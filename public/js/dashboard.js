@@ -192,59 +192,69 @@
     if (live) { lb.textContent = live + ' live'; lb.classList.remove('hide'); } else lb.classList.add('hide');
 
     const bn = el('dashBanner');
-    if (off) {
-      const names = rows.filter(r => r.state === 'off').map(r => r.plat.name);
-      el('dashBannerT').textContent = off + (off === 1 ? ' account needs you to sign in' : ' accounts need you to sign in');
-      el('dashBannerS').textContent = names.join(', ') + (off === 1
-        ? " isn't connected yet — the agent can't act there until you sign in once."
-        : " aren't connected yet — the agent can't act there until you sign in once.");
-      bn.classList.remove('hide');
-      bn.dataset.first = rows.findIndex(r => r.state === 'off');
-    } else bn.classList.add('hide');
+if (off) {
+         const names = rows.filter(r => r.state === 'off').map(r => r.plat.name);
+         el('dashBannerT').textContent = off + (off === 1 ? ' account needs you to sign in' : ' accounts need you to sign in');
+         el('dashBannerS').textContent = names.join(', ') + (off === 1
+           ? " isn't connected yet — the agent can't act there until you sign in once."
+           : " aren't connected yet — the agent can't act there until you sign in once.");
+         el('dashBanner').classList.remove('hide');
+         el('dashBanner').dataset.first = rows.findIndex(r => r.state === 'off');
+       } else el('dashBanner').classList.add('hide');
 
-    el('dashGrid').innerHTML = rows.map((r, i) => {
-      const p = r.plat, pill = PILL[r.state], cls = pill[0], label = pill[1];
-      let acts;
-      if (r.state === 'off')
-        acts = '<button class="btn primary" data-open="' + i + '" style="--brand:' + p.brand + '">Open &amp; sign in →</button>';
-      else if (r.state === 'live')
-        acts = '<button class="btn primary" data-watch="' + i + '" style="--brand:' + p.brand + '">Watch</button>'
-             + '<button class="btn ghost" data-stop="' + i + '" style="color:var(--bad)" title="Stop this session">Stop</button>'
-             + '<button class="btn ghost" data-open="' + i + '" title="Details">⋯</button>';
-      else
-        acts = '<button class="btn primary" data-run="' + i + '" style="--brand:' + p.brand + '">Open</button>'
-             + '<button class="btn ghost" data-open="' + i + '" title="Details">⋯</button>';
-      // An authored site can be forgotten again — the card, not the saved login, which stays until removed.
-      if (r.custom) acts += '<button class="btn ghost" data-forget="' + i + '" title="Remove this profile" style="margin-left:auto;color:var(--faint)">✕</button>';
-      return '<div class="dcard ' + (r.state === 'off' ? 'off' : '') + (r.custom ? ' custom' : '') + '" style="--brand:' + p.brand + '" data-open="' + i + '" tabindex="0">'
-        + '<div class="stripe"></div>'
-        + '<div class="hd">' + logoHtml(p) + '<div><div class="nm">' + safe(p.name) + '</div><div class="sub mono">' + safe(p.url) + '</div></div>'
-        + '<div class="stq"><span class="pill ' + cls + '"><span class="pdot"></span>' + label + '</span></div></div>'
-        + '<div class="status">' + r.statusHtml + '</div>'
-        + '<div class="roles">' + (r.roles.length
-            ? r.roles.map(x => '<span class="role">' + safe(x) + '</span>').join('')
-            : '<span class="role" style="opacity:.6">no roles yet</span>') + '</div>'
-        + '<div class="acts">' + acts + '</div></div>';
-    }).join('')
-    // The always-present tile: add a profile for any site, with a URL and (if any exist) roles.
-    + '<div class="dcard addcard" id="dashAddCard" tabindex="0" role="button">'
-      + '<div class="addplus">＋</div>'
-      + '<div class="addttl">Add a profile</div>'
-      + '<div class="addsub">Any site — give its login URL and attach the roles that work there.</div></div>';
+el('dashPlatformsGrid').innerHTML = rows.map((r, i) => {
+       const p = r.plat, pill = PILL[r.state], cls = pill[0], label = pill[1];
+       let acts;
+       if (r.state === 'off')
+         acts = '<button class="dash-platform-button primary" data-open="' + i + '" style="--brand:' + p.brand + '">Open & sign in →</button>';
+       else if (r.state === 'live')
+         acts = '<button class="dash-platform-button primary" data-watch="' + i + '" style="--brand:' + p.brand + '">Watch</button>'
+              + '<button class="dash-platform-button ghost" data-stop="' + i + '" style="color:var(--bad)" title="Stop this session">Stop</button>'
+              + '<button class="dash-platform-button ghost" data-open="' + i + '" title="Details">⋯</button>';
+       else
+         acts = '<button class="dash-platform-button primary" data-run="' + i + '" style="--brand:' + p.brand + '">Open</button>'
+              + '<button class="dash-platform-button ghost" data-open="' + i + '" title="Details">⋯</button>';
+       // An authored site can be forgotten again — the card, not the saved login, which stays until removed.
+       if (r.custom) acts += '<button class="dash-platform-button ghost" data-forget="' + i + '" title="Remove this profile" style="margin-left:auto;color:var(--faint)">✕</button>';
+       return '<div class="dash-platform-card ' + (r.state === 'off' ? 'dash-platform-card--off' : '') + (r.custom ? ' dash-platform-card--custom' : '') + '" style="--brand:' + p.brand + '" data-open="' + i + '" tabindex="0">'
+         + '<div class="dash-platform-logo-container">' + logoHtml(p) + '</div>'
+         + '<div class="dash-platform-info">'
+           + '<div class="dash-platform-name">' + safe(p.name) + '</div>'
+           + '<div class="dash-platform-url mono">' + safe(p.url) + '</div>'
+         + '</div>'
+         + '<div class="dash-platform-status">' + r.statusHtml + '</div>'
+         + '<div class="dash-platform-roles">' + (r.roles.length
+             ? r.roles.map(x => '<span class="dash-platform-role">' + safe(x) + '</span>').join('')
+             : '<span class="dash-platform-role" style="opacity:.6">no roles yet</span>') + '</div>'
+         + '<div class="dash-platform-actions">' + acts + '</div>'
+       + '</div>';
+     }).join('')
+     
+     // The always-present tile: add a profile for any site, with a URL and (if any exist) roles.
+     + '<div class="dash-platform-card dash-platform-card--add" id="dashAddCard" tabindex="0" role="button">'
+       + '<div class="dash-platform-add-icon">＋</div>'
+       + '<div class="dash-platform-add-title">Add a profile</div>'
+       + '<div class="dash-platform-add-subtitle">Any site — give its login URL and attach the roles that work there.</div>'
+     + '</div>';
 
     const liveRows = rows.filter(r => r.state === 'live');
-    el('dashRail').innerHTML = liveRows.length ? liveRows.map(r => {
-      const p = r.plat, i = rows.indexOf(r);
-      return '<div class="lr">' + logoHtml(p)
-        + '<div class="info"><div class="t">' + safe(p.name)
-        + (r.roles[0] ? '<span class="role">' + safe(r.roles[0]) + '</span>' : '') + '</div>'
-        + '<div class="s">' + safe(r.activity) + '</div></div>'
-        + '<div class="prog"><i></i></div>'
-        + '<div class="actions"><button class="lb watch" data-watch="' + i + '">Watch</button>'
-        + '<button class="lb" data-stop="' + i + '" style="color:var(--bad)">Stop</button>'
-        + '<button class="lb" data-open="' + i + '">Details</button></div></div>';
-    }).join('')
-      : '<div class="lr" style="color:var(--faint)"><div class="info"><div class="s">Nothing running right now. Open an account and ask the agent to do something.</div></div></div>';
+el('dashRail').innerHTML = liveRows.length ? liveRows.map(r => {
+       const p = r.plat, i = rows.indexOf(r);
+       return '<div class="dash-live-item">'
+         + '<div class="dash-live-logo">' + logoHtml(p) + '</div>'
+         + '<div class="dash-live-info">'
+           + '<div class="dash-live-title">' + safe(p.name) + '</div>'
+           + (r.roles[0] ? '<div class="dash-live-role"><span class="dash-platform-role">' + safe(r.roles[0]) + '</span></div>' : '')
+           + '<div class="dash-live-activity">' + safe(r.activity) + '</div>'
+         + '</div>'
+         + '<div class="dash-live-actions">'
+           + '<button class="dash-live-button lb watch" data-watch="' + i + '">Watch</button>'
+           + '<button class="dash-live-button lb" data-stop="' + i + '" style="color:var(--bad)">Stop</button>'
+           + '<button class="dash-live-button lb" data-open="' + i + '">Details</button>'
+         + '</div>'
+       + '</div>';
+     }).join('')
+       : '<div class="dash-live-empty"><div class="dash-live-empty-text">Nothing running right now. Open an account and ask the agent to do something.</div></div>';
   }
 
   async function refresh() { try { render(await load()); } catch (e) { /* keep whatever is shown */ } }
@@ -434,26 +444,26 @@
     refresh();
   }
 
-  // ── Wiring — event delegation only, nothing global.
-  el('dashGrid').addEventListener('click', e => {
-    const add = e.target.closest('#dashAddCard');
-    if (add) { e.stopPropagation(); openAddModal(); return; }
-    const forget = e.target.closest('[data-forget]');
-    if (forget) { e.stopPropagation(); forgetProfile(+forget.dataset.forget); return; }
-    const watch = e.target.closest('[data-watch]');
-    if (watch) { e.stopPropagation(); watchLive(+watch.dataset.watch); return; }
-    const stop = e.target.closest('[data-stop]');
-    if (stop) { e.stopPropagation(); stopSession(+stop.dataset.stop); return; }
-    const run = e.target.closest('[data-run]'), open = e.target.closest('[data-open]');
-    if (run) { e.stopPropagation(); runOpen(+run.dataset.run); return; }
-    if (open) openModal(+open.dataset.open);
-  });
-  el('dashGrid').addEventListener('keydown', e => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    if (e.target.closest('#dashAddCard')) { e.preventDefault(); openAddModal(); return; }
-    const card = e.target.closest('.dcard[data-open]'); if (card) { e.preventDefault(); openModal(+card.dataset.open); }
-  });
-  el('dashRail').addEventListener('click', e => {
+// ── Wiring — event delegation only, nothing global.
+   el('dashPlatformsGrid').addEventListener('click', e => {
+     const add = e.target.closest('#dashAddCard');
+     if (add) { e.stopPropagation(); openAddModal(); return; }
+     const forget = e.target.closest('[data-forget]');
+     if (forget) { e.stopPropagation(); forgetProfile(+forget.dataset.forget); return; }
+     const watch = e.target.closest('[data-watch]');
+     if (watch) { e.stopPropagation(); watchLive(+watch.dataset.watch); return; }
+     const stop = e.target.closest('[data-stop]');
+     if (stop) { e.stopPropagation(); stopSession(+stop.dataset.stop); return; }
+     const run = e.target.closest('[data-run]'), open = e.target.closest('[data-open]');
+     if (run) { e.stopPropagation(); runOpen(+run.dataset.run); return; }
+     if (open) openModal(+open.dataset.open);
+   });
+   el('dashPlatformsGrid').addEventListener('keydown', e => {
+     if (e.key !== 'Enter' && e.key !== ' ') return;
+     if (e.target.closest('#dashAddCard')) { e.preventDefault(); openAddModal(); return; }
+     const card = e.target.closest('.dash-platform-card[data-open]'); if (card) { e.preventDefault(); openModal(+card.dataset.open); }
+   });
+   el('dashRail').addEventListener('click', e => {
     const watch = e.target.closest('[data-watch]');
     if (watch) { watchLive(+watch.dataset.watch); return; }
     const stop = e.target.closest('[data-stop]');
@@ -477,7 +487,7 @@
   });
   el('dmClose').addEventListener('click', closeModal);
   el('dashBannerBtn').addEventListener('click', () => { const i = +el('dashBanner').dataset.first; if (i >= 0) openModal(i); });
-  el('dashGoActivity').addEventListener('click', () => el('dashRail').scrollIntoView({ behavior:'smooth', block:'center' }));
+  document.querySelector('.dash-nav-item[data-view="activity"]').addEventListener('click', () => el('dashRail').scrollIntoView({ behavior:'smooth', block:'center' }));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && el('dashModal').classList.contains('on')) closeModal(); });
 
   // The "← Accounts" back button lives in the (static) #app header.
@@ -497,188 +507,192 @@
   // swaps between them; nothing here reaches #app or #gate, and every control talks to the real
   // endpoints via the shared api() helper.
   const dwrap        = dash.querySelector('.dwrap');
-  const accountsView = el('dashAccountsView');
-  const settingsView = el('dashSettingsView');
-  const apiView      = el('dashApiView');
-  const rolesView    = el('dashRolesView');
-  const autoView     = el('dashAutoView');
-  const filesView    = el('dashFilesView');
-  const navAccounts  = el('dashGoAccounts');
-  const navSettings  = el('dashGoSettings');
-  const navApi       = el('dashGoApi');
-  const navRoles     = el('dashGoRoles');
-  const navAuto      = el('dashGoAuto');
-  const navFiles     = el('dashGoFiles');
-  const platformsView = el('dashPlatformsView');
-  const navPlatforms  = el('dashGoPlatforms');
-  const adminView    = el('dashAdminView');
-  const navAdmin     = el('dashGoAdmin');
-  const topTitle     = dash.querySelector('.top h1');
-  const topStat      = dash.querySelector('.top .stat');
-  // Restore the topbar heading exactly as authored when returning to Accounts.
-  const ACC_TITLE = 'Accounts<small>The logins the agent works through — one per platform</small>';
-  const SET_TITLE = 'Settings<small>Connection, the agent, your account and per-login exit routes</small>';
-  const API_TITLE = 'API<small>Drive the Ghost Browser over HTTP — the same interface the master agent uses</small>';
-  const ROLES_TITLE = 'Roles<small>The specialists your agent can run — create, browse and import them</small>';
-  const AUTO_TITLE = 'Automation<small>Wire roles and profiles into steps that run in a line — collect, then act on it</small>';
-  const FILES_TITLE = 'Files<small>Everything the agent has generated — images, voiceovers, music, clips — across every session</small>';
-  const ADMIN_TITLE = 'Superadmin<small>Every user, and the flows and roles they created — across all Ghost Browsers</small>';
-  const PLAT_TITLE = 'Platforms<small>Every platform the agent knows — where you are signed in, how fast it is read, and whether a private message may be sent</small>';
+const accountsView = el('dashAccountsView');
+   const settingsView = el('dashSettingsView');
+   const apiView      = el('dashApiView');
+   const rolesView    = el('dashRolesView');
+   const autoView     = el('dashAutoView');
+   const filesView    = el('dashFilesView');
+   const navAccounts  = dash.querySelector('[data-view="accounts"]');
+   const navSettings  = dash.querySelector('[data-view="settings"]');
+   const navApi       = dash.querySelector('[data-view="api"]');
+   const navRoles     = dash.querySelector('[data-view="roles"]');
+   const navAuto      = dash.querySelector('[data-view="automation"]');
+   const navFiles     = dash.querySelector('[data-view="files"]');
+   const platformsView = el('dashPlatformsView');
+   const navPlatforms  = dash.querySelector('[data-view="platforms"]');
+   const adminView    = el('dashAdminView');
+   const navAdmin     = dash.querySelector('[data-view="admin"]');
+   const topTitle     = dash.querySelector('.dash-header-title');
+   const topStat      = dash.querySelector('.dash-header-stats');
+   // Restore the topbar heading exactly as authored when returning to Accounts.
+   const ACC_TITLE = 'Accounts<small>The logins the agent works through — one per platform</small>';
+   const SET_TITLE = 'Settings<small>Connection, the agent, your account and per-login exit routes</small>';
+   const API_TITLE = 'API<small>Drive the Ghost Browser over HTTP — the same interface the master agent uses</small>';
+   const ROLES_TITLE = 'Roles<small>The specialists your agent can run — create, browse and import them</small>';
+   const AUTO_TITLE = 'Automation<small>Wire roles and profiles into steps that run in a line — collect, then act on it</small>';
+   const FILES_TITLE = 'Files<small>Everything the agent has generated — images, voiceovers, music, clips — across every session</small>';
+   const ADMIN_TITLE = 'Superadmin<small>Every user, and the flows and roles they created — across all Ghost Browsers</small>';
+   const PLAT_TITLE = 'Platforms<small>Every platform the agent knows — where you are signed in, how fast it is read, and whether a private message may be sent</small>';
 
-  function setNavOn(active) {
-    dash.querySelectorAll('.nav .navi').forEach(b => b.classList.toggle('on', b === active));
-  }
+function setNavOn(active) {
+   dash.querySelectorAll('.dash-nav .dash-nav-item').forEach(b => b.classList.toggle('on', b === active));
+ }
   function closeDrawer() { if (dwrap) dwrap.classList.remove('draw'); }
 
   // One place shows a view and hides the rest, so a new tab never leaves two on screen at once.
   const ALL_VIEWS = [accountsView, settingsView, apiView, rolesView, autoView, filesView, platformsView, adminView];
   function onlyView(v) { ALL_VIEWS.forEach(x => { if (x) x.classList.toggle('hide', x !== v); }); }
 
-  function showAccounts() {
-    closeDrawer();
-    onlyView(accountsView);
-    if (topStat) topStat.style.display = '';
-    if (topTitle) topTitle.innerHTML = ACC_TITLE;
-    setNavOn(navAccounts);
-  }
-  function showSettings() {
-    closeDrawer();
-    onlyView(settingsView);
-    if (topStat) topStat.style.display = 'none';   // the KPIs are about the accounts grid
-    if (topTitle) topTitle.innerHTML = SET_TITLE;
-    setNavOn(navSettings);
-    loadSettings();
-  }
-  // The API reference is pure static documentation — nothing to load, only the base-URL hint to
-  // fill in with the origin actually serving this console.
-  function showApi() {
-    closeDrawer();
-    onlyView(apiView);
-    if (topStat) topStat.style.display = 'none';   // the KPIs are about the accounts grid
-    if (topTitle) topTitle.innerHTML = API_TITLE;
-    setNavOn(navApi);
-    const base = el('apiBaseUrl');
-    if (base) { try { base.textContent = location.origin; } catch (e) { /* leave the placeholder */ } }
-  }
-  // The Roles marketplace — its own module (window.Marketplace) fills #dashRolesView on demand.
-  function showRoles() {
-    closeDrawer();
-    onlyView(rolesView);
-    if (topStat) topStat.style.display = 'none';
-    if (topTitle) topTitle.innerHTML = ROLES_TITLE;
-    setNavOn(navRoles);
-    if (window.Marketplace && window.Marketplace.load) window.Marketplace.load();
-  }
-  if (navAccounts) navAccounts.addEventListener('click', showAccounts);
-  if (navSettings) navSettings.addEventListener('click', showSettings);
-  if (navApi) navApi.addEventListener('click', showApi);
-  if (navRoles) navRoles.addEventListener('click', showRoles);
-  // The Automation workbench — its own module (window.Automation) fills #dashAutoView on demand.
-  function showAuto() {
-    closeDrawer();
-    onlyView(autoView);
-    if (topStat) topStat.style.display = 'none';
-    if (topTitle) topTitle.innerHTML = AUTO_TITLE;
-    setNavOn(navAuto);
-    if (window.Automation && window.Automation.load) window.Automation.load();
-  }
-  if (navAuto) navAuto.addEventListener('click', showAuto);
-
-  // The Files tab — its own module (window.Files) fills #dashFilesView on demand.
-  function showFiles() {
-    closeDrawer();
-    onlyView(filesView);
-    if (topStat) topStat.style.display = 'none';
-    if (topTitle) topTitle.innerHTML = FILES_TITLE;
-    setNavOn(navFiles);
-    if (window.Files && window.Files.load) window.Files.load();
-  }
-  if (navFiles) navFiles.addEventListener('click', showFiles);
-
-  /*
-   * The Platforms tab — its own module (window.Platforms) fills #dashPlatformsView on demand. It
-   * joins the two halves that were never connected: the logins on the Accounts page, and the rules
-   * every service reads about each platform.
-   */
-  function showPlatforms() {
-    closeDrawer();
-    onlyView(platformsView);
-    if (topStat) topStat.style.display = 'none';
-    if (topTitle) topTitle.innerHTML = PLAT_TITLE;
-    setNavOn(navPlatforms);
-    if (window.Platforms && window.Platforms.load) window.Platforms.load();
-  }
-  if (navPlatforms) navPlatforms.addEventListener('click', showPlatforms);
-
-  // ── Superadmin (platform) — cross-tenant Users / Flows / Roles from /v1/admin/tenants-overview.
-  //    The nav item stays hidden until we confirm this login is a superadmin (the endpoint 200s).
-  let ADMIN_DATA = null, ADMIN_TAB = 'users';
-  const fmtDate = (t) => { if (!t) return '—'; const d = new Date(t); return isNaN(d) ? '—' : d.toLocaleString(); };
-  function showAdmin() {
-    closeDrawer();
-    onlyView(adminView);
-    if (topStat) topStat.style.display = 'none';
-    if (topTitle) topTitle.innerHTML = ADMIN_TITLE;
-    setNavOn(navAdmin);
-    loadAdmin();
-  }
-  async function loadAdmin() {
-    const body = el('adminBody'); if (!body) return;
-    if (!ADMIN_DATA) body.innerHTML = '<p class="admin-empty">Loading…</p>';
-    try {
-      const r = await api('/v1/admin/tenants-overview');
-      ADMIN_DATA = (r && r.tenants) || [];
-      renderAdmin();
-    } catch (e) { body.innerHTML = '<p class="admin-empty">Could not load: ' + safe(e.message) + '</p>'; }
-  }
-  function renderAdmin() {
-    const body = el('adminBody'); if (!body) return;
-    const tenants = ADMIN_DATA || [];
-    adminView.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('on', b.dataset.atab === ADMIN_TAB));
-    if (!tenants.length) { body.innerHTML = '<p class="admin-empty">No instances reported.</p>'; return; }
-    const owner = (t) => safe(t.owner && t.owner.username || '—');
-    let h = '';
-    if (ADMIN_TAB === 'users') {
-      h = '<table class="admin-tbl"><thead><tr><th>User</th><th>Instance</th><th>Sessions</th><th>Flows</th><th>Roles</th><th>Since</th></tr></thead><tbody>';
-      for (const t of tenants) {
-        if (t.error) { h += '<tr><td colspan="6" class="admin-err">' + safe(t.base) + ' — ' + safe(t.error) + '</td></tr>'; continue; }
-        const c = t.counts || {};
-        h += '<tr><td class="admin-strong">' + owner(t) + '</td><td class="admin-dim">' + safe(t.tenant || t.base || '') + '</td><td>' + (c.sessions || 0) + '</td><td>' + (c.workflows || 0) + '</td><td>' + (c.createdRoles || 0) + '</td><td class="admin-dim">' + fmtDate(t.owner && t.owner.createdAt) + '</td></tr>';
-      }
-      h += '</tbody></table>';
-    } else if (ADMIN_TAB === 'flows') {
-      h = '<table class="admin-tbl"><thead><tr><th>Flow</th><th>By</th><th>Steps</th><th>Active</th><th>Updated</th></tr></thead><tbody>'; let n = 0;
-      for (const t of tenants) { if (t.error) continue; for (const w of (t.workflows || [])) { n++; h += '<tr><td class="admin-strong">' + safe(w.name || w.id) + '</td><td class="admin-dim">' + owner(t) + '</td><td>' + (w.nodes || 0) + '</td><td>' + (w.active ? '<span class="admin-on">on</span>' : '<span class="admin-off">off</span>') + '</td><td class="admin-dim">' + fmtDate(w.updatedAt || w.createdAt) + '</td></tr>'; } }
-      if (!n) h += '<tr><td colspan="5" class="admin-empty">No flows yet.</td></tr>';
-      h += '</tbody></table>';
-    } else {
-      h = '<table class="admin-tbl"><thead><tr><th>Role</th><th>By</th><th>Group</th><th>Tools</th><th>Created</th></tr></thead><tbody>'; let n = 0;
-      for (const t of tenants) { if (t.error) continue; for (const r of (t.roles || [])) { n++; h += '<tr><td class="admin-strong">' + safe(r.label || r.id) + '</td><td class="admin-dim">' + owner(t) + '</td><td class="admin-dim">' + safe(r.group || '') + '</td><td>' + (r.tools || 0) + '</td><td class="admin-dim">' + fmtDate(r.createdAt) + '</td></tr>'; } }
-      if (!n) h += '<tr><td colspan="5" class="admin-empty">No created roles yet.</td></tr>';
-      h += '</tbody></table>';
-    }
-    body.innerHTML = h;
-  }
-  if (navAdmin) navAdmin.addEventListener('click', showAdmin);
-  if (adminView) adminView.addEventListener('click', (e) => {
-    const tab = e.target.closest('.admin-tab');
-    if (tab) { ADMIN_TAB = tab.dataset.atab; renderAdmin(); return; }
-    if (e.target.closest('#adminRefresh')) { ADMIN_DATA = null; loadAdmin(); }
-  });
-  /*
-   * Reveal the Superadmin nav only when this login actually is one — ASKED, not attempted.
-   *
-   * This used to call /v1/admin/overview and catch the refusal. It worked, and it meant every
-   * ordinary page load printed a red 403 in the browser's console: noise that reads exactly like a
-   * broken page and twice sent the owner hunting a bug that was not there. The sign-in state already
-   * says who you are, so the question is asked there and the refusal never happens.
-   */
-  (async () => {
-    try {
-      const s = await api('/api/auth/state');
-      if (s.superadmin && navAdmin) navAdmin.classList.remove('hide');
-    } catch (e) { /* not signed in yet — the nav stays hidden, as it should */ }
-  })();
+function showAccounts() {
+     closeDrawer();
+     onlyView(accountsView);
+     if (topStat) topStat.style.display = '';
+     if (topTitle) topTitle.innerHTML = ACC_TITLE;
+     setNavOn(navAccounts);
+   }
+   function showSettings() {
+     closeDrawer();
+     onlyView(settingsView);
+     if (topStat) topStat.style.display = 'none';   // the KPIs are about the accounts grid
+     if (topTitle) topTitle.innerHTML = SET_TITLE;
+     setNavOn(navSettings);
+     loadSettings();
+   }
+   // The API reference is pure static documentation — nothing to load, only the base-URL hint to
+   // fill in with the origin actually serving this console.
+   function showApi() {
+     closeDrawer();
+     onlyView(apiView);
+     if (topStat) topStat.style.display = 'none';   // the KPIs are about the accounts grid
+     if (topTitle) topTitle.innerHTML = API_TITLE;
+     setNavOn(navApi);
+     const base = el('apiBaseUrl');
+     if (base) { try { base.textContent = location.origin; } catch (e) { /* leave the placeholder */ } }
+   }
+   // The Roles marketplace — its own module (window.Marketplace) fills #dashRolesView on demand.
+   function showRoles() {
+     closeDrawer();
+     onlyView(rolesView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = ROLES_TITLE;
+     setNavOn(navRoles);
+     if (window.Marketplace && window.Marketplace.load) window.Marketplace.load();
+   }
+   // The Automation workbench — its own module (window.Automation) fills #dashAutoView on demand.
+   function showAuto() {
+     closeDrawer();
+     onlyView(autoView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = AUTO_TITLE;
+     setNavOn(navAuto);
+     if (window.Automation && window.Automation.load) window.Automation.load();
+   }
+if (navAccounts) navAccounts.addEventListener('click', showAccounts);
+   if (navSettings) navSettings.addEventListener('click', showSettings);
+   if (navApi) navApi.addEventListener('click', showApi);
+   if (navRoles) navRoles.addEventListener('click', showRoles);
+   // The Automation workbench — its own module (window.Automation) fills #dashAutoView on demand.
+   function showAuto() {
+     closeDrawer();
+     onlyView(autoView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = AUTO_TITLE;
+     setNavOn(navAuto);
+     if (window.Automation && window.Automation.load) window.Automation.load();
+   }
+   if (navAuto) navAuto.addEventListener('click', showAuto);
+   
+   // The Files tab — its own module (window.Files) fills #dashFilesView on demand.
+   function showFiles() {
+     closeDrawer();
+     onlyView(filesView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = FILES_TITLE;
+     setNavOn(navFiles);
+     if (window.Files && window.Files.load) window.Files.load();
+   }
+   if (navFiles) navFiles.addEventListener('click', showFiles);
+   
+   /*
+    * The Platforms tab — its own module (window.Platforms) fills #dashPlatformsView on demand. It
+    * joins the two halves that were never connected: the logins on the Accounts page, and the rules
+    * every service reads about each platform.
+    */
+   function showPlatforms() {
+     closeDrawer();
+     onlyView(platformsView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = PLAT_TITLE;
+     setNavOn(navPlatforms);
+     if (window.Platforms && window.Platforms.load) window.Platforms.load();
+   }
+   if (navPlatforms) navPlatforms.addEventListener('click', showPlatforms);
+   
+   // ── Superadmin (platform) — cross-tenant Users / Flows / Roles from /v1/admin/tenants-overview.
+   //    The nav item stays hidden until we confirm this login is a superadmin (the endpoint 200s).
+   let ADMIN_DATA = null, ADMIN_TAB = 'users';
+   const fmtDate = (t) => { if (!t) return '—'; const d = new Date(t); return isNaN(d) ? '—' : d.toLocaleString(); };
+   function showAdmin() {
+     closeDrawer();
+     onlyView(adminView);
+     if (topStat) topStat.style.display = 'none';
+     if (topTitle) topTitle.innerHTML = ADMIN_TITLE;
+     setNavOn(navAdmin);
+     loadAdmin();
+   }
+   async function loadAdmin() {
+     const body = el('adminBody'); if (!body) return;
+     if (!ADMIN_DATA) body.innerHTML = '<p class="admin-empty">Loading…</p>';
+     try {
+       const r = await api('/v1/admin/tenants-overview');
+       ADMIN_DATA = (r && r.tenants) || [];
+       renderAdmin();
+     } catch (e) { body.innerHTML = '<p class="admin-empty">Could not load: ' + safe(e.message) + '</p>'; }
+   }
+   function renderAdmin() {
+     const body = el('adminBody'); if (!body) return;
+     const tenants = ADMIN_DATA || [];
+     adminView.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('on', b.dataset.atab === ADMIN_TAB));
+     if (!tenants.length) { body.innerHTML = '<p class="admin-empty">No instances reported.</p>'; return; }
+     const owner = (t) => safe(t.owner && t.owner.username || '—');
+     let h = '';
+     if (ADMIN_TAB === 'users') {
+       h = '<table class="admin-tbl"><thead><tr><th>User</th><th>Instance</th><th>Sessions</th><th>Flows</th><th>Roles</th><th>Since</th></tr></thead><tbody>';
+       for (const t of tenants) {
+         if (t.error) { h += '<tr><td colspan="6" class="admin-err">' + safe(t.base) + ' — ' + safe(t.error) + '</td></tr>'; continue; }
+         const c = t.counts || {};
+         h += '<tr><td class="admin-strong">' + owner(t) + '</td><td class="admin-dim">' + safe(t.tenant || t.base || '') + '</td><td>' + (c.sessions || 0) + '</td><td>' + (c.workflows || 0) + '</td><td>' + (c.createdRoles || 0) + '</td><td class="admin-dim">' + fmtDate(t.owner && t.owner.createdAt) + '</td></tr>'; }
+     }
+      else if (ADMIN_TAB === 'flows') {
+       h = '<table class="admin-tbl"><thead><tr><th>Flow</th><th>By</th><th>Steps</th><th>Active</th><th>Updated</th></tr></thead><tbody>'; let n = 0;
+       for (const t of tenants) { if (t.error) continue; for (const w of (t.workflows || [])) { n++; h += '<tr><td class="admin-strong">' + safe(w.name || w.id) + '</td><td class="admin-dim">' + owner(t) + '</td><td>' + (w.nodes || 0) + '</td><td>' + (w.active ? '<span class="admin-on">on</span>' : '<span class="admin-off">off</span>') + '</td><td class="admin-dim">' + fmtDate(w.updatedAt || w.createdAt) + '</td></tr>'; } }
+       if (!n) h += '<tr><td colspan="5" class="admin-empty">No flows yet.</td></tr>';
+       h += '</tbody></table>'; }
+     else {
+       h = '<table class="admin-tbl"><thead><tr><th>Role</th><th>By</th><th>Group</th><th>Tools</th><th>Created</th></tr></thead><tbody>'; let n = 0;
+       for (const t of tenants) { if (t.error) continue; for (const r of (t.roles || [])) { n++; h += '<tr><td class="admin-strong">' + safe(r.label || r.id) + '</td><td class="admin-dim">' + owner(t) + '</td><td class="admin-dim">' + safe(r.group || '') + '</td><td>' + (r.tools || 0) + '</td><td class="admin-dim">' + fmtDate(r.createdAt) + '</td></tr>'; } }
+       if (!n) h += '<tr><td colspan="5" class="admin-empty">No created roles yet.</td></tr>';
+       h += '</tbody></table>'; }
+     body.innerHTML = h; }
+   if (adminView) adminView.addEventListener('click', (e) => {
+     const tab = e.target.closest('.admin-tab');
+     if (tab) { ADMIN_TAB = tab.dataset.atab; renderAdmin(); return; }
+     if (e.target.closest('#adminRefresh')) { ADMIN_DATA = null; loadAdmin(); } });
+   /*
+    * Reveal the Superadmin nav only when this login actually is one — ASKED, not attempted.
+    *
+    * This used to call /v1/admin/overview and catch the refusal. It worked, and it meant every
+    * ordinary page load printed a red 403 in the browser's console: noise that reads exactly like a
+    * broken page and twice sent the owner hunting a bug that was not there. The sign-in state already
+    * says who you are, so the question is asked there and the refusal never happens.
+    */
+   (async () => {
+     try {
+       const s = await api('/api/auth/state');
+       if (s.superadmin && navAdmin) navAdmin.classList.remove('hide');
+     } catch (e) { /* not signed in yet — the nav stays hidden, as it should */ }
+   })();
 
   // Copy buttons on the docs' code blocks. Delegated, so it covers every block with no per-button
   // wiring; it only ever reads the adjacent <pre> and writes the clipboard.
@@ -695,9 +709,9 @@
     } catch (err) { btn.textContent = 'Copy failed'; setTimeout(() => { btn.textContent = 'Copy'; }, 1400); }
   });
 
-  // Any nav choice closes the drawer (requirement: close on nav-click).
-  const navEl = dash.querySelector('.nav');
-  if (navEl) navEl.addEventListener('click', e => { if (e.target.closest('.navi')) closeDrawer(); });
+// Any nav choice closes the drawer (requirement: close on nav-click).
+   const navEl = dash.querySelector('.dash-nav');
+   if (navEl) navEl.addEventListener('click', e => { if (e.target.closest('.dash-nav-item')) closeDrawer(); });
 
   // Hamburger + scrim + Escape drive the off-canvas drawer (class lives on .dwrap, not #dash).
   const ham = el('dashHam'), scrim = el('dashScrim');
