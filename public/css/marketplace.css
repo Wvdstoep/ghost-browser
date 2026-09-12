@@ -12,7 +12,7 @@
 .mkt-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .mkt-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .mkt-search {
-  flex: 1 1 240px; min-width: 200px; padding: 10px 14px; border-radius: 10px;
+  flex: 1 1 240px; min-width: 200px; padding: 10px 14px; border-radius: var(--rr);
   border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit;
 }
 .mkt-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -29,14 +29,14 @@
 /* ── the catalogue grid ──────────────────────────────────────────────────────────────────────── */
 .mkt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
 .rcard {
-  display: flex; flex-direction: column; gap: 10px; padding: 16px;
-  border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+   display: flex; flex-direction: column; gap: 10px; padding: 16px;
+   border: 1px solid var(--line); border-radius: var(--rs); background: var(--panel);
 }
 .rcard:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .rhd { display: flex; align-items: center; gap: 10px; }
 .rbadge {
-  width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center;
-  background: var(--b, var(--accent)); color: #fff; font-weight: 800; font-size: 14px;
+   width: 34px; height: 34px; flex: none; border-radius: var(--rr); display: grid; place-items: center;
+   background: var(--b, var(--accent)); color: #fff; font-weight: 800; font-size: 14px;
 }
 .rbadge.cross { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .rttl { min-width: 0; flex: 1; }
@@ -54,8 +54,8 @@
 .rmeta .act { color: var(--warn); font-weight: 600; }
 .racts { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--line); }
 .rempty {
-  grid-column: 1 / -1; padding: 40px 20px; text-align: center; color: var(--muted);
-  border: 1px dashed var(--line); border-radius: 14px; line-height: 1.6;
+   grid-column: 1 / -1; padding: 40px 20px; text-align: center; color: var(--muted);
+   border: 1px dashed var(--line); border-radius: var(--rs);
 }
 
 /* small + danger button variants (the console ships .btn / .btn.primary / .btn.ghost) */
@@ -70,9 +70,9 @@
 }
 .mkt-modal.on { display: flex; }
 .mkt-modal .mcard {
-  width: 100%; max-width: 620px; background: var(--panel); color: var(--text);
-  border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.35);
-  display: flex; flex-direction: column; max-height: calc(100vh - 80px);
+   width: 100%; max-width: 620px; background: var(--panel); color: var(--text);
+   border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-lg);
+   display: flex; flex-direction: column; max-height: calc(100vh - 80px);
 }
 .mkt-modal .mhd { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 12px; }
 .mkt-modal .mhd .t { font-weight: 700; font-size: 17px; }
@@ -87,8 +87,8 @@
 .rfield > label { font-weight: 600; font-size: 13px; color: var(--text); }
 .rfield .hint { font-weight: 400; color: var(--muted); }
 .rform input[type=text], .rform input:not([type]), .rform select, .rform textarea, .pktext {
-  width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box;
+   width: 100%; padding: 10px 12px; border-radius: var(--rr); border: 1px solid var(--line);
+   background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box;
 }
 .rform textarea { resize: vertical; line-height: 1.5; }
 .rform input:focus, .rform select:focus, .rform textarea:focus, .pktext:focus {
@@ -98,11 +98,11 @@
 .allrow input { width: auto; }
 
 /* AI-suggest box — the star of the form, so it reads as a helper not a field */
-.aisug { border: 1px solid var(--accent); border-radius: 12px; padding: 14px; background: var(--accent-soft); }
+.aisug { border: 1px solid var(--accent); border-radius: var(--rs); padding: 14px; background: var(--accent-soft); }
 .aisug-h { font-weight: 700; font-size: 14px; color: var(--accent); }
 .aisug p { margin: 4px 0 10px; font-size: 12.5px; color: var(--text); opacity: .85; }
 .airow { display: flex; gap: 8px; align-items: stretch; }
-.airow textarea { flex: 1; resize: vertical; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.airow textarea { flex: 1; resize: vertical; padding: 9px 11px; border-radius: var(--rr); border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
 .airow .btn { white-space: nowrap; }
 .aimsg { font-size: 12px; margin-top: 8px; min-height: 14px; color: var(--muted); }
 .aimsg.ok { color: var(--accent); }

@@ -59,71 +59,109 @@
   }
 
   // ── list of automations ─────────────────────────────────────────────────────────────────────────
-  function renderList() {
-    const view = el('dashAutoView'); if (!view) return;
-    const running = WORKFLOWS.filter((w) => w._running);
-    const shown = LIST_FILTER === 'running' ? running : WORKFLOWS;
-    const cards = shown.length ? shown.map((w) => {
-      /*
-       * WHAT THE FLOW DOES, counted honestly. This counted agent nodes only, so Herald's reply flow —
-       * post it, was it refused, is it on the thread, what happened — read as "1 step" and looked
-       * trivial. A step is a node that ACTS or DECIDES; a store just writes the answer down.
-       */
-      const doing = (w.nodes || []).filter((n) => n.type !== 'trigger' && n.type !== 'store');
-      const steps = doing.length;
-      /* And what KIND of steps, so a glance says whether it browses, checks or sorts. */
-      const kinds = [...new Set(doing.map((n) => (n.type === 'agent' ? 'browses' : n.type === 'verify' ? 'checks the page' : n.type === 'branch' ? 'decides' : n.type)))].join(', ');
-      const pill = w._running
-        ? '<span class="wpill run">● running</span>'
-        : '<span class="wpill ' + (w.active ? 'on' : '') + '">' + (w.active ? 'active' : 'draft') + '</span>';
-      /* Where it came from. An organ ships its flow and starts it itself, so "manual" — which is
-         what the trigger says — would read as "nobody has pressed this", which is the opposite. */
-      const from = w.owner ? '<span class="wpill from">from ' + esc(w.owner) + '</span>' : '';
-      const starter = w.owner ? 'started by ' + esc(w.owner) : esc((w.trigger && w.trigger.type) || 'manual');
-      // "Results" opens the findings/approvals view (the DATA) — deliberately not "Watch", which
-      // elsewhere in the app opens the live browser. Shown whenever a run exists to look at.
-      const results = w._runId ? '<button class="btn ' + (w._running ? 'primary' : 'ghost') + ' sm" data-results="' + esc(w.id) + '">Results' + (w._running ? ' →' : '') + '</button>' : '';
-      return '<div class="wcard' + (w._running ? ' running' : '') + '" data-open="' + esc(w.id) + '">'
-        + '<div class="wtop"><div class="wname">' + esc(w.name) + '</div>' + from + pill + '</div>'
-        + '<div class="wmeta">' + steps + (steps === 1 ? ' step' : ' steps') + (kinds ? ' · ' + kinds : '') + ' · ' + starter + '</div>'
-        + '<div class="wacts">' + results + '<button class="btn ghost sm" data-open="' + esc(w.id) + '">Open</button>'
-        + '<button class="btn ghost sm" data-export="' + esc(w.id) + '">Export</button>'
-        /* No Delete for an organ's flow: it would stop the organ's work silently, and the organ
-           registers it again on its next restart anyway. */
-        + (w.owner ? '' : '<button class="btn ghost sm danger" data-del="' + esc(w.id) + '">Delete</button>') + '</div></div>';
-    }).join('') : '<div class="wempty">' + (LIST_FILTER === 'running'
-        ? 'Nothing running right now.'
-        : 'No automations yet. Build one — a trigger, then steps that run your roles and pass their findings along.') + '</div>';
-
-    view.innerHTML =
-      '<div class="auto-top">'
-      + '<div class="wtabs">'
-      + '<button class="wtab ' + (LIST_FILTER === 'all' ? 'on' : '') + '" data-f="all">All <span class="cnt">' + WORKFLOWS.length + '</span></button>'
-      + '<button class="wtab ' + (LIST_FILTER === 'running' ? 'on' : '') + '" data-f="running">Running <span class="cnt' + (running.length ? ' live' : '') + '">' + running.length + '</span></button>'
-      + '</div>'
-      + '<div class="auto-actions"><button class="btn ghost" id="autoImport">⭳ Import</button>'
-      + '<button class="btn primary" id="autoNew">＋ New automation</button></div></div>'
-      + '<div class="wgrid">' + cards + '</div>';
-
-    el('autoNew').onclick = () => openEditor(null);
-    el('autoImport').onclick = openImport;
-    view.querySelectorAll('.wtab').forEach((b) => b.onclick = () => { LIST_FILTER = b.dataset.f; renderList(); });
-    view.querySelectorAll('[data-results]').forEach((b) => b.onclick = async (e) => {
-      e.stopPropagation();
-      const wf = WORKFLOWS.find((x) => x.id === b.dataset.results);
-      if (!wf || !wf._runId) return;
-      try { const run = await api('/v1/workflow-runs/' + encodeURIComponent(wf._runId)); openRunResults(run); if (wf._running) pollResultsModal(wf._runId); } catch (er) {}
-    });
-    view.querySelectorAll('[data-export]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); exportWorkflow(b.dataset.export); });
-    view.querySelectorAll('[data-open]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); openEditor(b.dataset.open); });
-    view.querySelectorAll('[data-del]').forEach((b) => b.onclick = async (e) => {
-      e.stopPropagation();
-      const w = WORKFLOWS.find((x) => x.id === b.dataset.del);
-      if (!confirm('Delete "' + (w ? w.name : b.dataset.del) + '"?')) return;
-      try { await api('/v1/workflows/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' }); } catch (err) {}
-      load();
-    });
-  }
+function renderList() {
+     const view = el('dashAutoView'); if (!view) return;
+     const running = WORKFLOWS.filter((w) => w._running);
+     const shown = LIST_FILTER === 'running' ? running : WORKFLOWS;
+     
+     view.innerHTML =
+       '<div class="auto-header">' +
+       '<h1 class="auto-title">Automations<span>Wire roles and profiles into steps that run in a line — collect, then act on it</span></h1>' +
+       '<div class="auto-actions">' +
+       '<button class="btn ghost" id="autoImport">Import</button>' +
+       '<button class="btn primary" id="autoNew">＋ New automation</button>' +
+       '</div>' +
+       '</div>' +
+       
+       '<div class="auto-filters">' +
+       '<div class="auto-filter-group">' +
+       '<button class="auto-filter-tab ' + (LIST_FILTER === 'all' ? 'active' : '') + '" data-f="all">All <span class="count">' + WORKFLOWS.length + '</span></button>' +
+       '<button class="auto-filter-tab ' + (LIST_FILTER === 'running' ? 'active' : '') + '" data-f="running">Running <span class="count' + (running.length ? ' live' : '') + '">' + running.length + '</span></button>' +
+       '</div>' +
+       '</div>' +
+       
+       '<div class="auto-list">' +
+       (shown.length ? shown.map((w) => {
+         /*
+          * WHAT THE FLOW DOES, counted honestly. This counted agent nodes only, so Herald's reply flow —
+          * post it, was it refused, is it on the thread, what happened — read as "1 step" and looked
+          * trivial. A step is a node that ACTS or DECIDES; a store just writes the answer down.
+          */
+         const doing = (w.nodes || []).filter((n) => n.type !== 'trigger' && n.type !== 'store');
+         const steps = doing.length;
+         /* And what KIND of steps, so a glance says whether it browses, checks or sorts. */
+         const kinds = [...new Set(doing.map((n) => (n.type === 'agent' ? 'browses' : n.type === 'verify' ? 'checks the page' : n.type === 'branch' ? 'decides' : n.type)))].join(', ');
+         const pill = w._running
+           ? '<span class="auto-pill auto-pill--running">● running</span>'
+           : '<span class="auto-pill ' + (w.active ? 'auto-pill--active' : 'auto-pill--draft') + '">' + (w.active ? 'active' : 'draft') + '</span>';
+         /* Where it came from. An organ ships its flow and starts it itself, so "manual" — which is
+            what the trigger says — would read as "nobody has pressed this", which is the opposite. */
+         const from = w.owner ? '<span class="auto-pill auto-pill--from">from ' + esc(w.owner) + '</span>' : '';
+         const starter = w.owner ? 'started by ' + esc(w.owner) : esc((w.trigger && w.trigger.type) || 'manual');
+         // "Results" opens the findings/approvals view (the DATA) — deliberately not "Watch", which
+         // elsewhere in the app opens the live browser. Shown whenever a run exists to look at.
+         const results = w._runId ? '<button class="btn btn-sm ' + (w._running ? 'btn-primary' : 'btn-ghost') + '" data-results="' + esc(w.id) + '">Results' + (w._running ? ' →' : '') + '</button>' : '';
+         
+         return '<div class="auto-item' + (w._running ? ' auto-item--running' : '') + '" data-open="' + esc(w.id) + '">' +
+           '<div class="auto-item-header">' +
+           '<div class="auto-item-title">' + esc(w.name) + '</div>' +
+           '<div class="auto-item-meta">' + from + pill + '</div>' +
+           '</div>' +
+           '<div class="auto-item-body">' +
+           '<div class="auto-item-description">' + (w.description || 'No description') + '</div>' +
+           '<div class="auto-item-details">' +
+           '<span class="auto-detail"><span class="auto-detail-label">Steps:</span> ' + steps + (steps === 1 ? '' : 's') + '</span>' +
+           (kinds ? '<span class="auto-detail"><span class="auto-detail-label">Type:</span> ' + kinds + '</span>' : '') +
+           '</div>' +
+           '</div>' +
+           '<div class="auto-item-actions">' +
+           results +
+           '<button class="btn btn-sm btn-ghost" data-open="' + esc(w.id) + '">Open</button>' +
+           '<button class="btn btn-sm btn-ghost" data-export="' + esc(w.id) + '">Export</button>' +
+           (w.owner ? '' : '<button class="btn btn-sm btn-ghost btn-danger" data-del="' + esc(w.id) + '">Delete</button>') +
+           '</div>' +
+           '</div>';
+       }).join('') : 
+       '<div class="auto-empty">' +
+       '<div class="auto-empty-icon">🔧</div>' +
+       '<h2 class="auto-empty-title">No automations yet</h2>' +
+       '<p class="auto-empty-description">Build one — a trigger, then steps that run your roles and pass their findings along.</p>' +
+       '</div>'
+       ) +
+       '</div>';
+     
+     // Event listeners
+     if (el('autoNew')) el('autoNew').onclick = () => openEditor(null);
+     if (el('autoImport')) el('autoImport').onclick = openImport;
+     view.querySelectorAll('.auto-filter-tab').forEach((b) => b.onclick = () => { LIST_FILTER = b.dataset.f; renderList(); });
+     view.querySelectorAll('[data-results]').forEach((b) => b.onclick = async (e) => {
+       e.stopPropagation();
+       const wf = WORKFLOWS.find((x) => x.id === b.dataset.results);
+       if (!wf || !wf._runId) return;
+       try { 
+         const run = await api('/v1/workflow-runs/' + encodeURIComponent(wf._runId)); 
+         openRunResults(run); 
+         if (wf._running) pollResultsModal(wf._runId); 
+       } catch (er) {}
+     });
+     view.querySelectorAll('[data-export]').forEach((b) => b.onclick = (e) => { 
+       e.stopPropagation(); 
+       exportWorkflow(b.dataset.export); 
+     });
+     view.querySelectorAll('[data-open]').forEach((b) => b.onclick = (e) => { 
+       e.stopPropagation(); 
+       openEditor(b.dataset.open); 
+     });
+     view.querySelectorAll('[data-del]').forEach((b) => b.onclick = async (e) => {
+       e.stopPropagation();
+       const w = WORKFLOWS.find((x) => x.id === b.dataset.del);
+       if (!confirm('Delete "' + (w ? w.name : b.dataset.del) + '"?')) return;
+       try { 
+         await api('/v1/workflows/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' }); 
+       } catch (err) {}
+       load();
+     });
+   }
 
   // ── open the editor ─────────────────────────────────────────────────────────────────────────────
   async function openEditor(id) {
