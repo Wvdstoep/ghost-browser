@@ -1,0 +1,20 @@
+
+  Ghost Browser is installed in namespace "{{ .Release.Namespace }}".
+
+  Open it:
+{{- if .Values.ingress.enabled }}
+    http{{ if .Values.ingress.tls }}s{{ end }}://{{ .Values.ingress.host }}/
+{{- else }}
+    kubectl -n {{ .Release.Namespace }} port-forward svc/ghost-tool 3000:{{ .Values.service.port }}
+    then open  http://localhost:3000
+{{- end }}
+
+  First visit creates the single owner account (or, if you set leadflowSecret, sign in via your
+  platform SSO — only that one account can enter this instance).
+
+  Your API key (for Authorization: Bearer <key>) is in the ghost-tool-secrets Secret:
+    kubectl -n {{ .Release.Namespace }} get secret ghost-tool-secrets -o jsonpath='{.data.API_KEYS}' | base64 -d
+
+  Drive it over HTTP (sessions, look/act, roles, workflows) — the API tab in the console has the full
+  reference. To route logins through your own connection, open Settings -> Connection & exit route and
+  connect your tailnet exit node.

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: ghost-tool
+description: Ghost Browser — a real logged-in browser with an HTTP API and an on-board agent, installable in any cluster. One owner per install, its own persistent profile volume, its own tailnet exit.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords: [browser, automation, agent, playwright, api]
+home: https://my-app.engineer

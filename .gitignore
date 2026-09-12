@@ -1,0 +1,5 @@
+# the browser's own state, not its source: logins, cookies, flows, roles, assets, run journals
+/profiles/
+node_modules/
+*.log
+.DS_Store

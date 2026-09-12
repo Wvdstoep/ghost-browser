@@ -1,0 +1,22 @@
+{
+  "name": "ghost-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browsing as a service: a real Chromium driven by numbered Set-of-Mark annotations.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "playwright": "1.59.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "ws": "8.18.0"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3",
+    "vitest": "^1.6.0"
+  }
+}

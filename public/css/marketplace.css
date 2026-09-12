@@ -1,0 +1,136 @@
+/* ═══════════════════════ ROLES MARKETPLACE ═══════════════════════
+   The Roles tab and its two modals. Everything is drawn in the console's own tokens (--bg, --panel,
+   --line, --text, --accent, …) so it inherits light/dark with the rest of the console and never needs
+   its own theme rules. View styles are scoped under #dash; the modals live on <body>, so they are
+   scoped under .mkt-modal and define their own overlay rather than leaning on the accounts modal. */
+
+#dash .rolesv.hide { display: none; }
+#dash .rolesv { display: flex; flex-direction: column; gap: 18px; }
+
+/* ── toolbar ─────────────────────────────────────────────────────────────────────────────────── */
+.mkt-top { display: flex; flex-direction: column; gap: 14px; }
+.mkt-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.mkt-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.mkt-search {
+  flex: 1 1 240px; min-width: 200px; padding: 10px 14px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit;
+}
+.mkt-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mkt-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.mtab {
+  padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font: 600 13px/1 inherit; cursor: pointer; transition: .12s;
+}
+.mtab:hover { color: var(--text); }
+.mtab.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.mtab .cnt { opacity: .65; font-weight: 700; margin-left: 2px; }
+.mtab.on .cnt { opacity: .85; }
+
+/* ── the catalogue grid ──────────────────────────────────────────────────────────────────────── */
+.mkt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.rcard {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+}
+.rcard:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.rhd { display: flex; align-items: center; gap: 10px; }
+.rbadge {
+  width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center;
+  background: var(--b, var(--accent)); color: #fff; font-weight: 800; font-size: 14px;
+}
+.rbadge.cross { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.rttl { min-width: 0; flex: 1; }
+.rname { font-weight: 700; font-size: 15px; color: var(--text); line-height: 1.2; }
+.rsite { font-size: 12px; color: var(--muted); }
+.rtag {
+  font: 700 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em;
+  padding: 4px 8px; border-radius: 999px; white-space: nowrap; text-transform: uppercase;
+}
+.rtag.builtin { background: var(--panel-2); color: var(--muted); }
+.rtag.yours { background: var(--accent-soft); color: var(--accent); }
+.rtag.pack { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); text-transform: none; letter-spacing: 0; }
+.rdesc { font-size: 13px; color: var(--muted); line-height: 1.45; flex: 1; }
+.rmeta { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.rmeta .act { color: var(--warn); font-weight: 600; }
+.racts { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--line); }
+.rempty {
+  grid-column: 1 / -1; padding: 40px 20px; text-align: center; color: var(--muted);
+  border: 1px dashed var(--line); border-radius: 14px; line-height: 1.6;
+}
+
+/* small + danger button variants (the console ships .btn / .btn.primary / .btn.ghost) */
+.btn.sm { padding: 6px 11px; font-size: 12.5px; }
+.btn.danger { color: var(--bad); }
+.btn.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); }
+
+/* ── the modals (builder + packs) ────────────────────────────────────────────────────────────── */
+.mkt-modal {
+  position: fixed; inset: 0; z-index: 60; display: none; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; background: color-mix(in srgb, #0b1120 62%, transparent); overflow-y: auto;
+}
+.mkt-modal.on { display: flex; }
+.mkt-modal .mcard {
+  width: 100%; max-width: 620px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; max-height: calc(100vh - 80px);
+}
+.mkt-modal .mhd { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 12px; }
+.mkt-modal .mhd .t { font-weight: 700; font-size: 17px; }
+.mkt-modal .mhd .s { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+.mkt-modal .mhd .x { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+.mkt-modal .mbody { padding: 4px 20px; overflow-y: auto; }
+.mkt-modal .mfoot { display: flex; gap: 10px; justify-content: flex-end; padding: 14px 20px 18px; flex-wrap: wrap; }
+
+/* ── the builder form ────────────────────────────────────────────────────────────────────────── */
+.rform { display: flex; flex-direction: column; gap: 16px; padding-bottom: 6px; }
+.rfield { display: flex; flex-direction: column; gap: 7px; }
+.rfield > label { font-weight: 600; font-size: 13px; color: var(--text); }
+.rfield .hint { font-weight: 400; color: var(--muted); }
+.rform input[type=text], .rform input:not([type]), .rform select, .rform textarea, .pktext {
+  width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font: inherit; box-sizing: border-box;
+}
+.rform textarea { resize: vertical; line-height: 1.5; }
+.rform input:focus, .rform select:focus, .rform textarea:focus, .pktext:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.allrow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.allrow input { width: auto; }
+
+/* AI-suggest box — the star of the form, so it reads as a helper not a field */
+.aisug { border: 1px solid var(--accent); border-radius: 12px; padding: 14px; background: var(--accent-soft); }
+.aisug-h { font-weight: 700; font-size: 14px; color: var(--accent); }
+.aisug p { margin: 4px 0 10px; font-size: 12.5px; color: var(--text); opacity: .85; }
+.airow { display: flex; gap: 8px; align-items: stretch; }
+.airow textarea { flex: 1; resize: vertical; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.airow .btn { white-space: nowrap; }
+.aimsg { font-size: 12px; margin-top: 8px; min-height: 14px; color: var(--muted); }
+.aimsg.ok { color: var(--accent); }
+.aimsg.warn { color: var(--bad); }
+
+/* tool picker */
+.toolgroups { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--bg); }
+.toolgroups.dim { opacity: .4; pointer-events: none; }
+.tgroup { display: flex; flex-direction: column; gap: 7px; }
+.tgh { font: 700 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.tchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tchip {
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; transition: .1s;
+}
+.tchip:hover { color: var(--text); border-color: var(--muted); }
+.tchip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.tchip.gated { border-style: dashed; }
+.tchip.gated.on { background: var(--warn); border-color: var(--warn); }
+.tcount { font-size: 12px; color: var(--muted); }
+.rerr { color: var(--bad); font-size: 13px; min-height: 16px; }
+
+/* pack modal */
+.pkfile { margin-bottom: 10px; font-size: 12.5px; color: var(--muted); }
+.pktext { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+
+@media (max-width: 560px) {
+  .airow { flex-direction: column; }
+  .mkt-actions { justify-content: stretch; }
+  .mkt-actions .btn { flex: 1; }
+}

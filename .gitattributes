@@ -1,0 +1,10 @@
+# Line endings for anything the LINUX IMAGE runs.
+#
+# GB is built from `git archive HEAD ghost-browser` on a Windows checkout, and git archive applies
+# the worktree eol conversion — so entrypoint.sh left the repo with CRLF even though the blob is LF.
+# A shebang ending in \r is not a path: the v195 pod crashlooped with
+#   exec /usr/local/bin/entrypoint.sh: no such file or directory
+# and the browser was down until v196. These files are LF wherever they are checked out or exported.
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf
