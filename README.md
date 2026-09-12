@@ -2,6 +2,8 @@
 
 A real Chromium, driven by numbered annotations instead of CSS selectors, behind an HTTP API — with an AI agent, a workflow engine, and record/replay on top.
 
+**→ [Set it up on your own VPS in ten minutes](SETUP.md)** — including routing the browser out through your own home connection so sites see a residential address.
+
 ## Why it looks like this
 
 The trick it is built on is **Set-of-Mark**: before any decision, every interactive element on
