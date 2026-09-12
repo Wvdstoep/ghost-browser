@@ -1,0 +1,42 @@
+{
+  "name": "read GitHub open issues",
+  "description": "Reads the open issues of a repo through a logged-in GitHub session, using a script node (no model calls, no writes). Points at this very repo by default.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "trigger",
+      "label": "start",
+      "trigger": {
+        "type": "manual"
+      }
+    },
+    {
+      "id": "read",
+      "type": "script",
+      "label": "extract open issues",
+      "url": "https://github.com/Wvdstoep/ghost-browser/issues",
+      "profile": "github",
+      "script": "var out=[];var seen={};\nvar A=document.querySelectorAll(\"a[href]\");\nfor(var i=0;i<A.length;i++){\n  var hh=A[i].getAttribute(\"href\")||\"\";\n  if(hh.indexOf(\"/issues/\")<0) continue;\n  var part=(hh.split(\"/issues/\")[1]||\"\").split(\"#\")[0].split(\"?\")[0];\n  if(!part||isNaN(Number(part))) continue;\n  if(seen[hh])continue; seen[hh]=1;\n  var t=(A[i].innerText||\"\").replace(/s+/g,\" \").trim();\n  if(t.length<6) continue;\n  out.push({number:Number(part),title:t});\n  if(out.length>=20) break;\n}\nreturn out;",
+      "outKey": "issues"
+    },
+    {
+      "id": "check",
+      "type": "verify",
+      "label": "issues page loaded",
+      "url": "https://github.com/Wvdstoep/ghost-browser/issues",
+      "profile": "github",
+      "text": "Issues",
+      "outKey": "ok"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "read"
+    },
+    {
+      "from": "read",
+      "to": "check"
+    }
+  ]
+}
