@@ -81,6 +81,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         wireCluster()
         observe()
 
+        // Notification permission (Android 13+) so the "connected" foreground notification can show.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101) } catch (e: Exception) {}
+        }
+
         load("file:///android_asset/home.html")
     }
 
@@ -260,6 +266,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.cluster.setOnClickListener {
             if (pollThread?.isAlive == true) {
                 pollStop = true; vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
+                try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
             } else {
                 vm.clusterUrl = b.clusterUrl.text.toString().trim()
                 val cookies = try { CookieManager.getInstance().getCookie(vm.clusterUrl) ?: "" } catch (e: Exception) { "" }
@@ -275,6 +282,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     client.run()
                     runOnUiThread { vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off" }
                 }.also { it.start() }
+                // keep the app alive with the screen off so it stays a reachable node
+                try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
             }
         }
         b.tailscaleBtn.setOnClickListener {
