@@ -1006,6 +1006,7 @@ app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() 
  * none, and neither half looks broken. Getting it wrong was silent. These cannot be typed wrongly
  * because there is nothing to type.
  */
+require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
 app.get('/v1/profiles/presets', authed, (_req, res) =>
   // Detailed, so a login labelled for a site counts even when it is called something else.
   res.json({ presets: sites.list(pool.listProfilesDetailed()) }));
