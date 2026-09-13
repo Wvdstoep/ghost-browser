@@ -41,12 +41,13 @@ import java.util.concurrent.TimeUnit
 class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser {
 
     private val HOME = "file:///android_asset/home.html"
+    private val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     private lateinit var b: ActivityMainBinding
     private val vm: GbViewModel by viewModels()
 
     // --- tabs ---
-    private inner class TabHandle(var url: String, var title: String, val profile: String) {
+    private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
         var web: WebView? = null
     }
     private val tabs = mutableListOf<TabHandle>()
@@ -121,7 +122,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val arr = JSONArray(raw)
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    tabs.add(TabHandle(o.optString("url", HOME), o.optString("title", "Tab"), o.optString("profile", "default")))
+                    tabs.add(TabHandle(o.optString("url", HOME), o.optString("title", "Tab"), o.optString("profile", "default"), o.optBoolean("desktop", false)))
                 }
             }
         } catch (e: Exception) {}
@@ -132,7 +133,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun persistTabs() {
         try {
             val arr = JSONArray()
-            for (h in tabs) arr.put(JSONObject().put("url", h.url).put("title", h.title).put("profile", h.profile))
+            for (h in tabs) arr.put(JSONObject().put("url", h.url).put("title", h.title).put("profile", h.profile).put("desktop", h.desktop))
             vm.tabsJson = arr.toString(); vm.activeTabIndex = activeTab
         } catch (e: Exception) {}
     }
@@ -183,20 +184,34 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun showMenu() {
         val pm = PopupMenu(this, b.menuBtn)
-        pm.menu.add(0, 1, 0, "Tools · Agent · Profiles · Cluster")
+        val desk = tabs.getOrNull(activeTab)?.desktop == true
+        pm.menu.add(0, 1, 0, "Tools · Agent · Profiles · Flows · Cluster")
         pm.menu.add(0, 2, 1, "New tab")
         pm.menu.add(0, 3, 2, "Reload")
-        pm.menu.add(0, 4, 3, "Close this tab")
+        pm.menu.add(0, 5, 3, if (desk) "Request mobile site" else "Request desktop site")
+        pm.menu.add(0, 4, 4, "Close this tab")
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> b.panel.visibility = if (b.panel.visibility == View.GONE) View.VISIBLE else View.GONE
                 2 -> newTab()
                 3 -> if (this::web.isInitialized) web.reload()
                 4 -> closeTab(activeTab)
+                5 -> toggleDesktop()
             }
             true
         }
         pm.show()
+    }
+
+    /** Chrome-style "Request desktop site" — swaps the UA and reloads this tab (some portals, e.g.
+     *  Rapyd, refuse mobile browsers). Rebuilds the WebView so the new UA takes effect from the start. */
+    private fun toggleDesktop() {
+        val i = activeTab; if (i !in tabs.indices) return
+        val h = tabs[i]; h.desktop = !h.desktop
+        vm.log(if (h.desktop) "🖥 desktop site" else "📱 mobile site")
+        try { h.web?.let { (it.parent as? ViewGroup)?.removeView(it); it.destroy() } } catch (e: Exception) {}
+        h.web = null
+        activateTab(i)
     }
 
     // ---- tab switcher -----------------------------------------------------------------------------
@@ -272,6 +287,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         s.setSupportZoom(true); s.builtInZoomControls = true; s.displayZoomControls = false
         s.mediaPlaybackRequiresUserGesture = false
         s.userAgentString = s.userAgentString.replace("; wv", "")     // present as real mobile Chrome
+        if (h.desktop) s.userAgentString = DESKTOP_UA                 // "Request desktop site" for portals that refuse mobile
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.webViewClient = object : WebViewClient() {
@@ -584,8 +600,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun openPlatform(prof: String, site: String) {
         vm.addProfile(prof)              // creates it if new and selects it
         renderChips()
-        newTab(site)                     // open a new tab in this platform's isolated profile
-        vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
+        val host = try { Uri.parse(site).host } catch (e: Exception) { null }
+        val existing = tabs.indexOfFirst { it.profile == prof && host != null && (try { Uri.parse(it.url).host } catch (e: Exception) { null }) == host }
+        if (existing >= 0) {             // don't spawn duplicates — focus the platform's own tab
+            activateTab(existing); b.panel.visibility = View.GONE
+            vm.log("↺ switched to the \"$prof\" tab for $host")
+        } else {
+            newTab(site)                 // open a new tab in this platform's isolated profile
+            vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
+        }
     }
 
     // ---- Flows panel (automations — the same workflow engine GB runs) ---------------------------
