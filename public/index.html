@@ -489,14 +489,23 @@ KEY="gb_live_9f3c2a71b0e4…"      # from GET /api/auth/key</pre>
 
             <div class="endpoint">
               <div class="ep-head"><span class="method post">POST</span><code class="epath">/v1/sessions/:id/type</code><span class="ep-auth">bearer</span></div>
-              <p class="ep-desc">Type into a field box, human-paced. Pass <code>submit: true</code> to press Enter afterwards.</p>
+              <p class="ep-desc">Type into a field box, human-paced. It re-reads the page if it moved (so the number still names the right field), scrolls the field on-screen first, and clears it before typing. For a <b>rich / markdown / React editor</b>, pass <code>paste: true</code>: it inserts the whole block so the editor actually registers it &mdash; plain typing into such a box lands in a hidden backing field and silently does nothing (this is what made a Bugcrowd biography or a GitHub comment look filled but submit empty). <code>submit: true</code> presses Enter after.</p>
+              <table class="ptable"><thead><tr><th>Field</th><th>Type</th><th>Req</th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr><td class="nm">index</td><td class="ty">number</td><td class="req">yes</td><td>The field&rsquo;s number from the last analyze.</td></tr>
+                  <tr><td class="nm">text</td><td class="ty">string</td><td class="req">yes</td><td>What to type.</td></tr>
+                  <tr><td class="nm">paste</td><td class="ty">boolean</td><td class="req">no</td><td>Insert the whole block at once, firing the input events a rich / markdown / contenteditable editor needs. Use for any editor that ignores plain typing.</td></tr>
+                  <tr><td class="nm">clear</td><td class="ty">boolean</td><td class="req">no</td><td>Select and replace the field&rsquo;s existing content first. Default true.</td></tr>
+                  <tr><td class="nm">submit</td><td class="ty">boolean</td><td class="req">no</td><td>Press Enter after typing.</td></tr>
+                </tbody>
+              </table>
               <div class="codewrap">
-                <div class="codebar"><span class="codelabel">Request body</span><button class="copybtn" type="button">Copy</button></div>
-                <pre class="code">{ "index": 1, "text": "someone@example.com", "submit": false }</pre>
+                <div class="codebar"><span class="codelabel">Request body &mdash; rich editor</span><button class="copybtn" type="button">Copy</button></div>
+                <pre class="code">{ "index": 14, "text": "Security researcher focused on web and API security...", "paste": true }</pre>
               </div>
               <div class="codewrap">
                 <div class="codebar"><span class="codelabel">Response 200</span><button class="copybtn" type="button">Copy</button></div>
-                <pre class="code">{ "typed": 19, "into": "Email or phone number", "url": "https://www.facebook.com/" }</pre>
+                <pre class="code">{ "typed": 371, "into": "biography", "mode": "paste", "url": "https://bugcrowd.com/h/onboarding" }</pre>
               </div>
             </div>
           </div>

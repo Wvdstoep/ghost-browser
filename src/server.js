@@ -816,31 +816,55 @@ app.post('/v1/sessions/:id/click', async (req, res) => {
       const fresh = await analyzePage(s.page);
       s.lastAnalysis = { elements: fresh.elements, url: fresh.url, scrollY };
     }
-    const target = await clickByIndex(s.page, Number(index), s.lastAnalysis.elements);
+    const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
     await s.page.mouse.click(target.x, target.y);
     await s.page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
     res.json({ clicked: { index: Number(index), text: target.text }, url: s.page.url() });
   } catch (e) { fail(res, e); }
 });
 
+// Scroll a target to mid-viewport if it is off-screen, so a coordinate action actually lands on it
+// (the same fix the agent uses for long forms). Mutates and returns the target with a usable y.
+async function bringIntoView(page, target) {
+  const vh = await page.evaluate(() => window.innerHeight).catch(() => 800);
+  if (target.y < 40 || target.y > vh - 40) {
+    await page.mouse.wheel(0, target.y - Math.round(vh / 2));
+    await new Promise((r) => setTimeout(r, 500));
+    target.y = Math.round(vh / 2);
+  }
+  return target;
+}
+// Re-analyse when the page moved since the last look, so an index still names the thing the caller meant.
+async function freshIfMoved(s) {
+  const scrollY = await s.page.evaluate(() => window.scrollY).catch(() => 0);
+  if (!s.lastAnalysis || s.page.url() !== s.lastAnalysis.url || Math.abs(scrollY - s.lastAnalysis.scrollY) > 40) {
+    const fresh = await analyzePage(s.page);
+    s.lastAnalysis = { elements: fresh.elements, url: fresh.url, scrollY };
+  }
+}
+
 app.post('/v1/sessions/:id/type', async (req, res) => {
   try {
     const s = mine(req);
-    const { index, text = '', submit = false } = req.body || {};
+    const { index, text = '', submit = false, paste = false, clear = true } = req.body || {};
     if (!s.lastAnalysis) return res.status(409).json({ error: 'analyze the page first' });
-    const target = await clickByIndex(s.page, Number(index), s.lastAnalysis.elements);
-    await s.page.mouse.click(target.x, target.y);
-    /*
-     * Typed with a delay rather than filled in one shot. It is the cheapest piece of human-looking
-     * behaviour available, and instantaneous text in a field is one of the easiest automation
-     * signals to spot.
-     */
-    await s.page.keyboard.type(String(text), { delay: 45 + Math.floor(Math.random() * 55) });
+    await freshIfMoved(s);
+    const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
+    // Focus the field; triple-click selects its own content so a re-type REPLACES rather than appends.
+    await s.page.mouse.click(target.x, target.y, clear ? { clickCount: 3 } : {});
+    if (paste) {
+      // insertText fires the input events a RICH editor (markdown/contenteditable/React) needs, which
+      // keyboard.type into a hidden backing textarea does not — this is why a bio/markdown box now fills.
+      await s.page.keyboard.press('Control+A').catch(() => {});
+      await s.page.keyboard.insertText(String(text));
+    } else {
+      await s.page.keyboard.type(String(text), { delay: 45 + Math.floor(Math.random() * 55) });
+    }
     if (submit) {
       await s.page.keyboard.press('Enter');
       await s.page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
     }
-    res.json({ typed: String(text).length, into: target.text, url: s.page.url() });
+    res.json({ typed: String(text).length, into: target.text, mode: paste ? 'paste' : 'type', url: s.page.url() });
   } catch (e) { fail(res, e); }
 });
 
