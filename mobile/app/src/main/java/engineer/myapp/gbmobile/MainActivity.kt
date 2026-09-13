@@ -48,6 +48,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var server: GbServer? = null
     private var agentThread: Thread? = null
     @Volatile private var agentStop: Boolean = false
+    private var pollThread: Thread? = null
+    @Volatile private var pollStop: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,6 +129,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + Uri.encode(u)
         }
         b.url.setText(u); web.loadUrl(u)
+        b.panel.visibility = View.GONE   // collapse the tools sheet so the page is visible after navigating
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -238,7 +241,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // login in its own WebView (passes SSO/Cloudflare), and the session cookie then authorizes API calls.
         b.signin.setOnClickListener {
             vm.clusterUrl = b.clusterUrl.text.toString().trim()
-            if (vm.clusterUrl.isNotEmpty()) { load(vm.clusterUrl); vm.log("→ opening cluster SSO — sign in, then tap Fetch profiles") }
+            // The GB tool page is SSO-only (no password there). You sign in on the PLATFORM and open
+            // Ghost Browser from its Tools tab — so open the workspace, not the ghost-browser subdomain.
+            val platform = if (vm.clusterUrl.contains("://ghost-browser."))
+                vm.clusterUrl.replace("://ghost-browser.", "://") else "https://my-app.engineer"
+            load(platform)
+            vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ → Fetch profiles")
         }
         // Once signed in (WebView is on the cluster origin), a same-origin authed fetch pulls the profiles.
         b.fetchProfiles.setOnClickListener {
@@ -250,14 +258,23 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             vm.log("↑ fetching cluster profiles…")
         }
         b.cluster.setOnClickListener {
-            if (server == null) {
-                try {
-                    server = GbServer(8471, vm.deviceToken, this).apply { start(NanoHTTPD.SOCKET_READ_TIMEOUT, false) }
-                    vm.clusterOn.value = true
-                    vm.clusterInfo.value = "Cluster: ON — GB API on :8471\ntoken: ${vm.deviceToken}\nJoin this device to your tailnet; the backend can then drive it."
-                } catch (e: Exception) { vm.clusterInfo.value = "Cluster: failed — ${e.message}" }
+            if (pollThread?.isAlive == true) {
+                pollStop = true; vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
             } else {
-                server?.stop(); server = null; vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
+                vm.clusterUrl = b.clusterUrl.text.toString().trim()
+                val cookies = try { CookieManager.getInstance().getCookie(vm.clusterUrl) ?: "" } catch (e: Exception) { "" }
+                if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in (SSO), open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
+                pollStop = false; vm.clusterOn.value = true
+                vm.clusterInfo.value = "Cluster: connecting… device \"${android.os.Build.MODEL}\""
+                val client = PollClient(
+                    vm.clusterUrl, vm.deviceToken, android.os.Build.MODEL,
+                    { try { CookieManager.getInstance().getCookie(vm.clusterUrl) ?: "" } catch (e: Exception) { "" } },
+                    this, { screenshotPng() }, { m -> vm.log(m) }, { pollStop }
+                )
+                pollThread = Thread {
+                    client.run()
+                    runOnUiThread { vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off" }
+                }.also { it.start() }
             }
         }
         b.tailscaleBtn.setOnClickListener {
@@ -302,7 +319,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     override fun onDestroy() {
-        agentStop = true
+        agentStop = true; pollStop = true
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()
     }
