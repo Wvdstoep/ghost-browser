@@ -158,6 +158,35 @@ Auth is `Authorization: Bearer <key>`; keys come from `API_KEYS` (`key:plan,key:
 
 ---
 
+## GB Mobile — Ghost Browser on your own devices
+
+`mobile/` is Ghost Browser as a **native Android app** running a **real on-device Chromium WebView**.
+Because it runs on your real phone — real residential IP, real device fingerprint, real touch — it walks
+through walls a server cannot (it **passes Cloudflare Turnstile** where a datacentre browser loops).
+
+Two ways to use it:
+
+- **Standalone** — an on-device agent (perceive → act) driven by **your own Ollama key**, or by an
+  **on-device model** (Gemma via MediaPipe LLM Inference) with **no key and no network** at all.
+- **Cluster** — the phone dials the backend and becomes a **drivable node**: it registers, long-polls for
+  commands, runs them on its real browser, and posts results back. So the hosted backend (or your own
+  scripts) can run a hunt on the device. Inbound-to-phone is impossible on Android, so it is always the
+  **phone that connects out** — no ports, no tailnet inbound.
+
+### Connecting is not tied to any one platform
+GB Mobile talks to **any** Ghost Browser server using GB's own auth:
+
+- **Self-hosted / open-source:** point it at **your GB URL** and authenticate with a **Bearer API key**
+  (your server's API_KEYS). No third-party sign-in required — anyone running GB can use it.
+- **Hosted on a platform** (e.g. my-app.engineer): authenticate via that platform's **SSO** — open Ghost
+  Browser from the platform, and the app rides the same session.
+
+The device command-queue lives in the GB server itself (the /v1/device/ endpoints), so it ships with
+open-source GB; the SSO handoff is a platform convenience layered on top, not a requirement.
+
+Prebuilt debug APK: [mobile/dist/app-debug.apk](mobile/dist/app-debug.apk). Build it: cd mobile then ./gradlew assembleDebug.
+
+
 ## Help wanted
 
 Two things that used to live here are now **solved**: the live view going black is fixed, and GB now
