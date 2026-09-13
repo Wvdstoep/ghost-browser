@@ -1,17 +1,98 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.GBMobile" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
-        <item name="colorOnPrimary">#06140a</item>
+        <item name="colorOnPrimary">@color/onAccent</item>
         <item name="colorPrimaryContainer">@color/accentDim</item>
         <item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
         <item name="colorSurface">@color/panel</item>
         <item name="colorSurfaceContainer">@color/panel2</item>
+        <item name="colorSurfaceContainerHigh">@color/panel2</item>
+        <item name="colorSurfaceContainerHighest">@color/panel2</item>
         <item name="colorOnSurface">@color/text</item>
         <item name="colorOnSurfaceVariant">@color/muted</item>
         <item name="colorOutline">@color/line</item>
+        <item name="colorOutlineVariant">@color/lineSoft</item>
+        <item name="colorError">@color/danger</item>
         <item name="android:colorBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bar</item>
         <item name="android:navigationBarColor">@color/bar</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:fontFamily">@font/manrope</item>
+        <item name="fontFamily">@font/manrope</item>
+        <item name="shapeAppearanceSmallComponent">@style/Shape.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/Shape.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/Shape.Large</item>
+    </style>
+
+    <style name="Shape.Small" parent="ShapeAppearance.Material3.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="Shape.Medium" parent="ShapeAppearance.Material3.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+    <style name="Shape.Large" parent="ShapeAppearance.Material3.LargeComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">22dp</item>
+    </style>
+
+    <style name="Text" />
+    <style name="Text.Eyebrow">
+        <item name="android:fontFamily">@font/manrope_bold</item>
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+    <style name="Text.Title">
+        <item name="android:fontFamily">@font/manrope_extrabold</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">19sp</item>
+        <item name="android:letterSpacing">-0.01</item>
+    </style>
+    <style name="Text.Body">
+        <item name="android:fontFamily">@font/manrope_regular</item>
+        <item name="android:textColor">@color/muted</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:lineSpacingMultiplier">1.25</item>
+    </style>
+
+    <style name="Text.Tab" parent="TextAppearance.Material3.TitleSmall">
+        <item name="android:fontFamily">@font/manrope_bold</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <style name="Btn.Primary" parent="Widget.Material3.Button">
+        <item name="android:fontFamily">@font/manrope_bold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="Btn.Tonal" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:fontFamily">@font/manrope_semibold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="Btn.Outline" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:fontFamily">@font/manrope_semibold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+    <style name="Input" parent="Widget.Material3.TextInputLayout.OutlinedBox.Dense">
+        <item name="boxCornerRadiusTopStart">12dp</item>
+        <item name="boxCornerRadiusTopEnd">12dp</item>
+        <item name="boxCornerRadiusBottomStart">12dp</item>
+        <item name="boxCornerRadiusBottomEnd">12dp</item>
+        <item name="boxStrokeColor">@color/line</item>
+        <item name="hintTextColor">@color/muted</item>
     </style>
 </resources>

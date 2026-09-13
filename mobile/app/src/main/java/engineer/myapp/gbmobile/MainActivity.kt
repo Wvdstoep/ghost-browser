@@ -7,14 +7,17 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.PopupMenu
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.activity.viewModels
@@ -25,22 +28,31 @@ import androidx.webkit.WebViewFeature
 import com.google.android.material.chip.Chip
 import com.google.android.material.tabs.TabLayout
 import engineer.myapp.gbmobile.databinding.ActivityMainBinding
-import fi.iki.elonen.NanoHTTPD
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * GB Mobile — Ghost Browser as a real on-device browser (MVVM). One shared WebView, two ways to drive
- * it: a STANDALONE on-device agent (your Ollama key) and CLUSTER mode (the backend drives it via the
- * GB API over the tailnet). Profiles give each identity its own isolated cookie jar.
+ * GB Mobile — Ghost Browser as a real on-device browser (MVVM). A true multi-tab browser: each tab is
+ * its own WebView under a chosen profile (isolated cookies). Two ways to drive the active tab: a
+ * STANDALONE on-device agent (your Ollama key or an on-device model) and CLUSTER mode (the backend
+ * drives it via the GB API over the tailnet).
  */
 class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser {
+
+    private val HOME = "file:///android_asset/home.html"
 
     private lateinit var b: ActivityMainBinding
     private val vm: GbViewModel by viewModels()
 
-    private lateinit var web: WebView
+    // --- tabs ---
+    private inner class TabHandle(var url: String, var title: String, val profile: String) {
+        var web: WebView? = null
+    }
+    private val tabs = mutableListOf<TabHandle>()
+    private var activeTab = -1
+    private lateinit var web: WebView                     // always the active tab's WebView
+
     private var gbJs: String = ""
     @Volatile private var lastUrl: String = ""
     @Volatile private var loadLatch: CountDownLatch? = null
@@ -48,8 +60,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var server: GbServer? = null
     private var agentThread: Thread? = null
     @Volatile private var agentStop: Boolean = false
-    private var pollThread: Thread? = null
-    @Volatile private var pollStop: Boolean = false
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
     private var platformFetchWeb: WebView? = null        // transient hidden WebView used to pull "Your platforms"
     private var gbControlJs: String = ""
@@ -64,16 +74,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
         gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
 
-        web = buildWebView(vm.currentProfile.value ?: "default")
-        b.webHolder.addView(web)
+        restoreTabs()
 
-        // top bar
-        b.go.setOnClickListener { loadInBar() }
-        b.home.setOnClickListener { load("file:///android_asset/home.html") }
-        b.tools.setOnClickListener { b.panel.visibility = if (b.panel.visibility == View.GONE) View.VISIBLE else View.GONE }
+        // Chrome-like top bar
+        b.home.setOnClickListener { load(HOME) }
+        b.newTab.setOnClickListener { newTab() }
+        b.tabCount.setOnClickListener { openSwitcher() }
+        b.menuBtn.setOnClickListener { showMenu() }
         b.url.setOnEditorActionListener { _, id, ev ->
             if (id == EditorInfo.IME_ACTION_GO || (ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN)) { loadInBar(); true } else false
         }
+
+        // tab switcher overlay
+        b.newTabInSwitcher.setOnClickListener { newTab(); closeSwitcher() }
+        b.closeSwitcher.setOnClickListener { closeSwitcher() }
 
         // tabs -> flipper
         b.tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
@@ -87,25 +101,163 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         wireCluster()
         observe()
 
-        // Notification permission (Android 13+) so the "connected" foreground notification can show.
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101) } catch (e: Exception) {}
         }
 
-        load("file:///android_asset/home.html")
+        activateTab(activeTab.coerceIn(0, tabs.size - 1))
     }
 
-    // ---- WebView (per-profile for isolated cookies) ----------------------------------------------
+    // ---- tabs -------------------------------------------------------------------------------------
+
+    private fun restoreTabs() {
+        try {
+            val raw = vm.tabsJson
+            if (raw.isNotBlank()) {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    tabs.add(TabHandle(o.optString("url", HOME), o.optString("title", "Tab"), o.optString("profile", "default")))
+                }
+            }
+        } catch (e: Exception) {}
+        if (tabs.isEmpty()) tabs.add(TabHandle(HOME, "New tab", vm.currentProfile.value ?: "default"))
+        activeTab = vm.activeTabIndex.coerceIn(0, tabs.size - 1)
+    }
+
+    private fun persistTabs() {
+        try {
+            val arr = JSONArray()
+            for (h in tabs) arr.put(JSONObject().put("url", h.url).put("title", h.title).put("profile", h.profile))
+            vm.tabsJson = arr.toString(); vm.activeTabIndex = activeTab
+        } catch (e: Exception) {}
+    }
+
+    private fun isActive(h: TabHandle) = activeTab in tabs.indices && tabs[activeTab] === h
+
+    private fun ensureWeb(h: TabHandle): WebView {
+        h.web?.let { return it }
+        val w = buildWebView(h); h.web = w
+        w.loadUrl(if (h.url.isBlank()) HOME else h.url)
+        return w
+    }
+
+    private fun activateTab(i: Int) {
+        if (i < 0 || i >= tabs.size) return
+        val h = tabs[i]
+        val w = ensureWeb(h)
+        (w.parent as? ViewGroup)?.removeView(w)
+        b.webHolder.removeAllViews()
+        b.webHolder.addView(w)
+        web = w; activeTab = i
+        lastUrl = h.url
+        if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
+        b.url.setText(if (h.url == HOME) "" else h.url)
+        updateTabCount()
+    }
+
+    private fun newTab(url: String = HOME, activate: Boolean = true) {
+        val prof = vm.currentProfile.value ?: "default"
+        tabs.add(TabHandle(url, if (url == HOME) "New tab" else url, prof))
+        if (activate) activateTab(tabs.size - 1) else updateTabCount()
+        b.panel.visibility = View.GONE
+    }
+
+    private fun closeTab(i: Int) {
+        if (i < 0 || i >= tabs.size) return
+        val h = tabs[i]
+        try { h.web?.let { (it.parent as? ViewGroup)?.removeView(it); it.destroy() } } catch (e: Exception) {}
+        tabs.removeAt(i)
+        if (tabs.isEmpty()) { activeTab = -1; newTab(HOME); return }
+        if (i < activeTab) activeTab--
+        if (activeTab >= tabs.size) activeTab = tabs.size - 1
+        activateTab(activeTab)
+        if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
+    }
+
+    private fun updateTabCount() { b.tabCount.text = if (tabs.size > 99) "99" else tabs.size.toString() }
+
+    private fun showMenu() {
+        val pm = PopupMenu(this, b.menuBtn)
+        pm.menu.add(0, 1, 0, "Tools · Agent · Profiles · Cluster")
+        pm.menu.add(0, 2, 1, "New tab")
+        pm.menu.add(0, 3, 2, "Reload")
+        pm.menu.add(0, 4, 3, "Close this tab")
+        pm.setOnMenuItemClickListener {
+            when (it.itemId) {
+                1 -> b.panel.visibility = if (b.panel.visibility == View.GONE) View.VISIBLE else View.GONE
+                2 -> newTab()
+                3 -> if (this::web.isInitialized) web.reload()
+                4 -> closeTab(activeTab)
+            }
+            true
+        }
+        pm.show()
+    }
+
+    // ---- tab switcher -----------------------------------------------------------------------------
+
+    private fun openSwitcher() { renderTabList(); b.tabSwitcher.visibility = View.VISIBLE }
+    private fun closeSwitcher() { b.tabSwitcher.visibility = View.GONE }
+
+    private fun renderTabList() {
+        b.tabList.removeAllViews()
+        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+        for (idx in tabs.indices) {
+            val h = tabs[idx]
+            val active = idx == activeTab
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(13), dp(8), dp(13))
+                background = getDrawable(R.drawable.bg_card_ripple)
+                val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
+            }
+            val col = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
+            }
+            col.addView(android.widget.TextView(this).apply {
+                text = if (h.title.isBlank()) "New tab" else h.title
+                setTextColor(getColor(if (active) R.color.accent else R.color.text)); textSize = 15f
+                typeface = resources.getFont(R.font.manrope_bold); maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            col.addView(android.widget.TextView(this).apply {
+                text = hostLabel(h.url) + (if (h.profile != "default") "  ·  ${h.profile}" else "")
+                setTextColor(getColor(R.color.muted)); textSize = 12f
+                typeface = resources.getFont(R.font.manrope_regular); maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, dp(2), 0, 0)
+            })
+            row.addView(col)
+            row.addView(android.widget.ImageButton(this).apply {
+                setImageResource(R.drawable.ic_close); setColorFilter(getColor(R.color.muted))
+                background = getDrawable(R.drawable.bg_icon_ripple)
+                layoutParams = android.widget.LinearLayout.LayoutParams(dp(38), dp(38))
+                setPadding(dp(9), dp(9), dp(9), dp(9))
+                setOnClickListener { closeTab(idx) }
+            })
+            row.setOnClickListener { activateTab(idx); closeSwitcher() }
+            b.tabList.addView(row)
+        }
+    }
+
+    private fun hostLabel(u: String): String {
+        if (u == HOME || u.startsWith("file:")) return "Home"
+        return try { Uri.parse(u).host ?: u } catch (e: Exception) { u }
+    }
+
+    // ---- WebView (per-tab, per-profile for isolated cookies) --------------------------------------
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun buildWebView(profile: String): WebView {
+    private fun buildWebView(h: TabHandle): WebView {
         val w = WebView(this)
-        // Attach an isolated profile BEFORE any load, if the platform WebView supports multi-profile.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try {
-                ProfileStore.getInstance().getOrCreateProfile(profile)
-                WebViewCompat.setProfile(w, profile)
+                ProfileStore.getInstance().getOrCreateProfile(h.profile)
+                WebViewCompat.setProfile(w, h.profile)
             } catch (e: Exception) { /* fall back to the default shared profile */ }
         }
         val s = w.settings
@@ -120,16 +272,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) { lastUrl = url ?: ""; b.url.setText(lastUrl) }
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                h.url = url ?: h.url
+                if (isActive(h)) { lastUrl = h.url; b.url.setText(if (h.url == HOME) "" else h.url) }
+            }
             override fun onPageFinished(view: WebView?, url: String?) {
-                lastUrl = url ?: lastUrl
+                h.url = url ?: h.url
+                if (isActive(h)) lastUrl = h.url
                 if (gbJs.isNotEmpty()) view?.evaluateJavascript(gbJs, null)
                 loadLatch?.countDown()
+                if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
             }
         }
-        w.webChromeClient = WebChromeClient()
+        w.webChromeClient = object : WebChromeClient() {
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                if (!title.isNullOrBlank()) h.title = title
+                if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
+            }
+        }
         w.addJavascriptInterface(Bridge(), "GBHost")   // lets injected JS hand results back to the app
-        w.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
+        w.layoutParams = ViewGroup.LayoutParams(-1, -1)
         return w
     }
 
@@ -140,12 +302,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (!u.startsWith("http") && !u.startsWith("file:")) {
             u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + Uri.encode(u)
         }
-        b.url.setText(u); web.loadUrl(u)
-        b.panel.visibility = View.GONE   // collapse the tools sheet so the page is visible after navigating
+        b.url.setText(if (u == HOME) "" else u)
+        if (this::web.isInitialized) web.loadUrl(u)
+        b.panel.visibility = View.GONE
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && this::web.isInitialized && web.canGoBack()) { web.goBack(); return true }
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (b.tabSwitcher.visibility == View.VISIBLE) { closeSwitcher(); return true }
+            if (b.panel.visibility == View.VISIBLE) { b.panel.visibility = View.GONE; return true }
+            if (this::web.isInitialized && web.canGoBack()) { web.goBack(); return true }
+        }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -207,7 +374,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.endpoint.setText(vm.endpoint); b.apiKey.setText(vm.apiKey); b.model.setText(vm.model); b.task.setText(vm.task)
         b.customUrl.setText(vm.customUrl); b.useLocal.isChecked = vm.useLocal
 
-        // on-device model selector
         val labels = ModelCatalog.models.map { it.label }
         b.modelSpinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         b.modelSpinner.setSelection(ModelCatalog.models.indexOfFirst { it.id == vm.selectedModel }.coerceAtLeast(0))
@@ -248,7 +414,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val goal = vm.task.trim()
             if (goal.isEmpty()) { vm.log("! enter a task first"); return@setOnClickListener }
             val brain: Llm = if (vm.useLocal) {
-                if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — tap Download / Use first"); return@setOnClickListener }
+                if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — tap Download first"); return@setOnClickListener }
                 vm.log("▶ brain: on-device (${vm.selectedModel})"); LocalLlm(this, models.path(vm.selectedModel), ModelCatalog.byId(vm.selectedModel).family)
             } else {
                 if (vm.endpoint.isBlank()) { vm.log("! set an Ollama endpoint, or tick 'Use on-device model'"); return@setOnClickListener }
@@ -263,7 +429,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.stop.setOnClickListener { agentStop = true; vm.log("… stopping") }
     }
 
-    // ---- Profiles panel (isolated cookie jars) --------------------------------------------------
+    // ---- Profiles panel -------------------------------------------------------------------------
 
     private fun wireProfiles() {
         renderChips()
@@ -271,16 +437,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val name = b.newProfile.text.toString()
             if (name.isBlank()) return@setOnClickListener
             vm.addProfile(name); b.newProfile.setText("")
-            renderChips(); switchProfile(vm.currentProfile.value ?: "default")
+            renderChips(); newTab()
         }
         b.loadPlatforms.setOnClickListener { loadPlatforms() }
     }
 
+    private fun renderChips() {
+        b.profileChips.removeAllViews()
+        val cur = vm.currentProfile.value
+        for (p in vm.profiles.value ?: emptyList()) {
+            val chip = Chip(this).apply {
+                text = p; isCheckable = true; isChecked = (p == cur)
+                setOnClickListener { vm.selectProfile(p); renderChips(); newTab() }
+            }
+            b.profileChips.addView(chip)
+        }
+        b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}"
+    }
+
     // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
 
-    /** Pull the backend's platform list (same-origin authed fetch on the GB origin, reusing the SSO
-     *  cookies stored in the CURRENT profile) into selectable cards. The phone is a separate browser,
-     *  so tapping a card opens that platform here to log in once — the session then persists on-device. */
     private fun loadPlatforms() {
         val url = vm.clusterUrl.trim()
         if (url.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
@@ -304,13 +480,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 view?.evaluateJavascript(js, null)
             }
         }
-        (b.root as android.view.ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
+        (b.root as ViewGroup).addView(w, 1, 1)
         platformFetchWeb = w
         w.loadUrl(url)
     }
 
     private fun stopPlatformFetch() {
-        platformFetchWeb?.let { pw -> try { (pw.parent as? android.view.ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
+        platformFetchWeb?.let { pw -> try { (pw.parent as? ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
         platformFetchWeb = null
     }
 
@@ -326,40 +502,41 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val site = p.optString("site")
             if (key.isBlank() || site.isBlank()) continue
             val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
-            val onPhone = known.contains(prof)
-            b.platformCards.addView(platformCard(label, site, prof, onPhone))
+            b.platformCards.addView(platformCard(label, site, prof, known.contains(prof)))
         }
     }
 
-    /** One row card: platform name + site + status, with an Open button that switches to this
-     *  platform's isolated profile and navigates there so the user logs in once. */
     private fun platformCard(label: String, site: String, prof: String, onPhone: Boolean): View {
         fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
         val row = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(8); layoutParams = lp
-            setBackgroundColor(getColor(R.color.panel))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(12), dp(12))
+            background = getDrawable(R.drawable.bg_card_ripple)
+            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
+            setOnClickListener { openPlatform(prof, site) }
         }
         val col = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
             layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
         }
         col.addView(android.widget.TextView(this).apply {
-            text = label; setTextColor(getColor(R.color.text)); textSize = 14f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            text = label; setTextColor(getColor(R.color.text)); textSize = 15f
+            typeface = resources.getFont(R.font.manrope_bold)
         })
         val host = try { Uri.parse(site).host ?: site } catch (e: Exception) { site }
         col.addView(android.widget.TextView(this).apply {
-            text = host + (if (onPhone) "   • signed in on this phone ✓" else "   • not signed in here yet")
-            setTextColor(getColor(if (onPhone) R.color.accent else R.color.muted)); textSize = 11f
+            text = host + (if (onPhone) "   ·  signed in ✓" else "   ·  not signed in yet")
+            setTextColor(getColor(if (onPhone) R.color.accent else R.color.muted)); textSize = 12f
+            typeface = resources.getFont(R.font.manrope_regular); setPadding(0, dp(2), 0, 0)
         })
         row.addView(col)
         row.addView(com.google.android.material.button.MaterialButton(
             this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
         ).apply {
             text = if (onPhone) "Open" else "Open & sign in"
+            isAllCaps = false
+            typeface = resources.getFont(R.font.manrope_semibold)
             setOnClickListener { openPlatform(prof, site) }
         })
         return row
@@ -368,53 +545,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun openPlatform(prof: String, site: String) {
         vm.addProfile(prof)              // creates it if new and selects it
         renderChips()
-        switchProfile(prof, site)        // isolate cookies, then land on the platform to log in once
-        b.panel.visibility = View.GONE
+        newTab(site)                     // open a new tab in this platform's isolated profile
         vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
-    }
-
-    private fun renderChips() {
-        b.profileChips.removeAllViews()
-        val cur = vm.currentProfile.value
-        for (p in vm.profiles.value ?: emptyList()) {
-            val chip = Chip(this).apply {
-                text = p; isCheckable = true; isChecked = (p == cur)
-                setOnClickListener { switchProfile(p) }
-            }
-            b.profileChips.addView(chip)
-        }
-        b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}"
-    }
-
-    private fun switchProfile(name: String, target: String? = null) {
-        val already = name == vm.currentProfile.value && this::web.isInitialized && web.parent != null
-        if (already) { if (target != null) load(target); return }
-        vm.selectProfile(name)
-        try { web.destroy() } catch (e: Exception) {}
-        b.webHolder.removeAllViews()
-        web = buildWebView(name)
-        b.webHolder.addView(web)
-        b.currentProfileLabel.text = "Active: $name"
-        vm.log("↺ switched to profile \"$name\" (isolated cookies)")
-        load(target ?: "file:///android_asset/home.html")
     }
 
     // ---- Cluster panel --------------------------------------------------------------------------
 
     private fun wireCluster() {
         b.clusterUrl.setText(vm.clusterUrl)
-        // Sign in to the cluster via SSO — GB Mobile is a real browser, so it does the my-app.engineer
-        // login in its own WebView (passes SSO/Cloudflare), and the session cookie then authorizes API calls.
         b.signin.setOnClickListener {
             vm.clusterUrl = b.clusterUrl.text.toString().trim()
-            // The GB tool page is SSO-only (no password there). You sign in on the PLATFORM and open
-            // Ghost Browser from its Tools tab — so open the workspace, not the ghost-browser subdomain.
             val platform = if (vm.clusterUrl.contains("://ghost-browser."))
                 vm.clusterUrl.replace("://ghost-browser.", "://") else "https://my-app.engineer"
             load(platform)
-            vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ → Fetch profiles")
+            vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ → Fetch")
         }
-        // Once signed in (WebView is on the cluster origin), a same-origin authed fetch pulls the profiles.
         b.fetchProfiles.setOnClickListener {
             val js = "fetch('/v1/profiles/presets',{credentials:'include'})" +
                 ".then(function(r){return r.text()})" +
@@ -430,7 +575,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             } else {
                 vm.clusterUrl = b.clusterUrl.text.toString().trim()
                 val cookies = cookiesFor(vm.clusterUrl)
-                if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in (SSO), open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
+                if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
                 vm.clusterInfo.value = "Cluster: connecting…"; vm.log("→ connecting (control channel on the GB origin)…")
                 startControlWeb()
                 try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
@@ -455,12 +600,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         vm.agentRunning.observe(this) { running -> b.run.isEnabled = !running }
     }
 
-    // JS -> app bridge: injected page code hands results back here (e.g. the fetched cluster profiles).
+    // JS -> app bridge: injected page code hands results back here.
     inner class Bridge {
         @JavascriptInterface
         fun result(tag: String, data: String) { runOnUiThread { onBridge(tag, data) } }
 
-        // control channel (called from gb-control.js in the hidden WebView)
         @JavascriptInterface
         fun ctl(tag: String, data: String) = runOnUiThread {
             when (tag) {
@@ -518,7 +662,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     vm.log("   • " + p.optString("label", p.optString("key")) + " — " + p.optString("site") + loggedIn)
                 }
             } catch (e: Exception) { vm.log("! profiles parse failed (${e.message}); sign in first. ${data.take(100)}") }
-            "error" -> vm.log("! fetch error: ${data.take(160)} — tap Sign in (SSO) first")
+            "error" -> vm.log("! fetch error: ${data.take(160)} — tap Sign in first")
             else -> vm.log("$tag: ${data.take(160)}")
         }
     }
@@ -544,10 +688,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             }
         }
-        (b.root as android.view.ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
+        (b.root as ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
         ctrlWeb = w
         w.loadUrl(vm.clusterUrl)
-        // Mirror the activity log to the backend while connected, so the operator/master can watch this device.
         vm.logSink = { line -> pushLog(line) }
     }
 
@@ -561,21 +704,22 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun stopControlWeb() {
         vm.logSink = null
-        ctrlWeb?.let { cw -> try { (cw.parent as? android.view.ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
+        ctrlWeb?.let { cw -> try { (cw.parent as? ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
         ctrlWeb = null
     }
 
     override fun onPause() {
-        // Write cookies (SSO + per-profile logins) to disk so a session survives the app being killed.
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
+        persistTabs()
         super.onPause()
     }
 
     override fun onDestroy() {
-        agentStop = true; pollStop = true
+        agentStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
         try { stopControlWeb() } catch (e: Exception) {}
         try { stopPlatformFetch() } catch (e: Exception) {}
+        try { for (h in tabs) h.web?.destroy() } catch (e: Exception) {}
         try { cmdExec.shutdownNow() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()

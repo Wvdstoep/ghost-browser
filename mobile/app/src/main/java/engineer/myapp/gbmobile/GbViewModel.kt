@@ -35,6 +35,12 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
         set(v) { sp.edit().putString("clusterUrl", v).apply() }
 
+    // --- open tabs (restored across launches, like a real browser) ---
+    var tabsJson: String get() = sp.getString("tabs", "") ?: ""
+        set(v) { sp.edit().putString("tabs", v).apply() }
+    var activeTabIndex: Int get() = sp.getInt("activeTab", 0)
+        set(v) { sp.edit().putInt("activeTab", v).apply() }
+
     // --- device token (cluster mode) ---
     val deviceToken: String by lazy {
         var t = sp.getString("token", null)
