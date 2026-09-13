@@ -23,6 +23,14 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var task: String get() = sp.getString("task", "") ?: ""
         set(v) { sp.edit().putString("task", v).apply() }
 
+    // --- on-device model ---
+    var selectedModel: String get() = sp.getString("selModel", "gemma3-1b-int4") ?: "gemma3-1b-int4"
+        set(v) { sp.edit().putString("selModel", v).apply() }
+    var customUrl: String get() = sp.getString("customUrl", "") ?: ""
+        set(v) { sp.edit().putString("customUrl", v).apply() }
+    var useLocal: Boolean get() = sp.getBoolean("useLocal", false)
+        set(v) { sp.edit().putBoolean("useLocal", v).apply() }
+
     // --- cluster (my-app.engineer SSO) ---
     var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
         set(v) { sp.edit().putString("clusterUrl", v).apply() }

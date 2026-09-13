@@ -11,8 +11,8 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 11
+        versionName = "0.11"
     }
 
     buildTypes {
@@ -33,6 +33,7 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.6")
-    implementation("androidx.webkit:webkit:1.12.1")     // multi-profile: isolated cookies per profile
-    implementation("org.nanohttpd:nanohttpd:2.3.1")     // GB API server (cluster mode)
+    implementation("androidx.webkit:webkit:1.12.1")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("com.google.mediapipe:tasks-genai:0.10.24")   // on-device Gemma (LLM Inference)
 }
