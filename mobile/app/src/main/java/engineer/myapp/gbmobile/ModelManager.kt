@@ -5,23 +5,31 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** A few on-device models the user can pick by device strength, and a downloader with progress. */
+/** A few on-device models the user can pick by device strength, and a downloader with progress.
+ *  [family] selects the chat template LocalLlm wraps prompts in ("chatml" for Qwen, "gemma" for Gemma).
+ *  Defaults are UNGATED (Apache-2.0) so they download with no token; Gemma stays available for anyone
+ *  who supplies a free Hugging Face token after accepting Google's licence. */
 object ModelCatalog {
-    data class Model(val id: String, val label: String, val sizeMb: Int, val url: String, val note: String)
+    data class Model(val id: String, val label: String, val sizeMb: Int, val url: String, val note: String, val family: String = "chatml", val gated: Boolean = false)
     val models = listOf(
         Model(
-            "gemma3-1b-int4", "Gemma 3 · 1B (int4) — fast · ~550 MB", 555,
-            "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv1280.task",
-            "Runs on most modern phones (4 GB+ RAM)."
+            "qwen-0_5b", "Qwen 2.5 · 0.5B — fast · no token · ~550 MB", 547,
+            "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+            "Runs on most modern phones (4 GB+ RAM). No login needed.", "chatml"
         ),
         Model(
-            "gemma2-2b-int4", "Gemma 2 · 2B (int4) — stronger · ~1.3 GB", 1300,
-            "https://huggingface.co/litert-community/Gemma2-2B-IT/resolve/main/Gemma2-2B-IT_multi-prefill-seq_q4_ekv1280.task",
-            "For strong phones (6 GB+ RAM). Slower."
+            "qwen-1_5b", "Qwen 2.5 · 1.5B — stronger · no token · ~1.6 GB", 1600,
+            "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+            "For strong phones (6 GB+ RAM). Slower but sharper. No login needed.", "chatml"
+        ),
+        Model(
+            "gemma3-1b", "Gemma 3 · 1B — needs free HF token · ~550 MB", 555,
+            "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv1280.task",
+            "Google Gemma: accept the licence on huggingface.co once, then paste a HF read token above.", "gemma", true
         ),
         Model(
             "custom", "Custom — paste a .task URL below", 0, "",
-            "Any MediaPipe LLM .task URL (e.g. from HuggingFace/Kaggle after accepting the license)."
+            "Any MediaPipe LLM .task URL. Assumes a ChatML-style model (Qwen/most); Gemma files use the Gemma option.", "chatml"
         )
     )
     fun byId(id: String) = models.firstOrNull { it.id == id } ?: models.first()

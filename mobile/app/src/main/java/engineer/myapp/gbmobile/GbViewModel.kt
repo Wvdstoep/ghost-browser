@@ -24,7 +24,7 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         set(v) { sp.edit().putString("task", v).apply() }
 
     // --- on-device model ---
-    var selectedModel: String get() = sp.getString("selModel", "gemma3-1b-int4") ?: "gemma3-1b-int4"
+    var selectedModel: String get() = sp.getString("selModel", "qwen-0_5b") ?: "qwen-0_5b"
         set(v) { sp.edit().putString("selModel", v).apply() }
     var customUrl: String get() = sp.getString("customUrl", "") ?: ""
         set(v) { sp.edit().putString("customUrl", v).apply() }
@@ -67,10 +67,15 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     val clusterInfo = MutableLiveData("Cluster: off")
     val logText = MutableLiveData("")
 
+    // When connected to the cluster, the Activity sets this to mirror each log line to the backend
+    // (so the operator/master can watch this device). Cleared on disconnect. Best-effort.
+    @Volatile var logSink: ((String) -> Unit)? = null
+
     fun log(line: String) {
         val cur = logText.value ?: ""
         val next = (cur + line + "\n")
         logText.postValue(if (next.length > 12000) next.takeLast(12000) else next)
+        try { logSink?.invoke(line) } catch (e: Exception) {}
     }
     fun clearLog() { logText.value = "" }
 }

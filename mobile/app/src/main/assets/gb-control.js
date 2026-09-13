@@ -16,6 +16,15 @@
     }).catch(function () {});
   };
 
+  // Mirror the app's activity log to the backend so the operator/master can watch this device
+  // (its own on-device agent runs and the commands we drive). Best-effort, same-origin SSO fetch.
+  window.__gbLog = function (line) {
+    fetch('/v1/device/log', {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: DEV, line: line })
+    }).catch(function () {});
+  };
+
   function loop() {
     fetch('/v1/device/poll?deviceId=' + encodeURIComponent(DEV), { credentials: 'include' })
       .then(function (r) {

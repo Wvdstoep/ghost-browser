@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var pollThread: Thread? = null
     @Volatile private var pollStop: Boolean = false
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
+    private var platformFetchWeb: WebView? = null        // transient hidden WebView used to pull "Your platforms"
     private var gbControlJs: String = ""
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val models by lazy { ModelManager(this) }
@@ -248,7 +249,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (goal.isEmpty()) { vm.log("! enter a task first"); return@setOnClickListener }
             val brain: Llm = if (vm.useLocal) {
                 if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — tap Download / Use first"); return@setOnClickListener }
-                vm.log("▶ brain: on-device (${vm.selectedModel})"); LocalLlm(this, models.path(vm.selectedModel))
+                vm.log("▶ brain: on-device (${vm.selectedModel})"); LocalLlm(this, models.path(vm.selectedModel), ModelCatalog.byId(vm.selectedModel).family)
             } else {
                 if (vm.endpoint.isBlank()) { vm.log("! set an Ollama endpoint, or tick 'Use on-device model'"); return@setOnClickListener }
                 vm.log("▶ brain: Ollama (${vm.model})"); OllamaClient(vm.endpoint, vm.apiKey, vm.model)
@@ -272,6 +273,104 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             vm.addProfile(name); b.newProfile.setText("")
             renderChips(); switchProfile(vm.currentProfile.value ?: "default")
         }
+        b.loadPlatforms.setOnClickListener { loadPlatforms() }
+    }
+
+    // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
+
+    /** Pull the backend's platform list (same-origin authed fetch on the GB origin, reusing the SSO
+     *  cookies stored in the CURRENT profile) into selectable cards. The phone is a separate browser,
+     *  so tapping a card opens that platform here to log in once — the session then persists on-device. */
+    private fun loadPlatforms() {
+        val url = vm.clusterUrl.trim()
+        if (url.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
+        b.platformsHint.text = "loading…"
+        stopPlatformFetch()
+        val w = WebView(this)
+        val prof = vm.currentProfile.value ?: "default"
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}
+        }
+        w.settings.javaScriptEnabled = true
+        w.settings.domStorageEnabled = true
+        CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+        w.addJavascriptInterface(Bridge(), "GBHost")
+        w.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, u: String?) {
+                val js = "fetch('/v1/profiles/presets',{credentials:'include'})" +
+                    ".then(function(r){return r.text()})" +
+                    ".then(function(t){GBHost.result('platforms',t)})" +
+                    ".catch(function(e){GBHost.result('platerr',String(e))})"
+                view?.evaluateJavascript(js, null)
+            }
+        }
+        (b.root as android.view.ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
+        platformFetchWeb = w
+        w.loadUrl(url)
+    }
+
+    private fun stopPlatformFetch() {
+        platformFetchWeb?.let { pw -> try { (pw.parent as? android.view.ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
+        platformFetchWeb = null
+    }
+
+    private fun renderPlatforms(arr: JSONArray) {
+        b.platformCards.removeAllViews()
+        if (arr.length() == 0) { b.platformsHint.text = "no platforms on the cluster yet"; return }
+        b.platformsHint.text = "${arr.length()} platforms — tap to open & sign in here"
+        val known = (vm.profiles.value ?: emptyList()).toSet()
+        for (i in 0 until arr.length()) {
+            val p = arr.optJSONObject(i) ?: continue
+            val key = p.optString("key")
+            val label = p.optString("label", key).ifBlank { key }
+            val site = p.optString("site")
+            if (key.isBlank() || site.isBlank()) continue
+            val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
+            val onPhone = known.contains(prof)
+            b.platformCards.addView(platformCard(label, site, prof, onPhone))
+        }
+    }
+
+    /** One row card: platform name + site + status, with an Open button that switches to this
+     *  platform's isolated profile and navigates there so the user logs in once. */
+    private fun platformCard(label: String, site: String, prof: String, onPhone: Boolean): View {
+        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(8); layoutParams = lp
+            setBackgroundColor(getColor(R.color.panel))
+        }
+        val col = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        col.addView(android.widget.TextView(this).apply {
+            text = label; setTextColor(getColor(R.color.text)); textSize = 14f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        val host = try { Uri.parse(site).host ?: site } catch (e: Exception) { site }
+        col.addView(android.widget.TextView(this).apply {
+            text = host + (if (onPhone) "   • signed in on this phone ✓" else "   • not signed in here yet")
+            setTextColor(getColor(if (onPhone) R.color.accent else R.color.muted)); textSize = 11f
+        })
+        row.addView(col)
+        row.addView(com.google.android.material.button.MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = if (onPhone) "Open" else "Open & sign in"
+            setOnClickListener { openPlatform(prof, site) }
+        })
+        return row
+    }
+
+    private fun openPlatform(prof: String, site: String) {
+        vm.addProfile(prof)              // creates it if new and selects it
+        renderChips()
+        switchProfile(prof, site)        // isolate cookies, then land on the platform to log in once
+        b.panel.visibility = View.GONE
+        vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
     }
 
     private fun renderChips() {
@@ -287,8 +386,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}"
     }
 
-    private fun switchProfile(name: String) {
-        if (name == vm.currentProfile.value && this::web.isInitialized && web.parent != null) return
+    private fun switchProfile(name: String, target: String? = null) {
+        val already = name == vm.currentProfile.value && this::web.isInitialized && web.parent != null
+        if (already) { if (target != null) load(target); return }
         vm.selectProfile(name)
         try { web.destroy() } catch (e: Exception) {}
         b.webHolder.removeAllViews()
@@ -296,7 +396,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.webHolder.addView(web)
         b.currentProfileLabel.text = "Active: $name"
         vm.log("↺ switched to profile \"$name\" (isolated cookies)")
-        load("file:///android_asset/home.html")
+        load(target ?: "file:///android_asset/home.html")
     }
 
     // ---- Cluster panel --------------------------------------------------------------------------
@@ -397,6 +497,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun onBridge(tag: String, data: String) {
         when (tag) {
+            "platforms" -> {
+                try {
+                    val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
+                    renderPlatforms(arr)
+                    vm.log("↓ your platforms (${arr.length()}) — tap one to open & sign in on this phone")
+                } catch (e: Exception) {
+                    b.platformsHint.text = "sign in on the Cluster tab first"
+                    vm.log("! could not read platforms — sign in via the Cluster tab (SSO), then Load. ${data.take(80)}")
+                }
+                stopPlatformFetch()
+            }
+            "platerr" -> { b.platformsHint.text = "sign in on the Cluster tab first"; vm.log("! load platforms: ${data.take(140)}"); stopPlatformFetch() }
             "profiles" -> try {
                 val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                 vm.log("↓ cluster profiles (${arr.length()}):")
@@ -435,9 +547,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         (b.root as android.view.ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
         ctrlWeb = w
         w.loadUrl(vm.clusterUrl)
+        // Mirror the activity log to the backend while connected, so the operator/master can watch this device.
+        vm.logSink = { line -> pushLog(line) }
+    }
+
+    /** Push one log line to the backend via the control WebView (same-origin SSO fetch = the proven path). */
+    private fun pushLog(line: String) {
+        val cw = ctrlWeb ?: return
+        runOnUiThread {
+            try { cw.evaluateJavascript("if(window.__gbLog)window.__gbLog(" + JSONObject.quote(line) + ")", null) } catch (e: Exception) {}
+        }
     }
 
     private fun stopControlWeb() {
+        vm.logSink = null
         ctrlWeb?.let { cw -> try { (cw.parent as? android.view.ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
         ctrlWeb = null
     }
@@ -452,6 +575,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         agentStop = true; pollStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
         try { stopControlWeb() } catch (e: Exception) {}
+        try { stopPlatformFetch() } catch (e: Exception) {}
         try { cmdExec.shutdownNow() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()
