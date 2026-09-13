@@ -13,9 +13,9 @@ import java.net.URL
  * most hosted proxies expose). The device runs its OWN brain here — no cluster involved. Base URL,
  * API key and model are the user's own. Blocking call; run it off the UI thread.
  */
-class OllamaClient(private var baseUrl: String, private var apiKey: String, private var model: String) {
+class OllamaClient(private var baseUrl: String, private var apiKey: String, private var model: String) : Llm {
 
-    fun chat(system: String, user: String): String {
+    override fun chat(system: String, user: String): String {
         var base = baseUrl.trim().trimEnd('/')
         if (base.isEmpty()) throw IllegalStateException("no endpoint set")
         // Accept either a bare host or a full URL; normalise to the chat-completions path.

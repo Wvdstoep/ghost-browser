@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
     private var gbControlJs: String = ""
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val models by lazy { ModelManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -203,16 +204,58 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun wireAgent() {
         b.endpoint.setText(vm.endpoint); b.apiKey.setText(vm.apiKey); b.model.setText(vm.model); b.task.setText(vm.task)
+        b.customUrl.setText(vm.customUrl); b.useLocal.isChecked = vm.useLocal
+
+        // on-device model selector
+        val labels = ModelCatalog.models.map { it.label }
+        b.modelSpinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        b.modelSpinner.setSelection(ModelCatalog.models.indexOfFirst { it.id == vm.selectedModel }.coerceAtLeast(0))
+        fun selModel() = ModelCatalog.models[b.modelSpinner.selectedItemPosition]
+        fun refreshModel() {
+            val m = selModel(); vm.selectedModel = m.id
+            b.modelNote.text = m.note
+            b.modelStatus.text = if (models.isReady(m.id)) "ready ✓" else "not downloaded"
+        }
+        b.modelSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = refreshModel()
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+        refreshModel()
+
+        b.downloadModel.setOnClickListener {
+            val m = selModel(); vm.customUrl = b.customUrl.text.toString().trim()
+            if (models.isReady(m.id) && m.id != "custom") { b.modelStatus.text = "ready ✓"; vm.log("● ${m.label} already downloaded"); return@setOnClickListener }
+            val url = if (m.id == "custom") vm.customUrl else m.url
+            if (url.isBlank()) { vm.log("! paste a .task URL for the Custom option"); return@setOnClickListener }
+            b.modelProgress.visibility = View.VISIBLE; b.modelProgress.progress = 0
+            b.modelStatus.text = "downloading…"; b.downloadModel.isEnabled = false
+            vm.log("↓ downloading ${m.label}…")
+            models.download(m.id, url, m.sizeMb, b.hfToken.text.toString(),
+                { p -> runOnUiThread { b.modelProgress.progress = p; b.modelStatus.text = "downloading… $p%" } },
+                { ok, msg -> runOnUiThread {
+                    b.downloadModel.isEnabled = true; b.modelProgress.visibility = View.GONE
+                    if (ok) { b.modelStatus.text = "ready ✓"; vm.log("● model ${m.label} ready — tick 'Use on-device model'") }
+                    else { b.modelStatus.text = "failed"; vm.log("! model download: $msg") }
+                } })
+        }
+
         b.run.setOnClickListener {
             if (vm.agentRunning.value == true) { vm.log("… agent already running"); return@setOnClickListener }
             vm.endpoint = b.endpoint.text.toString(); vm.apiKey = b.apiKey.text.toString()
             vm.model = b.model.text.toString(); vm.task = b.task.text.toString()
+            vm.useLocal = b.useLocal.isChecked; vm.selectedModel = selModel().id
             val goal = vm.task.trim()
             if (goal.isEmpty()) { vm.log("! enter a task first"); return@setOnClickListener }
-            val llm = OllamaClient(vm.endpoint, vm.apiKey, vm.model)
+            val brain: Llm = if (vm.useLocal) {
+                if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — tap Download / Use first"); return@setOnClickListener }
+                vm.log("▶ brain: on-device (${vm.selectedModel})"); LocalLlm(this, models.path(vm.selectedModel))
+            } else {
+                if (vm.endpoint.isBlank()) { vm.log("! set an Ollama endpoint, or tick 'Use on-device model'"); return@setOnClickListener }
+                vm.log("▶ brain: Ollama (${vm.model})"); OllamaClient(vm.endpoint, vm.apiKey, vm.model)
+            }
             agentStop = false; vm.agentRunning.value = true; vm.log("▶ goal: $goal")
             agentThread = Thread {
-                Agent(this, llm, { m -> vm.log(m) }, { agentStop }).run(goal)
+                Agent(this, brain, { m -> vm.log(m) }, { agentStop }).run(goal)
                 runOnUiThread { vm.agentRunning.value = false; vm.log("— agent finished —") }
             }.also { it.start() }
         }

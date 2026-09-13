@@ -7,7 +7,7 @@ import org.json.JSONObject
  *  act -> repeat. Runs fully on-device with the user's own Ollama key; no cluster/master involved. */
 class Agent(
     private val browser: DeviceBrowser,
-    private val llm: OllamaClient,
+    private val llm: Llm,
     private val log: (String) -> Unit,
     private val isStopped: () -> Boolean
 ) {
