@@ -60,7 +60,7 @@ addEventListener('message', (e) => {
     ? { api: payload.socialApi, token: payload.socialToken } : null;
 })();
 
-let session = null, ws = null, activeProfile = '';
+let session = null, ws = null, activeProfile = '', framesSeen = 0, frameErr = false;
 
 const log = (m, cls='') => {
   const d = document.createElement('div');
@@ -380,6 +380,7 @@ const view = $('view');
 const ctx = view.getContext('2d', { alpha:false });
 
 function connectLive() {
+  framesSeen = 0; frameErr = false;
   if (ws) { try { ws.close(); } catch {} ws = null; }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(proto + '//' + location.host + mounted('/v1/live') + '?session=' + encodeURIComponent(session));
@@ -389,14 +390,19 @@ function connectLive() {
   ws.onmessage = async (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t === 'frame') {
-      /* Decoded off the main thread, then drawn in one go. Assigning a data URL to an <img> blanks
-         it while it decodes, which is what made the old polled version strobe. */
-      const blob = await (await fetch('data:image/jpeg;base64,' + m.data)).blob();
-      const bmp = await createImageBitmap(blob);
-      if (view.width !== bmp.width || view.height !== bmp.height) { view.width = bmp.width; view.height = bmp.height; }
-      ctx.drawImage(bmp, 0, 0);
-      bmp.close();
-      view.hidden = false; $('empty').classList.add('hide'); $('hint').hidden = false;
+      try {
+        /* Decode base64 -> Blob directly. fetch('data:...') is governed by CSP connect-src and
+           can fail silently in a sandboxed/proxied frame, leaving the canvas black on every profile. */
+        const bin = atob(m.data);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+        if (view.width !== bmp.width || view.height !== bmp.height) { view.width = bmp.width; view.height = bmp.height; }
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+        if (!framesSeen++) log('live view painting (' + view.width + 'x' + view.height + ')', 'ok');
+        view.hidden = false; $('empty').classList.add('hide'); $('hint').hidden = false;
+      } catch (e) { if (!frameErr) { frameErr = true; log('live frame draw failed: ' + (e && e.message || e), 'err'); } }
     } else if (m.t === 'url') { $('url').value = m.url; }
     else if (m.t === 'focus') {
       /* The tap landed on a real field → raise the keyboard (still inside the tap's activation).
