@@ -29,6 +29,8 @@
     fetch('/v1/device/poll?deviceId=' + encodeURIComponent(DEV), { credentials: 'include' })
       .then(function (r) {
         if (r.status === 204) { setTimeout(loop, 400); return; }
+        // 404 = the backend forgot us (GB pod rolled / restarted) → re-register instead of spinning.
+        if (r.status === 404) { setTimeout(reg, 800); return; }
         if (!r.ok) { GBHost.ctl('pollerr', String(r.status)); setTimeout(loop, 3000); return; }
         return r.json().then(function (cmd) {
           GBHost.onCommand(cmd.id || '', cmd.path || '/v1/info', JSON.stringify(cmd.body || {}));
@@ -38,11 +40,15 @@
       .catch(function (e) { GBHost.ctl('pollerr', String(e)); setTimeout(loop, 3000); });
   }
 
-  fetch('/v1/device/register', {
-    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceId: DEV, name: NAME })
-  }).then(function (r) {
-    if (r.ok) { GBHost.ctl('registered', DEV); loop(); }
-    else { GBHost.ctl('regfail', String(r.status)); }
-  }).catch(function (e) { GBHost.ctl('regfail', String(e)); });
+  function reg() {
+    fetch('/v1/device/register', {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: DEV, name: NAME })
+    }).then(function (r) {
+      if (r.ok) { GBHost.ctl('registered', DEV); loop(); }
+      else { GBHost.ctl('regfail', String(r.status)); setTimeout(reg, 4000); }
+    }).catch(function (e) { GBHost.ctl('regfail', String(e)); setTimeout(reg, 4000); });
+  }
+
+  reg();
 })();
