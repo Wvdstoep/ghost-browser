@@ -112,6 +112,24 @@ function attach({ server, pool, authorize, path = '/v1/live', logger = console }
         everyNthFrame: 1,
       });
 
+      /*
+       * A static page emits no screencastFrame until it next repaints, so the console live view
+       * stays black on a page that has finished painting (a settled sign-in form, an error page)
+       * even while the tab is in front and the stream is up. Prime it: capture one screenshot the
+       * moment the stream starts and send it on the same channel as a frame; the first real
+       * screencast frame paints over it. Best-effort - a failed capture just waits for the next
+       * repaint. (issue #1)
+       */
+      try {
+        const primer = await cdp.send('Page.captureScreenshot', {
+          format: 'jpeg', quality: Number(process.env.SCREENCAST_QUALITY) || 60,
+        });
+        if (primer && primer.data && ws.readyState === WebSocket.OPEN) {
+          const vp = (page.viewportSize && page.viewportSize()) || null;
+          ws.send(JSON.stringify({ t: 'frame', data: primer.data, w: (vp && vp.width) || 1280, h: (vp && vp.height) || 800 }));
+        }
+      } catch { /* the next repaint will paint it */ }
+
       cdp.on('Page.screencastFrame', async ({ data, sessionId, metadata }) => {
         /*
          * Acknowledge every frame, always. Chromium stops sending until the last one is acked, so a
