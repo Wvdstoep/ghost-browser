@@ -50,6 +50,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @Volatile private var agentStop: Boolean = false
     private var pollThread: Thread? = null
     @Volatile private var pollStop: Boolean = false
+    private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
+    private var gbControlJs: String = ""
+    private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +60,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         setContentView(b.root)
 
         gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
+        gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
 
         web = buildWebView(vm.currentProfile.value ?: "default")
         b.webHolder.addView(web)
@@ -277,25 +281,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             vm.log("↑ fetching cluster profiles…")
         }
         b.cluster.setOnClickListener {
-            if (pollThread?.isAlive == true) {
-                pollStop = true; vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
+            if (ctrlWeb != null) {
+                stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
                 try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
             } else {
                 vm.clusterUrl = b.clusterUrl.text.toString().trim()
                 val cookies = cookiesFor(vm.clusterUrl)
                 if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in (SSO), open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
-                pollStop = false; vm.clusterOn.value = true
-                vm.clusterInfo.value = "Cluster: connecting… device \"${android.os.Build.MODEL}\""
-                val client = PollClient(
-                    vm.clusterUrl, vm.deviceToken, android.os.Build.MODEL,
-                    { cookiesFor(vm.clusterUrl) },
-                    this, { screenshotPng() }, { m -> vm.log(m) }, { pollStop }
-                )
-                pollThread = Thread {
-                    client.run()
-                    runOnUiThread { vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off" }
-                }.also { it.start() }
-                // keep the app alive with the screen off so it stays a reachable node
+                vm.clusterInfo.value = "Cluster: connecting…"; vm.log("→ connecting (control channel on the GB origin)…")
+                startControlWeb()
                 try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
             }
         }
@@ -322,6 +316,40 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     inner class Bridge {
         @JavascriptInterface
         fun result(tag: String, data: String) { runOnUiThread { onBridge(tag, data) } }
+
+        // control channel (called from gb-control.js in the hidden WebView)
+        @JavascriptInterface
+        fun ctl(tag: String, data: String) = runOnUiThread {
+            when (tag) {
+                "registered" -> { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"; vm.log("● registered with the cluster — waiting for commands") }
+                "regfail" -> vm.log("! register failed (in-webview): $data — reopen GB from the platform Tools")
+                "pollerr" -> vm.log("… poll: $data")
+            }
+        }
+
+        @JavascriptInterface
+        fun onCommand(id: String, path: String, bodyStr: String) {
+            cmdExec.execute {
+                val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
+                val out = try {
+                    when (path) {
+                        "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
+                        "/v1/analyze" -> evalGb("window.__gb.mark()")
+                        "/v1/info" -> evalGb("window.__gb.info()")
+                        "/v1/content" -> evalGb("window.__gb.text()")
+                        "/v1/click" -> evalGb("window.__gb.click(${body.optInt("index", -1)})")
+                        "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
+                        "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
+                        "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
+                        else -> "{\"error\":\"unknown path\"}"
+                    }
+                } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
+                runOnUiThread {
+                    vm.log("↺ ran $path")
+                    ctrlWeb?.evaluateJavascript("window.__gbResult(" + JSONObject.quote(id) + ",200," + JSONObject.quote(out) + ")", null)
+                }
+            }
+        }
     }
 
     private fun onBridge(tag: String, data: String) {
@@ -340,6 +368,37 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun startControlWeb() {
+        stopControlWeb()
+        val w = WebView(this)
+        val prof = vm.currentProfile.value ?: "default"
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}
+        }
+        w.settings.javaScriptEnabled = true
+        w.settings.domStorageEnabled = true
+        CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+        w.addJavascriptInterface(Bridge(), "GBHost")
+        w.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (url != null && url.contains("ghost-browser") && gbControlJs.isNotEmpty()) {
+                    val js = gbControlJs.replace("__DEVICE_ID__", vm.deviceToken)
+                        .replace("__DEVICE_NAME__", android.os.Build.MODEL.replace("\"", "").replace("\\", ""))
+                    view?.evaluateJavascript(js, null)
+                }
+            }
+        }
+        (b.root as android.view.ViewGroup).addView(w, 1, 1)   // 1x1, effectively hidden
+        ctrlWeb = w
+        w.loadUrl(vm.clusterUrl)
+    }
+
+    private fun stopControlWeb() {
+        ctrlWeb?.let { cw -> try { (cw.parent as? android.view.ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
+        ctrlWeb = null
+    }
+
     override fun onPause() {
         // Write cookies (SSO + per-profile logins) to disk so a session survives the app being killed.
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
@@ -349,6 +408,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     override fun onDestroy() {
         agentStop = true; pollStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
+        try { stopControlWeb() } catch (e: Exception) {}
+        try { cmdExec.shutdownNow() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()
     }
