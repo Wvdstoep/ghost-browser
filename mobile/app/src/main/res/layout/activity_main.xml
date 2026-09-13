@@ -92,6 +92,7 @@
                 app:tabRippleColor="@color/accentDim">
                 <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Agent" />
                 <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Profiles" />
+                <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Flows" />
                 <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Cluster" />
             </com.google.android.material.tabs.TabLayout>
 
@@ -170,7 +171,30 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 2: Cluster -->
+                <!-- 2: Flows -->
+                <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView style="@style/Text.Eyebrow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Automations" />
+                    <TextView style="@style/Text.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="3dp" android:paddingBottom="10dp" android:text="Repeatable jobs — the same flows your Ghost Browser runs. Fetch them, run one over the API, or build a new one here." />
+                    <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+                        <com.google.android.material.button.MaterialButton android:id="@+id/loadFlows" style="@style/Btn.Tonal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Load from cluster" app:icon="@drawable/ic_link" app:iconSize="18dp" />
+                        <TextView android:id="@+id/flowsHint" style="@style/Text.Body" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="10dp" android:text="Sign in on the Cluster tab first" />
+                    </LinearLayout>
+                    <LinearLayout android:id="@+id/flowCards" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" />
+
+                    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/lineSoft" android:layout_marginTop="14dp" android:layout_marginBottom="14dp" />
+
+                    <TextView style="@style/Text.Eyebrow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="New automation" />
+                    <TextView style="@style/Text.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="3dp" android:paddingBottom="8dp" android:text="One plain-language goal per line. A manual trigger and the steps are chained for you." />
+                    <com.google.android.material.textfield.TextInputLayout style="@style/Input" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Automation name">
+                        <com.google.android.material.textfield.TextInputEditText android:id="@+id/flowName" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" android:textColor="@color/text" android:fontFamily="@font/manrope_regular" android:textSize="14sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.textfield.TextInputLayout style="@style/Input" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:hint="Steps — one goal per line">
+                        <com.google.android.material.textfield.TextInputEditText android:id="@+id/flowSteps" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textMultiLine|textCapSentences" android:minLines="3" android:gravity="top" android:textColor="@color/text" android:fontFamily="@font/manrope_regular" android:textSize="14sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.button.MaterialButton android:id="@+id/createFlow" style="@style/Btn.Tonal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Create on cluster" app:icon="@drawable/ic_add" app:iconSize="18dp" />
+                </LinearLayout>
+
+                <!-- 3: Cluster -->
                 <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
                     <TextView style="@style/Text.Eyebrow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Cluster" />
                     <TextView style="@style/Text.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="3dp" android:paddingBottom="10dp" android:text="Let the hosted backend drive this device for a hunt." />
