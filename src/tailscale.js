@@ -38,7 +38,7 @@ const SHIM_PORT = SOCKS_PORT + 2;
 const PROXY_URL = `http://127.0.0.1:${SHIM_PORT}`;
 const dnsShim = require('./dns-shim');
 let shimServer = null;
-function startShimOnce() { if (shimServer) return; try { shimServer = dnsShim.start({ shimPort: SHIM_PORT, tsHttpPort: SOCKS_PORT + 1, log }); } catch (e) { if (log && log.warn) log.warn('[dns-shim] start failed: ' + e.message); } }
+function startShimOnce(log) { if (shimServer) return; try { shimServer = dnsShim.start({ shimPort: SHIM_PORT, tsHttpPort: SOCKS_PORT + 1, log }); } catch (e) { if (log && log.warn) log.warn('[dns-shim] start failed: ' + e.message); } }
 const HOSTNAME = process.env.TAILSCALE_HOSTNAME || 'ghost-browser';
 
 let daemon = null;
@@ -93,7 +93,7 @@ async function startDaemon(log = console) {
 
   // Wait for the socket rather than sleeping: the CLI fails confusingly if it is not there yet.
   for (let i = 0; i < 100; i++) {
-    if (fs.existsSync(SOCK)) { startShimOnce(); return true; }
+    if (fs.existsSync(SOCK)) { startShimOnce(log); return true; }
     if (!daemon || daemon.killed) return false;
     await new Promise((r) => setTimeout(r, 100));
   }
