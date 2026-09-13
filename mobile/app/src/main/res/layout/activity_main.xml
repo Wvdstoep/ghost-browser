@@ -72,6 +72,10 @@
             <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Cluster" />
         </com.google.android.material.tabs.TabLayout>
 
+        <ScrollView
+            android:id="@+id/toolsScroll"
+            android:layout_width="match_parent" android:layout_height="380dp"
+            android:fillViewport="true">
         <ViewFlipper
             android:id="@+id/flipper"
             android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -177,6 +181,7 @@
                 </LinearLayout>
             </LinearLayout>
         </ViewFlipper>
+        </ScrollView>
 
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/line" />
         <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="140dp" android:padding="10dp" android:background="@color/bg">
