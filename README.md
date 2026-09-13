@@ -32,6 +32,7 @@ Ghost Browser is the missing hands. You log into a site **once, by hand**, and f
 - **Teach it a site's API by watching it.** **Route cards** record a platform's own network traffic once, distil it, and replay it — so the second run is fast and costs no model calls.
 - **Run many accounts, each isolated.** One **profile** per account, isolated cookies and storage, each labelled with the site it's signed into.
 - **Leave through your own home connection.** A built-in **Tailscale exit** routes a profile's traffic out through a device you own, so sites see a residential address instead of a datacentre. ([setup →](SETUP.md#4-the-part-that-makes-it-different-leave-through-your-home-connection))
+- **Pass sites behind Cloudflare.** Turnstile verifies against Cloudflare challenge hosts that are **IPv6-only**; a proxied browser can’t resolve them, so the “verify you are human” checkbox renders but never completes. Ghost Browser resolves those hosts locally and reaches them through your residential exit, so challenge-gated sites actually load and verify instead of hanging.
 
 ---
 
