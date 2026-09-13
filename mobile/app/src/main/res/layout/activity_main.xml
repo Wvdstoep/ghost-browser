@@ -126,7 +126,19 @@
             <!-- 1: Profiles -->
             <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="Profiles — each keeps its own isolated cookies / logins" android:textColor="@color/muted" android:textSize="12sp" android:paddingBottom="8dp" />
+                    android:text="Your platforms" android:textColor="@color/accent" android:textStyle="bold" android:paddingBottom="2dp" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="This phone is its own browser. Tap a platform to open it and sign in once here — the session then lives in its own isolated profile on the device (real residential IP, passes bot walls)." android:textColor="@color/muted" android:textSize="11sp" android:paddingBottom="8dp" />
+                <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+                    <com.google.android.material.button.MaterialButton android:id="@+id/loadPlatforms" style="@style/Widget.Material3.Button.TonalButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Load from cluster" />
+                    <TextView android:id="@+id/platformsHint" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Sign in on the Cluster tab first" android:textColor="@color/muted" android:textSize="12sp" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/platformCards" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" />
+
+                <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/line" android:layout_marginTop="12dp" android:layout_marginBottom="12dp" />
+
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Manual profiles — each keeps its own isolated cookies / logins" android:textColor="@color/muted" android:textSize="12sp" android:paddingBottom="8dp" />
                 <TextView android:id="@+id/currentProfileLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:text="Active: default" android:textColor="@color/accent" android:textSize="13sp" android:textStyle="bold" android:paddingBottom="8dp" />
                 <com.google.android.material.chip.ChipGroup android:id="@+id/profileChips" android:layout_width="match_parent" android:layout_height="wrap_content" app:singleSelection="true" />
