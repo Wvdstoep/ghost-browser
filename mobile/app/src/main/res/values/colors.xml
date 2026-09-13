@@ -1,12 +1,19 @@
 <resources>
     <color name="ic_bg">#0B5FFF</color>
-    <color name="bg">#0D100D</color>
-    <color name="bar">#0B0F0B</color>
-    <color name="panel">#161A15</color>
-    <color name="panel2">#1C211B</color>
-    <color name="line">#282E26</color>
-    <color name="accent">#4CC35E</color>
-    <color name="accentDim">#173A21</color>
-    <color name="text">#DCE2D9</color>
-    <color name="muted">#9AA598</color>
+    <color name="bg">#0A0D0B</color>
+    <color name="bar">#0A0D0B</color>
+    <color name="sheet">#0F120E</color>
+    <color name="panel">#141813</color>
+    <color name="panel2">#1B2019</color>
+    <color name="logbg">#070907</color>
+    <color name="line">#272E24</color>
+    <color name="lineSoft">#1F251D</color>
+    <color name="accent">#52CE67</color>
+    <color name="accentPressed">#43B457</color>
+    <color name="accentDim">#16331D</color>
+    <color name="onAccent">#04140A</color>
+    <color name="text">#EAF0E6</color>
+    <color name="muted">#9AA894</color>
+    <color name="faint">#6B7A66</color>
+    <color name="danger">#FF6B6B</color>
 </resources>
