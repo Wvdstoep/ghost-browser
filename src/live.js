@@ -104,6 +104,24 @@ function attach({ server, pool, authorize, path = '/v1/live', logger = console }
       try { await page.bringToFront(); } catch { /* a page that will not raise still streams if it is alone */ }
       cdp = await session.context.newCDPSession(page);
       await cdp.send('Page.enable');
+      // Static pages never emit a screencast frame until something paints; seed one screenshot
+      // so the console is not left on a black canvas after connect.
+      try {
+        const shot = await cdp.send('Page.captureScreenshot', {
+          format: 'jpeg',
+          quality: Number(process.env.SCREENCAST_QUALITY) || 60,
+        });
+        if (ws.readyState === WebSocket.OPEN && shot?.data) {
+          const viewport = page.viewportSize?.() || {};
+          ws.send(JSON.stringify({
+            t: 'frame',
+            data: shot.data,
+            w: viewport.width,
+            h: viewport.height,
+          }));
+        }
+      } catch { /* capture can fail on a closing page; screencast still starts below */ }
+
       await cdp.send('Page.startScreencast', {
         format: 'jpeg',
         // 60 is the point where text is still crisp and a full-page frame stays well under 100 KB.
