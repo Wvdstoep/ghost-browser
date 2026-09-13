@@ -2,36 +2,93 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#0d100d">
 
+    <!-- top browser bar -->
     <LinearLayout
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="6dp"
+        android:gravity="center_vertical"
         android:background="#0B1220">
 
-        <EditText
-            android:id="@+id/url"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:inputType="textUri"
-            android:imeOptions="actionGo"
-            android:hint="@string/url_hint"
-            android:textColor="#FFFFFF"
-            android:textColorHint="#7A8699"
-            android:singleLine="true" />
+        <Button android:id="@+id/home"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:minWidth="0dp" android:text="⌂" />
 
-        <Button
-            android:id="@+id/go"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/go" />
+        <EditText android:id="@+id/url"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:inputType="textUri" android:imeOptions="actionGo" android:singleLine="true"
+            android:hint="Enter a URL…" android:textColor="#FFFFFF" android:textColorHint="#7A8699" />
+
+        <Button android:id="@+id/go" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:minWidth="0dp" android:text="Go" />
+        <Button android:id="@+id/tools" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:minWidth="0dp" android:text="⚙" />
     </LinearLayout>
 
-    <WebView
-        android:id="@+id/web"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+    <WebView android:id="@+id/web"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+
+    <!-- tools panel: standalone agent + cluster connect + log (hidden until ⚙) -->
+    <ScrollView android:id="@+id/panel"
+        android:layout_width="match_parent" android:layout_height="360dp"
+        android:visibility="gone" android:background="#12161a" android:padding="12dp">
+
+        <LinearLayout android:orientation="vertical"
+            android:layout_width="match_parent" android:layout_height="wrap_content">
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="On-device agent (your Ollama key)" android:textColor="#4cc35e"
+                android:textStyle="bold" android:paddingBottom="6dp" />
+
+            <EditText android:id="@+id/endpoint" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:hint="Ollama endpoint (e.g. https://host/v1)" android:singleLine="true"
+                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
+            <EditText android:id="@+id/key" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:hint="API key" android:inputType="textPassword" android:singleLine="true"
+                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
+            <EditText android:id="@+id/model" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:hint="model (e.g. glm-4)" android:singleLine="true"
+                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
+            <EditText android:id="@+id/task" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:hint="Task — what should GB do?" android:textColor="#FFFFFF"
+                android:textColorHint="#7A8699" android:textSize="13sp" />
+
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:paddingTop="4dp">
+                <Button android:id="@+id/run" android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="▶ Run" />
+                <Button android:id="@+id/stop" android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="■ Stop" />
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#282e26" android:layout_marginTop="10dp" android:layout_marginBottom="10dp" />
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Cluster — let the backend drive this device" android:textColor="#4cc35e"
+                android:textStyle="bold" android:paddingBottom="6dp" />
+            <Button android:id="@+id/cluster" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Connect to cluster" />
+            <TextView android:id="@+id/clusterStatus" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Cluster: off" android:textColor="#9aa598" android:textSize="12sp"
+                android:fontFamily="monospace" android:paddingTop="4dp" />
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#282e26" android:layout_marginTop="10dp" android:layout_marginBottom="10dp" />
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Activity" android:textColor="#8a938a" android:textSize="12sp"
+                android:fontFamily="monospace" android:paddingBottom="4dp" />
+            <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="150dp"
+                android:background="#0d100d" android:padding="8dp">
+                <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="#dce2d9" android:textSize="12sp" android:fontFamily="monospace"
+                    android:textIsSelectable="true" />
+            </ScrollView>
+        </LinearLayout>
+    </ScrollView>
 </LinearLayout>
