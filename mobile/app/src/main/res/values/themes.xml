@@ -1,0 +1,17 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.GBMobile" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">#06140a</item>
+        <item name="colorPrimaryContainer">@color/accentDim</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSurface">@color/panel</item>
+        <item name="colorSurfaceContainer">@color/panel2</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bar</item>
+        <item name="android:navigationBarColor">@color/bar</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -4,6 +4,8 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
+> **v0.3** — Material 3 redesign, MVVM (ViewModel), and **profiles with isolated cookie jars** (each identity keeps its own logins). Tap **⚙** → tabs for **Agent / Profiles / Cluster**.
+
 Two ways to drive it, sharing one browser (tap **⚙** to open the panel):
 
 ## 1. Standalone — on-device agent (your Ollama key, no cluster)

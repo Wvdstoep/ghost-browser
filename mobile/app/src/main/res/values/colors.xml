@@ -1,3 +1,12 @@
 <resources>
     <color name="ic_bg">#0B5FFF</color>
+    <color name="bg">#0D100D</color>
+    <color name="bar">#0B0F0B</color>
+    <color name="panel">#161A15</color>
+    <color name="panel2">#1C211B</color>
+    <color name="line">#282E26</color>
+    <color name="accent">#4CC35E</color>
+    <color name="accentDim">#173A21</color>
+    <color name="text">#DCE2D9</color>
+    <color name="muted">#9AA598</color>
 </resources>

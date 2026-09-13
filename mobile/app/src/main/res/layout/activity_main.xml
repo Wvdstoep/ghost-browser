@@ -1,94 +1,143 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0d100d">
+    android:background="@color/bg">
 
-    <!-- top browser bar -->
+    <!-- Top bar -->
     <LinearLayout
         android:orientation="horizontal"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="6dp"
-        android:gravity="center_vertical"
-        android:background="#0B1220">
+        android:background="@color/bar"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="6dp"
+        android:gravity="center_vertical">
 
-        <Button android:id="@+id/home"
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/home"
+            style="@style/Widget.Material3.Button.IconButton"
             android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:minWidth="0dp" android:text="⌂" />
+            app:icon="@android:drawable/ic_menu_revert" app:iconTint="@color/muted" />
 
-        <EditText android:id="@+id/url"
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/urlLayout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:inputType="textUri" android:imeOptions="actionGo" android:singleLine="true"
-            android:hint="Enter a URL…" android:textColor="#FFFFFF" android:textColorHint="#7A8699" />
+            app:boxBackgroundColor="@color/panel" app:hintEnabled="false"
+            app:boxStrokeColor="@color/line" app:boxCornerRadiusTopStart="10dp"
+            app:boxCornerRadiusTopEnd="10dp" app:boxCornerRadiusBottomStart="10dp" app:boxCornerRadiusBottomEnd="10dp">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/url"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:inputType="textUri" android:imeOptions="actionGo" android:maxLines="1"
+                android:hint="Search or enter URL" android:textColor="@color/text"
+                android:textColorHint="@color/muted" android:textSize="14sp" />
+        </com.google.android.material.textfield.TextInputLayout>
 
-        <Button android:id="@+id/go" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:minWidth="0dp" android:text="Go" />
-        <Button android:id="@+id/tools" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:minWidth="0dp" android:text="⚙" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/go"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="4dp" android:minWidth="0dp" android:text="Go" android:insetTop="0dp" android:insetBottom="0dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/tools"
+            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            app:icon="@android:drawable/ic_menu_manage" />
     </LinearLayout>
 
-    <WebView android:id="@+id/web"
+    <FrameLayout
+        android:id="@+id/webHolder"
         android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
 
-    <!-- tools panel: standalone agent + cluster connect + log (hidden until ⚙) -->
-    <ScrollView android:id="@+id/panel"
-        android:layout_width="match_parent" android:layout_height="360dp"
-        android:visibility="gone" android:background="#12161a" android:padding="12dp">
+    <!-- Tools sheet (Agent / Profiles / Cluster) -->
+    <LinearLayout
+        android:id="@+id/panel"
+        android:orientation="vertical"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:visibility="gone" android:background="@color/panel"
+        android:elevation="12dp">
 
-        <LinearLayout android:orientation="vertical"
-            android:layout_width="match_parent" android:layout_height="wrap_content">
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/tabs"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            app:tabMode="fixed" app:tabTextColor="@color/muted" app:tabSelectedTextColor="@color/accent"
+            app:tabIndicatorColor="@color/accent" android:background="@color/panel">
+            <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Agent" />
+            <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Profiles" />
+            <com.google.android.material.tabs.TabItem android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Cluster" />
+        </com.google.android.material.tabs.TabLayout>
 
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:text="On-device agent (your Ollama key)" android:textColor="#4cc35e"
-                android:textStyle="bold" android:paddingBottom="6dp" />
+        <ViewFlipper
+            android:id="@+id/flipper"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:padding="14dp">
 
-            <EditText android:id="@+id/endpoint" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="Ollama endpoint (e.g. https://host/v1)" android:singleLine="true"
-                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
-            <EditText android:id="@+id/key" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="API key" android:inputType="textPassword" android:singleLine="true"
-                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
-            <EditText android:id="@+id/model" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="model (e.g. glm-4)" android:singleLine="true"
-                android:textColor="#FFFFFF" android:textColorHint="#7A8699" android:textSize="13sp" />
-            <EditText android:id="@+id/task" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:hint="Task — what should GB do?" android:textColor="#FFFFFF"
-                android:textColorHint="#7A8699" android:textSize="13sp" />
-
-            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:paddingTop="4dp">
-                <Button android:id="@+id/run" android:layout_width="0dp" android:layout_height="wrap_content"
-                    android:layout_weight="1" android:text="▶ Run" />
-                <Button android:id="@+id/stop" android:layout_width="0dp" android:layout_height="wrap_content"
-                    android:layout_weight="1" android:text="■ Stop" />
+            <!-- 0: Agent -->
+            <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="On-device agent — runs on your own Ollama key" android:textColor="@color/muted" android:textSize="12sp" android:paddingBottom="8dp" />
+                <com.google.android.material.textfield.TextInputLayout style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Ollama endpoint (https://host/v1)">
+                    <com.google.android.material.textfield.TextInputEditText android:id="@+id/endpoint" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textUri" android:maxLines="1" android:textColor="@color/text" android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+                <com.google.android.material.textfield.TextInputLayout style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:hint="API key" app:endIconMode="password_toggle">
+                    <com.google.android.material.textfield.TextInputEditText android:id="@+id/apiKey" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:maxLines="1" android:textColor="@color/text" android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+                <com.google.android.material.textfield.TextInputLayout style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:hint="Model (e.g. glm-4)">
+                    <com.google.android.material.textfield.TextInputEditText android:id="@+id/model" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" android:textColor="@color/text" android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+                <com.google.android.material.textfield.TextInputLayout style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:hint="Task — what should GB do?">
+                    <com.google.android.material.textfield.TextInputEditText android:id="@+id/task" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/text" android:textSize="14sp" />
+                </com.google.android.material.textfield.TextInputLayout>
+                <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp">
+                    <com.google.android.material.button.MaterialButton android:id="@+id/run" style="@style/Widget.Material3.Button" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Run" app:icon="@android:drawable/ic_media_play" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/stop" style="@style/Widget.Material3.Button.OutlinedButton" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Stop" />
+                </LinearLayout>
             </LinearLayout>
 
-            <View android:layout_width="match_parent" android:layout_height="1dp"
-                android:background="#282e26" android:layout_marginTop="10dp" android:layout_marginBottom="10dp" />
+            <!-- 1: Profiles -->
+            <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Profiles — each keeps its own isolated cookies / logins" android:textColor="@color/muted" android:textSize="12sp" android:paddingBottom="8dp" />
+                <TextView android:id="@+id/currentProfileLabel" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Active: default" android:textColor="@color/accent" android:textSize="13sp" android:textStyle="bold" android:paddingBottom="8dp" />
+                <com.google.android.material.chip.ChipGroup android:id="@+id/profileChips" android:layout_width="match_parent" android:layout_height="wrap_content" app:singleSelection="true" />
+                <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center_vertical">
+                    <com.google.android.material.textfield.TextInputLayout style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:hint="New profile name">
+                        <com.google.android.material.textfield.TextInputEditText android:id="@+id/newProfile" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="1" android:textColor="@color/text" android:textSize="14sp" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.button.MaterialButton android:id="@+id/addProfile" style="@style/Widget.Material3.Button.TonalButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="Add" />
+                </LinearLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"
+                    android:text="Switching a profile reloads the browser with that profile's own cookie jar — like the cluster's isolated identities." android:textColor="@color/muted" android:textSize="11sp" />
+            </LinearLayout>
 
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:text="Cluster — let the backend drive this device" android:textColor="#4cc35e"
-                android:textStyle="bold" android:paddingBottom="6dp" />
-            <Button android:id="@+id/cluster" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:text="Connect to cluster" />
-            <TextView android:id="@+id/clusterStatus" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="Cluster: off" android:textColor="#9aa598" android:textSize="12sp"
-                android:fontFamily="monospace" android:paddingTop="4dp" />
+            <!-- 2: Cluster -->
+            <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Let the hosted backend drive this device for a hunt" android:textColor="@color/muted" android:textSize="12sp" android:paddingBottom="8dp" />
+                <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <com.google.android.material.button.MaterialButton android:id="@+id/cluster" style="@style/Widget.Material3.Button" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Connect to cluster" />
+                    <com.google.android.material.button.MaterialButton android:id="@+id/tailscaleBtn" style="@style/Widget.Material3.Button.OutlinedButton" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="8dp" android:text="Set up Tailscale" />
+                </LinearLayout>
+                <TextView android:id="@+id/clusterStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp"
+                    android:text="Cluster: off" android:textColor="@color/muted" android:textSize="12sp" android:fontFamily="monospace" android:textIsSelectable="true" />
+            </LinearLayout>
+        </ViewFlipper>
 
-            <View android:layout_width="match_parent" android:layout_height="1dp"
-                android:background="#282e26" android:layout_marginTop="10dp" android:layout_marginBottom="10dp" />
-
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:text="Activity" android:textColor="#8a938a" android:textSize="12sp"
-                android:fontFamily="monospace" android:paddingBottom="4dp" />
-            <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="150dp"
-                android:background="#0d100d" android:padding="8dp">
-                <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:textColor="#dce2d9" android:textSize="12sp" android:fontFamily="monospace"
-                    android:textIsSelectable="true" />
-            </ScrollView>
-        </LinearLayout>
-    </ScrollView>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/line" />
+        <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="140dp" android:padding="10dp" android:background="@color/bg">
+            <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/text" android:textSize="12sp" android:fontFamily="monospace" android:textIsSelectable="true" />
+        </ScrollView>
+    </LinearLayout>
 </LinearLayout>
