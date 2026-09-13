@@ -167,7 +167,9 @@ through walls a server cannot (it **passes Cloudflare Turnstile** where a datace
 Two ways to use it:
 
 - **Standalone** — an on-device agent (perceive → act) driven by **your own Ollama key**, or by an
-  **on-device model** (Gemma via MediaPipe LLM Inference) with **no key and no network** at all.
+  **on-device model** you pick by device strength and download in-app (live progress, a clear “ready”),
+  running with **no key and no network** at all. Defaults are **ungated** (Qwen 2.5 0.5B fast / 1.5B
+  stronger — no account, no token); Gemma is available too if you add a free Hugging Face token.
 - **Cluster** — the phone dials the backend and becomes a **drivable node**: it registers, long-polls for
   commands, runs them on its real browser, and posts results back. So the hosted backend (or your own
   scripts) can run a hunt on the device. Inbound-to-phone is impossible on Android, so it is always the
@@ -183,6 +185,13 @@ GB Mobile talks to **any** Ghost Browser server using GB's own auth:
 
 The device command-queue lives in the GB server itself (the /v1/device/ endpoints), so it ships with
 open-source GB; the SSO handoff is a platform convenience layered on top, not a requirement.
+
+### Your platforms — sign in once on the device
+The **Profiles** tab mirrors your server’s platform list (GB’s “Your platforms”): tap **Load from
+cluster**, then tap a platform to open it in its own **isolated profile** on the phone and sign in once.
+The session then lives on-device (real residential IP, passes bot walls), and the backend can drive that
+logged-in profile through a hunt. The phone is its own browser, so sessions are not shared from the
+server — you log in once here, and each profile keeps its own cookie jar, like the cluster’s identities.
 
 Prebuilt debug APK: [mobile/dist/app-debug.apk](mobile/dist/app-debug.apk). Build it: cd mobile then ./gradlew assembleDebug.
 
