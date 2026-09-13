@@ -318,8 +318,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
+    override fun onPause() {
+        // Write cookies (SSO + per-profile logins) to disk so a session survives the app being killed.
+        try { CookieManager.getInstance().flush() } catch (e: Exception) {}
+        super.onPause()
+    }
+
     override fun onDestroy() {
         agentStop = true; pollStop = true
+        try { CookieManager.getInstance().flush() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()
     }
