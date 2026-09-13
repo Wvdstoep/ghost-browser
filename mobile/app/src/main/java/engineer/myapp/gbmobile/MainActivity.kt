@@ -61,7 +61,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var agentThread: Thread? = null
     @Volatile private var agentStop: Boolean = false
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
-    private var platformFetchWeb: WebView? = null        // transient hidden WebView used to pull "Your platforms"
+    private var apiWeb: WebView? = null                  // hidden WebView on the GB origin = same-origin authed API channel
+    @Volatile private var apiReady = false
+    private val apiQueue = mutableListOf<() -> Unit>()
     private var gbControlJs: String = ""
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val models by lazy { ModelManager(this) }
@@ -98,6 +100,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
         wireAgent()
         wireProfiles()
+        wireFlows()
         wireCluster()
         observe()
 
@@ -455,13 +458,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}"
     }
 
-    // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
+    // ---- Same-origin authed API channel (fetch profiles, flows, run/create over the SSO session) ----
 
-    private fun loadPlatforms() {
+    /** A hidden WebView pinned to the GB origin exposing window.__gbApi — every cluster read/write
+     *  rides the SSO cookies of the current profile, the proven auth path. Loaded once, reused. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun ensureApiWeb() {
+        if (apiWeb != null) return
         val url = vm.clusterUrl.trim()
         if (url.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
-        b.platformsHint.text = "loading…"
-        stopPlatformFetch()
+        apiReady = false
         val w = WebView(this)
         val prof = vm.currentProfile.value ?: "default"
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
@@ -473,21 +479,43 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.addJavascriptInterface(Bridge(), "GBHost")
         w.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, u: String?) {
-                val js = "fetch('/v1/profiles/presets',{credentials:'include'})" +
-                    ".then(function(r){return r.text()})" +
-                    ".then(function(t){GBHost.result('platforms',t)})" +
-                    ".catch(function(e){GBHost.result('platerr',String(e))})"
-                view?.evaluateJavascript(js, null)
+                if (apiReady) return
+                view?.evaluateJavascript(
+                    "window.__gbApi=function(m,p,b,t){var o={method:m,credentials:'include',headers:{'Content-Type':'application/json'}};if(b)o.body=b;" +
+                    "fetch(p,o).then(function(r){return r.text()}).then(function(x){GBHost.result(t,x)}).catch(function(e){GBHost.result(t+'_err',String(e))})};", null)
+                apiReady = true
+                val q = ArrayList(apiQueue); apiQueue.clear(); for (fn in q) fn()
             }
         }
         (b.root as ViewGroup).addView(w, 1, 1)
-        platformFetchWeb = w
+        apiWeb = w
         w.loadUrl(url)
     }
 
-    private fun stopPlatformFetch() {
-        platformFetchWeb?.let { pw -> try { (pw.parent as? ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
-        platformFetchWeb = null
+    /** Call the GB API over the SSO session; the response text comes back to onBridge as [tag]
+     *  (or [tag]_err on failure). */
+    private fun apiCall(method: String, path: String, body: String?, tag: String) {
+        ensureApiWeb()
+        val call: () -> Unit = {
+            val bodyJs = if (body == null) "null" else JSONObject.quote(body)
+            apiWeb?.evaluateJavascript("window.__gbApi(" + JSONObject.quote(method) + "," + JSONObject.quote(path) + "," + bodyJs + "," + JSONObject.quote(tag) + ")", null)
+            Unit
+        }
+        if (apiReady && apiWeb != null) call() else apiQueue.add(call)
+    }
+
+    private fun stopApiWeb() {
+        apiReady = false; apiQueue.clear()
+        apiWeb?.let { pw -> try { (pw.parent as? ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
+        apiWeb = null
+    }
+
+    // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
+
+    private fun loadPlatforms() {
+        if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
+        b.platformsHint.text = "loading…"
+        apiCall("GET", "/v1/profiles/presets", null, "platforms")
     }
 
     private fun renderPlatforms(arr: JSONArray) {
@@ -502,8 +530,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val site = p.optString("site")
             if (key.isBlank() || site.isBlank()) continue
             val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
-            b.platformCards.addView(platformCard(label, site, prof, known.contains(prof)))
+            // "signed in" ONLY if this phone's profile actually holds a session cookie for the site —
+            // not merely because the profile exists (the phone is a separate browser from the cluster).
+            val signedIn = known.contains(prof) && profileHasSession(prof, site)
+            b.platformCards.addView(platformCard(label, site, prof, signedIn))
         }
+    }
+
+    private fun profileHasSession(prof: String, site: String): Boolean {
+        return try {
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return false
+            val cm = ProfileStore.getInstance().getOrCreateProfile(prof).cookieManager
+            (cm.getCookie(site) ?: "").isNotBlank()
+        } catch (e: Exception) { false }
     }
 
     private fun platformCard(label: String, site: String, prof: String, onPhone: Boolean): View {
@@ -547,6 +586,89 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         renderChips()
         newTab(site)                     // open a new tab in this platform's isolated profile
         vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
+    }
+
+    // ---- Flows panel (automations — the same workflow engine GB runs) ---------------------------
+
+    private fun wireFlows() {
+        b.loadFlows.setOnClickListener {
+            if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
+            b.flowsHint.text = "loading…"; apiCall("GET", "/v1/workflows", null, "flows")
+        }
+        b.createFlow.setOnClickListener { createFlow() }
+    }
+
+    private fun renderFlows(arr: JSONArray) {
+        b.flowCards.removeAllViews()
+        if (arr.length() == 0) { b.flowsHint.text = "no automations yet — build one below"; return }
+        b.flowsHint.text = "${arr.length()} automations — tap Run to fire one"
+        for (i in 0 until arr.length()) {
+            val w = arr.optJSONObject(i) ?: continue
+            val id = w.optString("id"); if (id.isBlank()) continue
+            val name = w.optString("name", id)
+            val steps = w.optJSONArray("nodes")?.length() ?: w.optInt("nodes", 0)
+            val last = w.optString("lastRunStatus", "").ifBlank { "never run" }
+            b.flowCards.addView(flowCard(id, name, steps, last))
+        }
+    }
+
+    private fun flowCard(id: String, name: String, steps: Int, last: String): View {
+        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+        val row = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(12), dp(12))
+            background = getDrawable(R.drawable.bg_card)
+            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
+        }
+        val col = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
+        }
+        col.addView(android.widget.TextView(this).apply {
+            text = name; setTextColor(getColor(R.color.text)); textSize = 15f
+            typeface = resources.getFont(R.font.manrope_bold)
+        })
+        col.addView(android.widget.TextView(this).apply {
+            text = "$steps steps  ·  $last"
+            setTextColor(getColor(R.color.muted)); textSize = 12f
+            typeface = resources.getFont(R.font.manrope_regular); setPadding(0, dp(2), 0, 0)
+        })
+        row.addView(col)
+        row.addView(com.google.android.material.button.MaterialButton(
+            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+        ).apply {
+            text = "Run"; isAllCaps = false
+            typeface = resources.getFont(R.font.manrope_semibold)
+            setOnClickListener { runFlow(id, name) }
+        })
+        return row
+    }
+
+    private fun runFlow(id: String, name: String) {
+        vm.log("▶ running automation \"$name\"…")
+        apiCall("POST", "/v1/workflows/$id/run", "{}", "flowrun")
+    }
+
+    private fun createFlow() {
+        val name = b.flowName.text.toString().trim()
+        val stepLines = b.flowSteps.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+        if (name.length < 3) { vm.log("! give the automation a name (3+ chars)"); return }
+        if (stepLines.isEmpty()) { vm.log("! add at least one step (one goal per line)"); return }
+        val nodes = JSONArray()
+        val edges = JSONArray()
+        nodes.put(JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
+        var prev = "trigger"
+        for ((idx, goal) in stepLines.withIndex()) {
+            val nid = "n$idx"
+            nodes.put(JSONObject().put("id", nid).put("type", "agent").put("label", "Step ${idx + 1}").put("goal", goal))
+            edges.put(JSONObject().put("from", prev).put("to", nid))
+            prev = nid
+        }
+        val body = JSONObject().put("name", name).put("trigger", JSONObject().put("type", "manual"))
+            .put("nodes", nodes).put("edges", edges).toString()
+        vm.log("↑ creating automation \"$name\" (${stepLines.size} steps)…")
+        apiCall("POST", "/v1/workflows", body, "flowcreate")
     }
 
     // ---- Cluster panel --------------------------------------------------------------------------
@@ -650,9 +772,38 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     b.platformsHint.text = "sign in on the Cluster tab first"
                     vm.log("! could not read platforms — sign in via the Cluster tab (SSO), then Load. ${data.take(80)}")
                 }
-                stopPlatformFetch()
             }
-            "platerr" -> { b.platformsHint.text = "sign in on the Cluster tab first"; vm.log("! load platforms: ${data.take(140)}"); stopPlatformFetch() }
+            "platforms_err" -> { b.platformsHint.text = "sign in on the Cluster tab first"; vm.log("! load platforms: ${data.take(140)}") }
+            "flows" -> {
+                try {
+                    val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
+                    renderFlows(arr)
+                    vm.log("↓ automations (${arr.length()})")
+                } catch (e: Exception) {
+                    b.flowsHint.text = "sign in on the Cluster tab first"
+                    vm.log("! could not read automations — sign in via the Cluster tab (SSO), then Load. ${data.take(80)}")
+                }
+            }
+            "flows_err" -> { b.flowsHint.text = "sign in on the Cluster tab first"; vm.log("! load automations: ${data.take(140)}") }
+            "flowrun" -> try {
+                val o = JSONObject(data); val runId = o.optString("runId")
+                vm.log("● automation started (run $runId) — ${o.optString("status", "running")}")
+                if (runId.isNotBlank()) {
+                    val h = android.os.Handler(mainLooper)
+                    for (d in listOf(6000L, 15000L, 30000L)) { h.postDelayed({ apiCall("GET", "/v1/workflow-runs/$runId", null, "flowrunstatus") }, d) }
+                }
+            } catch (e: Exception) { vm.log("! run: ${data.take(160)}") }
+            "flowrun_err" -> vm.log("! run automation: ${data.take(140)}")
+            "flowrunstatus" -> try {
+                val o = JSONObject(data)
+                vm.log("· run ${o.optString("id")}: ${o.optString("status", "?")}" + (o.optString("outcome", "").let { if (it.isNotBlank()) " — $it" else "" }))
+            } catch (e: Exception) {}
+            "flowcreate" -> try {
+                val o = JSONObject(data)
+                if (o.has("error")) vm.log("! create automation: ${o.optString("error")}")
+                else { vm.log("✓ automation created: ${o.optString("name", o.optString("id"))}"); b.flowName.setText(""); b.flowSteps.setText(""); apiCall("GET", "/v1/workflows", null, "flows") }
+            } catch (e: Exception) { vm.log("! create: ${data.take(160)}") }
+            "flowcreate_err" -> vm.log("! create automation: ${data.take(140)}")
             "profiles" -> try {
                 val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                 vm.log("↓ cluster profiles (${arr.length()}):")
@@ -718,7 +869,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         agentStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
         try { stopControlWeb() } catch (e: Exception) {}
-        try { stopPlatformFetch() } catch (e: Exception) {}
+        try { stopApiWeb() } catch (e: Exception) {}
         try { for (h in tabs) h.web?.destroy() } catch (e: Exception) {}
         try { cmdExec.shutdownNow() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
