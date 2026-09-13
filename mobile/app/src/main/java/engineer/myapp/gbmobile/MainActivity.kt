@@ -208,7 +208,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun toggleDesktop() {
         val i = activeTab; if (i !in tabs.indices) return
         val h = tabs[i]; h.desktop = !h.desktop
-        vm.log(if (h.desktop) "🖥 desktop site" else "📱 mobile site")
+        if (h.desktop) {
+            // Desktop portals often live on the bare host — strip a leading "m." so the real desktop site loads.
+            val demob = h.url.replace(Regex("://m\\."), "://")
+            if (demob != h.url) h.url = demob
+            vm.log("🖥 desktop site — heads-up: a desktop UA can FAIL Cloudflare (the phone passes it by looking mobile). Use mobile for Cloudflare-gated sites.")
+        } else {
+            vm.log("📱 mobile site — real device fingerprint (best for Cloudflare).")
+        }
         try { h.web?.let { (it.parent as? ViewGroup)?.removeView(it); it.destroy() } } catch (e: Exception) {}
         h.web = null
         activateTab(i)
