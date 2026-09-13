@@ -76,7 +76,9 @@ const HEADLESS = String(process.env.HEADLESS || '').toLowerCase() === 'true';
  * true at the source, rather than patching it afterwards where a determined check can notice the
  * patch. The rest are what make Chromium survive in a container at all.
  */
+const CF_CHALLENGE_IP = process.env.CF_CHALLENGE_IP || '104.18.94.41'; // Cloudflare Turnstile challenge IPv4 (brunhild.* is IPv6-only)
 const CHROME_ARGS = [
+  '--host-resolver-rules=MAP challenges.cloudflare.com ' + CF_CHALLENGE_IP + ',MAP *.challenges.cloudflare.com ' + CF_CHALLENGE_IP, // beat Turnstile: brunhild.* is IPv6-only and SOCKS remote-DNS SERVFAILs on it, so the checkbox never verifies. Pin the challenge domains to a CF IPv4 so the browser connects to an IP through the exit (CF serves by SNI).
   '--no-sandbox',
   '--disable-dev-shm-usage',            // /dev/shm is tiny in containers; without this it crashes under load
   '--disable-blink-features=AutomationControlled',
