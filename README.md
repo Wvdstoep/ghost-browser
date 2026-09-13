@@ -11,7 +11,7 @@
 
 > *What the agent actually sees — every interactive element on the live page numbered. It doesn't guess CSS selectors; it says "click 12".*
 
-> ⚠️ **Early and honest:** the engine is solid and battle-tested in production, but the **console UI/UX is rough** — it was built by an engineer, not a designer. If design is your thing, this is a project where your help lands immediately and visibly. See [Help wanted](#help-wanted--especially-design--ux).
+> ⚠️ **Early and honest:** the engine is solid and battle-tested in production, but the **console UI/UX is rough** — it was built by an engineer, not a designer. If design is your thing, this is a project where your help lands immediately and visibly. See [Help wanted](#help-wanted).
 
 ---
 
@@ -158,17 +158,33 @@ Auth is `Authorization: Bearer <key>`; keys come from `API_KEYS` (`key:plan,key:
 
 ---
 
-## Help wanted — especially design & UX
+## Help wanted
 
-The engine is solid; the **interface is not**, and that's exactly where contributions land hardest right now:
+Two things that used to live here are now **solved**: the live view going black is fixed, and GB now
+**passes Cloudflare Turnstile** — it resolves the IPv6-only challenge hosts locally and reaches them
+through your residential exit, so challenge-gated sites load and verify instead of looping. What is
+open and where help lands hardest now:
 
-- 🎨 **Redesign the console** — layout, spacing, typography, the session and agent panels. Screenshots welcome. ([issue](https://github.com/Wvdstoep/ghost-browser/issues/2))
-- 📱 **Make it responsive** — it's desktop-only today. ([issue](https://github.com/Wvdstoep/ghost-browser/issues/3))
-- 🐛 **Fix the live view going black** on static pages. ([issue](https://github.com/Wvdstoep/ghost-browser/issues/1))
+**GB on your own devices — the biggest push.** A browser on a server is detectable as automated
+(datacentre IP, virtual display, remote control). Running on your real phone or laptop gives a real
+residential IP and real hardware, so it walks straight through walls a server cannot — *proven:* the
+GB Mobile prototype passed Cloudflare on a real phone where the server looped forever.
 
-New here? Start with the [`good first issue`](https://github.com/Wvdstoep/ghost-browser/labels/good%20first%20issue) and [`ui`](https://github.com/Wvdstoep/ghost-browser/labels/ui) labels, and read [CONTRIBUTING.md](CONTRIBUTING.md). Design ideas without code are welcome too — open an issue with a sketch.
+- **GB Mobile** — the Android app in [`mobile/`](mobile/): a real on-device Chromium WebView driven by
+  the same Ghost Browser API, plus an on-device agent that runs the perceive/act loop with **your own
+  Ollama key** — no cluster required. Sideloadable APK included.
+- **GB Laptop** — drive real desktop Chrome over CDP behind the same API, on your own machine.
+- **Embed Tailscale** (`tsnet` / gomobile) so a device joins the tailnet in one install and the hosted
+  backend can drive it like any other GB node — control over the tailnet, browsing over the device.
+
+**Console design & UX** — still genuinely rough (built by an engineer, not a designer): layout,
+spacing, typography, the session and agent panels. ([issue](https://github.com/Wvdstoep/ghost-browser/issues/2))
+
+New here? Read [CONTRIBUTING.md](CONTRIBUTING.md). Design ideas without code are welcome too — open an
+issue with a sketch.
 
 ---
+
 
 ## License
 
