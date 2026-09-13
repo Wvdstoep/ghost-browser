@@ -11,8 +11,8 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26            // adaptive icon (v26) so no raster launcher assets needed; Android 8+
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
     }
 
     buildTypes {
@@ -29,6 +29,7 @@ android {
     }
 }
 
-// No external UI deps on purpose — a plain Activity + WebView keeps the build minimal and robust.
 dependencies {
+    // Embedded HTTP server — the device exposes the Ghost Browser API so the backend can drive it.
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 }
