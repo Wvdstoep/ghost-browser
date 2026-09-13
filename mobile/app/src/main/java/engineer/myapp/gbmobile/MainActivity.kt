@@ -158,6 +158,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     override fun evalGb(expr: String): String = evalJs(gbJs + "\n" + expr)
     override fun currentUrl(): String = lastUrl
 
+    /** Cookies for [url] from the ACTIVE profile's store (multi-profile keeps them out of the global
+     *  CookieManager). This is why the SSO session must be read per-profile, not globally. */
+    private fun cookiesFor(url: String): String {
+        return try {
+            val cm = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE))
+                ProfileStore.getInstance().getOrCreateProfile(vm.currentProfile.value ?: "default").cookieManager
+            else CookieManager.getInstance()
+            cm.getCookie(url) ?: ""
+        } catch (e: Exception) {
+            try { CookieManager.getInstance().getCookie(url) ?: "" } catch (e2: Exception) { "" }
+        }
+    }
+
     private fun evalJs(script: String): String {
         val latch = CountDownLatch(1); val holder = arrayOfNulls<String>(1)
         runOnUiThread { web.evaluateJavascript(script) { v -> holder[0] = v; latch.countDown() } }
@@ -269,13 +282,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
             } else {
                 vm.clusterUrl = b.clusterUrl.text.toString().trim()
-                val cookies = try { CookieManager.getInstance().getCookie(vm.clusterUrl) ?: "" } catch (e: Exception) { "" }
+                val cookies = cookiesFor(vm.clusterUrl)
                 if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in (SSO), open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
                 pollStop = false; vm.clusterOn.value = true
                 vm.clusterInfo.value = "Cluster: connecting… device \"${android.os.Build.MODEL}\""
                 val client = PollClient(
                     vm.clusterUrl, vm.deviceToken, android.os.Build.MODEL,
-                    { try { CookieManager.getInstance().getCookie(vm.clusterUrl) ?: "" } catch (e: Exception) { "" } },
+                    { cookiesFor(vm.clusterUrl) },
                     this, { screenshotPng() }, { m -> vm.log(m) }, { pollStop }
                 )
                 pollThread = Thread {
