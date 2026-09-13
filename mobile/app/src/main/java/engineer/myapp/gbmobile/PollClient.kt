@@ -41,17 +41,29 @@ class PollClient(
 
     private fun conn(path: String, method: String): HttpURLConnection {
         val c = URL(root + path).openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = false   // an SSO redirect should surface as 3xx, not a masked 200
         c.requestMethod = method
         c.connectTimeout = 15000
         c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("Accept", "application/json")
+        // Mimic the in-WebView fetch that already works (the SSO proxy may check these).
+        c.setRequestProperty("X-Requested-With", "XMLHttpRequest")
+        c.setRequestProperty("Origin", root)
+        c.setRequestProperty("Referer", "$root/")
         val ck = cookie(); if (ck.isNotBlank()) c.setRequestProperty("Cookie", ck)
         return c
     }
 
     private fun register(): Boolean {
-        val c = conn("/v1/device/register", "POST"); c.doOutput = true; c.readTimeout = 15000
-        c.outputStream.use { it.write(JSONObject().put("deviceId", deviceId).put("name", deviceName).toString().toByteArray()) }
-        return c.responseCode in 200..299
+        return try {
+            val c = conn("/v1/device/register", "POST"); c.doOutput = true; c.readTimeout = 15000
+            c.outputStream.use { it.write(JSONObject().put("deviceId", deviceId).put("name", deviceName).toString().toByteArray()) }
+            val code = c.responseCode
+            if (code in 200..299) return true
+            val err = try { BufferedReader(InputStreamReader(c.errorStream ?: c.inputStream)).use { it.readText() } } catch (e: Exception) { "" }
+            log("! register HTTP $code (cookieLen=${cookie().length}): ${err.replace(Regex("\\s+"), " ").take(160)}")
+            false
+        } catch (e: Exception) { log("! register threw: ${e.message}"); false }
     }
 
     private fun poll(): JSONObject? {
