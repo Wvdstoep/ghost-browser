@@ -11,9 +11,12 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.ProfileStore
@@ -111,6 +114,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
         }
         w.webChromeClient = WebChromeClient()
+        w.addJavascriptInterface(Bridge(), "GBHost")   // lets injected JS hand results back to the app
         w.layoutParams = android.view.ViewGroup.LayoutParams(-1, -1)
         return w
     }
@@ -229,6 +233,22 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     // ---- Cluster panel --------------------------------------------------------------------------
 
     private fun wireCluster() {
+        b.clusterUrl.setText(vm.clusterUrl)
+        // Sign in to the cluster via SSO — GB Mobile is a real browser, so it does the my-app.engineer
+        // login in its own WebView (passes SSO/Cloudflare), and the session cookie then authorizes API calls.
+        b.signin.setOnClickListener {
+            vm.clusterUrl = b.clusterUrl.text.toString().trim()
+            if (vm.clusterUrl.isNotEmpty()) { load(vm.clusterUrl); vm.log("→ opening cluster SSO — sign in, then tap Fetch profiles") }
+        }
+        // Once signed in (WebView is on the cluster origin), a same-origin authed fetch pulls the profiles.
+        b.fetchProfiles.setOnClickListener {
+            val js = "fetch('/v1/profiles/presets',{credentials:'include'})" +
+                ".then(function(r){return r.text()})" +
+                ".then(function(t){GBHost.result('profiles',t)})" +
+                ".catch(function(e){GBHost.result('error',String(e))})"
+            web.evaluateJavascript(js, null)
+            vm.log("↑ fetching cluster profiles…")
+        }
         b.cluster.setOnClickListener {
             if (server == null) {
                 try {
@@ -257,6 +277,28 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             b.cluster.text = if (vm.clusterOn.value == true) "Disconnect" else "Connect to cluster"
         }
         vm.agentRunning.observe(this) { running -> b.run.isEnabled = !running }
+    }
+
+    // JS -> app bridge: injected page code hands results back here (e.g. the fetched cluster profiles).
+    inner class Bridge {
+        @JavascriptInterface
+        fun result(tag: String, data: String) { runOnUiThread { onBridge(tag, data) } }
+    }
+
+    private fun onBridge(tag: String, data: String) {
+        when (tag) {
+            "profiles" -> try {
+                val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
+                vm.log("↓ cluster profiles (${arr.length()}):")
+                for (i in 0 until arr.length()) {
+                    val p = arr.getJSONObject(i)
+                    val loggedIn = if (p.optBoolean("exists")) " [logged in]" else ""
+                    vm.log("   • " + p.optString("label", p.optString("key")) + " — " + p.optString("site") + loggedIn)
+                }
+            } catch (e: Exception) { vm.log("! profiles parse failed (${e.message}); sign in first. ${data.take(100)}") }
+            "error" -> vm.log("! fetch error: ${data.take(160)} — tap Sign in (SSO) first")
+            else -> vm.log("$tag: ${data.take(160)}")
+        }
     }
 
     override fun onDestroy() {

@@ -23,6 +23,10 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var task: String get() = sp.getString("task", "") ?: ""
         set(v) { sp.edit().putString("task", v).apply() }
 
+    // --- cluster (my-app.engineer SSO) ---
+    var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
+        set(v) { sp.edit().putString("clusterUrl", v).apply() }
+
     // --- device token (cluster mode) ---
     val deviceToken: String by lazy {
         var t = sp.getString("token", null)
