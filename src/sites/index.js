@@ -130,8 +130,13 @@ const profileNameFor = (key) => {
  * the shared one. Nothing is created or relabelled for a pinned preset.
  */
 const pinnedProfile = (key) => {
-  const s = SITES[String(key || '').toLowerCase()];
-  return (s && s.profile) ? slugName(s.profile) : null;
+  const k = String(key || '').toLowerCase();
+  const s = SITES[k];
+  if (s && s.profile) return slugName(s.profile);
+  // An owner-authored (custom) site is its own identity - pin it to its OWN profile so it never
+  // falls into the shared single-browser jar. Per-profile isolation for new platforms (Bugcrowd).
+  try { if (userSites.get(k)) return slugName(k); } catch { /* ignore */ }
+  return null;
 };
 
 /*
