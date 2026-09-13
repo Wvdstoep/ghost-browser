@@ -1,0 +1,10 @@
+# Build + machine-specific — never committed
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.DS_Store
+# NOTE: gradle/wrapper/gradle-wrapper.jar IS committed on purpose (needed to build).
