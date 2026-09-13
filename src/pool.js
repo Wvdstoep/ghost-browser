@@ -580,7 +580,7 @@ class BrowserPool {
         ...(function () {
           const ts = require('./tailscale');
           const routeAll = require('./settings').read().routeThroughTailnet !== false;
-          const px = profiles.launchProxy(cfg.proxy, ts.socksUrl(), { routeAll });
+          const px = profiles.launchProxy(cfg.proxy, ts.proxyUrl(), { routeAll });
           return px ? { proxy: px } : {};
         }()),
       });
