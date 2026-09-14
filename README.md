@@ -28,6 +28,8 @@ Ghost Browser is the missing hands. You log into a site **once, by hand**, and f
 - **Log in once, automate forever.** Sign into LinkedIn / Gmail / a marketplace by hand in the console; the session persists in a **profile**, and the agent uses it from then on. No re-typing passwords, no storing credentials in scripts.
 - **Let an agent operate the site by sight.** It gets a screenshot with every element numbered (Set-of-Mark) and acts by number — resilient to redesigns that shatter selector-based bots.
 - **Keep a human in the loop where it matters.** Reading is free; posting, messaging, following, joining go through an **act-gate** that shows you the exact text and waits. Approve, edit, or reject.
+- **Talk to it, don’t just script it.** A built-in **conversational agent** (in the desktop & mobile apps) runs on your own
+  model and can both chat and *act* — it calls the whole GB API to browse, and to build & run automations or drive your other devices.
 - **Run repeatable jobs without an LLM in the loop.** Compose **workflows** — typed steps (fetch, extract, script, branch, verify, check-login…) that run deterministically and return data.
 - **Teach it a site's API by watching it.** **Route cards** record a platform's own network traffic once, distil it, and replay it — so the second run is fast and costs no model calls.
 - **Run many accounts, each isolated.** One **profile** per account, isolated cookies and storage, each labelled with the site it's signed into.
@@ -157,6 +159,28 @@ Auth is `Authorization: Bearer <key>`; keys come from `API_KEYS` (`key:plan,key:
 </details>
 
 ---
+
+## Run it anywhere — cluster, laptop, or phone
+
+Ghost Browser is the same engine wherever it runs; what changes is **where the browser physically lives** — which decides the
+IP, the hardware fingerprint, and which walls it can walk through.
+
+| Surface | What it is | Best for | Status |
+|---|---|---|---|
+| **Cluster** (server) | GB on your server — its own browser pool + the automations engine, behind the HTTP API | always-on jobs, scheduled flows, the API | live |
+| **Desktop node** ([`desktop/`](desktop/)) | GB as a Windows app (Electron) — real desktop Chromium on your laptop’s home IP | desktop-only portals + Cloudflare, hands-on use | live · installer below |
+| **Phone node** ([`mobile/`](mobile/)) | GB as an Android app — real mobile Chromium on your residential IP | a real mobile identity, beating bot-detection a server can’t | live · APK below |
+
+**One cluster, many nodes.** A laptop or phone **dials out** to the cluster’s device hub and registers as a drivable node (Android/
+tailnet can’t accept inbound, so it always connects out). It then appears in `/v1/device/list`, and the backend drives it with the
+same `/v1/*` commands — `navigate`, `analyze`, `click`, `type`, `fetch`, `eval` — so you choose *which real device* runs a task:
+the phone for a mobile identity, the laptop for a desktop one, the cluster for always-on. Nothing upstream changes — a device is
+“just another GB”.
+
+**Talk to it — the built-in agent.** Both apps ship a full-screen **conversational agent**: instead of only handing it a goal, you
+chat with it. It runs on **your own model** (a local Ollama endpoint, or any OpenAI-compatible API) and can both *talk* and *act*,
+calling the whole GB API through a model-agnostic **JSON tool protocol** — browse a page, and **list / create / run automations**,
+inspect your profiles and platforms, and even **drive your other device nodes**. Chat history is kept; model settings sit behind a gear.
 
 ## GB Mobile — Ghost Browser on your own devices
 
