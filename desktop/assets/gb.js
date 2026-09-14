@@ -39,6 +39,17 @@
     return out;
   }
   function clearOverlay() { var c = document.getElementById('__gbmarks'); if (c) c.remove(); }
+  /* A realistic tap: many SPA sites (Facebook) bind React handlers to pointer/mouse events, so a bare
+   * el.click() does nothing. Dispatch the full sequence at the element's centre. */
+  function tap(el) {
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+    var r = el.getBoundingClientRect(); var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var o = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+    var seq = ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+    seq.forEach(function (type) {
+      try { var E = (type.indexOf('pointer') === 0 && window.PointerEvent) ? PointerEvent : MouseEvent; el.dispatchEvent(new E(type, o)); } catch (e) {}
+    });
+  }
   function drawOverlay(els) {
     clearOverlay();
     var c = document.createElement('div'); c.id = '__gbmarks';
@@ -69,8 +80,7 @@
     click: function (i) {
       var o = this._els[i]; if (!o) return 'no-element';
       clearOverlay();
-      try { o.el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-      try { o.el.click(); } catch (e) { o.el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+      tap(o.el);
       return 'ok';
     },
     type: function (i, text) {
@@ -111,8 +121,7 @@
       var el2 = hits[nth]; if (!el2) return 'notfound';
       var c = el2; for (var k = 0; k < 5 && c; k++) { if (c.tagName === 'A' || c.tagName === 'BUTTON' || (c.getAttribute && c.getAttribute('role') === 'button')) { el2 = c; break; } c = c.parentElement; }
       clearOverlay();
-      try { el2.scrollIntoView({ block: 'center' }); } catch (e) {}
-      try { el2.click(); } catch (e) { el2.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+      tap(el2);
       return 'ok';
     },
     text: function () {
