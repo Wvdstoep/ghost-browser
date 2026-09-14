@@ -182,6 +182,15 @@ chat with it. It runs on **your own model** (a local Ollama endpoint, or any Ope
 calling the whole GB API through a model-agnostic **JSON tool protocol** — browse a page, and **list / create / run automations**,
 inspect your profiles and platforms, and even **drive your other device nodes**. Chat history is kept; model settings sit behind a gear.
 
+**See every node — the Device Hub.** The **same** `/hub` page is reachable from all three surfaces —
+the cluster console (a *Device Hub* item in the nav), the desktop app (a *Device Hub* button on the
+Cluster tab), and the phone app (a *Device Hub* button on the Cluster tab). It lists every registered
+node with a live online dot, last-seen and queued count, and lets you open one to watch its activity log
+and fire quick commands at it (open a URL, read posts, perceive, screenshot). One page, so you can see
+your fleet from wherever you happen to be. It is a single file (`public/hub.html`) served by the cluster;
+the desktop and phone open that same URL, authenticating with the session cookie (or the API key in the
+URL hash), so there is nothing to keep in sync.
+
 ## GB Mobile — Ghost Browser on your own devices
 
 `mobile/` is Ghost Browser as a **native Android app** running a **real on-device Chromium WebView**.
@@ -261,13 +270,25 @@ embedded/automated browser, so you read and act differently. What GB learned the
 - **Open a group or page by its direct URL** (`/groups/<id>/`) - search-result rows will not open via a tap.
 - **Wait for content to settle.** Feeds lazy-load behind a skeleton; GB polls a readiness check before
   reading instead of racing the first paint.
-- **Where it runs matters.** The hosted (cluster) browser drives real Chromium via CDP through a
-  residential exit; the on-device nodes (phone/laptop) give a real IP and fingerprint. Facebook
-  degrades the mobile in-app WebView home feed to an open-the-app screen, but a group's own page reads
-  fine, and the laptop/desktop node gets the full site.
+- **Where it runs matters — and the phone needs the mobile host.** The hosted (cluster) browser drives
+  real Chromium via CDP through a residential exit; the on-device nodes (phone/laptop) give a real IP
+  and fingerprint. Confirmed end-to-end on both device nodes against a live group:
 
-Net: to read a social feed on any surface use `analyze` + `posts()`; to act, click-by-text; never lean
-on page-text or `eval` for a site that fights automation.
+  | Node | Facebook host | Result |
+  |---|---|---|
+  | Laptop / desktop | `www.facebook.com` (full desktop site) | reads real posts via `posts()` |
+  | Phone (in-app WebView) | `www.facebook.com` | **"App openen" wall** — feed innerText ~45 chars, 0 `[role=article]`, nothing to read |
+  | Phone (in-app WebView) | `m.facebook.com` + settle + one scroll | reads real posts via `posts()` |
+
+  Facebook serves its `www` **feed** (home *and* a group's own page) to the phone's in-app WebView as an
+  open-the-app interstitial — even a direct `/groups/<id>/` URL. The mobile web host `m.facebook.com`
+  renders the real feed with no app-wall. So the **GB mobile app rewrites any `www.facebook.com` URL to
+  `m.facebook.com` at the device level** (`mobileFbUrl()` in `MainActivity`), a guarantee that holds
+  whatever the platform/agent/flow passes; the laptop node is not walled and keeps the full desktop site.
+
+Net: to read a social feed on any surface use `analyze` + `posts()`; to act, click-by-text; open groups
+by URL; **on the phone use `m.facebook.com`** (the app does this automatically); never lean on page-text
+or `eval` for a site that fights automation.
 
 ## Help wanted
 

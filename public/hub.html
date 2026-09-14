@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device Hub · Ghost Browser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#09090b; --panel:#18181b; --panel2:#111113; --line:#27272a; --line2:#1f1f22;
+    --ink:#fafafa; --dim:#a1a1aa; --dim2:#71717a; --acc:#10b981; --acc2:#059669;
+    --red:#f43f5e; --amber:#f59e0b; --radius:14px;
+    --sans:'Plus Jakarta Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  a{color:var(--acc)}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px 20px 60px}
+
+  /* Header */
+  header{display:flex;align-items:center;gap:14px;padding:6px 2px 18px;flex-wrap:wrap}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:-.02em}
+  .logo .mark{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#03150e;font-weight:800;font-size:17px}
+  .logo b{color:var(--acc);font-weight:800}
+  .sub{color:var(--dim2);font-size:12.5px;font-weight:500;margin-left:2px}
+  .spacer{flex:1}
+  .conn{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--dim);background:var(--panel);border:1px solid var(--line);padding:7px 12px;border-radius:999px}
+  .pulse{width:8px;height:8px;border-radius:50%;background:var(--dim2)}
+  .pulse.live{background:var(--acc);box-shadow:0 0 0 0 rgba(16,185,129,.5);animation:p 2s infinite}
+  .pulse.err{background:var(--red)}
+  @keyframes p{0%{box-shadow:0 0 0 0 rgba(16,185,129,.5)}70%{box-shadow:0 0 0 7px rgba(16,185,129,0)}100%{box-shadow:0 0 0 0 rgba(16,185,129,0)}}
+
+  .bar{display:flex;align-items:center;gap:16px;color:var(--dim2);font-size:12.5px;margin:0 2px 16px}
+  .bar b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+
+  /* Device grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 16px 14px;cursor:pointer;transition:border-color .15s,transform .1s;position:relative;overflow:hidden}
+  .card:hover{border-color:#3f3f46}
+  .card.sel{border-color:var(--acc)}
+  .card.off{opacity:.62}
+  .card-top{display:flex;align-items:flex-start;gap:11px}
+  .dot{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none;background:var(--dim2)}
+  .dot.on{background:var(--acc);box-shadow:0 0 8px rgba(16,185,129,.6)}
+  .dot.off{background:var(--dim2)}
+  .nm{font-weight:700;font-size:15px;letter-spacing:-.01em}
+  .own{color:var(--dim2);font-size:12px;margin-top:1px;word-break:break-all}
+  .kind{margin-left:auto;font-family:var(--mono);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);background:var(--panel2);border:1px solid var(--line);padding:3px 8px;border-radius:999px;white-space:nowrap}
+  .meta{display:flex;gap:18px;margin-top:13px;padding-top:12px;border-top:1px solid var(--line2)}
+  .meta .m{display:flex;flex-direction:column;gap:2px}
+  .meta .lab{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim2);font-weight:600}
+  .meta .val{font-family:var(--mono);font-size:13px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .val.warn{color:var(--amber)}
+
+  .empty{border:1px dashed var(--line);border-radius:var(--radius);padding:48px 20px;text-align:center;color:var(--dim2)}
+  .empty h3{color:var(--dim);font-weight:600;margin:0 0 6px}
+
+  /* Detail drawer */
+  .detail{margin-top:20px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .detail[hidden]{display:none}
+  .d-head{display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line)}
+  .d-head .nm{font-size:16px}
+  .d-head .id{font-family:var(--mono);font-size:11px;color:var(--dim2)}
+  .d-head .x{margin-left:auto;background:var(--panel2);border:1px solid var(--line);color:var(--dim);width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;line-height:1}
+  .d-head .x:hover{color:var(--ink);border-color:#3f3f46}
+  .d-body{display:grid;grid-template-columns:1fr 1fr;gap:0}
+  @media(max-width:760px){.d-body{grid-template-columns:1fr}}
+  .col{padding:16px 18px}
+  .col+.col{border-left:1px solid var(--line)}
+  @media(max-width:760px){.col+.col{border-left:0;border-top:1px solid var(--line)}}
+  .col h4{margin:0 0 12px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim2);font-weight:700}
+
+  /* Actions */
+  .act{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .in{flex:1;min-width:150px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:9px 11px;font-family:var(--mono);font-size:12.5px}
+  .in:focus{outline:none;border-color:var(--acc)}
+  .btn{background:var(--acc);color:#03150e;border:none;border-radius:9px;padding:9px 14px;font-weight:700;font-size:12.5px;cursor:pointer;font-family:var(--sans)}
+  .btn:hover{background:#0ea472}
+  .btn.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line)}
+  .btn.ghost:hover{border-color:#3f3f46}
+  .btn:disabled{opacity:.5;cursor:default}
+  .quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .chip{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer;font-weight:500}
+  .chip:hover{color:var(--ink);border-color:var(--acc)}
+
+  .out{background:#050506;border:1px solid var(--line2);border-radius:10px;padding:11px 12px;font-family:var(--mono);font-size:12px;color:var(--dim);white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;min-height:44px}
+  .shot{width:100%;border-radius:10px;border:1px solid var(--line2);margin-top:10px;display:block}
+
+  /* Log */
+  .log{background:#050506;border:1px solid var(--line2);border-radius:10px;font-family:var(--mono);font-size:11.5px;height:300px;overflow:auto;padding:4px 0}
+  .log .ln{padding:2px 12px;display:flex;gap:10px;border-bottom:1px solid #0d0d0f}
+  .log .ln:hover{background:#0b0b0d}
+  .log .ts{color:var(--dim2);flex:none}
+  .log .tx{color:#c7c7cd;white-space:pre-wrap;word-break:break-word}
+  .log .muted{color:var(--dim2);padding:14px 12px}
+
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:11px 18px;border-radius:10px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+  .toast.err{border-color:var(--red)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><span class="mark">G</span><span>Ghost<b>Browser</b></span></div>
+    <span class="sub">Device Hub</span>
+    <div class="spacer"></div>
+    <div class="conn"><span class="pulse" id="pulse"></span><span id="connText">connecting…</span></div>
+  </header>
+
+  <div class="bar">
+    <span><b id="onCount">0</b> online</span>
+    <span><b id="totCount">0</b> registered</span>
+    <span id="src"></span>
+  </div>
+
+  <div id="grid" class="grid"></div>
+  <div id="empty" class="empty" hidden>
+    <h3>No devices registered</h3>
+    <div>Open a GB node (phone or laptop) and connect it to this cluster — it appears here within seconds.</div>
+  </div>
+
+  <section id="detail" class="detail" hidden>
+    <div class="d-head">
+      <span class="dot" id="dDot"></span>
+      <div><div class="nm" id="dName">—</div><div class="id" id="dId"></div></div>
+      <button class="x" id="dClose">×</button>
+    </div>
+    <div class="d-body">
+      <div class="col">
+        <h4>Control</h4>
+        <div class="quick" id="quick"></div>
+        <div class="act">
+          <input class="in" id="cmdUrl" placeholder="https://m.facebook.com/groups/…">
+          <button class="btn" id="cmdGo">Open</button>
+        </div>
+        <div class="out" id="out">Pick an action or open a URL. Results show here.</div>
+        <img class="shot" id="shot" hidden alt="screenshot">
+      </div>
+      <div class="col">
+        <h4>Activity log</h4>
+        <div class="log" id="log"><div class="muted">Selecting…</div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ── Config ────────────────────────────────────────────────────────────────
+   ONE hub page, shared by cluster + desktop + mobile. Config comes from the URL
+   hash so the same file works everywhere and the key never reaches the server:
+     cluster :  /hub                        → same-origin, uses the SSO cookie
+     desktop :  <cluster>/hub#key=<apikey>  → cross-origin, uses the Bearer key
+     mobile  :  <cluster>/hub#key=<apikey>
+   Optional #base=<url> points the page at a cluster other than its own origin. */
+function cfg(){
+  var h={}; (location.hash.replace(/^#/,'')).split('&').forEach(function(p){
+    var i=p.indexOf('='); if(i>0) h[decodeURIComponent(p.slice(0,i))]=decodeURIComponent(p.slice(i+1));
+  });
+  return { base:(h.base||'').replace(/\/$/,''), key:h.key||'' };
+}
+var C=cfg();
+function api(path,opts){
+  opts=opts||{}; opts.headers=opts.headers||{};
+  if(C.key) opts.headers['Authorization']='Bearer '+C.key;
+  else opts.credentials='include';
+  if(opts.body && !opts.headers['Content-Type']) opts.headers['Content-Type']='application/json';
+  return fetch(C.base+path,opts);
+}
+document.getElementById('src').textContent = C.base ? ('via '+C.base.replace(/^https?:\/\//,'')) : 'this cluster';
+
+/* ── State ─────────────────────────────────────────────────────────────── */
+var devices=[], selId=null, logAfter=0, logTimer=null;
+var pulse=document.getElementById('pulse'), connText=document.getElementById('connText');
+function setConn(state,txt){ pulse.className='pulse'+(state==='live'?' live':state==='err'?' err':''); connText.textContent=txt; }
+function toast(msg,err){ var t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(err?' err':''); clearTimeout(t._h); t._h=setTimeout(function(){t.className='toast';},2600); }
+function rel(ms){ if(!ms) return '—'; var s=Math.round((Date.now()-ms)/1000); if(s<60) return s+'s ago'; var m=Math.round(s/60); if(m<60) return m+'m ago'; var h=Math.round(m/60); if(h<48) return h+'h ago'; return Math.round(h/24)+'d ago'; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+/* SM-F926B / GT-… look like phone model numbers; a hostname is a laptop. */
+function kindOf(n){ return /^[A-Z]{2,3}[-_]?[A-Z0-9]{3,}$/.test(n||'') ? 'phone' : 'laptop'; }
+
+/* ── Poll the device list ──────────────────────────────────────────────── */
+async function refresh(){
+  try{
+    var r=await api('/v1/device/list');
+    if(r.status===401||r.status===403){ setConn('err','not authorized'); return; }
+    if(!r.ok){ setConn('err','error '+r.status); return; }
+    var j=await r.json(); devices=j.devices||[];
+    setConn('live','live');
+    render();
+  }catch(e){ setConn('err','offline'); }
+}
+function render(){
+  var g=document.getElementById('grid'), on=0;
+  g.innerHTML='';
+  devices.forEach(function(d){
+    if(d.online) on++;
+    var el=document.createElement('div');
+    el.className='card'+(d.online?'':' off')+(d.deviceId===selId?' sel':'');
+    el.innerHTML=
+      '<div class="card-top">'+
+        '<span class="dot '+(d.online?'on':'off')+'"></span>'+
+        '<div style="min-width:0"><div class="nm">'+esc(d.name||'(unnamed)')+'</div>'+
+        '<div class="own">'+esc(d.owner||'')+'</div></div>'+
+        '<span class="kind">'+kindOf(d.name)+'</span>'+
+      '</div>'+
+      '<div class="meta">'+
+        '<div class="m"><span class="lab">Status</span><span class="val" style="color:'+(d.online?'var(--acc)':'var(--dim2)')+'">'+(d.online?'online':'offline')+'</span></div>'+
+        '<div class="m"><span class="lab">Last seen</span><span class="val">'+rel(d.lastSeen)+'</span></div>'+
+        '<div class="m"><span class="lab">Queued</span><span class="val'+(d.queued?' warn':'')+'">'+(d.queued||0)+'</span></div>'+
+      '</div>';
+    el.onclick=function(){ select(d.deviceId); };
+    g.appendChild(el);
+  });
+  document.getElementById('onCount').textContent=on;
+  document.getElementById('totCount').textContent=devices.length;
+  document.getElementById('empty').hidden=devices.length>0;
+  // keep open detail header fresh
+  if(selId){ var d=devices.find(function(x){return x.deviceId===selId;}); if(d){ document.getElementById('dDot').className='dot '+(d.online?'on':'off'); } }
+}
+
+/* ── Detail: log + control ─────────────────────────────────────────────── */
+var QUICK=[
+  {t:'Read posts',m:'POST',p:'/v1/posts',b:{}},
+  {t:'Perceive',m:'POST',p:'/v1/perceive',b:{}},
+  {t:'Info',m:'POST',p:'/v1/info',b:{}},
+  {t:'Screenshot',m:'POST',p:'/v1/screenshot',b:{},shot:true}
+];
+function select(id){
+  selId=id; logAfter=0;
+  var d=devices.find(function(x){return x.deviceId===id;})||{};
+  document.getElementById('detail').hidden=false;
+  document.getElementById('dName').textContent=d.name||'(unnamed)';
+  document.getElementById('dId').textContent=id;
+  document.getElementById('dDot').className='dot '+(d.online?'on':'off');
+  document.getElementById('out').textContent='Pick an action or open a URL. Results show here.';
+  document.getElementById('shot').hidden=true;
+  var q=document.getElementById('quick'); q.innerHTML='';
+  QUICK.forEach(function(a){ var c=document.createElement('span'); c.className='chip'; c.textContent=a.t; c.onclick=function(){ runCmd(a.m,a.p,a.b,a.shot); }; q.appendChild(c); });
+  document.getElementById('log').innerHTML='<div class="muted">Loading log…</div>';
+  render();
+  pollLog(true);
+  document.getElementById('detail').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+document.getElementById('dClose').onclick=function(){ selId=null; document.getElementById('detail').hidden=true; render(); };
+document.getElementById('cmdGo').onclick=function(){ var u=document.getElementById('cmdUrl').value.trim(); if(u) runCmd('POST','/v1/navigate',{url:u}); };
+document.getElementById('cmdUrl').addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('cmdGo').click(); });
+
+async function runCmd(method,path,body,isShot){
+  if(!selId) return;
+  var out=document.getElementById('out'); out.textContent='Running '+path+' …';
+  document.getElementById('shot').hidden=true;
+  try{
+    var r=await api('/v1/device/'+selId+'/command',{method:'POST',body:JSON.stringify({method:method,path:path,body:body||{}})});
+    var j=await r.json();
+    if(!r.ok){ out.textContent='Error '+r.status+': '+(j.error||'failed'); return; }
+    var res=j.result||{}; var b=res.body;
+    if(isShot && typeof b==='string' && b.indexOf('data:image')===0){
+      var img=document.getElementById('shot'); img.src=b; img.hidden=false; out.textContent='Screenshot ('+Math.round(b.length/1024)+' KB)'; return;
+    }
+    // pretty-print JSON bodies
+    try{ b=JSON.stringify(JSON.parse(b),null,2); }catch(e){}
+    out.textContent=(typeof b==='string'?b:JSON.stringify(b,null,2))||'(empty)';
+    toast(path.replace('/v1/','')+' → '+(res.status||'ok'));
+  }catch(e){ out.textContent='Failed: '+e; }
+}
+
+async function pollLog(reset){
+  if(!selId){ return; }
+  try{
+    var r=await api('/v1/device/'+selId+'/log?after='+(reset?0:logAfter));
+    if(r.ok){
+      var j=await r.json(); var box=document.getElementById('log');
+      if(reset) box.innerHTML='';
+      var lines=j.lines||[];
+      if(reset && !lines.length){ box.innerHTML='<div class="muted">No activity logged yet. Run an action to see it here.</div>'; }
+      lines.forEach(function(e){
+        logAfter=Math.max(logAfter,e.n);
+        var ln=document.createElement('div'); ln.className='ln';
+        var d=new Date(e.t); var ts=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+        ln.innerHTML='<span class="ts">'+ts+'</span><span class="tx">'+esc(e.line)+'</span>';
+        box.appendChild(ln);
+      });
+      if(lines.length) box.scrollTop=box.scrollHeight;
+    }
+  }catch(e){}
+}
+
+/* ── Loops ─────────────────────────────────────────────────────────────── */
+refresh(); setInterval(refresh,4000);
+setInterval(function(){ if(selId) pollLog(false); },3000);
+</script>
+</body>
+</html>

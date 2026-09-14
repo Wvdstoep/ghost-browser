@@ -340,6 +340,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (!u.startsWith("http") && !u.startsWith("file:")) {
             u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + Uri.encode(u)
         }
+        u = mobileFbUrl(u)
         b.url.setText(if (u == HOME) "" else u)
         if (this::web.isInitialized) web.loadUrl(u)
         b.panel.visibility = View.GONE
@@ -363,12 +364,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     override fun navigate(url: String): String {
         var u = url.trim(); if (u.isEmpty()) return currentUrl()
         if (!u.startsWith("http") && !u.startsWith("file:")) u = "https://$u"
+        u = mobileFbUrl(u)
         val latch = CountDownLatch(1); loadLatch = latch
         val fu = u
         runOnUiThread { b.url.setText(fu); web.loadUrl(fu) }
         latch.await(25, TimeUnit.SECONDS); Thread.sleep(400)
         waitSettle(6000)   // lazy-loaded pages (Facebook) fire onPageFinished on a skeleton — wait for real content
         return currentUrl()
+    }
+
+    /** On the phone the in-app WebView is served Facebook's "App openen" interstitial on www.facebook.com
+     *  (feed innerText degrades to ~45 chars, 0 articles). The mobile web host m.facebook.com renders the
+     *  real feed with no app-wall, so ANY facebook.com URL is rewritten to m.facebook.com here — this is a
+     *  device-level guarantee so it works always, whatever the platform/agent/flow passes. The laptop node
+     *  keeps the full desktop site (it is not walled), so this rewrite lives only in the mobile app. */
+    private fun mobileFbUrl(u: String): String {
+        return try {
+            val uri = android.net.Uri.parse(u); val host = (uri.host ?: "").lowercase()
+            if (host == "www.facebook.com" || host == "facebook.com" || host == "web.facebook.com" || host == "mbasic.facebook.com")
+                u.replaceFirst(Regex("://(www\\.|web\\.|mbasic\\.)?facebook\\.com"), "://m.facebook.com")
+            else u
+        } catch (e: Exception) { u }
     }
 
     /** Poll gb.js ready() until the page has meaningful content or [maxMs] elapses. Fixes reads that
@@ -1144,6 +1160,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val i = packageManager.getLaunchIntentForPackage(pkg)
                 ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
             try { startActivity(i) } catch (e: Exception) { vm.log("! could not open Tailscale: ${e.message}") }
+        }
+        // Device Hub — the SAME page the cluster and laptop show. Opened in the main WebView on the GB
+        // origin, so it rides this profile's SSO cookie; the API key is added in the hash as a fallback.
+        b.hubBtn.setOnClickListener {
+            val base = vm.clusterUrl.trim().trimEnd('/')
+            if (base.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
+            val k = vm.apiKey.trim()
+            val url = base + "/hub" + (if (k.isNotEmpty()) "#key=" + k else "")
+            load(url)
         }
     }
 
