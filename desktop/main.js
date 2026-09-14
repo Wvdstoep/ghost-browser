@@ -40,12 +40,16 @@ ipcMain.handle('llm', async (_e, a) => {
     const url = String(a.endpoint || '').replace(/\/$/, '') + '/chat/completions'
     const headers = { 'Content-Type': 'application/json' }
     if (a.key) headers['Authorization'] = 'Bearer ' + a.key
+    // Accept a full conversation (messages[]) or the legacy single system+user turn.
+    const messages = Array.isArray(a.messages) && a.messages.length
+      ? a.messages
+      : [{ role: 'system', content: a.system || '' }, { role: 'user', content: a.user || '' }]
     const r = await fetch(url, {
       method: 'POST', headers,
-      body: JSON.stringify({ model: a.model, messages: [{ role: 'system', content: a.system }, { role: 'user', content: a.user }], temperature: 0.2, stream: false }),
+      body: JSON.stringify({ model: a.model, messages, temperature: (a.temperature != null ? a.temperature : 0.2), stream: false }),
     })
     const j = await r.json().catch(() => null)
-    return { ok: r.ok, text: (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '', error: r.ok ? null : ('HTTP ' + r.status) }
+    return { ok: r.ok, text: (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '', error: r.ok ? null : ('HTTP ' + r.status + (j && j.error ? ': ' + (j.error.message || j.error) : '')) }
   } catch (e) { return { ok: false, text: '', error: String(e && e.message || e) } }
 })
 
