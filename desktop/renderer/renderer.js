@@ -236,8 +236,20 @@ function openPlatform(prof, site) {
 }
 
 // ---------- flows ----------
+let rolesLoaded = false
+async function ensureRoles() {
+  if (rolesLoaded) return
+  const r = await api('GET', '/v1/agent/roles', null)
+  try {
+    const arr = JSON.parse(r.body).roles || []
+    const sel = $('fl-role')
+    arr.forEach((role) => { const o = document.createElement('option'); o.value = role.name; o.textContent = role.name; sel.appendChild(o) })
+    rolesLoaded = true
+  } catch (e) { /* role picker stays on "default" — not fatal */ }
+}
 async function loadFlows() {
   $('fl-hint').textContent = 'loading…'
+  ensureRoles()
   const r = await api('GET', '/v1/workflows', null)
   try { const arr = JSON.parse(r.body).workflows || []; LS.set('flowsCache', r.body); renderFlows(arr); log('↓ automations (' + arr.length + ')') }
   catch (e) { $('fl-hint').textContent = 'sign in on the Cluster tab first'; log('! flows: ' + (r.body || '').slice(0, 80)) }
@@ -249,28 +261,64 @@ function renderFlows(arr) {
   arr.forEach((w) => {
     if (!w.id) return
     const steps = (w.nodes && w.nodes.length) || 0
+    const proof = w.verifiedEver ? (w.lastVerified ? ' · ✓ verified' : ' · was verified, last run didn\'t confirm') : ''
     const row = document.createElement('div'); row.className = 'card'
     row.innerHTML = '<div class="col"><div class="t"></div><div class="s"></div></div>'
     row.querySelector('.t').textContent = w.name || w.id
-    row.querySelector('.s').textContent = steps + ' steps · ' + (w.lastRunStatus || 'never run')
+    row.querySelector('.s').textContent = steps + ' steps · ' + (w.runs ? w.runs + ' runs, last ' + (w.lastRunStatus || '?') : 'never run') + proof
+    const hist = document.createElement('button'); hist.className = 'btn out'; hist.textContent = 'History'; hist.onclick = () => showHistory(w.id, w.name || w.id)
     const b = document.createElement('button'); b.className = 'btn out'; b.textContent = 'Run'; b.onclick = () => runFlow(w.id, w.name || w.id)
-    row.appendChild(b)
+    row.appendChild(hist); row.appendChild(b)
     c.appendChild(row)
   })
 }
+async function showHistory(id, name) {
+  const r = await api('GET', '/v1/workflows/' + id + '/runs', null)
+  try {
+    const runs = JSON.parse(r.body).runs || []
+    if (!runs.length) { log('· "' + name + '" has no runs yet'); return }
+    log('· "' + name + '" — last ' + Math.min(runs.length, 5) + ' run(s):')
+    runs.slice(0, 5).forEach((run) => log('   ' + (run.started_at || '').replace('T', ' ').slice(0, 16) + '  ' + (run.status || '?') + '  ' + runOutcomeText(run)))
+  } catch (e) { log('! history: ' + (r.body || '').slice(0, 100)) }
+}
+function runOutcomeText(run) {
+  const steps = Array.isArray(run.steps) ? run.steps : []
+  if (steps.some((s) => s && s.status === 'error')) return '· a step errored'
+  const verifies = steps.filter((s) => s && s.type === 'verify')
+  if (verifies.length) return verifies.every((s) => s.output && s.output.found) ? '· verified ✓' : '· could not confirm'
+  return ''
+}
+/** Fire the run, then POLL its status so "Run" closes the loop instead of firing blind — the same
+ *  outcome semantics (done/error, verified/unconfirmed) the console itself uses. */
 async function runFlow(id, name) {
   log('▶ running "' + name + '"…')
   const r = await api('POST', '/v1/workflows/' + id + '/run', '{}')
-  try { const o = JSON.parse(r.body); log('● run ' + o.runId + ' — ' + (o.status || 'running')) } catch (e) { log('! run: ' + (r.body || '').slice(0, 120)) }
+  let runId = null
+  try { const o = JSON.parse(r.body); runId = o.runId; log('● run ' + runId + ' — ' + (o.status || 'running')) } catch (e) { log('! run: ' + (r.body || '').slice(0, 120)); return }
+  if (!runId) return
+  for (let i = 0; i < 40; i++) {
+    await sleep(2500)
+    const rr = await api('GET', '/v1/workflow-runs/' + runId, null)
+    let run; try { run = JSON.parse(rr.body) } catch (e) { continue }
+    if (!run || run.error) continue
+    if (run.status && run.status !== 'running') {
+      const outcome = runOutcomeText(run)
+      log((run.status === 'error' ? '✗' : '✓') + ' "' + name + '" ' + run.status + (outcome ? ' ' + outcome : ''))
+      loadFlows()
+      return
+    }
+  }
+  log('· "' + name + '" still running — check History later')
 }
 async function createFlow() {
   const name = $('fl-name').value.trim()
+  const role = $('fl-role').value
   const steps = $('fl-steps').value.split('\n').map((s) => s.trim()).filter(Boolean)
   if (name.length < 3) { log('! give the automation a name (3+ chars)'); return }
   if (!steps.length) { log('! add at least one step (one goal per line)'); return }
   const nodes = [{ id: 'trigger', type: 'trigger', label: 'Manual' }], edges = []
   let prev = 'trigger'
-  steps.forEach((g, i) => { const nid = 'n' + i; nodes.push({ id: nid, type: 'agent', label: 'Step ' + (i + 1), goal: g }); edges.push({ from: prev, to: nid }); prev = nid })
+  steps.forEach((g, i) => { const nid = 'n' + i; const node = { id: nid, type: 'agent', label: 'Step ' + (i + 1), goal: g }; if (role) node.role = role; nodes.push(node); edges.push({ from: prev, to: nid }); prev = nid })
   log('↑ creating "' + name + '" (' + steps.length + ' steps)…')
   const r = await api('POST', '/v1/workflows', JSON.stringify({ name, trigger: { type: 'manual' }, nodes, edges }))
   try { const o = JSON.parse(r.body); if (o.error) log('! create: ' + o.error); else { log('✓ created: ' + (o.name || o.id)); $('fl-name').value = ''; $('fl-steps').value = ''; loadFlows() } }
