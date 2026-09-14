@@ -254,6 +254,28 @@ Installer: [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/Ghost
 Connect: Cluster tab → your GB URL → Sign in (SSO) → open Ghost Browser from Tools → Connect. The laptop
 registers with the device hub and appears in `/v1/device/list` next to your phone.
 
+## Heavy web apps as an agent: CapCut, and the knowledge lives in GB
+
+GB's desktop node can operate full web applications, not just pages. The proof is a real video edit made in
+**CapCut Web** entirely through GB: import the clip (no file dialog), drag it onto the timeline, set 9:16, add
+placed and sized captions, give each a voice-over, lay music under it, trim, and export at 1080p.
+
+What made that possible, and what you can reuse:
+
+- **Primitives for real apps.** `upload_file` attaches a local file to a page input via CDP (no OS dialog);
+  `click_xy` / `drag_xy` send genuine mouse input for canvases and timelines; `browser_read` returns every
+  element with `x,y,w,h`; `/v1/batch` and the agent's `run_steps` run a whole sequence in one round-trip.
+- **The playbook is a role, not a note.** Everything learned on the real editor - including every trap
+  (a one-line caption overflows a 9:16 frame; "Add heading" no-ops while a text clip is selected; free
+  voices live only under the TikTok category; "Apply to all" hangs; a library track lands at the playhead)
+  - is the `capcut-video-editor` role's prompt. An agent adopting the role inherits the method.
+- **The job is an automation.** `capcut-vertical-demo-edit-desktop-node` takes a recording path and a caption
+  plan and runs the role end to end on the desktop node.
+- **Profiles show their role and automations.** On desktop and Android the Profiles tab has a "This profile"
+  card: the role it runs as, what that role does, and every automation whose steps run on that profile -
+  each runnable from the card. Profile chips carry a badge with the same. Nothing about how a profile is
+  used has to be rediscovered.
+
 ## Driving dynamic / anti-automation sites (e.g. Facebook)
 
 Most sites read fine with page text. A few (Facebook is the sharpest example) actively resist an

@@ -256,7 +256,13 @@ async function api(method, path, bodyStr) {
 // ---------- profiles ----------
 function renderChips() {
   const c = $('pf-chips'); c.innerHTML = ''
-  profiles.forEach((p) => { const b = document.createElement('button'); b.className = 'chip' + (p === currentProfile ? ' on' : ''); b.textContent = p; b.onclick = () => { currentProfile = p; LS.set('profile', p); renderChips(); renderRoleSelect(); newTab(HOME) }; c.appendChild(b) })
+  profiles.forEach((p) => {
+    const b = document.createElement('button'); b.className = 'chip' + (p === currentProfile ? ' on' : ''); b.textContent = p
+    // badge: the profile's role and how many automations run on it — visible without opening anything
+    const role = roleForProfile(p), n = automationsForProfile(p).length
+    if (role || n) { const s = document.createElement('span'); s.className = 'chipmeta'; s.textContent = (role || '') + (n ? (role ? ' · ' : '') + n + (n === 1 ? ' automation' : ' automations') : ''); b.appendChild(s) }
+    b.onclick = () => { currentProfile = p; LS.set('profile', p); renderChips(); renderRoleSelect(); newTab(HOME) }; c.appendChild(b)
+  })
 }
 // ---------- roles per profile (like the platform GB) ----------
 function rolesArr() { try { return JSON.parse(LS.get('rolesCache', '{}')).roles || [] } catch (e) { return [] } }
@@ -264,8 +270,25 @@ function profileRoles() { try { return JSON.parse(LS.get('profileRoles', '{}')) 
 function roleForProfile(p) { return profileRoles()[p] || '' }
 function setRoleForProfile(p, name) { const m = profileRoles(); if (!name) delete m[p]; else m[p] = name; LS.set('profileRoles', JSON.stringify(m)) }
 function roleDescription(name) { const r = rolesArr().find((x) => x.name === name); return r ? (r.description || '') : '' }
+// ---- this profile at a glance: role + the automations whose steps run on it ----
+function flowsArr() { try { return JSON.parse(LS.get('flowsCache', '{}')).workflows || [] } catch (e) { return [] } }
+// Read straight off the flow definitions (nodes[].profile) so the list is always the truth, never a note.
+function automationsForProfile(p) { return flowsArr().filter((w) => (w.nodes || []).some((n) => n.profile === p)) }
+const escH = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+function renderProfileSummary() {
+  const box = $('pf-summary'); if (!box) return
+  const p = currentProfile, role = roleForProfile(p), autos = automationsForProfile(p)
+  let h = '<div class="sum-h">' + escH(p) + '</div>'
+  h += '<div class="sum-row"><span class="sum-k">Role</span><span class="sum-v">' + (role ? escH(role) : '<i>none</i>') + '</span></div>'
+  if (role && roleDescription(role)) h += '<div class="sum-row"><span class="sum-k"></span><span class="sum-v" style="color:var(--muted)">' + escH(roleDescription(role)) + '</span></div>'
+  h += '<div class="sum-row"><span class="sum-k">Automations</span><span class="sum-v">' + (autos.length ? autos.length + ' run on this profile' : '<i>none use this profile</i>') + '</span></div>'
+  autos.forEach((w) => { h += '<div class="sum-auto"><span>' + escH(w.name) + '</span><button class="btn tonal sm" data-run="' + escH(w.id) + '">Run</button></div>' })
+  box.innerHTML = h
+  box.querySelectorAll('[data-run]').forEach((btn) => { btn.onclick = async () => { btn.disabled = true; btn.textContent = 'running…'; const r = await apiJson('POST', '/v1/workflows/' + btn.dataset.run + '/run', '{}'); log('▶ ' + btn.dataset.run + ' → ' + (r.runId || r.error || 'started')); btn.textContent = 'Run'; btn.disabled = false } })
+}
 function renderRoleSelect() {
   const sel = $('pf-role'); if (!sel) return
+  setTimeout(renderProfileSummary, 0) // after the note below is set; also covers profile switch + role change + roles load
   const cur = roleForProfile(currentProfile)
   sel.innerHTML = '<option value="">(none)</option>' + rolesArr().map((r) => '<option value="' + r.name + '"' + (r.name === cur ? ' selected' : '') + '>' + r.name + '</option>').join('')
   $('pf-rolenote').textContent = cur ? (roleDescription(cur) || ('Role: ' + cur)) : 'The agent adopts this role’s behaviour when it works on this profile — like the platform’s agent roles.'
@@ -328,7 +351,7 @@ async function loadFlows() {
   $('fl-hint').textContent = 'loading…'
   ensureRoles()
   const r = await api('GET', '/v1/workflows', null)
-  try { const arr = JSON.parse(r.body).workflows || []; LS.set('flowsCache', r.body); renderFlows(arr); log('↓ automations (' + arr.length + ')') }
+  try { const arr = JSON.parse(r.body).workflows || []; LS.set('flowsCache', r.body); renderFlows(arr); renderChips(); renderProfileSummary(); log('↓ automations (' + arr.length + ')') }
   catch (e) { $('fl-hint').textContent = 'sign in on the Cluster tab first'; log('! flows: ' + (r.body || '').slice(0, 80)) }
 }
 function renderFlows(arr) {

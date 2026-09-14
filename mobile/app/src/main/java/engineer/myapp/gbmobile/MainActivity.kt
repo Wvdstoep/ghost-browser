@@ -577,7 +577,44 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val cur = roleForProfile(vm.currentProfile.value ?: "default")
         val idx = names.indexOf(cur).let { if (it < 0) 0 else it }
         b.roleSpinner.setSelection(idx)
+        b.roleSpinner.post { renderProfileSummary() }   // after the note below is set; covers profile switch + role change
         b.roleNote.text = if (cur.isNotBlank()) roleDescription(cur).ifBlank { "Role: $cur" } else "The agent adopts this role's behaviour when it works on this profile — like the platform's agent roles."
+    }
+
+    /** Automations whose steps run on [profile] — read off the flow definitions (nodes[].profile), so the
+     *  list is always the truth, never a note that can go stale. */
+    private fun automationsForProfile(profile: String): List<JSONObject> {
+        val out = ArrayList<JSONObject>()
+        try {
+            val arr = JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val w = arr.optJSONObject(i) ?: continue
+                val nodes = w.optJSONArray("nodes") ?: JSONArray()
+                var hit = false
+                for (k in 0 until nodes.length()) { if (nodes.optJSONObject(k)?.optString("profile") == profile) { hit = true; break } }
+                if (hit) out.add(w)
+            }
+        } catch (e: Exception) {}
+        return out
+    }
+
+    /** "This profile" card: its role (+ what that role does) and every automation that uses it, each
+     *  runnable right here — mirrors the platform GB, so the knowledge lives in the app, not in memory. */
+    private fun renderProfileSummary() {
+        val box = b.profileSummary; box.removeAllViews()
+        val p = vm.currentProfile.value ?: "default"
+        val role = roleForProfile(p); val autos = automationsForProfile(p)
+        fun line(t: String, muted: Boolean = false) = TextView(this).apply {
+            text = t; textSize = if (muted) 12f else 13f
+            setTextColor(getColor(if (muted) R.color.muted else R.color.text)); setPadding(0, 4, 0, 4)
+        }
+        box.addView(line("Role: " + (if (role.isBlank()) "none" else role)))
+        if (role.isNotBlank()) { val d = roleDescription(role); if (d.isNotBlank()) box.addView(line(d, true)) }
+        box.addView(line(if (autos.isEmpty()) "Automations: none use this profile" else "Automations using this profile: ${autos.size}", autos.isEmpty()))
+        for (w in autos) {
+            val id = w.optString("id"); val name = w.optString("name", id)
+            box.addView(flowCard(id, name, w.optJSONArray("nodes")?.length() ?: 0, "runs on $p"))
+        }
     }
 
     private fun renderChips() {
@@ -592,6 +629,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         val r = roleForProfile(vm.currentProfile.value ?: "default")
         b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}" + (if (r.isNotBlank()) "  ·  role: $r" else "")
+        renderProfileSummary()
     }
 
     // ---- Same-origin authed API channel (fetch profiles, flows, run/create over the SSO session) ----
@@ -757,6 +795,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}$proof" else "never run"
             b.flowCards.addView(flowCard(id, name, steps, last))
         }
+        renderProfileSummary()   // the per-profile card lists the automations that run on it
     }
 
     private fun flowCard(id: String, name: String, steps: Int, last: String): View {

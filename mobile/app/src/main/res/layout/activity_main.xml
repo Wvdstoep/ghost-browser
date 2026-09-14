@@ -183,6 +183,9 @@
                     </LinearLayout>
                     <Spinner android:id="@+id/roleSpinner" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" />
                     <TextView android:id="@+id/roleNote" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="The agent adopts this role's behaviour when it works on this profile — like the platform's agent roles." android:textColor="@color/muted" android:textSize="11sp" android:fontFamily="@font/manrope_regular" />
+                    <!-- This profile at a glance: its role + every automation whose steps run on it (each runnable) -->
+                    <TextView style="@style/Text.Eyebrow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:text="This profile" />
+                    <LinearLayout android:id="@+id/profileSummary" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" />
                 </LinearLayout>
 
                 <!-- 2: Flows -->
