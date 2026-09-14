@@ -148,9 +148,8 @@ function onCtl(tag, data) {
 }
 function setStatus(s) { $('status').textContent = s }
 
-async function runCommand(id, path, bodyStr) {
-  const t = tabs[active]; const wv = ensureWv(t)
-  let body = {}; try { body = JSON.parse(bodyStr || '{}') } catch (e) {}
+// One device path → its JSON result. Split out of runCommand so /v1/batch can run many in one trip.
+async function execPath(wv, path, body) {
   let out = '{}'
   try {
     if (path === '/v1/navigate') { const u = await nav(wv, body.url || ''); await waitSettle(wv, 6000); out = JSON.stringify({ url: u }) }
@@ -202,6 +201,26 @@ async function runCommand(id, path, bodyStr) {
     }
     else out = JSON.stringify({ error: 'unknown path' })
   } catch (e) { out = JSON.stringify({ error: String(e) }) }
+  return out
+}
+// A device command is one round-trip on a channel that waits up to 60s each. A CapCut caption is ~6
+// steps (playhead, add, focus, type, select, drag) — /v1/batch runs a whole sequence in ONE trip:
+// body {steps:[{path, body, sleep?, stopOnError?}]} → {ran, results:[{path, result}]}.
+async function runCommand(id, path, bodyStr) {
+  const t = tabs[active]; const wv = ensureWv(t)
+  let body = {}; try { body = JSON.parse(bodyStr || '{}') } catch (e) {}
+  let out
+  if (path === '/v1/batch') {
+    const steps = Array.isArray(body.steps) ? body.steps : []
+    const results = []
+    for (const s of steps) {
+      const r = await execPath(wv, s.path || '/v1/info', s.body || {})
+      results.push({ path: s.path, result: r })
+      if (s.stopOnError && /"error"/.test(r || '')) break
+      if (s.sleep) await sleep(Math.min(Number(s.sleep) || 0, 15000))
+    }
+    out = JSON.stringify({ ran: results.length, results })
+  } else out = await execPath(wv, path, body)
   log('↺ ran ' + path)
   if (controlWv) { try { controlWv.executeJavaScript('window.__gbResult(' + JSON.stringify(id) + ',200,' + JSON.stringify(out) + ')', false) } catch (e) {} }
 }
@@ -407,6 +426,7 @@ const TOOLS = {
   upload_file: { desc: 'Import a LOCAL file on this device into a page file-input WITHOUT a dialog (e.g. add media in CapCut). args:{path, selector?, nth?}. After importing, CLICK the item in the media list to add it to the timeline — no drag needed.', run: async (a) => await G.uploadFile(activeWv().getWebContentsId(), a.selector || 'input[type=file]', a.paths || (a.path ? [a.path] : []), a.nth || 0) },
   click_xy: { desc: 'Click at exact pixel x,y from browser_read (each element has x,y,w,h). Use for canvas/timeline spots that have no clickable index — e.g. click a precise position on the timeline ruler to move the playhead. args:{x,y,clickCount?}', run: async (a) => { const wv = activeWv(); const x = a.x | 0, y = a.y | 0, cc = a.clickCount || 1; wv.sendInputEvent({ type: 'mouseMove', x, y }); wv.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: cc }); wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc }); return { ok: true, x, y } } },
   drag_xy: { desc: 'Drag with real mouse events from (fromX,fromY) to (toX,toY). Use ONLY when a click/field cannot do it — reordering or trimming a timeline clip. Prefer clicking to add and precise click/number-field for timing. args:{fromX,fromY,toX,toY,steps?}', run: async (a) => { const wv = activeWv(); const s = Math.max(2, a.steps || 24), fx = a.fromX | 0, fy = a.fromY | 0, tx = a.toX | 0, ty = a.toY | 0; wv.sendInputEvent({ type: 'mouseMove', x: fx, y: fy }); wv.sendInputEvent({ type: 'mouseDown', x: fx, y: fy, button: 'left', clickCount: 1 }); for (let i = 1; i <= s; i++) { wv.sendInputEvent({ type: 'mouseMove', x: Math.round(fx + (tx - fx) * i / s), y: Math.round(fy + (ty - fy) * i / s), button: 'left' }); await sleep(16) } await sleep(90); wv.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 }); return { ok: true } } },
+  run_steps: { desc: 'Run several browser tools in ONE call, in order — for multi-step sequences (e.g. a CapCut caption: click_xy, browser_type, drag_xy). args:{steps:[{tool, args, sleep?}]}. Stops at the first error. Far cheaper than one call per step.', run: async (a) => { const steps = Array.isArray(a.steps) ? a.steps : []; const results = []; for (const s of steps) { const t = TOOLS[s.tool]; if (!t) { results.push({ tool: s.tool, error: 'unknown tool' }); break } try { results.push({ tool: s.tool, result: await t.run(s.args || {}) }) } catch (e) { results.push({ tool: s.tool, error: String(e) }); break } if (s.sleep) await sleep(Math.min(Number(s.sleep) || 0, 15000)) } return { ran: results.length, results } } },
   open_tab: { desc: 'Open a new browser tab. args:{url}', run: async (a) => { newTab(absUrl(a.url || HOME)); return { ok: true } } },
   fetch_url: { desc: 'Authenticated same-origin fetch from the active tab. args:{url,method,body,headers}', run: async (a) => {
     const out = await deviceFetch(activeWv(), a); try { return JSON.parse(out) } catch (e) { return { raw: (out || '').slice(0, 1500) } }
