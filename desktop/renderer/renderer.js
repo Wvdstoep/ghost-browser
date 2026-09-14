@@ -175,15 +175,11 @@ async function execPath(wv, path, body) {
       out = JSON.stringify(await G.uploadFile(wv.getWebContentsId(), body.selector || 'input[type=file]', files, body.nth || 0))
     }
     else if (path === '/v1/drag') {
-      // Real OS-level drag INTO the guest — synthetic events don't move a canvas/timeline (CapCut). Coords
-      // are guest-viewport pixels. sendInputEvent delivers genuine mouse events the app can't tell from a human.
-      const steps = Math.max(2, body.steps || 24), fx = body.fromX | 0, fy = body.fromY | 0, tx = body.toX | 0, ty = body.toY | 0
-      wv.sendInputEvent({ type: 'mouseMove', x: fx, y: fy })
-      wv.sendInputEvent({ type: 'mouseDown', x: fx, y: fy, button: 'left', clickCount: 1 })
-      for (let i = 1; i <= steps; i++) { wv.sendInputEvent({ type: 'mouseMove', x: Math.round(fx + (tx - fx) * i / steps), y: Math.round(fy + (ty - fy) * i / steps), button: 'left' }); await sleep(16) }
-      await sleep(90)
-      wv.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 })
-      out = JSON.stringify({ ok: true, from: [fx, fy], to: [tx, ty] })
+      // Drag from (fromX,fromY) to (toX,toY) in guest-viewport pixels. Done in the main process by CDP with
+      // drag-interception: webview.sendInputEvent with the button held used to start a NATIVE drag loop on
+      // HTML5-draggable things (CapCut cards/clips) that no synthetic mouseUp could end — the node went deaf
+      // until a human moved the mouse. Canvas drags get plain mouse events; HTML5 drags get a real drop.
+      out = JSON.stringify(await G.dragCdp(wv.getWebContentsId(), { fromX: body.fromX | 0, fromY: body.fromY | 0, toX: body.toX | 0, toY: body.toY | 0, steps: body.steps, holdMs: body.holdMs }))
     }
     else if (path === '/v1/click_xy') {
       const x = body.x | 0, y = body.y | 0, cc = body.clickCount || 1
@@ -448,7 +444,7 @@ const TOOLS = {
   // ---- primitives for heavy web apps (CapCut editor etc.) ----
   upload_file: { desc: 'Import a LOCAL file on this device into a page file-input WITHOUT a dialog (e.g. add media in CapCut). args:{path, selector?, nth?}. After importing, CLICK the item in the media list to add it to the timeline — no drag needed.', run: async (a) => await G.uploadFile(activeWv().getWebContentsId(), a.selector || 'input[type=file]', a.paths || (a.path ? [a.path] : []), a.nth || 0) },
   click_xy: { desc: 'Click at exact pixel x,y from browser_read (each element has x,y,w,h). Use for canvas/timeline spots that have no clickable index — e.g. click a precise position on the timeline ruler to move the playhead. args:{x,y,clickCount?}', run: async (a) => { const wv = activeWv(); const x = a.x | 0, y = a.y | 0, cc = a.clickCount || 1; wv.sendInputEvent({ type: 'mouseMove', x, y }); wv.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: cc }); wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc }); return { ok: true, x, y } } },
-  drag_xy: { desc: 'Drag with real mouse events from (fromX,fromY) to (toX,toY). Use ONLY when a click/field cannot do it — reordering or trimming a timeline clip. Prefer clicking to add and precise click/number-field for timing. args:{fromX,fromY,toX,toY,steps?}', run: async (a) => { const wv = activeWv(); const s = Math.max(2, a.steps || 24), fx = a.fromX | 0, fy = a.fromY | 0, tx = a.toX | 0, ty = a.toY | 0; wv.sendInputEvent({ type: 'mouseMove', x: fx, y: fy }); wv.sendInputEvent({ type: 'mouseDown', x: fx, y: fy, button: 'left', clickCount: 1 }); for (let i = 1; i <= s; i++) { wv.sendInputEvent({ type: 'mouseMove', x: Math.round(fx + (tx - fx) * i / s), y: Math.round(fy + (ty - fy) * i / s), button: 'left' }); await sleep(16) } await sleep(90); wv.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 }); return { ok: true } } },
+  drag_xy: { desc: 'Drag with real mouse events from (fromX,fromY) to (toX,toY) — timeline clips, trims, library cards onto a timeline (HTML5 drag-and-drop is completed for real). args:{fromX,fromY,toX,toY,steps?}', run: async (a) => await G.dragCdp(activeWv().getWebContentsId(), { fromX: a.fromX | 0, fromY: a.fromY | 0, toX: a.toX | 0, toY: a.toY | 0, steps: a.steps }) },
   run_steps: { desc: 'Run several browser tools in ONE call, in order — for multi-step sequences (e.g. a CapCut caption: click_xy, browser_type, drag_xy). args:{steps:[{tool, args, sleep?}]}. Stops at the first error. Far cheaper than one call per step.', run: async (a) => { const steps = Array.isArray(a.steps) ? a.steps : []; const results = []; for (const s of steps) { const t = TOOLS[s.tool]; if (!t) { results.push({ tool: s.tool, error: 'unknown tool' }); break } try { results.push({ tool: s.tool, result: await t.run(s.args || {}) }) } catch (e) { results.push({ tool: s.tool, error: String(e) }); break } if (s.sleep) await sleep(Math.min(Number(s.sleep) || 0, 15000)) } return { ran: results.length, results } } },
   open_tab: { desc: 'Open a new browser tab. args:{url}', run: async (a) => { newTab(absUrl(a.url || HOME)); return { ok: true } } },
   fetch_url: { desc: 'Authenticated same-origin fetch from the active tab. args:{url,method,body,headers}', run: async (a) => {
