@@ -489,6 +489,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             renderChips(); newTab()
         }
         b.loadPlatforms.setOnClickListener { loadPlatforms() }
+        // show the last fetched platforms immediately (persisted), so they don't vanish on relaunch
+        if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
     }
 
     private fun renderChips() {
@@ -649,6 +651,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             b.flowsHint.text = "loading…"; apiCall("GET", "/v1/workflows", null, "flows")
         }
         b.createFlow.setOnClickListener { createFlow() }
+        // show the last fetched automations immediately (persisted)
+        if (vm.flowsJson.isNotBlank()) try { renderFlows(JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()) } catch (e: Exception) {}
     }
 
     private fun renderFlows(arr: JSONArray) {
@@ -791,7 +795,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
         @JavascriptInterface
         fun fetchResult(id: String, status: Int, bodyStr: String) {
-            fetchResults[id] = JSONObject().put("status", status).put("body", bodyStr.take(200000)).toString()
+            fetchResults[id] = JSONObject().put("status", status).put("body", bodyStr.take(2_000_000)).toString()
             fetchWaiters.remove(id)?.countDown()
         }
 
@@ -827,6 +831,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 try {
                     val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                     renderPlatforms(arr)
+                    vm.platformsJson = data   // persist so it survives relaunch
                     vm.log("↓ your platforms (${arr.length()}) — tap one to open & sign in on this phone")
                 } catch (e: Exception) {
                     b.platformsHint.text = "sign in on the Cluster tab first"
@@ -838,6 +843,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 try {
                     val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
                     renderFlows(arr)
+                    vm.flowsJson = data       // persist so it survives relaunch
                     vm.log("↓ automations (${arr.length()})")
                 } catch (e: Exception) {
                     b.flowsHint.text = "sign in on the Cluster tab first"

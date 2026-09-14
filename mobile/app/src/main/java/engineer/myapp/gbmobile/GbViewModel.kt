@@ -35,6 +35,12 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
         set(v) { sp.edit().putString("clusterUrl", v).apply() }
 
+    // --- cached cluster data (so fetched platforms/flows persist across launches) ---
+    var platformsJson: String get() = sp.getString("platformsCache", "") ?: ""
+        set(v) { sp.edit().putString("platformsCache", v).apply() }
+    var flowsJson: String get() = sp.getString("flowsCache", "") ?: ""
+        set(v) { sp.edit().putString("flowsCache", v).apply() }
+
     // --- open tabs (restored across launches, like a real browser) ---
     var tabsJson: String get() = sp.getString("tabs", "") ?: ""
         set(v) { sp.edit().putString("tabs", v).apply() }
