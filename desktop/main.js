@@ -126,6 +126,33 @@ ipcMain.handle('gb-drag', async (_e, a) => {
   }
 })
 
+// Downloads save themselves. Without a will-download handler Electron pops a native "Save As" dialog that
+// no remote command can reach (the node looked finished while a dialog sat waiting for a human). Every
+// session - each profile has its own partition - saves into the user's Downloads folder under a unique
+// name, and the renderer is told where it landed so the agent can report the path.
+const downloadsSeen = []
+function hookDownloads(ses) {
+  if (!ses || ses.__gbDownloads) return
+  ses.__gbDownloads = true
+  ses.on('will-download', (_e, item, wc) => {
+    try {
+      const folder = app.getPath('downloads')
+      const base = (item.getFilename() || 'download.bin').replace(/[\\/:*?"<>|]+/g, '_')
+      const ext = path.extname(base), stem = base.slice(0, base.length - ext.length)
+      let target = path.join(folder, base), n = 1
+      while (fs.existsSync(target)) { target = path.join(folder, stem + ' (' + (n++) + ')' + ext) }
+      item.setSavePath(target)
+      const rec = { file: target, url: item.getURL(), bytes: 0, total: item.getTotalBytes(), state: 'progressing', startedAt: Date.now() }
+      downloadsSeen.unshift(rec); if (downloadsSeen.length > 20) downloadsSeen.pop()
+      item.on('updated', () => { rec.bytes = item.getReceivedBytes(); rec.total = item.getTotalBytes() })
+      item.once('done', (_ev, state) => { rec.state = state; rec.bytes = item.getReceivedBytes(); rec.doneAt = Date.now()
+        for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send('gb-download', rec) } catch (e) {} } })
+    } catch (e) { /* fall back to Electron's default */ }
+  })
+}
+app.on('session-created', hookDownloads)
+ipcMain.handle('gb-downloads', () => downloadsSeen)
+
 // Ollama / OpenAI-compatible chat, run in the main process so the on-device agent avoids browser CORS.
 ipcMain.handle('llm', async (_e, a) => {
   try {
