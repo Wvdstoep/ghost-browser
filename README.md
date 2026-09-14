@@ -205,6 +205,22 @@ real browser identity, on real hardware, on a real network.
 Prebuilt debug APK: [mobile/dist/app-debug.apk](mobile/dist/app-debug.apk). Build it: cd mobile then ./gradlew assembleDebug.
 
 
+## GB Desktop — Ghost Browser on your laptop
+
+`desktop/` is Ghost Browser as a native **Windows app** (Electron): a real desktop Chromium on your
+own laptop’s residential IP. Desktop-only portals load **and** Cloudflare passes — a desktop browser on
+desktop hardware has no fingerprint mismatch to flag. It joins the cluster as a drivable node exactly
+like GB Mobile: same reverse channel, same `/v1/*` commands (navigate / analyze / click / type / fetch /
+eval), isolated per-profile sessions, an on-device agent (your own Ollama/OpenAI-compatible endpoint),
+your platform profiles, and the automations engine — same design language as the mobile app. So the
+backend can run a hunt on whichever node you pick: phone (mobile identity) or laptop (desktop identity).
+
+Installer: [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe)
+(unsigned — SmartScreen: *More info → Run anyway*). Build from source: see [desktop/README.md](desktop/README.md).
+
+Connect: Cluster tab → your GB URL → Sign in (SSO) → open Ghost Browser from Tools → Connect. The laptop
+registers with the device hub and appears in `/v1/device/list` next to your phone.
+
 ## Help wanted
 
 Two things that used to live here are now **solved**: the live view going black is fixed, and GB now
