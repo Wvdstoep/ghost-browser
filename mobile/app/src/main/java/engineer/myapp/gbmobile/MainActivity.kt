@@ -69,6 +69,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val flowRunDone = java.util.Collections.synchronizedSet(HashSet<String>())  // run ids already reported (poll fires 5x)
     private val models by lazy { ModelManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -667,7 +668,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val id = w.optString("id"); if (id.isBlank()) continue
             val name = w.optString("name", id)
             val steps = w.optJSONArray("nodes")?.length() ?: w.optInt("nodes", 0)
-            val last = w.optString("lastRunStatus", "").ifBlank { "never run" }
+            val runs = w.optInt("runs", 0)
+            val proof = if (w.optBoolean("verifiedEver")) (if (w.optBoolean("lastVerified")) " · ✓ verified" else " · was verified") else ""
+            val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}$proof" else "never run"
             b.flowCards.addView(flowCard(id, name, steps, last))
         }
     }
@@ -859,13 +862,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 vm.log("● automation started (run $runId) — ${o.optString("status", "running")}")
                 if (runId.isNotBlank()) {
                     val h = android.os.Handler(mainLooper)
-                    for (d in listOf(6000L, 15000L, 30000L)) { h.postDelayed({ apiCall("GET", "/v1/workflow-runs/$runId", null, "flowrunstatus") }, d) }
+                    for (d in listOf(5000L, 12000L, 25000L, 45000L, 70000L)) { h.postDelayed({ apiCall("GET", "/v1/workflow-runs/$runId", null, "flowrunstatus") }, d) }
                 }
             } catch (e: Exception) { vm.log("! run: ${data.take(160)}") }
             "flowrun_err" -> vm.log("! run automation: ${data.take(140)}")
             "flowrunstatus" -> try {
                 val o = JSONObject(data)
-                vm.log("· run ${o.optString("id")}: ${o.optString("status", "?")}" + (o.optString("outcome", "").let { if (it.isNotBlank()) " — $it" else "" }))
+                val status = o.optString("status", "?")
+                val steps = o.optJSONArray("steps") ?: JSONArray()
+                var errored = false; var verifies = 0; var verifiedAll = true
+                for (i in 0 until steps.length()) {
+                    val s = steps.optJSONObject(i) ?: continue
+                    if (s.optString("status") == "error") errored = true
+                    if (s.optString("type") == "verify") { verifies++; val out = s.optJSONObject("output"); if (out == null || !out.optBoolean("found")) verifiedAll = false }
+                }
+                // The engine's own outcome semantics: a run is "verified" only if a verify step found its text.
+                val outcome = when { errored -> "a step errored"; verifies > 0 && verifiedAll -> "verified ✓"; verifies > 0 -> "could not confirm"; else -> "" }
+                if (status != "running" && !flowRunDone.contains(o.optString("id"))) {
+                    flowRunDone.add(o.optString("id"))
+                    vm.log((if (errored) "✗" else "✓") + " automation done: $status" + (if (outcome.isNotBlank()) " — $outcome" else ""))
+                    apiCall("GET", "/v1/workflows", null, "flows")   // refresh run counts/verified badges
+                }
             } catch (e: Exception) {}
             "flowcreate" -> try {
                 val o = JSONObject(data)
