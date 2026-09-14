@@ -88,7 +88,12 @@
       return 'ok';
     },
     scroll: function (dy) { clearOverlay(); window.scrollBy(0, dy); return 'ok'; },
-    text: function () { return (document.body ? document.body.innerText : '').slice(0, 200000); },
+    text: function () {
+      var c = document.getElementById('__gbmarks'); var d = c ? c.style.display : null; if (c) c.style.display = 'none';
+      var t = (document.body ? document.body.innerText : '').slice(0, 200000);
+      if (c) c.style.display = (d || '');
+      return t;
+    },
     info: function () { return { url: location.href, title: document.title, ready: document.readyState }; }
   };
 })();
