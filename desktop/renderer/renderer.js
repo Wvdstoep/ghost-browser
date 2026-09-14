@@ -197,7 +197,25 @@ async function api(method, path, bodyStr) {
 // ---------- profiles ----------
 function renderChips() {
   const c = $('pf-chips'); c.innerHTML = ''
-  profiles.forEach((p) => { const b = document.createElement('button'); b.className = 'chip' + (p === currentProfile ? ' on' : ''); b.textContent = p; b.onclick = () => { currentProfile = p; LS.set('profile', p); renderChips(); newTab(HOME) }; c.appendChild(b) })
+  profiles.forEach((p) => { const b = document.createElement('button'); b.className = 'chip' + (p === currentProfile ? ' on' : ''); b.textContent = p; b.onclick = () => { currentProfile = p; LS.set('profile', p); renderChips(); renderRoleSelect(); newTab(HOME) }; c.appendChild(b) })
+}
+// ---------- roles per profile (like the platform GB) ----------
+function rolesArr() { try { return JSON.parse(LS.get('rolesCache', '{}')).roles || [] } catch (e) { return [] } }
+function profileRoles() { try { return JSON.parse(LS.get('profileRoles', '{}')) } catch (e) { return {} } }
+function roleForProfile(p) { return profileRoles()[p] || '' }
+function setRoleForProfile(p, name) { const m = profileRoles(); if (!name) delete m[p]; else m[p] = name; LS.set('profileRoles', JSON.stringify(m)) }
+function roleDescription(name) { const r = rolesArr().find((x) => x.name === name); return r ? (r.description || '') : '' }
+function renderRoleSelect() {
+  const sel = $('pf-role'); if (!sel) return
+  const cur = roleForProfile(currentProfile)
+  sel.innerHTML = '<option value="">(none)</option>' + rolesArr().map((r) => '<option value="' + r.name + '"' + (r.name === cur ? ' selected' : '') + '>' + r.name + '</option>').join('')
+  $('pf-rolenote').textContent = cur ? (roleDescription(cur) || ('Role: ' + cur)) : 'The agent adopts this role’s behaviour when it works on this profile — like the platform’s agent roles.'
+}
+async function loadRoles() {
+  $('pf-rolenote').textContent = 'loading roles…'
+  const r = await api('GET', '/v1/agent/roles', null)
+  try { const d = JSON.parse(r.body); LS.set('rolesCache', JSON.stringify({ roles: d.roles || [] })); renderRoleSelect(); log('↓ agent roles (' + (d.roles || []).length + ')') }
+  catch (e) { $('pf-rolenote').textContent = 'sign in on the Cluster tab first'; log('! roles: ' + (r.body || '').slice(0, 80)) }
 }
 function addProfile() {
   const n = $('pf-new').value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''); if (!n) return
@@ -228,7 +246,7 @@ function renderPlatforms(arr) {
 }
 function openPlatform(prof, site) {
   if (!profiles.includes(prof)) { profiles.push(prof); LS.set('profiles', JSON.stringify(profiles)); renderChips() }
-  currentProfile = prof; LS.set('profile', prof)
+  currentProfile = prof; LS.set('profile', prof); renderRoleSelect()
   const host = hostOf(site)
   const idx = tabs.findIndex((t) => t.profile === prof && hostOf(t.url) === host)
   if (idx >= 0) activateTab(idx); else newTab(site)
@@ -450,7 +468,10 @@ async function sendAgent() {
   pushMsg('user', text); if ($('ag-empty')) renderChat(); else addBubble('user', text)
   agentBusy = true; $('ag-sendbtn').disabled = true
   try {
-    const convo = [{ role: 'system', content: agentSystemPrompt() }]
+    const rn = roleForProfile(currentProfile)
+    const sysContent = rn ? ('ROLE: you are acting as "' + rn + '" — ' + roleDescription(rn) + ' Stay within this role\'s remit.\n\n' + agentSystemPrompt()) : agentSystemPrompt()
+    if (rn) log('▶ agent role: ' + rn + ' (profile ' + currentProfile + ')')
+    const convo = [{ role: 'system', content: sysContent }]
     chat.messages.forEach((msg) => {
       if (msg.role === 'user') convo.push({ role: 'user', content: msg.content })
       else if (msg.role === 'assistant') convo.push({ role: 'assistant', content: msg.content })
@@ -525,6 +546,9 @@ function wire() {
   // profiles
   $('pf-load').onclick = loadPlatforms
   $('pf-add').onclick = addProfile
+  $('pf-loadroles').onclick = loadRoles
+  $('pf-role').onchange = () => { setRoleForProfile(currentProfile, $('pf-role').value); renderRoleSelect() }
+  renderRoleSelect()
   // flows
   $('fl-load').onclick = loadFlows
   $('fl-create').onclick = createFlow
