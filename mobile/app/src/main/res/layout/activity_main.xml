@@ -218,6 +218,9 @@
                     </LinearLayout>
                     <TextView android:id="@+id/clusterStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Cluster: off" android:textColor="@color/muted" android:textSize="12sp" android:fontFamily="monospace" android:textIsSelectable="true" />
 
+                    <com.google.android.material.button.MaterialButton android:id="@+id/hubBtn" style="@style/Btn.Outline" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="Device Hub" />
+                    <TextView style="@style/Text.Body" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="4dp" android:text="Every connected node — phone, laptop, cluster — in one page." />
+
                     <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/lineSoft" android:layout_marginTop="14dp" android:layout_marginBottom="14dp" />
 
                     <TextView style="@style/Text.Eyebrow" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sign in (SSO)" />

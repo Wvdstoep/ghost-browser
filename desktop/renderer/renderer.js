@@ -568,6 +568,9 @@ function wire() {
   $('cl-connect').onclick = connect
   $('cl-signin').onclick = () => { clusterUrl = $('cl-url').value.trim() || clusterUrl; LS.set('clusterUrl', clusterUrl); const platform = clusterUrl.includes('://ghost-browser.') ? clusterUrl.replace('://ghost-browser.', '://') : 'https://my-app.engineer'; go(platform); log('→ log in, open Ghost Browser from Tools, then Fetch') }
   $('cl-fetch').onclick = () => { loadPlatforms(); loadFlows() }
+  // Device Hub: the SAME page the cluster and phone show. Opened in a tab on the cluster origin, so it
+  // rides this laptop's signed-in cluster cookie (same persist:<profile> partition as the API webview).
+  $('cl-hub').onclick = () => { clusterUrl = $('cl-url').value.trim() || clusterUrl; LS.set('clusterUrl', clusterUrl); newTab(clusterUrl.replace(/\/$/, '') + '/hub'); hideSheet() }
   $('cl-tailscale').onclick = () => go('https://tailscale.com/download/windows')
   // cached lists
   try { const pc = LS.get('platformsCache', ''); if (pc) renderPlatforms(JSON.parse(pc).presets || []) } catch (e) {}

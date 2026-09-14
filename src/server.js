@@ -59,6 +59,8 @@ app.use(express.json({ limit: '1mb' }));
  */
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   etag: true, lastModified: true,
+  // extensionless pretty URLs: /hub -> hub.html (the Device Hub page, shared by cluster/desktop/mobile)
+  extensions: ['html'],
   // no-cache on the console's own code too, or a deploy ships new JS/CSS that browsers keep serving
   // from cache (the "I don't see the new UI" trap). no-cache = revalidate every load (304 if unchanged).
   setHeaders: (res, file) => { if (/\.(html|js|css)$/i.test(file)) res.set('Cache-Control', 'no-cache'); },
