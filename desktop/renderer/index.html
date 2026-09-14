@@ -88,6 +88,54 @@
   .swrow .t{font-weight:700;font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .swrow .t.on{color:var(--accent)}
   .swrow .s{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  /* ---- full-screen agent ---- */
+  #agent{position:absolute;inset:0;z-index:70;background:var(--bg);display:flex}
+  #agent.hidden{display:none}
+  #ag-side{width:264px;flex:0 0 264px;background:var(--sheet);border-right:1px solid var(--line);display:flex;flex-direction:column}
+  #ag-side .sidehead{display:flex;align-items:center;gap:8px;padding:14px 14px 10px}
+  #ag-side .sidehead .b{flex:1;font-size:16px;font-weight:800;letter-spacing:-.01em}
+  #ag-newchat{display:flex;align-items:center;justify-content:center;gap:8px;margin:0 12px 10px;height:40px;border:1px solid var(--line);background:var(--accentDim);color:var(--accent);border-radius:11px;font-weight:700;font-size:13.5px}
+  #ag-newchat:hover{border-color:var(--accent)}
+  #ag-chatlist{flex:1;overflow-y:auto;padding:4px 8px 12px}
+  .chatrow{display:flex;align-items:center;gap:6px;padding:10px 10px;border-radius:10px;cursor:pointer;color:var(--muted)}
+  .chatrow:hover{background:var(--surface2)}
+  .chatrow.on{background:var(--accentDim);color:var(--text)}
+  .chatrow .ct{flex:1;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chatrow .cx{opacity:0;font-size:15px;color:var(--faint);padding:0 3px}
+  .chatrow:hover .cx{opacity:1}
+  #ag-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  #ag-top{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  #ag-top .t{flex:1;font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #ag-msgs{flex:1;overflow-y:auto;padding:24px 0}
+  .mrow{max-width:760px;margin:0 auto;padding:8px 24px;display:flex}
+  .mrow.user{justify-content:flex-end}
+  .bubble{max-width:82%;padding:12px 15px;border-radius:15px;font-size:14.5px;line-height:1.55;white-space:pre-wrap;word-wrap:break-word}
+  .mrow.user .bubble{background:var(--accent);color:var(--onAccent);border-bottom-right-radius:5px;font-weight:500}
+  .mrow.bot .bubble{background:var(--surface2);color:var(--text);border:1px solid var(--lineSoft);border-bottom-left-radius:5px}
+  .toolchip{max-width:760px;margin:4px auto;padding:0 24px}
+  .toolchip .inner{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--surface);border:1px solid var(--lineSoft);border-radius:9px;padding:6px 11px;cursor:pointer;max-width:100%}
+  .toolchip .inner:hover{border-color:var(--line)}
+  .toolchip .k{color:var(--accent);font-weight:700}
+  .toolchip pre{max-width:760px;margin:4px auto 0;padding:10px 14px;background:var(--logbg);border:1px solid var(--lineSoft);border-radius:10px;font-family:var(--mono);font-size:11px;color:var(--muted);overflow-x:auto;white-space:pre-wrap}
+  .thinking{max-width:760px;margin:0 auto;padding:6px 24px;color:var(--faint);font-size:13px;font-style:italic}
+  #ag-composerwrap{border-top:1px solid var(--line);padding:14px 24px 18px}
+  #ag-composer{max-width:760px;margin:0 auto;display:flex;gap:10px;align-items:flex-end;background:var(--surface2);border:1px solid var(--line);border-radius:16px;padding:8px 8px 8px 14px}
+  #ag-composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(82,206,103,.12)}
+  #ag-inp{flex:1;background:transparent;border:0;outline:0;color:var(--text);font-family:inherit;font-size:14.5px;resize:none;max-height:160px;min-height:24px;line-height:1.5;padding:6px 0}
+  #ag-inp::placeholder{color:var(--faint)}
+  #ag-sendbtn{flex:0 0 auto;width:40px;height:40px;border:0;border-radius:12px;background:var(--accent);color:var(--onAccent);display:flex;align-items:center;justify-content:center}
+  #ag-sendbtn:disabled{opacity:.4}
+  #ag-sendbtn svg{width:20px;height:20px;fill:currentColor}
+  #ag-empty{max-width:560px;margin:8vh auto 0;text-align:center;padding:0 24px}
+  #ag-empty h2{border:0;color:#F4F8F2;font-size:26px;letter-spacing:-.02em;text-transform:none;margin-bottom:8px}
+  #ag-empty p{color:var(--muted);font-size:14px}
+  .suggestions{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:20px}
+  .sugg{padding:9px 13px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--muted);font-size:13px}
+  .sugg:hover{border-color:var(--accentDim);color:var(--text)}
+  #ag-setbox{position:absolute;top:54px;right:16px;width:340px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;z-index:5;box-shadow:0 14px 44px rgba(0,0,0,.5)}
+  #ag-setbox.hidden{display:none}
+  #ag-setbox .lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:0 0 8px}
+  @media(max-width:680px){#ag-side{display:none}}
 </style>
 </head>
 <body>
@@ -100,6 +148,7 @@
     </div>
     <button class="ic" id="newtab" title="New tab"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg></button>
     <button class="tc" id="tabcount">1</button>
+    <button class="ic" id="agentbtn" title="Agent" style="color:var(--accent)"><svg viewBox="0 0 24 24"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.38-1 1.72V7h3a3 3 0 0 1 3 3v1h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-1H3a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1v-1a3 3 0 0 1 3-3h3V5.72c-.6-.34-1-.98-1-1.72a2 2 0 0 1 2-2M9 12a1.25 1.25 0 0 0 0 2.5A1.25 1.25 0 0 0 9 12m6 0a1.25 1.25 0 0 0 0 2.5A1.25 1.25 0 0 0 15 12z"/></svg></button>
     <button class="ic" id="menubtn" title="Menu"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></button>
   </div>
 
@@ -116,23 +165,12 @@
   <div id="sheet" class="hidden">
     <div class="grip"></div>
     <div id="tabsbar">
-      <button class="tb on" data-p="agent">Agent</button>
-      <button class="tb" data-p="profiles">Profiles</button>
+      <button class="tb on" data-p="profiles">Profiles</button>
       <button class="tb" data-p="flows">Flows</button>
       <button class="tb" data-p="cluster">Cluster</button>
     </div>
 
-    <div class="pane on" id="pane-agent">
-      <p class="eyebrow">On-device agent</p>
-      <p class="body">Point it at your own model (local Ollama at http://localhost:11434/v1, or any OpenAI-compatible endpoint), give it a goal, and it drives the active tab.</p>
-      <input class="fld" id="ag-endpoint" placeholder="Ollama endpoint (https://host/v1)">
-      <input class="fld" id="ag-key" type="password" placeholder="API key (blank for local Ollama)">
-      <input class="fld" id="ag-model" placeholder="Model (e.g. qwen2.5, llama3.1, glm-4)">
-      <input class="fld" id="ag-task" placeholder="Task — what should GB do?">
-      <div class="row"><button class="btn" id="ag-run">Run</button><button class="btn out" id="ag-stop">Stop</button></div>
-    </div>
-
-    <div class="pane" id="pane-profiles">
+    <div class="pane on" id="pane-profiles">
       <p class="eyebrow">Your platforms</p>
       <p class="body">A real desktop browser. Tap a platform to open it and sign in once — the session lives in its own isolated profile (real IP, desktop portals load, Cloudflare passes).</p>
       <div class="row"><button class="btn tonal" id="pf-load">Load from cluster</button><span class="hint" id="pf-hint">Sign in on the Cluster tab first</span></div>
@@ -178,6 +216,35 @@
       <button class="ic" id="sw-close"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
     </div>
     <div id="switchlist"></div>
+  </div>
+
+  <div id="agent" class="hidden">
+    <div id="ag-side">
+      <div class="sidehead"><div class="b">Agent</div></div>
+      <button id="ag-newchat"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg> New chat</button>
+      <div id="ag-chatlist"></div>
+    </div>
+    <div id="ag-main">
+      <div id="ag-top">
+        <div class="t" id="ag-title">New chat</div>
+        <button class="ic" id="ag-set" title="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.29 8.8a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96a7 7 0 0 0 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg></button>
+        <button class="ic" id="ag-close" title="Close"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+      </div>
+      <div id="ag-setbox" class="hidden">
+        <div class="lbl">Model connection</div>
+        <input class="fld" id="ag-endpoint" placeholder="Endpoint (http://localhost:11434/v1)">
+        <input class="fld" id="ag-key" type="password" placeholder="API key (blank for local Ollama)">
+        <input class="fld" id="ag-model" placeholder="Model (e.g. qwen2.5, llama3.1)">
+        <div class="body" style="margin:2px 0 0;font-size:12px">The agent can browse, and list/create/run automations, drive your other devices, and call the GB API — just ask.</div>
+      </div>
+      <div id="ag-msgs"></div>
+      <div id="ag-composerwrap">
+        <div id="ag-composer">
+          <textarea id="ag-inp" rows="1" placeholder="Message the agent — e.g. “make an automation that posts to r/forhire and run it”"></textarea>
+          <button id="ag-sendbtn" title="Send"><svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg></button>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script src="renderer.js"></script>

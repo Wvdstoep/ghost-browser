@@ -325,46 +325,164 @@ async function createFlow() {
   catch (e) { log('! create: ' + (r.body || '').slice(0, 120)) }
 }
 
-// ---------- agent (Ollama / OpenAI-compatible) ----------
-let agentStop = false, agentRunning = false
-async function runAgent() {
-  if (agentRunning) return
-  const endpoint = $('ag-endpoint').value.trim(), key = $('ag-key').value, model = $('ag-model').value.trim() || 'qwen2.5', goal = $('ag-task').value.trim()
-  LS.set('ag-endpoint', endpoint); LS.set('ag-model', model)
-  if (!endpoint) { log('! set an Ollama endpoint (e.g. http://localhost:11434/v1)'); return }
-  if (!goal) { log('! enter a task first'); return }
-  agentStop = false; agentRunning = true; log('▶ goal: ' + goal)
-  const sys = 'You are GB, an autonomous agent operating a real web browser. Each turn you get the current page and a numbered list of its interactive elements. Reply with EXACTLY ONE action as compact JSON and NOTHING else. Valid actions: {"action":"click","index":N,"reason":".."} | {"action":"type","index":N,"text":"..","reason":".."} | {"action":"navigate","url":"https://..","reason":".."} | {"action":"scroll","dy":600,"reason":".."} | {"action":"done","reason":".."}. If the current URL/TITLE already satisfies the GOAL, reply done. Never navigate to a page you are already on. A navigate url must be ONE plain https URL.'
-  const wv = ensureWv(tabs[active]); const visited = {}; let garbage = 0
-  for (let step = 1; step <= 20 && !agentStop; step++) {
-    await sleep(900)
-    const infoO = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}')
+// ---------- conversational agent (JSON tool protocol, model-agnostic) ----------
+function agCfg() { return { endpoint: ($('ag-endpoint').value || '').trim(), key: $('ag-key').value || '', model: ($('ag-model').value || '').trim() || 'qwen2.5' } }
+async function apiJson(method, path, body) { const r = await api(method, path, body); try { return JSON.parse(r.body) } catch (e) { return { _status: r.status, _raw: (r.body || '').slice(0, 1500) } } }
+function activeWv() { return ensureWv(tabs[active]) }
+
+// The agent's tools = everything the operator can do: drive the browser + the whole GB API.
+const TOOLS = {
+  browser_read: { desc: 'Read the active browser tab: {url,title,elements:[{i,tag,type,text}],text}. Use before click/type.', run: async () => {
+    const wv = activeWv()
+    const info = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}')
     const marks = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]')
-    const text = (JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""') || '').slice(0, 1200)
-    let els = ''; marks.slice(0, 60).forEach((o) => { els += o.i + ': ' + o.tag + (o.type ? '[' + o.type + ']' : '') + (o.text ? ' "' + o.text + '"' : '') + '\n' })
-    const user = 'GOAL: ' + goal + '\nURL: ' + (infoO.url || '') + '\nTITLE: ' + (infoO.title || '') + '\nPAGE TEXT:\n' + text + '\n\nELEMENTS:\n' + els + '\nReply with ONE JSON action.'
-    log('· step ' + step + ' — thinking…')
-    const resp = await G.llm({ endpoint, key, model, system: sys, user })
-    if (!resp.ok) { log('! llm: ' + resp.error); break }
-    const act = extractJson(resp.text)
-    if (!act) { log('! parse: ' + (resp.text || '').slice(0, 100)); if (++garbage >= 3) { log('■ stopped — unusable output'); break } continue }
-    const a = act.action, reason = act.reason || ''
-    if (a === 'done') { log('✓ done — ' + reason); break }
-    else if (a === 'navigate') {
-      const u = (act.url || '').trim()
-      if (!/^https?:\/\//.test(u) || /[ +"]|document\.|encodeURI/.test(u)) { log('! ignored malformed url'); if (++garbage >= 3) break; continue }
-      const n = normU(u)
-      if (n === normU(infoO.url || '')) { const c = (visited[n] || 0) + 1; visited[n] = c; log('· already there'); if (c >= 3) { log('■ stopped — stuck'); break } continue }
-      const c = (visited[n] || 0) + 1; visited[n] = c; if (c >= 3) { log('■ stopped — revisiting loop'); break }
-      garbage = 0; log('→ navigate ' + u + ' (' + reason + ')'); await nav(wv, u)
-    }
-    else if (a === 'click') { garbage = 0; log('→ click ' + act.index + ' (' + reason + ')'); await ex(wv, gbJs + '\nwindow.__gb.click(' + (act.index != null ? act.index : -1) + ')') }
-    else if (a === 'type') { garbage = 0; log('→ type ' + act.index + ' (' + reason + ')'); await ex(wv, gbJs + '\nwindow.__gb.type(' + (act.index != null ? act.index : -1) + ',' + JSON.stringify(act.text || '') + ')') }
-    else if (a === 'scroll') { garbage = 0; log('→ scroll ' + (act.dy || 600)); await ex(wv, gbJs + '\nwindow.__gb.scroll(' + (act.dy != null ? act.dy : 600) + ')') }
-    else log('! unknown action: ' + a)
-  }
-  agentRunning = false; log('— agent finished —')
+    const text = (JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""') || '').slice(0, 1500)
+    return { url: info.url, title: info.title, elements: marks.slice(0, 60).map((o) => ({ i: o.i, tag: o.tag, type: o.type, text: o.text })), text }
+  } },
+  browser_navigate: { desc: 'Open a URL in the active tab. args:{url}', run: async (a) => { await nav(activeWv(), absUrl(a.url || '')); return { url: activeWv().getURL() } } },
+  browser_click: { desc: 'Click element i from browser_read. args:{index}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.click(' + (a.index != null ? a.index : -1) + '))') }) },
+  browser_type: { desc: 'Type into element i. args:{index,text}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.type(' + (a.index != null ? a.index : -1) + ',' + JSON.stringify(a.text || '') + '))') }) },
+  browser_scroll: { desc: 'Scroll the page. args:{dy}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nwindow.__gb.scroll(' + (a.dy != null ? a.dy : 600) + ')') }) },
+  open_tab: { desc: 'Open a new browser tab. args:{url}', run: async (a) => { newTab(absUrl(a.url || HOME)); return { ok: true } } },
+  fetch_url: { desc: 'Authenticated same-origin fetch from the active tab. args:{url,method,body,headers}', run: async (a) => {
+    const out = await deviceFetch(activeWv(), a); try { return JSON.parse(out) } catch (e) { return { raw: (out || '').slice(0, 1500) } }
+  } },
+  list_workflows: { desc: 'List automations with run counts + verified flags.', run: async () => {
+    const d = await apiJson('GET', '/v1/workflows', null)
+    return (d.workflows || []).map((w) => ({ id: w.id, name: w.name, steps: (w.nodes || []).length, runs: w.runs, verifiedEver: w.verifiedEver, lastRunStatus: w.lastRunStatus }))
+  } },
+  create_workflow: { desc: 'Create an automation. args:{name, steps:[goal strings], role?}. Builds trigger->agent steps.', run: async (a) => {
+    const steps = Array.isArray(a.steps) ? a.steps : String(a.steps || '').split('\n').map((s) => s.trim()).filter(Boolean)
+    if (!a.name || steps.length === 0) return { error: 'need name + steps[]' }
+    const nodes = [{ id: 'trigger', type: 'trigger', label: 'Manual' }], edges = []; let prev = 'trigger'
+    steps.forEach((g, i) => { const nid = 'n' + i; const n = { id: nid, type: 'agent', label: 'Step ' + (i + 1), goal: g }; if (a.role) n.role = a.role; nodes.push(n); edges.push({ from: prev, to: nid }); prev = nid })
+    return await apiJson('POST', '/v1/workflows', JSON.stringify({ name: a.name, trigger: { type: 'manual' }, nodes, edges }))
+  } },
+  run_workflow: { desc: 'Run an automation and wait for its outcome. args:{id}', run: async (a) => {
+    const started = await apiJson('POST', '/v1/workflows/' + a.id + '/run', '{}')
+    const runId = started.runId; if (!runId) return started
+    for (let i = 0; i < 24; i++) { await sleep(2500); const run = await apiJson('GET', '/v1/workflow-runs/' + runId, null); if (run && run.status && run.status !== 'running') return { runId, status: run.status, outcome: runOutcomeText(run) } }
+    return { runId, status: 'running', note: 'still running; check get_run later' }
+  } },
+  get_run: { desc: 'Get a run’s status/outcome. args:{runId}', run: async (a) => { const run = await apiJson('GET', '/v1/workflow-runs/' + a.runId, null); return { status: run.status, outcome: runOutcomeText(run) } } },
+  workflow_runs: { desc: 'Recent runs of an automation. args:{id}', run: async (a) => { const d = await apiJson('GET', '/v1/workflows/' + a.id + '/runs', null); return (d.runs || []).slice(0, 6).map((r) => ({ started: r.started_at, status: r.status, outcome: runOutcomeText(r) })) } },
+  list_profiles: { desc: 'List browser profiles (identities).', run: async () => { const d = await apiJson('GET', '/v1/profiles', null); return d.profiles || d } },
+  list_platforms: { desc: 'List the platform registry / your platforms.', run: async () => { const d = await apiJson('GET', '/v1/profiles/presets', null); return (d.presets || []).map((p) => ({ key: p.key, label: p.label, site: p.site, loggedIn: p.exists })) } },
+  list_roles: { desc: 'List agent roles usable in automation steps.', run: async () => { const d = await apiJson('GET', '/v1/agent/roles', null); return (d.roles || []).map((r) => r.name) } },
+  list_devices: { desc: 'List connected device nodes (phone/laptop) in the cluster.', run: async () => { const d = await apiJson('GET', '/v1/device/list', null); return (d.devices || []).map((x) => ({ id: x.deviceId, name: x.name, online: x.online })) } },
+  device_command: { desc: 'Drive another node. args:{deviceId, path:/v1/navigate|/v1/info|/v1/analyze|/v1/fetch|..., body}', run: async (a) => await apiJson('POST', '/v1/device/' + a.deviceId + '/command', JSON.stringify({ path: a.path || '/v1/info', body: a.body || {} })) },
 }
+function agentSystemPrompt() {
+  const tools = Object.keys(TOOLS).map((n) => '- ' + n + ': ' + TOOLS[n].desc).join('\n')
+  return 'You are the Ghost Browser agent — a helpful assistant that can hold a normal conversation AND take real actions ' +
+    'by calling tools (drive a real browser, and list/create/run automations, inspect profiles/platforms, and command other ' +
+    'device nodes). Each turn reply with EXACTLY ONE compact JSON object and nothing else:\n' +
+    '  {"reply":"text to the user"}   — to talk, answer, or report what you did\n' +
+    '  {"tool":"<name>","args":{...}} — to take an action; you then get {"tool_result":...} and continue\n' +
+    'Chain tools as needed (e.g. list_workflows then run_workflow). When the task is done or you need the user, use reply. ' +
+    'Be concise and concrete. Never invent tool results. Available tools:\n' + tools
+}
+
+// chat state
+let chats = []; let chat = null; let agentBusy = false
+function loadChats() { try { chats = JSON.parse(LS.get('agentChats', '[]')) || [] } catch (e) { chats = [] } }
+function saveChats() { LS.set('agentChats', JSON.stringify(chats.slice(0, 50))) }
+function newChat() { chat = { id: 'c' + Date.now(), title: 'New chat', messages: [], updated: Date.now() }; chats.unshift(chat); renderChatList(); renderChat(); $('ag-inp').focus() }
+function loadChat(id) { const c = chats.find((x) => x.id === id); if (!c) return; chat = c; renderChatList(); renderChat() }
+function deleteChat(id) { chats = chats.filter((x) => x.id !== id); saveChats(); if (chat && chat.id === id) { chat = chats[0] || null; if (!chat) newChat() } renderChatList(); renderChat() }
+function pushMsg(role, content, name) { if (!chat) newChat(); chat.messages.push({ role, content, name }); if (role === 'user' && (chat.title === 'New chat' || !chat.title)) { chat.title = content.slice(0, 42); renderChatList() } chat.updated = Date.now(); saveChats() }
+function renderChatList() {
+  const l = $('ag-chatlist'); l.innerHTML = ''
+  chats.forEach((c) => {
+    const row = document.createElement('div'); row.className = 'chatrow' + (chat && c.id === chat.id ? ' on' : '')
+    const t = document.createElement('div'); t.className = 'ct'; t.textContent = c.title || 'New chat'; row.appendChild(t)
+    const x = document.createElement('div'); x.className = 'cx'; x.textContent = '×'; x.onclick = (e) => { e.stopPropagation(); deleteChat(c.id) }; row.appendChild(x)
+    row.onclick = () => loadChat(c.id)
+    l.appendChild(row)
+  })
+}
+function renderChat() {
+  const m = $('ag-msgs'); m.innerHTML = ''
+  $('ag-title').textContent = (chat && chat.title) || 'New chat'
+  if (!chat || !chat.messages.length) {
+    const e = document.createElement('div'); e.id = 'ag-empty'
+    e.innerHTML = '<h2>What can I do for you?</h2><p>I can browse for you, and build & run automations, inspect your platforms, or drive your other devices — just ask.</p><div class="suggestions"></div>'
+    m.appendChild(e)
+    const sg = e.querySelector('.suggestions')
+    ;['List my automations', 'Open example.com and read it', 'What devices are connected?', 'Make an automation that opens example.com and verifies it, then run it'].forEach((s) => {
+      const b = document.createElement('button'); b.className = 'sugg'; b.textContent = s; b.onclick = () => { $('ag-inp').value = s; sendAgent() }; sg.appendChild(b)
+    })
+    return
+  }
+  chat.messages.forEach((msg) => {
+    if (msg.role === 'user') addBubble('user', msg.content)
+    else if (msg.role === 'assistant') addBubble('bot', msg.content)
+    else if (msg.role === 'tool') addToolChip(msg.name || 'tool', null, msg.content)
+  })
+  m.scrollTop = m.scrollHeight
+}
+function addBubble(kind, text) {
+  const m = $('ag-msgs'); const row = document.createElement('div'); row.className = 'mrow ' + kind
+  const b = document.createElement('div'); b.className = 'bubble'; b.textContent = text; row.appendChild(b); m.appendChild(row); m.scrollTop = m.scrollHeight; return b
+}
+function addToolChip(name, args, result) {
+  const m = $('ag-msgs'); const wrap = document.createElement('div'); wrap.className = 'toolchip'
+  const inner = document.createElement('div'); inner.className = 'inner'
+  inner.innerHTML = '<span class="k">⚙ ' + name + '</span><span class="d"></span>'
+  const pre = document.createElement('pre'); pre.hidden = true
+  inner.querySelector('.d').textContent = args ? JSON.stringify(args) : ''
+  if (result != null) pre.textContent = result
+  inner.onclick = () => { pre.hidden = !pre.hidden }
+  wrap.appendChild(inner); wrap.appendChild(pre); m.appendChild(wrap); m.scrollTop = m.scrollHeight
+  return { setResult: (r) => { pre.textContent = r } }
+}
+function thinking(on) {
+  let t = $('ag-thinking')
+  if (on) { if (!t) { t = document.createElement('div'); t.id = 'ag-thinking'; t.className = 'thinking'; t.textContent = 'Thinking…'; $('ag-msgs').appendChild(t); $('ag-msgs').scrollTop = $('ag-msgs').scrollHeight } }
+  else if (t) t.remove()
+}
+async function sendAgent() {
+  if (agentBusy) return
+  const inp = $('ag-inp'); const text = inp.value.trim(); if (!text) return
+  const cfg = agCfg(); LS.set('ag-endpoint', cfg.endpoint); LS.set('ag-model', cfg.model); LS.set('ag-key', cfg.key)
+  if (!cfg.endpoint) { $('ag-set').click(); addBubble('bot', 'Set your model endpoint first (⚙) — e.g. http://localhost:11434/v1 for local Ollama.'); return }
+  inp.value = ''; inp.style.height = 'auto'
+  pushMsg('user', text); if ($('ag-empty')) renderChat(); else addBubble('user', text)
+  agentBusy = true; $('ag-sendbtn').disabled = true
+  try {
+    const convo = [{ role: 'system', content: agentSystemPrompt() }]
+    chat.messages.forEach((msg) => {
+      if (msg.role === 'user') convo.push({ role: 'user', content: msg.content })
+      else if (msg.role === 'assistant') convo.push({ role: 'assistant', content: msg.content })
+      else if (msg.role === 'tool') convo.push({ role: 'user', content: 'TOOL RESULT (' + (msg.name || '') + '): ' + msg.content })
+    })
+    let toolCalls = 0
+    while (toolCalls < 12) {
+      thinking(true)
+      const resp = await G.llm({ endpoint: cfg.endpoint, key: cfg.key, model: cfg.model, messages: convo, temperature: 0.3 })
+      thinking(false)
+      if (!resp.ok) { addBubble('bot', '⚠ model error: ' + resp.error); pushMsg('assistant', '⚠ model error: ' + resp.error); break }
+      const obj = extractJson(resp.text)
+      if (!obj || (obj.reply == null && !obj.tool)) { const t = (resp.text || '').trim() || '(no reply)'; addBubble('bot', t); pushMsg('assistant', t); break }
+      if (obj.reply != null) { addBubble('bot', String(obj.reply)); pushMsg('assistant', String(obj.reply)); convo.push({ role: 'assistant', content: resp.text }); break }
+      // tool call
+      const name = obj.tool, args = obj.args || {}
+      convo.push({ role: 'assistant', content: JSON.stringify({ tool: name, args }) })
+      const chip = addToolChip(name, args, null)
+      let result
+      try { result = TOOLS[name] ? await TOOLS[name].run(args) : { error: 'unknown tool: ' + name } }
+      catch (e) { result = { error: String(e && e.message || e) } }
+      const rs = (typeof result === 'string' ? result : JSON.stringify(result))
+      const trimmed = rs.length > 4000 ? rs.slice(0, 4000) + '…' : rs
+      chip.setResult(trimmed); pushMsg('tool', trimmed, name)
+      convo.push({ role: 'user', content: 'TOOL RESULT (' + name + '): ' + trimmed })
+      toolCalls++
+    }
+    if (toolCalls >= 12) { addBubble('bot', '(stopped — too many steps in one turn; ask me to continue)'); pushMsg('assistant', '(stopped — too many steps)') }
+  } finally { agentBusy = false; $('ag-sendbtn').disabled = false; saveChats() }
+}
+function openAgent() { $('agent').classList.remove('hidden'); if (!chat) { if (chats.length) loadChat(chats[0].id); else newChat() } $('ag-inp').focus() }
+function closeAgent() { $('agent').classList.add('hidden') }
 
 // ---------- sheet / menu ----------
 function toggleSheet() { $('sheet').classList.toggle('hidden') }
@@ -394,10 +512,16 @@ function wire() {
   $('sw-new').onclick = () => { newTab(HOME); hideSwitch() }
   $('sw-close').onclick = () => hideSwitch()
   document.querySelectorAll('.tb').forEach((b) => { b.onclick = () => selectPane(b.dataset.p) })
-  // agent
-  $('ag-endpoint').value = LS.get('ag-endpoint', ''); $('ag-model').value = LS.get('ag-model', '')
-  $('ag-run').onclick = runAgent
-  $('ag-stop').onclick = () => { agentStop = true; log('… stopping') }
+  // agent (full-screen conversational chat)
+  $('ag-endpoint').value = LS.get('ag-endpoint', ''); $('ag-model').value = LS.get('ag-model', ''); $('ag-key').value = LS.get('ag-key', '')
+  loadChats()
+  $('agentbtn').onclick = openAgent
+  $('ag-close').onclick = closeAgent
+  $('ag-newchat').onclick = newChat
+  $('ag-set').onclick = (e) => { e.stopPropagation(); $('ag-setbox').classList.toggle('hidden') }
+  $('ag-sendbtn').onclick = sendAgent
+  $('ag-inp').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAgent() } })
+  $('ag-inp').addEventListener('input', () => { const el = $('ag-inp'); el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px' })
   // profiles
   $('pf-load').onclick = loadPlatforms
   $('pf-add').onclick = addProfile
