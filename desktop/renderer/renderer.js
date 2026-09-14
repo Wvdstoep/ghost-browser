@@ -124,6 +124,7 @@ let controlWv = null
 function connect() {
   if (controlWv) { disconnect(); return }
   clusterUrl = $('cl-url').value.trim() || clusterUrl; LS.set('clusterUrl', clusterUrl)
+  LS.set('clusterAuto', '1') // remember we want to be a node, so the next launch reconnects on its own
   setStatus('Cluster: connecting…'); log('→ connecting (control channel on the GB origin)…')
   const wv = mkWebview(currentProfile, clusterUrl)
   wv.addEventListener('did-stop-loading', () => {
@@ -139,7 +140,7 @@ function connect() {
   })
   hidden.appendChild(wv); controlWv = wv; logSinkOn = true
 }
-function disconnect() { logSinkOn = false; if (controlWv) { try { controlWv.remove() } catch (e) {} } controlWv = null; setStatus('Cluster: off'); $('cl-connect').textContent = 'Connect to cluster' }
+function disconnect() { logSinkOn = false; LS.set('clusterAuto', '0'); if (controlWv) { try { controlWv.remove() } catch (e) {} } controlWv = null; setStatus('Cluster: off'); $('cl-connect').textContent = 'Connect to cluster' }
 function onCtl(tag, data) {
   if (tag === 'registered') { setStatus('Cluster: ON — registered as ' + (G.deviceName || 'GB Desktop') + '\nwaiting for commands'); $('cl-connect').textContent = 'Disconnect'; log('● registered with the cluster — waiting for commands') }
   else if (tag === 'regfail') log('! register failed: ' + data)
@@ -609,3 +610,6 @@ function wire() {
 
 restoreTabs(); renderChips(); wire(); activateTab(active); updateCount()
 log('Ghost Browser Desktop ready · device ' + (G.deviceName || '') + ' · ' + G.deviceId.slice(0, 8))
+// A node reconnects on its own after a restart/reinstall — no one has to click Connect. Auto-connect
+// unless the user explicitly Disconnected (clusterAuto==='0'); a drivable node's whole job is to be online.
+if (LS.get('clusterAuto', '') !== '0') { setTimeout(() => { if (!controlWv) { log('↻ auto-connecting to the cluster…'); connect() } }, 1800) }
