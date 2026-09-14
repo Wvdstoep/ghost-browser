@@ -88,6 +88,33 @@
       return 'ok';
     },
     scroll: function (dy) { clearOverlay(); window.scrollBy(0, dy); return 'ok'; },
+    /* Has the page rendered meaningful content yet (vs a lazy-load skeleton)? Used to wait for settle. */
+    ready: function () {
+      try {
+        var t = (document.body ? document.body.innerText : '').replace(/\s/g, '');
+        return t.length > 150 || document.querySelectorAll('[role=article]').length > 0 || collect().length > 8;
+      } catch (e) { return true; }
+    },
+    /* Click the element whose visible text / aria-label contains [s] (nth match, 0-based). Climbs to a
+     * clickable ancestor — robust on sites that navigate by JS onclick with no <a href> (Facebook). */
+    clickText: function (s, nth) {
+      s = (s || '').toLowerCase().trim(); nth = nth || 0; if (!s) return 'no-text';
+      var pref = 'a[href],button,[role=button],[role=link],[role=menuitem]';
+      var pool = Array.from(document.querySelectorAll(pref)).concat(Array.from(document.querySelectorAll('div,span,li')));
+      var hits = [];
+      for (var i = 0; i < pool.length; i++) {
+        var el = pool[i]; var r = el.getBoundingClientRect(); if (r.width < 2 || r.height < 2) continue;
+        var hay = ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase();
+        if (hay.indexOf(s) > -1) hits.push(el);
+        if (hits.length > nth + 4) break;
+      }
+      var el2 = hits[nth]; if (!el2) return 'notfound';
+      var c = el2; for (var k = 0; k < 5 && c; k++) { if (c.tagName === 'A' || c.tagName === 'BUTTON' || (c.getAttribute && c.getAttribute('role') === 'button')) { el2 = c; break; } c = c.parentElement; }
+      clearOverlay();
+      try { el2.scrollIntoView({ block: 'center' }); } catch (e) {}
+      try { el2.click(); } catch (e) { el2.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+      return 'ok';
+    },
     text: function () {
       var c = document.getElementById('__gbmarks'); var d = c ? c.style.display : null; if (c) c.style.display = 'none';
       var t = (document.body ? document.body.innerText : '').slice(0, 200000);
