@@ -18,6 +18,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.PopupMenu
+import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.activity.viewModels
@@ -70,6 +71,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val flowRunDone = java.util.Collections.synchronizedSet(HashSet<String>())  // run ids already reported (poll fires 5x)
+    private val agentExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val agentApiWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+    private val agentApiResults = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var agentReqSeq = 0
+    private var agentChats = JSONArray()      // [{id,title,messages:[{role,content,name}]}]
+    private var agentChat: JSONObject? = null
+    @Volatile private var agentBusy = false
     private val models by lazy { ModelManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,6 +114,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         wireProfiles()
         wireFlows()
         wireCluster()
+        wireAgentChat()
         observe()
 
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -338,6 +347,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (b.agentOverlay.visibility == View.VISIBLE) {
+                if (b.agentHistoryWrap.visibility == View.VISIBLE) { b.agentHistoryWrap.visibility = View.GONE; return true }
+                b.agentOverlay.visibility = View.GONE; return true
+            }
             if (b.tabSwitcher.visibility == View.VISIBLE) { closeSwitcher(); return true }
             if (b.panel.visibility == View.VISIBLE) { b.panel.visibility = View.GONE; return true }
             if (this::web.isInitialized && web.canGoBack()) { web.goBack(); return true }
@@ -734,6 +747,286 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         apiCall("POST", "/v1/workflows", body, "flowcreate")
     }
 
+    // ---- Conversational Agent (full-screen chat, JSON tool protocol) ----------------------------
+
+    private fun dpi(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** The configured brain (Ollama or on-device), or null with a logged reason. Same choice as the
+     *  Agent tab settings, so the chat and the one-shot Run share one place to configure a model. */
+    private fun buildBrain(): Llm? {
+        return if (vm.useLocal) {
+            if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — Agent tab → Download"); null }
+            else LocalLlm(this, models.path(vm.selectedModel), ModelCatalog.byId(vm.selectedModel).family)
+        } else {
+            if (vm.endpoint.isBlank()) null else OllamaClient(vm.endpoint, vm.apiKey, vm.model)
+        }
+    }
+
+    private fun wireAgentChat() {
+        try { agentChats = if (vm.agentChatsJson.isNotBlank()) JSONArray(vm.agentChatsJson) else JSONArray() } catch (e: Exception) { agentChats = JSONArray() }
+        b.agentBtn.setOnClickListener { openAgentChat() }
+        b.agentClose.setOnClickListener { b.agentOverlay.visibility = View.GONE }
+        b.agentNew.setOnClickListener { newAgentChat() }
+        b.agentHistoryBtn.setOnClickListener {
+            b.agentHistoryWrap.visibility = if (b.agentHistoryWrap.visibility == View.GONE) { renderAgentChatList(); View.VISIBLE } else View.GONE
+        }
+        b.agentSettings.setOnClickListener {
+            b.agentOverlay.visibility = View.GONE; b.panel.visibility = View.VISIBLE
+            b.tabs.getTabAt(0)?.select(); b.flipper.displayedChild = 0
+            vm.log("· set your model in the Agent tab, then reopen the agent (⚡)")
+        }
+        b.agentSend.setOnClickListener { sendAgentMessage() }
+    }
+
+    private fun openAgentChat() {
+        b.tabSwitcher.visibility = View.GONE
+        b.agentOverlay.visibility = View.VISIBLE
+        if (agentChat == null) { if (agentChats.length() > 0) agentChat = agentChats.optJSONObject(0) else newAgentChat() }
+        renderAgentChat()
+        b.agentInput.requestFocus()
+    }
+
+    private fun newAgentChat() {
+        val c = JSONObject().put("id", "c" + System.currentTimeMillis()).put("title", "New chat").put("messages", JSONArray())
+        val next = JSONArray().put(c)
+        for (i in 0 until agentChats.length()) next.put(agentChats.get(i))
+        agentChats = next; agentChat = c
+        b.agentHistoryWrap.visibility = View.GONE
+        persistAgentChats(); renderAgentChat()
+    }
+
+    private fun persistAgentChats() {
+        while (agentChats.length() > 50) agentChats.remove(agentChats.length() - 1)
+        vm.agentChatsJson = agentChats.toString()
+    }
+
+    private fun agentPushMsg(role: String, content: String, name: String? = null) {
+        val c = agentChat ?: return
+        val msgs = c.optJSONArray("messages") ?: JSONArray().also { c.put("messages", it) }
+        msgs.put(JSONObject().put("role", role).put("content", content).apply { if (name != null) put("name", name) })
+        if (role == "user" && (c.optString("title") == "New chat" || c.optString("title").isBlank())) {
+            c.put("title", content.take(42)); renderAgentChatList()
+        }
+        persistAgentChats()
+    }
+
+    private fun renderAgentChatList() {
+        b.agentChatList.removeAllViews()
+        for (i in 0 until agentChats.length()) {
+            val c = agentChats.optJSONObject(i) ?: continue
+            val id = c.optString("id")
+            val row = TextView(this).apply {
+                text = c.optString("title", "New chat"); setTextColor(getColor(R.color.text)); textSize = 14f
+                typeface = resources.getFont(R.font.manrope_medium)
+                setPadding(dpi(12), dpi(11), dpi(12), dpi(11)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                background = getDrawable(R.drawable.bg_card_ripple)
+                val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dpi(6); layoutParams = lp
+                setOnClickListener { agentChat = c; b.agentHistoryWrap.visibility = View.GONE; renderAgentChat() }
+            }
+            b.agentChatList.addView(row)
+        }
+    }
+
+    private fun renderAgentChat() {
+        b.agentMsgs.removeAllViews()
+        val c = agentChat
+        b.agentTitle.text = c?.optString("title", "Agent") ?: "Agent"
+        val msgs = c?.optJSONArray("messages")
+        if (msgs == null || msgs.length() == 0) {
+            b.agentMsgs.addView(TextView(this).apply {
+                text = "What can I do for you?\n\nI can browse for you, and build & run automations, inspect your platforms, or drive your other devices — just ask."
+                setTextColor(getColor(R.color.muted)); textSize = 15f; typeface = resources.getFont(R.font.manrope_regular)
+                setPadding(dpi(8), dpi(24), dpi(8), dpi(8))
+            })
+            return
+        }
+        for (i in 0 until msgs.length()) {
+            val m = msgs.optJSONObject(i) ?: continue
+            when (m.optString("role")) {
+                "user" -> addAgentBubble(true, m.optString("content"))
+                "assistant" -> addAgentBubble(false, m.optString("content"))
+                "tool" -> addAgentTool(m.optString("name", "tool"), m.optString("content"))
+            }
+        }
+        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun addAgentBubble(user: Boolean, text: String) {
+        val bubble = TextView(this).apply {
+            this.text = text; textSize = 15f
+            typeface = resources.getFont(R.font.manrope_regular)
+            setPadding(dpi(13), dpi(10), dpi(13), dpi(10))
+            if (user) { setTextColor(getColor(R.color.onAccent)); setBackgroundColor(getColor(R.color.accent)); setTextIsSelectable(false) }
+            else { setTextColor(getColor(R.color.text)); background = getDrawable(R.drawable.bg_card); setTextIsSelectable(true) }
+        }
+        val wrap = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dpi(8); layoutParams = lp
+            gravity = if (user) Gravity.END else Gravity.START
+            val blp = android.widget.LinearLayout.LayoutParams(-2, -2); blp.width = (resources.displayMetrics.widthPixels * 0.82).toInt(); blp.weight = 0f
+            bubble.maxWidth = (resources.displayMetrics.widthPixels * 0.82).toInt()
+            addView(bubble)
+        }
+        b.agentMsgs.addView(wrap)
+        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun addAgentTool(name: String, result: String) {
+        val chip = TextView(this)
+        chip.text = "⚙ $name"; chip.setTextColor(getColor(R.color.muted)); chip.textSize = 12f
+        chip.typeface = android.graphics.Typeface.MONOSPACE
+        chip.setPadding(dpi(11), dpi(7), dpi(11), dpi(7)); chip.background = getDrawable(R.drawable.bg_chip_soft)
+        val lp = android.widget.LinearLayout.LayoutParams(-2, -2); lp.bottomMargin = dpi(8); chip.layoutParams = lp
+        var open = false
+        chip.setOnClickListener { open = !open; chip.text = if (open) "⚙ $name\n${result.take(1500)}" else "⚙ $name" }
+        b.agentMsgs.addView(chip)
+        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun agentSystemPrompt(): String {
+        val tools = listOf(
+            "browser_read: read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type",
+            "browser_navigate {url}: open a url in the active tab",
+            "browser_click {index}: click element i from browser_read",
+            "browser_type {index,text}: type into element i",
+            "browser_scroll {dy}: scroll the page",
+            "fetch_url {url,method,body,headers}: authenticated same-origin fetch from the active tab",
+            "list_workflows: automations with run counts + verified flags",
+            "create_workflow {name,steps:[goal strings],role}: build a trigger->agent automation",
+            "run_workflow {id}: run an automation and wait for its outcome",
+            "get_run {runId} / workflow_runs {id}: run status/outcome / recent runs",
+            "list_profiles / list_platforms / list_roles",
+            "list_devices: connected device nodes (phone/laptop)",
+            "device_command {deviceId,path,body}: drive another node (path e.g. /v1/navigate,/v1/info,/v1/fetch)"
+        ).joinToString("\n") { "- $it" }
+        return "You are the Ghost Browser agent — you can hold a normal conversation AND take real actions by calling tools. " +
+            "Each turn reply with EXACTLY ONE compact JSON object and nothing else:\n" +
+            "  {\"reply\":\"text to the user\"}  — to talk, answer, or report what you did\n" +
+            "  {\"tool\":\"<name>\",\"args\":{...}} — to act; you then get TOOL RESULT and continue\n" +
+            "Chain tools as needed; when done or you need the user, use reply. Be concise. Never invent tool results. Tools:\n" + tools
+    }
+
+    private fun sendAgentMessage() {
+        if (agentBusy) return
+        val text = b.agentInput.text.toString().trim(); if (text.isEmpty()) return
+        val brain = buildBrain()
+        if (brain == null) { addAgentBubble(false, "Set your model first — tap ⚙ (Agent tab): a local Ollama (http://localhost:11434/v1) or any OpenAI-compatible endpoint."); return }
+        b.agentInput.setText("")
+        if (agentChat == null) newAgentChat()
+        agentPushMsg("user", text, null); addAgentBubble(true, text)
+        agentBusy = true; b.agentSend.isEnabled = false
+        agentExec.execute {
+            try {
+                var toolCalls = 0
+                while (toolCalls < 12) {
+                    val transcript = buildAgentTranscript()
+                    val reply = try { brain.chat(agentSystemPrompt(), transcript) } catch (e: Exception) { runOnUiThread { addAgentBubble(false, "⚠ model error: ${e.message}") }; agentPushMsg("assistant", "⚠ model error"); break }
+                    val obj = extractJsonObj(reply)
+                    if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) {
+                        val t = reply.trim().ifBlank { "(no reply)" }
+                        runOnUiThread { addAgentBubble(false, t) }; agentPushMsg("assistant", t); break
+                    }
+                    if (!obj.isNull("reply")) {
+                        val t = obj.optString("reply"); runOnUiThread { addAgentBubble(false, t) }; agentPushMsg("assistant", t); break
+                    }
+                    val name = obj.optString("tool"); val args = obj.optJSONObject("args") ?: JSONObject()
+                    agentPushMsg("assistant", JSONObject().put("tool", name).put("args", args).toString(), null)
+                    var result = try { runAgentTool(name, args) } catch (e: Exception) { "{\"error\":${JSONObject.quote(e.message ?: "error")}}" }
+                    if (result.length > 3500) result = result.take(3500) + "…"
+                    val fr = result
+                    runOnUiThread { addAgentTool(name, fr) }
+                    agentPushMsg("tool", fr, name)
+                    toolCalls++
+                }
+                if (toolCalls >= 12) runOnUiThread { addAgentBubble(false, "(stopped — too many steps in one turn; ask me to continue)") }
+            } finally { runOnUiThread { agentBusy = false; b.agentSend.isEnabled = true } }
+        }
+    }
+
+    private fun buildAgentTranscript(): String {
+        val c = agentChat ?: return ""
+        val msgs = c.optJSONArray("messages") ?: return ""
+        val sb = StringBuilder()
+        for (i in 0 until msgs.length()) {
+            val m = msgs.optJSONObject(i) ?: continue
+            when (m.optString("role")) {
+                "user" -> sb.append("User: ").append(m.optString("content")).append("\n")
+                "assistant" -> sb.append("Assistant: ").append(m.optString("content")).append("\n")
+                "tool" -> sb.append("TOOL RESULT (").append(m.optString("name")).append("): ").append(m.optString("content")).append("\n")
+            }
+        }
+        sb.append("Reply with ONE JSON object now.")
+        return sb.toString()
+    }
+
+    /** Executes a tool and returns a compact JSON/string result. Runs on the agent thread. */
+    private fun runAgentTool(name: String, a: JSONObject): String {
+        return when (name) {
+            "browser_read" -> "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
+            "browser_navigate", "open_tab" -> "{\"url\":" + JSONObject.quote(navigate(a.optString("url"))) + "}"
+            "browser_click" -> evalGb("window.__gb.click(${a.optInt("index", -1)})")
+            "browser_type" -> evalGb("window.__gb.type(${a.optInt("index", -1)}," + JSONObject.quote(a.optString("text")) + ")")
+            "browser_scroll" -> evalGb("window.__gb.scroll(${a.optInt("dy", 600)})")
+            "fetch_url" -> fetchInPage(a)
+            "list_workflows" -> apiAwait("GET", "/v1/workflows", null)
+            "create_workflow" -> {
+                val stepsArr = a.optJSONArray("steps") ?: JSONArray().apply { a.optString("steps").split("\n").map { it.trim() }.filter { it.isNotEmpty() }.forEach { put(it) } }
+                val nodes = JSONArray().put(JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
+                val edges = JSONArray(); var prev = "trigger"
+                for (i in 0 until stepsArr.length()) {
+                    val nid = "n$i"; val node = JSONObject().put("id", nid).put("type", "agent").put("label", "Step ${i + 1}").put("goal", stepsArr.optString(i))
+                    if (a.optString("role").isNotBlank()) node.put("role", a.optString("role"))
+                    nodes.put(node); edges.put(JSONObject().put("from", prev).put("to", nid)); prev = nid
+                }
+                apiAwait("POST", "/v1/workflows", JSONObject().put("name", a.optString("name")).put("trigger", JSONObject().put("type", "manual")).put("nodes", nodes).put("edges", edges).toString())
+            }
+            "run_workflow" -> {
+                val started = apiAwait("POST", "/v1/workflows/${a.optString("id")}/run", "{}")
+                val runId = try { JSONObject(started).optString("runId") } catch (e: Exception) { "" }
+                if (runId.isBlank()) started else {
+                    var out = "{\"runId\":${JSONObject.quote(runId)},\"status\":\"running\"}"
+                    for (i in 0 until 24) { Thread.sleep(2500); val rr = apiAwait("GET", "/v1/workflow-runs/$runId", null); val ro = try { JSONObject(rr) } catch (e: Exception) { null }; val st = ro?.optString("status") ?: "running"; if (st != "running") { out = "{\"runId\":${JSONObject.quote(runId)},\"status\":${JSONObject.quote(st)},\"outcome\":${JSONObject.quote(runOutcome(ro))}}"; break } }
+                    out
+                }
+            }
+            "get_run" -> { val rr = apiAwait("GET", "/v1/workflow-runs/${a.optString("runId")}", null); val ro = try { JSONObject(rr) } catch (e: Exception) { null }; "{\"status\":${JSONObject.quote(ro?.optString("status") ?: "?")},\"outcome\":${JSONObject.quote(runOutcome(ro))}}" }
+            "workflow_runs" -> apiAwait("GET", "/v1/workflows/${a.optString("id")}/runs", null)
+            "list_profiles" -> apiAwait("GET", "/v1/profiles", null)
+            "list_platforms" -> apiAwait("GET", "/v1/profiles/presets", null)
+            "list_roles" -> apiAwait("GET", "/v1/agent/roles", null)
+            "list_devices" -> apiAwait("GET", "/v1/device/list", null)
+            "device_command" -> apiAwait("POST", "/v1/device/${a.optString("deviceId")}/command", JSONObject().put("path", a.optString("path", "/v1/info")).put("body", a.optJSONObject("body") ?: JSONObject()).toString())
+            else -> "{\"error\":\"unknown tool: $name\"}"
+        }
+    }
+
+    private fun runOutcome(run: JSONObject?): String {
+        if (run == null) return ""
+        val steps = run.optJSONArray("steps") ?: return ""
+        var errored = false; var verifies = 0; var allFound = true
+        for (i in 0 until steps.length()) {
+            val s = steps.optJSONObject(i) ?: continue
+            if (s.optString("status") == "error") errored = true
+            if (s.optString("type") == "verify") { verifies++; val o = s.optJSONObject("output"); if (o == null || !o.optBoolean("found")) allFound = false }
+        }
+        return when { errored -> "a step errored"; verifies > 0 && allFound -> "verified ✓"; verifies > 0 -> "could not confirm"; else -> "" }
+    }
+
+    /** Blocking cluster API call for the agent loop (must run OFF the UI thread). */
+    private fun apiAwait(method: String, path: String, body: String?): String {
+        val id = "r${++agentReqSeq}_${System.nanoTime()}"
+        val latch = CountDownLatch(1); agentApiWaiters[id] = latch
+        runOnUiThread { apiCall(method, path, body, "agentapi:$id") }
+        latch.await(45, TimeUnit.SECONDS); agentApiWaiters.remove(id)
+        return agentApiResults.remove(id) ?: "{\"error\":\"timeout\"}"
+    }
+
+    private fun extractJsonObj(s: String): JSONObject? {
+        val a = s.indexOf('{'); val b = s.lastIndexOf('}')
+        if (a < 0 || b <= a) return null
+        return try { JSONObject(s.substring(a, b + 1)) } catch (e: Exception) { null }
+    }
+
     // ---- Cluster panel --------------------------------------------------------------------------
 
     private fun wireCluster() {
@@ -832,6 +1125,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun onBridge(tag: String, data: String) {
+        // Awaitable agent API calls: resolve the waiting latch (tag = "agentapi:<id>" or "..._err").
+        if (tag.startsWith("agentapi:")) {
+            val err = tag.endsWith("_err")
+            val id = tag.removePrefix("agentapi:").removeSuffix("_err")
+            agentApiResults[id] = if (err) "{\"error\":${JSONObject.quote(data)}}" else data
+            agentApiWaiters.remove(id)?.countDown()
+            return
+        }
         when (tag) {
             "platforms" -> {
                 try {
@@ -958,6 +1259,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         try { stopApiWeb() } catch (e: Exception) {}
         try { for (h in tabs) h.web?.destroy() } catch (e: Exception) {}
         try { cmdExec.shutdownNow() } catch (e: Exception) {}
+        try { agentExec.shutdownNow() } catch (e: Exception) {}
         try { server?.stop() } catch (e: Exception) {}
         super.onDestroy()
     }

@@ -40,6 +40,8 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         set(v) { sp.edit().putString("platformsCache", v).apply() }
     var flowsJson: String get() = sp.getString("flowsCache", "") ?: ""
         set(v) { sp.edit().putString("flowsCache", v).apply() }
+    var agentChatsJson: String get() = sp.getString("agentChats", "") ?: ""
+        set(v) { sp.edit().putString("agentChats", v).apply() }
 
     // --- open tabs (restored across launches, like a real browser) ---
     var tabsJson: String get() = sp.getString("tabs", "") ?: ""
