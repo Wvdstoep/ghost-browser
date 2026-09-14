@@ -175,6 +175,14 @@
                         </com.google.android.material.textfield.TextInputLayout>
                         <com.google.android.material.button.MaterialButton android:id="@+id/addProfile" style="@style/Btn.Tonal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="Add" />
                     </LinearLayout>
+
+                    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/line" android:layout_marginVertical="12dp" />
+                    <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+                        <TextView style="@style/Text.Eyebrow" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="Role for this profile" />
+                        <com.google.android.material.button.MaterialButton android:id="@+id/loadRoles" style="@style/Btn.Tonal" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Load roles" />
+                    </LinearLayout>
+                    <Spinner android:id="@+id/roleSpinner" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" />
+                    <TextView android:id="@+id/roleNote" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="The agent adopts this role's behaviour when it works on this profile — like the platform's agent roles." android:textColor="@color/muted" android:textSize="11sp" android:fontFamily="@font/manrope_regular" />
                 </LinearLayout>
 
                 <!-- 2: Flows -->
