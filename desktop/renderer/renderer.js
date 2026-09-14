@@ -152,18 +152,22 @@ async function runCommand(id, path, bodyStr) {
   let body = {}; try { body = JSON.parse(bodyStr || '{}') } catch (e) {}
   let out = '{}'
   try {
-    if (path === '/v1/navigate') { const u = await nav(wv, body.url || ''); out = JSON.stringify({ url: u }) }
-    else if (path === '/v1/analyze') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]'
+    if (path === '/v1/navigate') { const u = await nav(wv, body.url || ''); await waitSettle(wv, 6000); out = JSON.stringify({ url: u }) }
+    else if (path === '/v1/analyze') { await waitSettle(wv, 4000); out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]' }
     else if (path === '/v1/info') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}'
-    else if (path === '/v1/content') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""'
+    else if (path === '/v1/content') { await waitSettle(wv, 4000); out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""' }
+    else if (path === '/v1/posts') { await waitSettle(wv, 5000); out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.posts())')) || '[]' }
+    else if (path === '/v1/perceive') { await waitSettle(wv, 6000); out = '{"info":' + ((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}') + ',"elements":' + ((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]') + ',"posts":' + ((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.posts())')) || '[]') + '}' }
+    else if (path === '/v1/click_text') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.clickText(' + JSON.stringify(body.text || '') + ',' + (body.nth || 0) + '))')) || '{}'
     else if (path === '/v1/click') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.click(' + (body.index != null ? body.index : -1) + '))')) || '{}'
     else if (path === '/v1/type') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.type(' + (body.index != null ? body.index : -1) + ',' + JSON.stringify(body.text || '') + '))')) || '{}'
     else if (path === '/v1/scroll') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.scroll(' + (body.dy != null ? body.dy : 600) + '))')) || '{}'
     else if (path === '/v1/screenshot') { try { const img = await wv.capturePage(); out = JSON.stringify({ png_base64: img.toDataURL().split(',')[1] }) } catch (e) { out = JSON.stringify({ error: String(e) }) } }
     else if (path === '/v1/fetch') out = await deviceFetch(wv, body)
     else if (path === '/v1/eval') {
+      // Embed the code as an expression (NOT eval()) so a page CSP (Facebook) can't block it.
       const code = body.code || 'null'
-      out = (await ex(wv, '(async()=>{try{var __r=await eval(' + JSON.stringify(code) + ');return typeof __r==="string"?__r:JSON.stringify(__r)}catch(e){return JSON.stringify({__evalError:String(e)})}})()')) || 'null'
+      out = (await ex(wv, '(async()=>{try{var __r=await (' + code + ');return typeof __r==="string"?__r:JSON.stringify(__r)}catch(e){return JSON.stringify({__evalError:String(e)})}})()')) || 'null'
     }
     else out = JSON.stringify({ error: 'unknown path' })
   } catch (e) { out = JSON.stringify({ error: String(e) }) }
