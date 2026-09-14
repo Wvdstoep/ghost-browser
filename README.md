@@ -245,6 +245,30 @@ Installer: [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/Ghost
 Connect: Cluster tab → your GB URL → Sign in (SSO) → open Ghost Browser from Tools → Connect. The laptop
 registers with the device hub and appears in `/v1/device/list` next to your phone.
 
+## Driving dynamic / anti-automation sites (e.g. Facebook)
+
+Most sites read fine with page text. A few (Facebook is the sharpest example) actively resist an
+embedded/automated browser, so you read and act differently. What GB learned the hard way:
+
+- **Read with `analyze` (set-of-mark) and `posts()`, not page-text or `eval`.** Facebook keeps feed text
+  in nested non-interactive divs (so `body.innerText` returns almost nothing) and its CSP blocks `eval`.
+  GB reads it by **injecting** its perceive code: `analyze` numbers the interactive elements, and
+  **`posts()`** collects the post-like text blocks of a feed (a block carrying a comment/like count, a
+  timestamp, or a middot). Injected script runs even when the page forbids `eval`.
+- **Act by text, with a real tap.** These sites navigate by JavaScript onClick (no `href`), and a bare
+  `element.click()` does nothing because handlers are bound to pointer events. GB clicks the element
+  whose text/label matches and dispatches a full pointer + mouse sequence.
+- **Open a group or page by its direct URL** (`/groups/<id>/`) - search-result rows will not open via a tap.
+- **Wait for content to settle.** Feeds lazy-load behind a skeleton; GB polls a readiness check before
+  reading instead of racing the first paint.
+- **Where it runs matters.** The hosted (cluster) browser drives real Chromium via CDP through a
+  residential exit; the on-device nodes (phone/laptop) give a real IP and fingerprint. Facebook
+  degrades the mobile in-app WebView home feed to an open-the-app screen, but a group's own page reads
+  fine, and the laptop/desktop node gets the full site.
+
+Net: to read a social feed on any surface use `analyze` + `posts()`; to act, click-by-text; never lean
+on page-text or `eval` for a site that fights automation.
+
 ## Help wanted
 
 Two things that used to live here are now **solved**: the live view going black is fixed, and GB now
