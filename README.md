@@ -193,6 +193,15 @@ The session then lives on-device (real residential IP, passes bot walls), and th
 logged-in profile through a hunt. The phone is its own browser, so sessions are not shared from the
 server — you log in once here, and each profile keeps its own cookie jar, like the cluster’s identities.
 
+### Milestone — authenticated recon from a real phone (2026-09-14)
+GB Mobile now runs **authenticated, same-origin API requests from the device itself** (`/v1/fetch`),
+driven by the backend over the reverse channel. Because the request leaves the **phone’s real
+residential IP** carrying the profile’s own **logged-in session**, it clears **Cloudflare Turnstile**
+and the portal’s “mobile not supported” gate that a datacentre browser cannot — proven end-to-end
+against a live, Cloudflare-protected client portal (authenticated **HTTP 200**). The phone is now a
+first-class **authenticated recon node**: the backend maps and exercises an API through the device’s
+real browser identity, on real hardware, on a real network.
+
 Prebuilt debug APK: [mobile/dist/app-debug.apk](mobile/dist/app-debug.apk). Build it: cd mobile then ./gradlew assembleDebug.
 
 
