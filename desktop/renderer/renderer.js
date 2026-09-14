@@ -188,6 +188,10 @@ async function execPath(wv, path, body) {
       wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc })
       out = JSON.stringify({ ok: true, x, y })
     }
+    else if (path === '/v1/downloads') {
+      // What this node downloaded (newest first) - an export is only real once it is a file here.
+      out = JSON.stringify({ downloads: await G.downloads() })
+    }
     else if (path === '/v1/host') {
       // Host-app control so the cluster can fix the driving surface itself (close the settings sheet that
       // squeezes the webview, force a full viewport) without anyone touching the laptop.
@@ -445,6 +449,7 @@ const TOOLS = {
   upload_file: { desc: 'Import a LOCAL file on this device into a page file-input WITHOUT a dialog (e.g. add media in CapCut). args:{path, selector?, nth?}. After importing, CLICK the item in the media list to add it to the timeline — no drag needed.', run: async (a) => await G.uploadFile(activeWv().getWebContentsId(), a.selector || 'input[type=file]', a.paths || (a.path ? [a.path] : []), a.nth || 0) },
   click_xy: { desc: 'Click at exact pixel x,y from browser_read (each element has x,y,w,h). Use for canvas/timeline spots that have no clickable index — e.g. click a precise position on the timeline ruler to move the playhead. args:{x,y,clickCount?}', run: async (a) => { const wv = activeWv(); const x = a.x | 0, y = a.y | 0, cc = a.clickCount || 1; wv.sendInputEvent({ type: 'mouseMove', x, y }); wv.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: cc }); wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc }); return { ok: true, x, y } } },
   drag_xy: { desc: 'Drag with real mouse events from (fromX,fromY) to (toX,toY) — timeline clips, trims, library cards onto a timeline (HTML5 drag-and-drop is completed for real). args:{fromX,fromY,toX,toY,steps?}', run: async (a) => await G.dragCdp(activeWv().getWebContentsId(), { fromX: a.fromX | 0, fromY: a.fromY | 0, toX: a.toX | 0, toY: a.toY | 0, steps: a.steps }) },
+  downloads: { desc: 'List files this device downloaded (newest first, with state and size) - check here after an export/download click instead of assuming the file exists. args:{}', run: async () => ({ downloads: await G.downloads() }) },
   run_steps: { desc: 'Run several browser tools in ONE call, in order — for multi-step sequences (e.g. a CapCut caption: click_xy, browser_type, drag_xy). args:{steps:[{tool, args, sleep?}]}. Stops at the first error. Far cheaper than one call per step.', run: async (a) => { const steps = Array.isArray(a.steps) ? a.steps : []; const results = []; for (const s of steps) { const t = TOOLS[s.tool]; if (!t) { results.push({ tool: s.tool, error: 'unknown tool' }); break } try { results.push({ tool: s.tool, result: await t.run(s.args || {}) }) } catch (e) { results.push({ tool: s.tool, error: String(e) }); break } if (s.sleep) await sleep(Math.min(Number(s.sleep) || 0, 15000)) } return { ran: results.length, results } } },
   open_tab: { desc: 'Open a new browser tab. args:{url}', run: async (a) => { newTab(absUrl(a.url || HOME)); return { ok: true } } },
   fetch_url: { desc: 'Authenticated same-origin fetch from the active tab. args:{url,method,body,headers}', run: async (a) => {
