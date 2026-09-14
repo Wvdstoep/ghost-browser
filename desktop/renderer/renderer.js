@@ -1,6 +1,7 @@
 'use strict'
 const G = window.GBAPI
-const gbJs = G.gbJs, gbControlJs = G.gbControlJs
+if (!G) { document.body.innerHTML = '<div style="color:#EAF0E6;font-family:system-ui;padding:40px">Ghost Browser Desktop failed to initialise (preload bridge missing). Please report this.</div>' }
+const gbJs = (G && G.gbJs) || '', gbControlJs = (G && G.gbControlJs) || ''
 const HOME = new URL('home.html', location.href).href
 const $ = (id) => document.getElementById(id)
 const webarea = $('webarea'), hidden = $('hidden')
@@ -43,9 +44,11 @@ function mkWebview(profile, url) {
   return wv
 }
 function isActive(t) { return active >= 0 && tabs[active] === t }
+function absUrl(u) { if (!u) return HOME; if (/^https?:\/\//.test(u) || u.startsWith('file:')) return u; return 'https://' + u }
 function ensureWv(t) {
   if (t.wv) return t.wv
-  const wv = mkWebview(t.profile, t.url || HOME)
+  t.url = absUrl(t.url || HOME)
+  const wv = mkWebview(t.profile, t.url)
   wv.classList.add('hidden')
   wv.addEventListener('did-stop-loading', () => { t.url = wv.getURL(); if (isActive(t)) setUrlBar(t.url); saveTabs() })
   wv.addEventListener('page-title-updated', (e) => { t.title = e.title; if (!$('switch').classList.contains('hidden')) renderSwitch() })
