@@ -156,6 +156,10 @@ async function runCommand(id, path, bodyStr) {
     else if (path === '/v1/scroll') out = (await ex(wv, gbJs + '\nJSON.stringify(window.__gb.scroll(' + (body.dy != null ? body.dy : 600) + '))')) || '{}'
     else if (path === '/v1/screenshot') { try { const img = await wv.capturePage(); out = JSON.stringify({ png_base64: img.toDataURL().split(',')[1] }) } catch (e) { out = JSON.stringify({ error: String(e) }) } }
     else if (path === '/v1/fetch') out = await deviceFetch(wv, body)
+    else if (path === '/v1/eval') {
+      const code = body.code || 'null'
+      out = (await ex(wv, '(async()=>{try{var __r=await eval(' + JSON.stringify(code) + ');return typeof __r==="string"?__r:JSON.stringify(__r)}catch(e){return JSON.stringify({__evalError:String(e)})}})()')) || 'null'
+    }
     else out = JSON.stringify({ error: 'unknown path' })
   } catch (e) { out = JSON.stringify({ error: String(e) }) }
   log('↺ ran ' + path)
