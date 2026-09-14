@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld('GBAPI', {
   deviceId: ipcRenderer.sendSync('device-id'),
   deviceName: (os.hostname() || 'GB Desktop'),
   llm: (a) => ipcRenderer.invoke('llm', a),
+  // Attach a local file to a page file-input by CDP (no native dialog) — for importing media into web apps.
+  uploadFile: (webContentsId, selector, files, nth) => ipcRenderer.invoke('gb-upload', { webContentsId, selector, files, nth }),
+  // Window control (maximize for a full driving viewport).
+  winCmd: (action) => ipcRenderer.invoke('gb-win', { action }),
 })
