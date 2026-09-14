@@ -41,8 +41,9 @@
   #menu.hidden{display:none}
   #menu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text);padding:11px 12px;border-radius:9px;font-size:14px;font-weight:500}
   #menu button:hover{background:var(--line)}
-  /* sheet */
-  #sheet{background:var(--sheet);border-top:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -8px 40px rgba(0,0,0,.4)}
+  /* sheet — OVERLAYS the browser (fixed), so opening settings never squeezes the driven webview.
+     (It used to be an in-flow bottom panel that shrank #webarea to a thin strip, breaking heavy apps.) */
+  #sheet{position:fixed;left:0;right:0;bottom:0;max-height:76vh;overflow-y:auto;z-index:55;background:var(--sheet);border-top:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -8px 40px rgba(0,0,0,.4)}
   #sheet.hidden{display:none}
   .grip{width:44px;height:5px;background:var(--line);border-radius:3px;margin:8px auto 4px}
   #tabsbar{display:flex;gap:4px;padding:4px 12px 0;border-bottom:1px solid var(--lineSoft)}

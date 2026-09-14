@@ -169,6 +169,36 @@ async function runCommand(id, path, bodyStr) {
       const code = body.code || 'null'
       out = (await ex(wv, '(async()=>{try{var __r=await (' + code + ');return typeof __r==="string"?__r:JSON.stringify(__r)}catch(e){return JSON.stringify({__evalError:String(e)})}})()')) || 'null'
     }
+    else if (path === '/v1/upload_file') {
+      // Import a LOCAL file (on this device) into a page's file input — no native dialog. For CapCut etc.
+      const files = body.paths || (body.path ? [body.path] : [])
+      out = JSON.stringify(await G.uploadFile(wv.getWebContentsId(), body.selector || 'input[type=file]', files, body.nth || 0))
+    }
+    else if (path === '/v1/drag') {
+      // Real OS-level drag INTO the guest — synthetic events don't move a canvas/timeline (CapCut). Coords
+      // are guest-viewport pixels. sendInputEvent delivers genuine mouse events the app can't tell from a human.
+      const steps = Math.max(2, body.steps || 24), fx = body.fromX | 0, fy = body.fromY | 0, tx = body.toX | 0, ty = body.toY | 0
+      wv.sendInputEvent({ type: 'mouseMove', x: fx, y: fy })
+      wv.sendInputEvent({ type: 'mouseDown', x: fx, y: fy, button: 'left', clickCount: 1 })
+      for (let i = 1; i <= steps; i++) { wv.sendInputEvent({ type: 'mouseMove', x: Math.round(fx + (tx - fx) * i / steps), y: Math.round(fy + (ty - fy) * i / steps), button: 'left' }); await sleep(16) }
+      await sleep(90)
+      wv.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 })
+      out = JSON.stringify({ ok: true, from: [fx, fy], to: [tx, ty] })
+    }
+    else if (path === '/v1/click_xy') {
+      const x = body.x | 0, y = body.y | 0, cc = body.clickCount || 1
+      wv.sendInputEvent({ type: 'mouseMove', x, y })
+      wv.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: cc })
+      wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc })
+      out = JSON.stringify({ ok: true, x, y })
+    }
+    else if (path === '/v1/host') {
+      // Host-app control so the cluster can fix the driving surface itself (close the settings sheet that
+      // squeezes the webview, force a full viewport) without anyone touching the laptop.
+      if (body.action === 'hideSheet') { try { hideSheet() } catch (e) {} out = JSON.stringify({ ok: true, sheet: 'hidden' }) }
+      else if (body.action === 'maximize') { out = JSON.stringify(await G.winCmd('maximize')) }
+      else out = JSON.stringify({ error: 'unknown host action' })
+    }
     else out = JSON.stringify({ error: 'unknown path' })
   } catch (e) { out = JSON.stringify({ error: String(e) }) }
   log('↺ ran ' + path)
