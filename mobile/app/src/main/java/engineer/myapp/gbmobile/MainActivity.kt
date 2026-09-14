@@ -908,7 +908,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun addAgentBubble(user: Boolean, text: String) {
         val bubble = TextView(this).apply {
-            this.text = text; textSize = 15f
+            this.text = safeText(text); textSize = 15f
             typeface = resources.getFont(R.font.manrope_regular)
             setPadding(dpi(13), dpi(10), dpi(13), dpi(10))
             if (user) { setTextColor(getColor(R.color.onAccent)); setBackgroundColor(getColor(R.color.accent)); setTextIsSelectable(false) }
@@ -926,14 +926,29 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
     }
 
+    /** Strip characters that crash Android's TextView layout (surrogate pairs / private-use icon-font
+     *  glyphs like Facebook's , plus control chars). Tool results are full of these. */
+    private fun safeText(s: String): String =
+        s.replace(Regex("[\\uD800-\\uDFFF\\uE000-\\uF8FF]"), "").replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), " ")
+
     private fun addAgentTool(name: String, result: String) {
         val chip = TextView(this)
         chip.text = "⚙ $name"; chip.setTextColor(getColor(R.color.muted)); chip.textSize = 12f
         chip.typeface = android.graphics.Typeface.MONOSPACE
         chip.setPadding(dpi(11), dpi(7), dpi(11), dpi(7)); chip.background = getDrawable(R.drawable.bg_chip_soft)
         val lp = android.widget.LinearLayout.LayoutParams(-2, -2); lp.bottomMargin = dpi(8); chip.layoutParams = lp
-        var open = false
-        chip.setOnClickListener { open = !open; chip.text = if (open) "⚙ $name\n${result.take(1500)}" else "⚙ $name" }
+        val clean = safeText(result).take(6000)
+        // Show in an isolated, scrollable dialog — inline-expanding huge/odd tool JSON in a TextView
+        // can crash the chat's layout pass (list_workflows is a large payload).
+        chip.setOnClickListener {
+            try {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("⚙ $name")
+                    .setMessage(if (clean.isBlank()) "(empty)" else clean)
+                    .setPositiveButton("Close", null)
+                    .show()
+            } catch (e: Exception) { vm.log("! could not show tool result: ${e.message}") }
+        }
         b.agentMsgs.addView(chip)
         b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
     }
