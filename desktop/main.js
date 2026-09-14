@@ -78,6 +78,54 @@ ipcMain.handle('gb-upload', async (_e, a) => {
   }
 })
 
+// Drag by CDP with drag-interception. Sending mouse events with the button held (webview.sendInputEvent)
+// makes Chromium start a NATIVE drag-and-drop the moment the page calls for one (HTML5 draggable, e.g. a
+// CapCut library card or a timeline clip) — the browser process enters a nested OS drag loop, the synthetic
+// mouseUp never ends it, and the device stops answering until a human touches the mouse. With
+// Input.setInterceptDrags the renderer's drag request is delivered to us as Input.dragIntercepted instead;
+// we then finish it ourselves with dragEnter/dragOver/drop at the target. Canvas drags (no HTML5 DnD)
+// just see the plain mouse events. This is the same path Puppeteer uses for page.mouse.drag.
+ipcMain.handle('gb-drag', async (_e, a) => {
+  const wc = webContents.fromId(a.webContentsId)
+  if (!wc) return { ok: false, error: 'no webContents ' + a.webContentsId }
+  const fx = a.fromX | 0, fy = a.fromY | 0, tx = a.toX | 0, ty = a.toY | 0
+  const steps = Math.max(2, Math.min(60, (a.steps | 0) || 24)), holdMs = Math.min(1500, (a.holdMs | 0) || 120)
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const dbg = wc.debugger
+  let attached = false, drag = null
+  const onMsg = (_ev, method, params) => { if (method === 'Input.dragIntercepted') drag = params.data }
+  try {
+    try { dbg.attach('1.3'); attached = true } catch (e) { /* already attached */ }
+    dbg.on('message', onMsg)
+    await dbg.sendCommand('Input.setInterceptDrags', { enabled: true })
+    const mouse = (p) => dbg.sendCommand('Input.dispatchMouseEvent', p)
+    await mouse({ type: 'mouseMoved', x: fx, y: fy })
+    await mouse({ type: 'mousePressed', x: fx, y: fy, button: 'left', buttons: 1, clickCount: 1 })
+    await sleep(holdMs)
+    let moved = 0
+    for (let i = 1; i <= steps; i++) {
+      await mouse({ type: 'mouseMoved', x: Math.round(fx + (tx - fx) * i / steps), y: Math.round(fy + (ty - fy) * i / steps), button: 'left', buttons: 1 })
+      moved = i; await sleep(16)
+      if (drag) break
+    }
+    if (drag) {
+      const dragEv = (type, x, y) => dbg.sendCommand('Input.dispatchDragEvent', { type, x, y, data: drag })
+      await dragEv('dragEnter', tx, ty)
+      // a few dragOver ticks so the target can compute its drop slot (timelines highlight the gap)
+      for (let i = 0; i < 4; i++) { await dragEv('dragOver', tx, ty); await sleep(40) }
+      await dragEv('drop', tx, ty)
+    } else await sleep(90)
+    await mouse({ type: 'mouseReleased', x: tx, y: ty, button: 'left', buttons: 0, clickCount: 1 })
+    await dbg.sendCommand('Input.setInterceptDrags', { enabled: false })
+    return { ok: true, from: [fx, fy], to: [tx, ty], dnd: !!drag, steps: moved, items: drag ? (drag.items || []).length : 0 }
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e), dnd: !!drag }
+  } finally {
+    try { dbg.removeListener('message', onMsg) } catch (e) {}
+    if (attached) { try { dbg.detach() } catch (e) {} }
+  }
+})
+
 // Ollama / OpenAI-compatible chat, run in the main process so the on-device agent avoids browser CORS.
 ipcMain.handle('llm', async (_e, a) => {
   try {
