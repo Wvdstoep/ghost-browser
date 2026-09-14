@@ -67,6 +67,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val apiQueue = mutableListOf<() -> Unit>()
     private var gbControlJs: String = ""
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+    private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val models by lazy { ModelManager(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -392,6 +394,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         latch.await(12, TimeUnit.SECONDS)
         return holder[0] ?: ByteArray(0)
+    }
+
+    /** Same-origin authenticated fetch INSIDE the active tab — runs from the real-mobile IP with the
+     *  tab's session cookies (passes Cloudflare + is authenticated). Returns {"status":N,"body":"..."}.
+     *  This is the primitive for authenticated API recon on a logged-in profile. */
+    private fun fetchInPage(body: JSONObject): String {
+        val url = body.optString("url"); if (url.isBlank()) return "{\"error\":\"no url\"}"
+        val method = body.optString("method", "GET").uppercase()
+        val ct = body.optString("contentType", "application/json")
+        val payload = if (body.has("body") && !body.isNull("body")) body.opt("body").toString() else null
+        val id = "f" + System.nanoTime()
+        val latch = CountDownLatch(1); fetchWaiters[id] = latch
+        val jsBody = if (payload == null) "undefined" else JSONObject.quote(payload)
+        val js = "(function(){try{var o={method:${JSONObject.quote(method)},credentials:'include',headers:{'Content-Type':${JSONObject.quote(ct)},'X-Requested-With':'XMLHttpRequest'}};" +
+            "var bd=$jsBody; if(bd!==undefined && ${JSONObject.quote(method)}!=='GET' && ${JSONObject.quote(method)}!=='HEAD')o.body=bd;" +
+            "fetch(${JSONObject.quote(url)},o).then(function(r){return r.text().then(function(t){GBHost.fetchResult(${JSONObject.quote(id)},r.status,t)})})" +
+            ".catch(function(e){GBHost.fetchResult(${JSONObject.quote(id)},0,String(e))});}catch(e){GBHost.fetchResult(${JSONObject.quote(id)},0,String(e))}})()"
+        runOnUiThread { web.evaluateJavascript(js, null) }
+        latch.await(30, TimeUnit.SECONDS)
+        fetchWaiters.remove(id)
+        return fetchResults.remove(id) ?: "{\"error\":\"timeout\"}"
     }
 
     // ---- Agent panel ----------------------------------------------------------------------------
@@ -767,6 +790,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
 
         @JavascriptInterface
+        fun fetchResult(id: String, status: Int, bodyStr: String) {
+            fetchResults[id] = JSONObject().put("status", status).put("body", bodyStr.take(200000)).toString()
+            fetchWaiters.remove(id)?.countDown()
+        }
+
+        @JavascriptInterface
         fun onCommand(id: String, path: String, bodyStr: String) {
             cmdExec.execute {
                 val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
@@ -780,6 +809,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
                         "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
                         "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
+                        "/v1/fetch" -> fetchInPage(body)
                         else -> "{\"error\":\"unknown path\"}"
                     }
                 } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
