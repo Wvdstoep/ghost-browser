@@ -42,6 +42,11 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         set(v) { sp.edit().putString("flowsCache", v).apply() }
     var agentChatsJson: String get() = sp.getString("agentChats", "") ?: ""
         set(v) { sp.edit().putString("agentChats", v).apply() }
+    // roles per profile (like the platform GB): {profileName: roleName}, + cached /v1/agent/roles
+    var profileRolesJson: String get() = sp.getString("profileRoles", "{}") ?: "{}"
+        set(v) { sp.edit().putString("profileRoles", v).apply() }
+    var rolesCacheJson: String get() = sp.getString("rolesCache", "") ?: ""
+        set(v) { sp.edit().putString("rolesCache", v).apply() }
 
     // --- open tabs (restored across launches, like a real browser) ---
     var tabsJson: String get() = sp.getString("tabs", "") ?: ""

@@ -508,6 +508,48 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.loadPlatforms.setOnClickListener { loadPlatforms() }
         // show the last fetched platforms immediately (persisted), so they don't vanish on relaunch
         if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
+        // roles per profile
+        b.loadRoles.setOnClickListener {
+            if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
+            vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list")
+        }
+        b.roleSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val names = roleNames(); if (pos !in names.indices) return
+                setRoleForProfile(vm.currentProfile.value ?: "default", names[pos])
+                b.roleNote.text = roleDescription(names[pos]).ifBlank { "The agent adopts this role when it works on this profile." }
+            }
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+        renderRoleSpinner()
+    }
+
+    private fun roleNames(): List<String> {
+        val out = arrayListOf("(none)")
+        try { val arr = JSONObject(vm.rolesCacheJson).optJSONArray("roles") ?: JSONArray(); for (i in 0 until arr.length()) out.add(arr.getJSONObject(i).optString("name")) } catch (e: Exception) {}
+        return out
+    }
+    private fun roleDescription(name: String): String {
+        try { val arr = JSONObject(vm.rolesCacheJson).optJSONArray("roles") ?: JSONArray(); for (i in 0 until arr.length()) { val r = arr.getJSONObject(i); if (r.optString("name") == name) return r.optString("description") } } catch (e: Exception) {}
+        return ""
+    }
+    private fun roleForProfile(profile: String): String {
+        return try { JSONObject(vm.profileRolesJson).optString(profile, "") } catch (e: Exception) { "" }
+    }
+    private fun setRoleForProfile(profile: String, roleName: String) {
+        try {
+            val o = JSONObject(vm.profileRolesJson)
+            if (roleName.isBlank() || roleName == "(none)") o.remove(profile) else o.put(profile, roleName)
+            vm.profileRolesJson = o.toString()
+        } catch (e: Exception) {}
+    }
+    private fun renderRoleSpinner() {
+        val names = roleNames()
+        b.roleSpinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        val cur = roleForProfile(vm.currentProfile.value ?: "default")
+        val idx = names.indexOf(cur).let { if (it < 0) 0 else it }
+        b.roleSpinner.setSelection(idx)
+        b.roleNote.text = if (cur.isNotBlank()) roleDescription(cur).ifBlank { "Role: $cur" } else "The agent adopts this role's behaviour when it works on this profile — like the platform's agent roles."
     }
 
     private fun renderChips() {
@@ -516,11 +558,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         for (p in vm.profiles.value ?: emptyList()) {
             val chip = Chip(this).apply {
                 text = p; isCheckable = true; isChecked = (p == cur)
-                setOnClickListener { vm.selectProfile(p); renderChips(); newTab() }
+                setOnClickListener { vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab() }
             }
             b.profileChips.addView(chip)
         }
-        b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}"
+        val r = roleForProfile(vm.currentProfile.value ?: "default")
+        b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}" + (if (r.isNotBlank()) "  ·  role: $r" else "")
     }
 
     // ---- Same-origin authed API channel (fetch profiles, flows, run/create over the SSO session) ----
@@ -914,13 +957,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b.agentInput.setText("")
         if (agentChat == null) newAgentChat()
         agentPushMsg("user", text, null); addAgentBubble(true, text)
+        // adopt the active profile's role (like the platform's per-profile agent roles)
+        val roleName = roleForProfile(vm.currentProfile.value ?: "default")
+        val sysPrompt = if (roleName.isNotBlank())
+            "ROLE: you are acting as \"$roleName\" — ${roleDescription(roleName)} Stay within this role's remit.\n\n" + agentSystemPrompt()
+        else agentSystemPrompt()
+        if (roleName.isNotBlank()) vm.log("▶ agent role: $roleName (profile ${vm.currentProfile.value})")
         agentBusy = true; b.agentSend.isEnabled = false
         agentExec.execute {
             try {
                 var toolCalls = 0
                 while (toolCalls < 12) {
                     val transcript = buildAgentTranscript()
-                    val reply = try { brain.chat(agentSystemPrompt(), transcript) } catch (e: Exception) { runOnUiThread { addAgentBubble(false, "⚠ model error: ${e.message}") }; agentPushMsg("assistant", "⚠ model error"); break }
+                    val reply = try { brain.chat(sysPrompt, transcript) } catch (e: Exception) { runOnUiThread { addAgentBubble(false, "⚠ model error: ${e.message}") }; agentPushMsg("assistant", "⚠ model error"); break }
                     val obj = extractJsonObj(reply)
                     if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) {
                         val t = reply.trim().ifBlank { "(no reply)" }
@@ -1192,6 +1241,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 else { vm.log("✓ automation created: ${o.optString("name", o.optString("id"))}"); b.flowName.setText(""); b.flowSteps.setText(""); apiCall("GET", "/v1/workflows", null, "flows") }
             } catch (e: Exception) { vm.log("! create: ${data.take(160)}") }
             "flowcreate_err" -> vm.log("! create automation: ${data.take(140)}")
+            "roles_list" -> try {
+                vm.rolesCacheJson = data
+                val n = JSONObject(data).optJSONArray("roles")?.length() ?: 0
+                vm.log("↓ agent roles ($n) — pick one per profile"); renderRoleSpinner()
+            } catch (e: Exception) { vm.log("! roles: ${data.take(80)}") }
+            "roles_list_err" -> vm.log("! load roles: ${data.take(120)}")
             "profiles" -> try {
                 val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                 vm.log("↓ cluster profiles (${arr.length()}):")
