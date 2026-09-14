@@ -27,3 +27,15 @@ signer's cache extraction needs symlink privilege), or run the shell as Administ
 Cluster tab → set your GB URL → Sign in (SSO) → open Ghost Browser from Tools → Connect.
 The laptop registers with the backend device hub and shows up in `/v1/device/list`
 alongside your phone; the backend drives whichever node you choose for a hunt.
+
+
+## Drags that never hang
+
+`/v1/drag` and the agent tool `drag_xy` run in the main process over CDP with drag-interception
+(`Input.setInterceptDrags` + `Input.dispatchDragEvent`). Sending held-button mouse events through
+`webview.sendInputEvent` made Chromium start a *native* drag-and-drop whenever the page asked for one
+(HTML5 `draggable` - CapCut cards and clips): the browser process sat in an OS drag loop, the synthetic
+mouse-up never ended it, and the node stopped answering until a human touched the mouse. With
+interception the renderer's drag request comes back to us as `Input.dragIntercepted` and we finish it
+with `dragEnter` / `dragOver` / `drop` at the target; canvas drags (no HTML5 DnD) just get the plain
+mouse events. The result `{ok, dnd:true|false}` tells you which path ran.

@@ -263,11 +263,17 @@ placed and sized captions, give each a voice-over, lay music under it, trim, and
 What made that possible, and what you can reuse:
 
 - **Primitives for real apps.** `upload_file` attaches a local file to a page input via CDP (no OS dialog);
-  `click_xy` / `drag_xy` send genuine mouse input for canvases and timelines; `browser_read` returns every
-  element with `x,y,w,h`; `/v1/batch` and the agent's `run_steps` run a whole sequence in one round-trip.
+  `click_xy` sends genuine mouse input for canvases and timelines; `drag_xy` drags by CDP with
+  **drag-interception** (`Input.setInterceptDrags`), so a drag over an HTML5-draggable thing (a CapCut
+  library card, a timeline clip) completes with a real drop instead of starting a native OS drag loop that
+  only a human mouse could end - the earlier "drag returns nothing and the node goes deaf" trap;
+  `browser_read` returns every element with `x,y,w,h`; `/v1/batch` and the agent's `run_steps` run a
+  whole sequence in one round-trip.
 - **The playbook is a role, not a note.** Everything learned on the real editor - including every trap
   (a one-line caption overflows a 9:16 frame; "Add heading" no-ops while a text clip is selected; free
-  voices live only under the TikTok category; "Apply to all" hangs; a library track lands at the playhead)
+  voices live only under the TikTok category; "Apply to all" hangs; a library track lands at the playhead;
+  the timeline is a canvas you can only see by screenshot, in device pixels; an export is not on disk until
+  its final Download button is clicked)
   - is the `capcut-video-editor` role's prompt. An agent adopting the role inherits the method.
 - **The job is an automation.** `capcut-vertical-demo-edit-desktop-node` takes a recording path and a caption
   plan and runs the role end to end on the desktop node.
