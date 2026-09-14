@@ -130,6 +130,23 @@
       if (c) c.style.display = (d || '');
       return t;
     },
+    /* Extract post-like text blocks from a feed (Facebook etc.). Runs via injected script, so it works
+     * where page-CSP blocks eval and where body.innerText is empty (feed text lives in nested divs).
+     * Heuristic: a block with real text that carries a post signal (comment/like count, a timestamp,
+     * "·"), de-duplicated to the outermost container. This is how you READ a social feed on a node. */
+    posts: function () {
+      var sig = /opmerking|reacties|reactie|comment|vind-?ik-?leuk|\blike\b|geleden|·|\b\d+\s?(u|d|w|h|m)\b/i;
+      var out = [], nodes = document.querySelectorAll('div,article,li');
+      for (var i = 0; i < nodes.length && out.length < 30; i++) {
+        var t = (nodes[i].innerText || '').replace(/\s+/g, ' ').trim();
+        if (t.length < 60 || t.length > 1500) continue;
+        if (!sig.test(t)) continue;
+        var dup = false;
+        for (var j = 0; j < out.length; j++) { if (out[j].indexOf(t) > -1 || t.indexOf(out[j]) > -1) { if (t.length <= out[j].length) { dup = true; } else { out[j] = t; dup = true; } break; } }
+        if (!dup) out.push(t);
+      }
+      return out;
+    },
     info: function () { return { url: location.href, title: document.title, ready: document.readyState }; }
   };
 })();
