@@ -367,7 +367,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val fu = u
         runOnUiThread { b.url.setText(fu); web.loadUrl(fu) }
         latch.await(25, TimeUnit.SECONDS); Thread.sleep(400)
+        waitSettle(6000)   // lazy-loaded pages (Facebook) fire onPageFinished on a skeleton — wait for real content
         return currentUrl()
+    }
+
+    /** Poll gb.js ready() until the page has meaningful content or [maxMs] elapses. Fixes reads that
+     *  return an empty skeleton on lazy-loading / WebView-degraded sites. */
+    private fun waitSettle(maxMs: Long) {
+        val deadline = System.currentTimeMillis() + maxMs
+        while (System.currentTimeMillis() < deadline) {
+            val r = try { evalGb("window.__gb.ready()") } catch (e: Exception) { "true" }
+            if (r.contains("true")) { Thread.sleep(250); return }
+            Thread.sleep(350)
+        }
     }
 
     override fun evalGb(expr: String): String = evalJs(gbJs + "\n" + expr)
@@ -931,6 +943,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "browser_read: read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type",
             "browser_navigate {url}: open a url in the active tab",
             "browser_click {index}: click element i from browser_read",
+            "browser_click_text {text}: click the element whose text/label contains this — use on sites without links (Facebook rows/buttons)",
             "browser_type {index,text}: type into element i",
             "browser_scroll {dy}: scroll the page",
             "fetch_url {url,method,body,headers}: authenticated same-origin fetch from the active tab",
@@ -1011,8 +1024,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     /** Executes a tool and returns a compact JSON/string result. Runs on the agent thread. */
     private fun runAgentTool(name: String, a: JSONObject): String {
         return when (name) {
-            "browser_read" -> "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
+            "browser_read" -> { waitSettle(4000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
             "browser_navigate", "open_tab" -> "{\"url\":" + JSONObject.quote(navigate(a.optString("url"))) + "}"
+            "browser_click_text" -> evalGb("window.__gb.clickText(" + JSONObject.quote(a.optString("text")) + "," + a.optInt("nth", 0) + ")")
             "browser_click" -> evalGb("window.__gb.click(${a.optInt("index", -1)})")
             "browser_type" -> evalGb("window.__gb.type(${a.optInt("index", -1)}," + JSONObject.quote(a.optString("text")) + ")")
             "browser_scroll" -> evalGb("window.__gb.scroll(${a.optInt("dy", 600)})")
@@ -1156,7 +1170,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
                         "/v1/analyze" -> evalGb("window.__gb.mark()")
                         "/v1/info" -> evalGb("window.__gb.info()")
-                        "/v1/content" -> evalGb("window.__gb.text()")
+                        "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
+                        "/v1/perceive" -> {   // one reliable look: settle, then url+title+elements+text together
+                            waitSettle(6000)
+                            "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
+                        }
+                        "/v1/click_text" -> evalGb("window.__gb.clickText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")")
                         "/v1/click" -> evalGb("window.__gb.click(${body.optInt("index", -1)})")
                         "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
                         "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")

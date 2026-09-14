@@ -94,6 +94,11 @@ function go(raw) {
   const t = tabs[active]; ensureWv(t); t.wv.loadURL(u); setUrlBar(u); hideSheet()
 }
 async function ex(wv, code) { try { return await wv.executeJavaScript(code, false) } catch (e) { return null } }
+// Wait until the page has real content (not a lazy-load skeleton), or maxMs elapses.
+async function waitSettle(wv, maxMs) {
+  const end = Date.now() + (maxMs || 6000)
+  while (Date.now() < end) { const r = await ex(wv, gbJs + '\nwindow.__gb.ready()'); if (r === true || r === 'true') { await sleep(200); return } await sleep(300) }
+}
 
 // ---------- tab switcher ----------
 function openSwitch() { renderSwitch(); $('switch').classList.remove('hidden') }
@@ -350,15 +355,16 @@ function activeWv() { return ensureWv(tabs[active]) }
 
 // The agent's tools = everything the operator can do: drive the browser + the whole GB API.
 const TOOLS = {
-  browser_read: { desc: 'Read the active browser tab: {url,title,elements:[{i,tag,type,text}],text}. Use before click/type.', run: async () => {
-    const wv = activeWv()
+  browser_read: { desc: 'Read the active browser tab: {url,title,elements:[{i,tag,text,label,href}],text}. Waits for content to load. Use before click/type.', run: async () => {
+    const wv = activeWv(); await waitSettle(wv, 5000)
     const info = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}')
     const marks = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]')
     const text = (JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""') || '').slice(0, 1500)
     return { url: info.url, title: info.title, elements: marks.slice(0, 60).map((o) => { const e = { i: o.i, tag: o.tag, text: o.text }; if (o.type) e.type = o.type; if (o.label && o.label !== o.text) e.label = o.label; if (o.role) e.role = o.role; if (o.href) e.href = o.href; return e }), text }
   } },
-  browser_navigate: { desc: 'Open a URL in the active tab. args:{url}', run: async (a) => { await nav(activeWv(), absUrl(a.url || '')); return { url: activeWv().getURL() } } },
+  browser_navigate: { desc: 'Open a URL in the active tab (waits for load). args:{url}', run: async (a) => { const wv = activeWv(); await nav(wv, absUrl(a.url || '')); await waitSettle(wv, 6000); return { url: wv.getURL() } } },
   browser_click: { desc: 'Click element i from browser_read. args:{index}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.click(' + (a.index != null ? a.index : -1) + '))') }) },
+  browser_click_text: { desc: 'Click the element whose text/label contains the string — use on sites without links (Facebook rows/buttons). args:{text,nth}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.clickText(' + JSON.stringify(a.text || '') + ',' + (a.nth || 0) + '))') }) },
   browser_type: { desc: 'Type into element i. args:{index,text}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.type(' + (a.index != null ? a.index : -1) + ',' + JSON.stringify(a.text || '') + '))') }) },
   browser_scroll: { desc: 'Scroll the page. args:{dy}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nwindow.__gb.scroll(' + (a.dy != null ? a.dy : 600) + ')') }) },
   open_tab: { desc: 'Open a new browser tab. args:{url}', run: async (a) => { newTab(absUrl(a.url || HOME)); return { ok: true } } },
