@@ -337,7 +337,7 @@ const TOOLS = {
     const info = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.info())')) || '{}')
     const marks = JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.mark())')) || '[]')
     const text = (JSON.parse((await ex(wv, gbJs + '\nJSON.stringify(window.__gb.text())')) || '""') || '').slice(0, 1500)
-    return { url: info.url, title: info.title, elements: marks.slice(0, 60).map((o) => ({ i: o.i, tag: o.tag, type: o.type, text: o.text })), text }
+    return { url: info.url, title: info.title, elements: marks.slice(0, 60).map((o) => { const e = { i: o.i, tag: o.tag, text: o.text }; if (o.type) e.type = o.type; if (o.label && o.label !== o.text) e.label = o.label; if (o.role) e.role = o.role; if (o.href) e.href = o.href; return e }), text }
   } },
   browser_navigate: { desc: 'Open a URL in the active tab. args:{url}', run: async (a) => { await nav(activeWv(), absUrl(a.url || '')); return { url: activeWv().getURL() } } },
   browser_click: { desc: 'Click element i from browser_read. args:{index}', run: async (a) => ({ ok: await ex(activeWv(), gbJs + '\nJSON.stringify(window.__gb.click(' + (a.index != null ? a.index : -1) + '))') }) },

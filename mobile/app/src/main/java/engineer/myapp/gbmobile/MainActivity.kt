@@ -1113,6 +1113,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
                         "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
                         "/v1/fetch" -> fetchInPage(body)
+                        "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify(eval(" + JSONObject.quote(body.optString("code")) + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
                         else -> "{\"error\":\"unknown path\"}"
                     }
                 } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
