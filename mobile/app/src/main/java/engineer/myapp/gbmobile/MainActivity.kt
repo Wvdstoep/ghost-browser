@@ -944,6 +944,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "browser_navigate {url}: open a url in the active tab",
             "browser_click {index}: click element i from browser_read",
             "browser_click_text {text}: click the element whose text/label contains this — use on sites without links (Facebook rows/buttons)",
+            "browser_posts: read the post-like text blocks of a feed (Facebook groups etc.) — use this to READ a social feed, not browser_read",
             "browser_type {index,text}: type into element i",
             "browser_scroll {dy}: scroll the page",
             "fetch_url {url,method,body,headers}: authenticated same-origin fetch from the active tab",
@@ -1025,6 +1026,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun runAgentTool(name: String, a: JSONObject): String {
         return when (name) {
             "browser_read" -> { waitSettle(4000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
+            "browser_posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
             "browser_navigate", "open_tab" -> "{\"url\":" + JSONObject.quote(navigate(a.optString("url"))) + "}"
             "browser_click_text" -> evalGb("window.__gb.clickText(" + JSONObject.quote(a.optString("text")) + "," + a.optInt("nth", 0) + ")")
             "browser_click" -> evalGb("window.__gb.click(${a.optInt("index", -1)})")
@@ -1171,6 +1173,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         "/v1/analyze" -> evalGb("window.__gb.mark()")
                         "/v1/info" -> evalGb("window.__gb.info()")
                         "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
+                        "/v1/posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
                         "/v1/perceive" -> {   // one reliable look: settle, then url+title+elements+text together
                             waitSettle(6000)
                             "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
