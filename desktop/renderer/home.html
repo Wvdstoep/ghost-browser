@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+  :root{--bg:#0A0D0B;--panel:#141813;--panel2:#1B2019;--line:#272E24;--lineSoft:#1F251D;
+    --text:#EAF0E6;--muted:#9AA894;--faint:#6B7A66;--accent:#52CE67;--accentDim:#16331D}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 460px at 50% -180px,rgba(82,206,103,.10),transparent 70%),var(--bg);
+    color:var(--text);font-family:system-ui,Segoe UI,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .w{max-width:640px;margin:0 auto;padding:72px 26px 40px}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:18px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px rgba(82,206,103,.7)}
+  h1{font-size:38px;line-height:1.05;letter-spacing:-.02em;font-weight:800;margin:0 0 8px;color:#F4F8F2}
+  .sub{color:var(--muted);font-size:15px;line-height:1.5;margin:0 0 28px;max-width:52ch}
+  .search{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:16px;padding:0 16px;height:56px;transition:border-color .15s,box-shadow .15s}
+  .search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(82,206,103,.14)}
+  .search input{flex:1;background:transparent;border:0;outline:0;color:var(--text);font-family:inherit;font-size:15px;font-weight:500}
+  .search input::placeholder{color:var(--faint)}
+  .lbl{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:28px 0 12px}
+  .g{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  a.card{display:flex;flex-direction:column;gap:3px;background:var(--panel);border:1px solid var(--lineSoft);border-radius:16px;padding:16px;color:var(--text);text-decoration:none;transition:transform .12s,border-color .12s,background .12s}
+  a.card:hover{border-color:var(--accentDim);background:#171C15;transform:translateY(-1px)}
+  a.card b{color:var(--text);font-size:15px;font-weight:700}
+  a.card span{font-size:12px;color:var(--faint);font-weight:500}
+  a.card .k{width:30px;height:30px;border-radius:9px;background:var(--accentDim);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;margin-bottom:9px}
+  .foot{margin-top:30px;color:var(--faint);font-size:12px}
+</style></head><body>
+<div class="w">
+  <div class="eyebrow"><span class="dot"></span> Ghost Browser · Desktop node</div>
+  <h1>Your ghost on the open web.</h1>
+  <p class="sub">A real desktop browser on your own laptop — real IP, real hardware, desktop portals load, Cloudflare passes. Drive it yourself, or let the backend run a hunt through it.</p>
+  <form onsubmit="return go(event)">
+    <div class="search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA894" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Search or type a URL">
+    </div>
+  </form>
+  <div class="lbl">Jump back in</div>
+  <div class="g">
+    <a class="card" href="https://dashboard.rapyd.net"><div class="k">R</div><b>Rapyd</b><span>client portal</span></a>
+    <a class="card" href="https://bugcrowd.com/engagements"><div class="k">B</div><b>Bugcrowd</b><span>engagements</span></a>
+    <a class="card" href="https://hackerone.com"><div class="k">H</div><b>HackerOne</b><span>programs</span></a>
+    <a class="card" href="https://www.google.com"><div class="k">G</div><b>Google</b><span>search</span></a>
+    <a class="card" href="https://www.linkedin.com"><div class="k">in</div><b>LinkedIn</b><span>network</span></a>
+    <a class="card" href="https://github.com"><div class="k">gh</div><b>GitHub</b><span>code</span></a>
+  </div>
+  <div class="foot">Open the ⋮ menu → Tools for the agent, your platform profiles, automations, and cluster mode.</div>
+</div>
+<script>
+  function go(e){e.preventDefault();var v=(document.getElementById('q').value||'').trim();if(!v)return false;
+    var u=/^https?:\/\//.test(v)?v:(v.indexOf('.')>-1&&v.indexOf(' ')===-1)?'https://'+v:'https://www.google.com/search?q='+encodeURIComponent(v);
+    window.location.href=u;return false;}
+</script>
+</body></html>

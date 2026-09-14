@@ -1,0 +1,38 @@
+{
+  "name": "gb-desktop",
+  "version": "0.1.0",
+  "description": "Ghost Browser Desktop — a drivable cluster node on your real laptop (real desktop Chromium + real residential IP)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "31.7.6",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "engineer.myapp.gbdesktop",
+    "productName": "Ghost Browser Desktop",
+    "files": [
+      "main.js",
+      "preload.js",
+      "control-preload.js",
+      "renderer/**",
+      "assets/**"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "GhostBrowserDesktop-Setup-${version}.${ext}"
+    }
+  }
+}

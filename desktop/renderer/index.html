@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ghost Browser Desktop</title>
+<style>
+  @font-face{font-family:Manrope;src:url('../assets/fonts/manrope_regular.ttf');font-weight:400}
+  @font-face{font-family:Manrope;src:url('../assets/fonts/manrope_medium.ttf');font-weight:500}
+  @font-face{font-family:Manrope;src:url('../assets/fonts/manrope_semibold.ttf');font-weight:600}
+  @font-face{font-family:Manrope;src:url('../assets/fonts/manrope_bold.ttf');font-weight:700}
+  @font-face{font-family:Manrope;src:url('../assets/fonts/manrope_extrabold.ttf');font-weight:800}
+  :root{--bg:#0A0D0B;--bar:#0A0D0B;--sheet:#0F120E;--panel:#141813;--panel2:#1B2019;--logbg:#070907;
+    --line:#272E24;--lineSoft:#1F251D;--accent:#52CE67;--accentPressed:#43B457;--accentDim:#16331D;
+    --onAccent:#04140A;--text:#EAF0E6;--muted:#9AA894;--faint:#6B7A66;--danger:#FF6B6B}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font-family:Manrope,Segoe UI,system-ui,sans-serif;
+    display:flex;flex-direction:column;overflow:hidden;-webkit-font-smoothing:antialiased;user-select:none}
+  button{font-family:inherit;cursor:pointer}
+  input,textarea{font-family:inherit}
+  /* top bar */
+  #bar{display:flex;align-items:center;gap:4px;padding:7px 8px;background:var(--bar);border-bottom:1px solid var(--line);-webkit-app-region:drag}
+  #bar .ic,#bar #url,#bar .tc{-webkit-app-region:no-drag}
+  .ic{width:38px;height:38px;border:0;background:transparent;border-radius:10px;color:var(--muted);display:flex;align-items:center;justify-content:center}
+  .ic:hover{background:var(--line);color:var(--text)}
+  .ic svg{width:20px;height:20px;fill:currentColor}
+  #pill{flex:1;display:flex;align-items:center;gap:9px;height:40px;background:var(--panel2);border:1px solid var(--line);border-radius:13px;padding:0 12px;margin:0 4px}
+  #pill:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(82,206,103,.13)}
+  #pill svg{width:15px;height:15px;fill:var(--faint);flex:0 0 auto}
+  #url{flex:1;background:transparent;border:0;outline:0;color:var(--text);font-size:14px;font-weight:500}
+  #url::placeholder{color:var(--faint)}
+  .tc{min-width:28px;height:28px;padding:0 6px;border:2px solid var(--muted);border-radius:7px;background:transparent;color:var(--muted);font-weight:700;font-size:12px}
+  .tc:hover{border-color:var(--text);color:var(--text)}
+  /* web area */
+  #webarea{flex:1;position:relative;background:#fff}
+  webview{position:absolute;inset:0;width:100%;height:100%}
+  webview.hidden{display:none}
+  #hidden{position:absolute;width:0;height:0;overflow:hidden;left:-9999px}
+  /* menu */
+  #menu{position:absolute;top:52px;right:10px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:6px;z-index:40;box-shadow:0 12px 40px rgba(0,0,0,.5);min-width:230px}
+  #menu.hidden{display:none}
+  #menu button{display:block;width:100%;text-align:left;background:transparent;border:0;color:var(--text);padding:11px 12px;border-radius:9px;font-size:14px;font-weight:500}
+  #menu button:hover{background:var(--line)}
+  /* sheet */
+  #sheet{background:var(--sheet);border-top:1px solid var(--line);border-radius:22px 22px 0 0;box-shadow:0 -8px 40px rgba(0,0,0,.4)}
+  #sheet.hidden{display:none}
+  .grip{width:44px;height:5px;background:var(--line);border-radius:3px;margin:8px auto 4px}
+  #tabsbar{display:flex;gap:4px;padding:4px 12px 0;border-bottom:1px solid var(--lineSoft)}
+  .tb{flex:1;background:transparent;border:0;color:var(--muted);font-weight:700;font-size:14px;padding:12px 0 11px;border-bottom:3px solid transparent}
+  .tb.on{color:var(--text);border-bottom-color:var(--accent)}
+  .pane{display:none;padding:16px;max-height:44vh;overflow-y:auto}
+  .pane.on{display:block}
+  .eyebrow{font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--accent);margin:0 0 3px}
+  .body{font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 10px}
+  .hr{height:1px;background:var(--lineSoft);margin:14px 0}
+  .fld{width:100%;height:44px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;color:var(--text);font-size:14px;padding:0 12px;margin-bottom:8px}
+  textarea.fld{height:auto;min-height:74px;padding:10px 12px;resize:vertical}
+  .fld:focus{outline:0;border-color:var(--accent)}
+  .row{display:flex;gap:10px;align-items:center}
+  .btn{height:42px;padding:0 16px;border:0;border-radius:12px;font-weight:700;font-size:14px;background:var(--accent);color:var(--onAccent)}
+  .btn:hover{background:var(--accentPressed)}
+  .btn.tonal{background:var(--accentDim);color:var(--accent)}
+  .btn.out{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .btn.out:hover{color:var(--text);border-color:var(--muted)}
+  .hint{font-size:12px;color:var(--muted);flex:1}
+  .cards{margin-top:10px;display:flex;flex-direction:column;gap:10px}
+  .card{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--lineSoft);border-radius:14px;padding:12px 12px 12px 14px}
+  .card .col{flex:1;min-width:0}
+  .card .t{font-weight:700;font-size:14px;color:var(--text)}
+  .card .s{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .s.ok{color:var(--accent)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:13px;font-weight:600}
+  .chip.on{border-color:var(--accent);color:var(--accent);background:var(--accentDim)}
+  #status{font-family:monospace;font-size:12px;color:var(--muted);white-space:pre-wrap;margin-top:10px}
+  #logwrap{padding:8px 16px 14px;border-top:1px solid var(--lineSoft)}
+  #logwrap .lbl{font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+  #log{height:120px;overflow-y:auto;background:var(--logbg);border:1px solid var(--lineSoft);border-radius:12px;padding:10px;font-family:monospace;font-size:11px;color:var(--muted);white-space:pre-wrap}
+  /* tab switcher */
+  #switch{position:absolute;inset:0;background:var(--bg);z-index:60;display:flex;flex-direction:column}
+  #switch.hidden{display:none}
+  #switch .sh{display:flex;align-items:center;gap:6px;padding:12px 16px;background:var(--bar);border-bottom:1px solid var(--line)}
+  #switch .sh .ttl{flex:1;font-size:19px;font-weight:800}
+  #switchlist{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .swrow{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--lineSoft);border-radius:14px;padding:13px 8px 13px 14px}
+  .swrow:hover{border-color:var(--accentDim)}
+  .swrow .col{flex:1;min-width:0}
+  .swrow .t{font-weight:700;font-size:15px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .swrow .t.on{color:var(--accent)}
+  .swrow .s{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+</style>
+</head>
+<body>
+  <div id="bar">
+    <button class="ic" id="home" title="Home"><svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></button>
+    <button class="ic" id="back" title="Back"><svg viewBox="0 0 24 24"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
+    <div id="pill">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93C7.05 19.44 4 16.08 4 12c0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+      <input id="url" placeholder="Search or type a URL" spellcheck="false">
+    </div>
+    <button class="ic" id="newtab" title="New tab"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg></button>
+    <button class="tc" id="tabcount">1</button>
+    <button class="ic" id="menubtn" title="Menu"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></button>
+  </div>
+
+  <div id="webarea"></div>
+  <div id="hidden"></div>
+
+  <div id="menu" class="hidden">
+    <button data-a="tools">Tools · Agent · Profiles · Flows · Cluster</button>
+    <button data-a="newtab">New tab</button>
+    <button data-a="reload">Reload</button>
+    <button data-a="close">Close this tab</button>
+  </div>
+
+  <div id="sheet" class="hidden">
+    <div class="grip"></div>
+    <div id="tabsbar">
+      <button class="tb on" data-p="agent">Agent</button>
+      <button class="tb" data-p="profiles">Profiles</button>
+      <button class="tb" data-p="flows">Flows</button>
+      <button class="tb" data-p="cluster">Cluster</button>
+    </div>
+
+    <div class="pane on" id="pane-agent">
+      <p class="eyebrow">On-device agent</p>
+      <p class="body">Point it at your own model (local Ollama at http://localhost:11434/v1, or any OpenAI-compatible endpoint), give it a goal, and it drives the active tab.</p>
+      <input class="fld" id="ag-endpoint" placeholder="Ollama endpoint (https://host/v1)">
+      <input class="fld" id="ag-key" type="password" placeholder="API key (blank for local Ollama)">
+      <input class="fld" id="ag-model" placeholder="Model (e.g. qwen2.5, llama3.1, glm-4)">
+      <input class="fld" id="ag-task" placeholder="Task — what should GB do?">
+      <div class="row"><button class="btn" id="ag-run">Run</button><button class="btn out" id="ag-stop">Stop</button></div>
+    </div>
+
+    <div class="pane" id="pane-profiles">
+      <p class="eyebrow">Your platforms</p>
+      <p class="body">A real desktop browser. Tap a platform to open it and sign in once — the session lives in its own isolated profile (real IP, desktop portals load, Cloudflare passes).</p>
+      <div class="row"><button class="btn tonal" id="pf-load">Load from cluster</button><span class="hint" id="pf-hint">Sign in on the Cluster tab first</span></div>
+      <div class="cards" id="pf-cards"></div>
+      <div class="hr"></div>
+      <p class="eyebrow">Manual profiles</p>
+      <div class="chips" id="pf-chips"></div>
+      <div class="row" style="margin-top:8px"><input class="fld" id="pf-new" placeholder="New profile name" style="margin:0"><button class="btn tonal" id="pf-add">Add</button></div>
+    </div>
+
+    <div class="pane" id="pane-flows">
+      <p class="eyebrow">Automations</p>
+      <p class="body">Repeatable jobs — the same flows your Ghost Browser runs. Fetch them, run one over the API, or build one here.</p>
+      <div class="row"><button class="btn tonal" id="fl-load">Load from cluster</button><span class="hint" id="fl-hint">Sign in on the Cluster tab first</span></div>
+      <div class="cards" id="fl-cards"></div>
+      <div class="hr"></div>
+      <p class="eyebrow">New automation</p>
+      <input class="fld" id="fl-name" placeholder="Automation name">
+      <textarea class="fld" id="fl-steps" placeholder="Steps — one goal per line"></textarea>
+      <button class="btn tonal" id="fl-create">Create on cluster</button>
+    </div>
+
+    <div class="pane" id="pane-cluster">
+      <p class="eyebrow">Cluster</p>
+      <p class="body">Let the hosted backend drive this laptop for a hunt — a real desktop browser node.</p>
+      <div class="row"><button class="btn" id="cl-connect">Connect to cluster</button><button class="btn out" id="cl-tailscale">Tailscale</button></div>
+      <div id="status">Cluster: off</div>
+      <div class="hr"></div>
+      <p class="eyebrow">Sign in (SSO)</p>
+      <p class="body">Sign in to my-app.engineer, open Ghost Browser from Tools, then pull your platforms/flows.</p>
+      <input class="fld" id="cl-url" placeholder="Cluster GB URL">
+      <div class="row"><button class="btn tonal" id="cl-signin">Sign in</button><button class="btn out" id="cl-fetch">Fetch</button></div>
+    </div>
+
+    <div id="logwrap"><div class="lbl">Activity</div><div id="log"></div></div>
+  </div>
+
+  <div id="switch" class="hidden">
+    <div class="sh">
+      <div class="ttl">Tabs</div>
+      <button class="ic" id="sw-new" style="color:var(--accent)"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg></button>
+      <button class="ic" id="sw-close"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+    </div>
+    <div id="switchlist"></div>
+  </div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
