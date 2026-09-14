@@ -405,12 +405,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val ct = body.optString("contentType", "application/json")
         val payload = if (body.has("body") && !body.isNull("body")) body.opt("body").toString() else null
         val extraHeaders = body.optJSONObject("headers")?.toString() ?: "{}"
+        val maxLen = body.optInt("maxLen", 900000)          // keep the returned slice under the server's 1MB body limit
+        val offset = body.optInt("offset", 0)               // page through large responses (CDNs often ignore Range)
         val id = "f" + System.nanoTime()
         val latch = CountDownLatch(1); fetchWaiters[id] = latch
         val jsBody = if (payload == null) "undefined" else JSONObject.quote(payload)
         val js = "(function(){try{var o={method:${JSONObject.quote(method)},credentials:'include',headers:Object.assign({'Content-Type':${JSONObject.quote(ct)},'X-Requested-With':'XMLHttpRequest'}, $extraHeaders)};" +
             "var bd=$jsBody; if(bd!==undefined && ${JSONObject.quote(method)}!=='GET' && ${JSONObject.quote(method)}!=='HEAD')o.body=bd;" +
-            "fetch(${JSONObject.quote(url)},o).then(function(r){return r.text().then(function(t){GBHost.fetchResult(${JSONObject.quote(id)},r.status,t)})})" +
+            "fetch(${JSONObject.quote(url)},o).then(function(r){return r.text().then(function(t){GBHost.fetchResult(${JSONObject.quote(id)},r.status,String(t).slice($offset,$offset+$maxLen))})})" +
             ".catch(function(e){GBHost.fetchResult(${JSONObject.quote(id)},0,String(e))});}catch(e){GBHost.fetchResult(${JSONObject.quote(id)},0,String(e))}})()"
         runOnUiThread { web.evaluateJavascript(js, null) }
         latch.await(30, TimeUnit.SECONDS)
