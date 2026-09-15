@@ -35,11 +35,12 @@ fun GbScaffold(
     onOpenSwitcher: () -> Unit,
     onOpenMenu: () -> Unit,
     onNav: (String) -> Unit,
+    showTopBar: Boolean = true,     // desktop supplies its own address bar, so it hides this one
     content: @Composable () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().background(cs.background)) {
-        if (selected == "browser" || selected == "flows") {
+        if (showTopBar && (selected == "browser" || selected == "flows")) {
             Surface(color = cs.surface, contentColor = cs.onSurface) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp),
