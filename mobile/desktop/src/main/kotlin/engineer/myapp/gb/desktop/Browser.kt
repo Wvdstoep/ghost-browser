@@ -56,6 +56,17 @@ object Cef {
         synchronized(this) {
             sharedClient?.let { return it }
             val c = ensureApp().createClient()
+            // Self-saving downloads: auto-continue to ~/Downloads with no Save-As dialog (like the
+            // Electron node) — this is what lets the agent export CapCut videos unattended.
+            c.addDownloadHandler(object : org.cef.handler.CefDownloadHandlerAdapter() {
+                override fun onBeforeDownload(browser: CefBrowser?, item: org.cef.callback.CefDownloadItem?, suggestedName: String?, callback: org.cef.callback.CefBeforeDownloadCallback?): Boolean {
+                    try {
+                        val dir = File(System.getProperty("user.home"), "Downloads"); dir.mkdirs()
+                        callback?.Continue(File(dir, suggestedName ?: ("download-" + System.currentTimeMillis())).absolutePath, false)
+                    } catch (e: Throwable) {}
+                    return true
+                }
+            })
             sharedClient = c
             return c
         }

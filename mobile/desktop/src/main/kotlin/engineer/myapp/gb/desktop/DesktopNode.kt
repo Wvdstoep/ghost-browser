@@ -1,6 +1,7 @@
 package engineer.myapp.gb.desktop
 
 import org.cef.browser.CefBrowser
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -24,7 +25,7 @@ class DesktopNode(
 
     private val caps = JSONObject()
         .put("platform", "desktop").put("cdp", true).put("model", false).put("realIp", false)
-        .put("features", listOf("navigate", "click", "click_text", "type", "scroll", "screenshot", "eval"))
+        .put("features", listOf("navigate", "click", "click_text", "type", "scroll", "screenshot", "eval", "click_xy", "drag", "upload_file", "download"))
         .toString()
 
     fun start() { Thread({ runLoop() }, "gb-desktop-node").apply { isDaemon = true }.start() }
@@ -75,10 +76,47 @@ class DesktopNode(
             }
             "/v1/eval" -> Cef.evalJs(main, gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()").ifBlank { "{}" }
             "/v1/info_device" -> "{\"platform\":\"desktop\",\"name\":${jsonStr(deviceName)}}"
-            // S8.3: the CapCut-critical primitives land next.
-            "/v1/drag", "/v1/click_xy", "/v1/upload_file", "/v1/download" -> "{\"error\":\"not yet on the JCEF node (S8.3)\"}"
+            "/v1/click_xy" -> { mouseClick(body.optDouble("x", 0.0), body.optDouble("y", 0.0)); "{\"ok\":true}" }
+            "/v1/drag" -> dragXY(body)
+            "/v1/upload_file" -> uploadFile(body.optString("path"), body.optInt("nth", 0))
             else -> "{\"error\":${jsonStr("unknown path $path")}}"
         }
+    }
+
+    /* ── S8.3 CapCut-critical primitives (CDP Input + DOM) ───────────────────────────────────── */
+
+    private fun mouseEvent(type: String, x: Double, y: Double, buttons: Int = 1) {
+        Cef.cdp(main, "Input.dispatchMouseEvent",
+            "{\"type\":\"$type\",\"x\":$x,\"y\":$y,\"button\":\"left\",\"buttons\":$buttons,\"clickCount\":1}")
+    }
+
+    private fun mouseClick(x: Double, y: Double) {
+        Cef.cdp(main, "Input.dispatchMouseEvent", "{\"type\":\"mouseMoved\",\"x\":$x,\"y\":$y}")
+        mouseEvent("mousePressed", x, y); Thread.sleep(40); mouseEvent("mouseReleased", x, y, 0)
+    }
+
+    /** Press → move (several steps) → release: real drag on a canvas (CapCut timeline/box). */
+    private fun dragXY(b: JSONObject): String {
+        val fx = b.optDouble("fromX", b.optDouble("x1", 0.0)); val fy = b.optDouble("fromY", b.optDouble("y1", 0.0))
+        val tx = b.optDouble("toX", b.optDouble("x2", 0.0)); val ty = b.optDouble("toY", b.optDouble("y2", 0.0))
+        mouseEvent("mouseMoved", fx, fy, 0); mouseEvent("mousePressed", fx, fy); Thread.sleep(60)
+        val steps = 14
+        for (i in 1..steps) { val x = fx + (tx - fx) * i / steps; val y = fy + (ty - fy) * i / steps; mouseEvent("mouseMoved", x, y, 1); Thread.sleep(25) }
+        Thread.sleep(60); mouseEvent("mouseReleased", tx, ty, 0)
+        return "{\"ok\":true}"
+    }
+
+    /** Set a file input's file via CDP DOM (no OS file dialog) — the upload primitive. */
+    private fun uploadFile(path: String, nth: Int): String {
+        if (path.isBlank()) return "{\"error\":\"path required\"}"
+        return try {
+            val rootId = JSONObject(Cef.cdp(main, "DOM.getDocument", "{\"depth\":0}")).optJSONObject("root")?.optInt("nodeId") ?: return "{\"error\":\"no document\"}"
+            val q = JSONObject(Cef.cdp(main, "DOM.querySelectorAll", "{\"nodeId\":$rootId,\"selector\":\"input[type=file]\"}")).optJSONArray("nodeIds") ?: JSONArray()
+            if (q.length() == 0) return "{\"error\":\"no file input found\"}"
+            val nid = q.optInt(nth.coerceIn(0, q.length() - 1))
+            Cef.cdp(main, "DOM.setFileInputFiles", "{\"files\":[${jsonStr(path)}],\"nodeId\":$nid}")
+            "{\"ok\":true,\"input\":$nid}"
+        } catch (e: Exception) { "{\"error\":${jsonStr(e.message ?: "upload failed")}}" }
     }
 
     /** Wait for lazy content to settle (Facebook etc. fire load on a skeleton). Best-effort. */
