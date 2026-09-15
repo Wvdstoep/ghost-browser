@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val runFlowName: MutableState<String?> = mutableStateOf(null)
     private val runPhase: MutableState<String> = mutableStateOf("pick")   // pick | running | done
     private val runStatus: MutableState<String> = mutableStateOf("")
+    @Volatile private var runUserStopped = false
 
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -1002,35 +1003,69 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val host = if (startSite.isNotBlank()) (try { Uri.parse(startSite).host ?: "" } catch (e: Exception) { "" }) else ""
         runStatus.value = if (startSite.isNotBlank()) "Opening $host…" else "Starting on this phone…"
         vm.log("▶ running \"${runFlowName.value}\" ON THIS PHONE (on-device engine, real IP) — ${goals.size} step(s)")
-        agentStop = false
+        agentStop = false; runUserStopped = false
+        val started = System.currentTimeMillis()
+        val journal = java.util.Collections.synchronizedList(ArrayList<String>())
+        val lastActivity = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val stalled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val logStep: (String) -> Unit = { m -> journal.add(m); lastActivity.set(System.currentTimeMillis()); runOnUiThread { vm.log(m) } }
         agentThread = Thread {
             if (startSite.isNotBlank() && !agentStop) {
                 // CODE opens the profile + page deterministically — the agent must NOT have to navigate.
-                // openPlatform switches to the flow's profile (its logged-in session) and opens the site;
-                // navigate() is the fallback when the flow names no profile.
                 try {
                     runOnUiThread { if (profile.isNotBlank()) openPlatform(profile, startSite) else navigate(startSite) }
                     Thread.sleep(5000)
                 } catch (e: Exception) { }
             }
+            // Stall watchdog: if the on-device agent produces NO activity for 90s it's hung — stop it so it
+            // can be reported (and, in S3, rerouted). A busy-loop that keeps logging isn't caught here
+            // (that needs semantic progress detection — S3).
+            Thread {
+                while (!agentStop) {
+                    try { Thread.sleep(5000) } catch (e: Exception) { break }
+                    if (System.currentTimeMillis() - lastActivity.get() > 90000) {
+                        stalled.set(true); agentStop = true
+                        runOnUiThread { runStatus.value = "Stalled — no progress for 90s; stopping."; vm.log("⚠ on-device run stalled (no activity 90s) — stopped") }
+                        break
+                    }
+                }
+            }.also { it.isDaemon = true; it.start() }
             var i = 0
             for ((label, g) in goals) {
                 if (agentStop) break
                 i++
                 runOnUiThread { runStatus.value = "This phone · step $i/${goals.size}: $label" }
                 val ctx = if (host.isNotBlank()) "You are already on $host — do NOT open any home page; work from here. " else ""
-                try { Agent(this, brain, { m -> runOnUiThread { vm.log(m) } }, { agentStop }).run(ctx + g) }
-                catch (e: Exception) { runOnUiThread { vm.log("! step $i failed: ${e.message}") } }
+                try { Agent(this, brain, { m -> logStep(m) }, { agentStop }).run(ctx + g) }
+                catch (e: Exception) { logStep("! step $i failed: ${e.message}") }
             }
+            agentStop = true   // release the watchdog
+            val outcome = if (stalled.get()) "stalled" else if (runUserStopped) "stopped" else "done"
+            // S1: journal this on-device run to the SHARED cluster history over the SSO API — no control
+            // channel needed — so runs are visible everywhere (GET /v1/device-runs), same as cluster runs.
+            val rec = JSONObject()
+                .put("deviceName", android.os.Build.MODEL).put("deviceId", android.os.Build.MODEL)
+                .put("target", "local").put("flowId", flowId ?: "").put("flowName", runFlowName.value ?: "")
+                .put("goal", goal).put("outcome", outcome).put("status", outcome)
+                .put("startedAt", started).put("endedAt", System.currentTimeMillis())
+            val stepsArr = JSONArray()
+            synchronized(journal) { val s0 = maxOf(0, journal.size - 200); for (k in s0 until journal.size) stepsArr.put(JSONObject().put("line", journal[k])) }
+            rec.put("steps", stepsArr)
             runOnUiThread {
+                apiCall("POST", "/v1/device-runs", rec.toString(), "devrunsave")
                 runPhase.value = "done"
-                runStatus.value = if (agentStop) "Stopped." else "Done on this phone — ran ${goals.size} step(s). See the log for what it did."
+                runStatus.value = when (outcome) {
+                    "stalled" -> "Stalled — no progress. Journaled to shared history."
+                    "stopped" -> "Stopped. Journaled to shared history."
+                    else -> "Done on this phone — ran ${goals.size} step(s). Journaled to shared history."
+                }
             }
         }.also { it.start() }
     }
 
     /** Cancel a running on-device flow — the agent loop checks this flag between steps. */
     private fun onRunStop() {
+        runUserStopped = true
         agentStop = true
         runStatus.value = "Stopping…"
     }
@@ -1554,6 +1589,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 else runStatus.value = "Running…"
             } catch (e: Exception) { }
             "sheetstatus_err" -> { }
+            "devrunsave" -> vm.log("↑ run journaled to shared history")
+            "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {
                 val o = JSONObject(data)
                 val status = o.optString("status", "?")
