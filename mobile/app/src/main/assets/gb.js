@@ -83,6 +83,30 @@
       tap(o.el);
       return 'ok';
     },
+    /* Native-tap support. Synthetic events (tap above) are ignored by trusted-input sites (Facebook's
+     * JS-onClick rows/buttons never fire), so the Android layer taps for real via a MotionEvent. These
+     * return the element's on-screen CENTER in CSS px plus the viewport size, so the native side can
+     * map CSS px -> View px (viewX = x * webWidthPx / iw). Scroll it into view first so it is tappable. */
+    coords: function (i) {
+      var o = this._els[i]; if (!o) return { err: 'no-element' };
+      var el = o.el; try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+      clearOverlay();
+      var r = el.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), iw: window.innerWidth, ih: window.innerHeight };
+    },
+    coordsText: function (s, nth) {
+      s = (s || '').toLowerCase().trim(); nth = nth || 0; if (!s) return { err: 'no-text' };
+      var pref = 'a[href],button,[role=button],[role=link],[role=menuitem]';
+      var pool = Array.from(document.querySelectorAll(pref)).concat(Array.from(document.querySelectorAll('div,span,li')));
+      var hits = [];
+      for (var i = 0; i < pool.length; i++) { var el = pool[i]; var r = el.getBoundingClientRect(); if (r.width < 2 || r.height < 2) continue; var hay = ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase(); if (hay.indexOf(s) > -1) hits.push(el); if (hits.length > nth + 4) break; }
+      var el2 = hits[nth]; if (!el2) return { err: 'notfound' };
+      var c = el2; for (var k = 0; k < 5 && c; k++) { if (c.tagName === 'A' || c.tagName === 'BUTTON' || (c.getAttribute && c.getAttribute('role') === 'button')) { el2 = c; break; } c = c.parentElement; }
+      try { el2.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+      clearOverlay();
+      var rr = el2.getBoundingClientRect();
+      return { x: Math.round(rr.left + rr.width / 2), y: Math.round(rr.top + rr.height / 2), iw: window.innerWidth, ih: window.innerHeight };
+    },
     type: function (i, text) {
       var o = this._els[i]; if (!o) return 'no-element';
       clearOverlay();
