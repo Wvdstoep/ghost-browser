@@ -51,7 +51,7 @@ class SettingsUi {
     val rolesLoadedNote = mutableStateOf("")
     val flowCount = mutableStateOf(0)
 
-    val themeMode = mutableStateOf(0)        // 0 system, 1 light, 2 dark
+    val themeMode = mutableStateOf(0)        // 0 dark, 1 light
 }
 
 /** Actions wired to the Activity's existing logic (so both UIs drive the same code paths). */
@@ -217,7 +217,7 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
 
                 // 6 ─ Appearance ----------------------------------------------------------------------
                 SectionCard("🎨", "Appearance", "Theme for the app") {
-                    Segmented(listOf("System", "Light", "Dark"), ui.themeMode.value) { act.onSetTheme(it) }
+                    Segmented(listOf("Dark", "Light"), ui.themeMode.value) { act.onSetTheme(it) }
                 }
 
                 Spacer(Modifier.height(28.dp))
@@ -270,7 +270,7 @@ private fun Note(text: String) {
 @Composable
 private fun Primary(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = GbGreen, contentColor = Color(0xFF04140A))) { Text(label) }
+        colors = ButtonDefaults.buttonColors(containerColor = GbGreen, contentColor = BrandOn)) { Text(label) }
 }
 
 @Composable
@@ -361,7 +361,7 @@ private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> U
                 Modifier.weight(1f).background(if (on) GbGreen else Color.Transparent)
                     .clickable { onSelect(i) }.padding(vertical = 12.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text(opt, color = if (on) Color(0xFF04140A) else cs.onSurface, fontSize = 13.sp) }
+            ) { Text(opt, color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp) }
         }
     }
 }

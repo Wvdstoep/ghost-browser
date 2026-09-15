@@ -1,40 +1,48 @@
 package engineer.myapp.gbmobile.ui
 
-import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 
 /**
- * S6 — the whole phone app in Compose. The browser chrome (top bar, tabs), the flows list, the agent
- * chat and the tab switcher are all Compose; the real WebView(s) are hosted via [AndroidView] so the
- * proven browser/agent/cluster engine underneath is untouched. The old view-based panel is retired.
+ * The whole phone app in Compose — Chrome-tight. A minimal top bar (site pill · tab count · overflow),
+ * a focused omnibox (tap the pill), a Chrome-style overflow sheet, and a thumbnail tab grid. The real
+ * WebView(s) are hosted via AndroidView so the browser/agent/cluster engine underneath is untouched.
  */
 
-data class TabInfo(val index: Int, val title: String, val host: String, val profile: String, val active: Boolean)
+data class TabInfo(val index: Int, val title: String, val host: String, val profile: String, val active: Boolean, val thumb: ImageBitmap? = null)
 data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String)
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
@@ -45,6 +53,9 @@ class ShellUi {
     val url = mutableStateOf("")
     val tabCount = mutableStateOf(1)
     val switcherOpen = mutableStateOf(false)
+    val menuOpen = mutableStateOf(false)
+    val urlFocused = mutableStateOf(false)
+    val desktopMode = mutableStateOf(false)
     val tabs = mutableStateOf<List<TabInfo>>(emptyList())
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
@@ -59,6 +70,8 @@ class ShellUi {
 
 class ShellActions(
     val onUrlGo: (String) -> Unit,
+    val onFocusUrl: () -> Unit,
+    val onCloseUrlFocus: () -> Unit,
     val onHome: () -> Unit,
     val onNewTab: () -> Unit,
     val onOpenSwitcher: () -> Unit,
@@ -76,7 +89,25 @@ class ShellActions(
     val onCreateFlow: (String, String) -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
+    // overflow menu / browser actions
+    val onOpenMenu: () -> Unit,
+    val onCloseMenu: () -> Unit,
+    val onBack: () -> Unit,
+    val onForward: () -> Unit,
+    val onReload: () -> Unit,
+    val onShare: () -> Unit,
+    val onToggleDesktop: () -> Unit,
+    val onFindInPage: () -> Unit,
+    val onOpenHub: () -> Unit,
 )
+
+private fun hostOf(url: String): String {
+    if (url.isBlank()) return ""
+    return try {
+        val u = if (url.startsWith("http")) url else "https://$url"
+        android.net.Uri.parse(u).host?.removePrefix("www.") ?: url
+    } catch (e: Exception) { url }
+}
 
 @Composable
 fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout) {
@@ -85,8 +116,6 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout) {
         Column(Modifier.fillMaxSize()) {
             TopBar(shell, act)
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                // The real browser — always mounted so tab state/JS is never torn down; hidden behind
-                // other screens rather than removed.
                 AndroidView(
                     factory = { (webHolder.parent as? ViewGroup)?.removeView(webHolder); webHolder },
                     modifier = Modifier.fillMaxSize(),
@@ -96,68 +125,64 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout) {
             BottomBar(shell, act)
         }
 
-        if (shell.switcherOpen.value) TabSwitcher(shell, act)
+        if (shell.switcherOpen.value) TabGrid(shell, act)
         if (shell.agentOpen.value) AgentChat(shell, act)
+        if (shell.menuOpen.value) OverflowMenu(shell, act)
+        if (shell.urlFocused.value) Omnibox(shell, act)
     }
 }
+
+/* AndroidView import kept local to avoid a wildcard clash */
+@Composable
+private fun AndroidView(factory: (android.content.Context) -> android.view.View, modifier: Modifier) =
+    androidx.compose.ui.viewinterop.AndroidView(factory = factory, modifier = modifier)
+
+/* ── Top bar ───────────────────────────────────────────────────────────────────────────────── */
 
 @Composable
 private fun TopBar(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
-    Surface(color = cs.surface, contentColor = cs.onSurface, tonalElevation = 2.dp) {
+    Surface(color = cs.surface, contentColor = cs.onSurface) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().statusBarsPaddingSafe().padding(horizontal = 8.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = act.onHome) { Icon(Icons.Default.Home, "Home", tint = cs.onSurfaceVariant) }
-            var text by remember(shell.url.value) { mutableStateOf(shell.url.value) }
+            val host = hostOf(shell.url.value)
             Surface(
-                color = cs.surfaceVariant, shape = RoundedCornerShape(21.dp),
-                modifier = Modifier.weight(1f).height(42.dp).padding(horizontal = 4.dp),
+                color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.weight(1f).height(44.dp).clickable { act.onFocusUrl() },
             ) {
-                Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Language, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(8.dp))
-                    BasicUrlField(text, { text = it }, { act.onUrlGo(text) }, Modifier.weight(1f))
+                Row(Modifier.padding(start = 14.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Lock, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        if (host.isBlank()) "Search or type a URL" else host,
+                        color = if (host.isBlank()) cs.onSurfaceVariant else cs.onSurface,
+                        fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                    )
                 }
             }
-            IconButton(onClick = act.onNewTab) { Icon(Icons.Default.Add, "New tab", tint = cs.onSurfaceVariant) }
+            Spacer(Modifier.width(6.dp))
             TabCountButton(shell.tabCount.value, act.onOpenSwitcher)
-            IconButton(onClick = act.onOpenAgent) { Icon(Icons.Default.Bolt, "Agent", tint = GbGreen) }
+            IconButton(onClick = act.onOpenMenu) { Icon(Icons.Default.MoreVert, "Menu", tint = cs.onSurface) }
         }
     }
-}
-
-@Composable
-private fun BasicUrlField(value: String, onChange: (String) -> Unit, onGo: () -> Unit, modifier: Modifier) {
-    val cs = MaterialTheme.colorScheme
-    androidx.compose.foundation.text.BasicTextField(
-        value = value, onValueChange = onChange, singleLine = true, modifier = modifier,
-        textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 14.sp),
-        cursorBrush = androidx.compose.ui.graphics.SolidColor(GbGreen),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-        keyboardActions = KeyboardActions(onGo = { onGo() }),
-        decorationBox = { inner ->
-            if (value.isEmpty()) Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 14.sp)
-            inner()
-        },
-    )
 }
 
 @Composable
 private fun TabCountButton(count: Int, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Box(
-        Modifier.size(30.dp).clip(RoundedCornerShape(7.dp))
-            .border(2.dp, cs.onSurfaceVariant, RoundedCornerShape(7.dp)).clickable { onClick() },
+        Modifier.size(30.dp).clip(RoundedCornerShape(8.dp))
+            .border(2.dp, cs.onSurface, RoundedCornerShape(8.dp)).clickable { onClick() },
         contentAlignment = Alignment.Center,
-    ) { Text("$count", color = cs.onSurfaceVariant, fontSize = 12.sp) }
+    ) { Text(if (count > 99) "99" else "$count", color = cs.onSurface, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
 }
 
 @Composable
 private fun BottomBar(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
-    NavigationBar(containerColor = cs.surface, tonalElevation = 3.dp) {
+    NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
         NavItem(Icons.Default.Public, "Browser", shell.screen.value == "browser") { act.onNav("browser") }
         NavItem(Icons.Default.Bolt, "Agent", false) { act.onOpenAgent() }
         NavItem(Icons.Default.AccountTree, "Flows", shell.screen.value == "flows") { act.onNav("flows") }
@@ -166,17 +191,167 @@ private fun BottomBar(shell: ShellUi, act: ShellActions) {
 }
 
 @Composable
-private fun RowScope.NavItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
     NavigationBarItem(
         selected = selected, onClick = onClick,
         icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
         colors = NavigationBarItemDefaults.colors(
-            selectedIconColor = Color(0xFF04140A), indicatorColor = GbGreen,
-            selectedTextColor = GbGreen, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedIconColor = BrandOn, indicatorColor = Brand,
+            selectedTextColor = Brand, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
     )
 }
+
+/* ── Omnibox (focused URL, Chrome-style) ─────────────────────────────────────────────────────── */
+
+@Composable
+private fun Omnibox(shell: ShellUi, act: ShellActions) {
+    val cs = MaterialTheme.colorScheme
+    var q by remember { mutableStateOf(shell.url.value) }
+    val fr = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
+    val looksUrl = q.contains(".") && !q.trimStart().contains(" ")
+    Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
+            // search pill
+            Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = act.onCloseUrlFocus) { Icon(Icons.Default.ArrowBack, "Back", tint = cs.onSurfaceVariant) }
+                Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(24.dp), modifier = Modifier.weight(1f).height(48.dp)) {
+                    Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(10.dp))
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = q, onValueChange = { q = it }, singleLine = true,
+                            modifier = Modifier.weight(1f).focusRequester(fr),
+                            textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 16.sp),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            keyboardActions = KeyboardActions(onGo = { if (q.isNotBlank()) act.onUrlGo(q.trim()) }),
+                            decorationBox = { inner -> if (q.isEmpty()) Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 16.sp); inner() },
+                        )
+                        if (q.isNotEmpty()) IconButton(onClick = { q = "" }) { Icon(Icons.Default.Close, "Clear", tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+                    }
+                }
+            }
+            HorizontalDivider(color = cs.outline)
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                if (q.isNotBlank()) {
+                    SuggestRow(Icons.Default.Search, if (looksUrl) "Go to $q" else "Search Google for “$q”", null) { act.onUrlGo(q.trim()) }
+                    HorizontalDivider(color = cs.outline)
+                }
+                // shortcuts (platforms)
+                if (shell.platforms.value.isNotEmpty()) {
+                    Text("Shortcuts", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 8.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+                        shell.platforms.value.take(10).forEach { p ->
+                            Column(
+                                Modifier.width(80.dp).clickable { act.onOpenPlatform(p.profile, p.site) }.padding(vertical = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Box(Modifier.size(48.dp).clip(CircleShape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
+                                    Text(p.label.take(1).uppercase(), color = Brand, fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(p.label, color = cs.onSurface, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = cs.outline, modifier = Modifier.padding(top = 12.dp))
+                }
+                // open tabs (filtered)
+                val tabs = shell.tabs.value.filter { q.isBlank() || it.title.contains(q, true) || it.host.contains(q, true) }
+                if (tabs.isNotEmpty()) {
+                    Text("Open tabs", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp))
+                    tabs.forEach { t -> SuggestRow(Icons.Default.Language, t.title.ifBlank { "New tab" }, t.host) { act.onSelectTab(t.index) } }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SuggestRow(icon: ImageVector, title: String, sub: String?, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = cs.onSurface, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (sub != null) Text(sub, color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/* ── Overflow menu (Chrome-style sheet) ──────────────────────────────────────────────────────── */
+
+@Composable
+private fun OverflowMenu(shell: ShellUi, act: ShellActions) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxSize().background(Color(0x80000000)).clickable { act.onCloseMenu() }, contentAlignment = Alignment.TopEnd) {
+        Surface(
+            color = cs.surface, contentColor = cs.onSurface, shape = RoundedCornerShape(20.dp),
+            tonalElevation = 4.dp,
+            modifier = Modifier.statusBarsPaddingSafe().padding(8.dp).width(300.dp).clickable(enabled = false) {},
+        ) {
+            Column(Modifier.padding(vertical = 8.dp).verticalScroll(rememberScrollState())) {
+                // top icon row
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    RoundIcon(Icons.Default.ArrowBack, "Back") { act.onCloseMenu(); act.onBack() }
+                    RoundIcon(Icons.Default.ArrowForward, "Forward") { act.onCloseMenu(); act.onForward() }
+                    RoundIcon(Icons.Default.Share, "Share") { act.onCloseMenu(); act.onShare() }
+                    RoundIcon(Icons.Default.Refresh, "Reload") { act.onCloseMenu(); act.onReload() }
+                }
+                Spacer(Modifier.height(4.dp))
+                MenuRow(Icons.Default.Add, "New tab") { act.onCloseMenu(); act.onNewTab() }
+                MenuRow(Icons.Default.Layers, "Tabs") { act.onCloseMenu(); act.onOpenSwitcher() }
+                MenuDivider()
+                MenuRow(Icons.Default.Search, "Find in page") { act.onCloseMenu(); act.onFindInPage() }
+                MenuRowToggle(Icons.Default.DesktopWindows, "Desktop site", shell.desktopMode.value) { act.onCloseMenu(); act.onToggleDesktop() }
+                MenuDivider()
+                MenuRow(Icons.Default.Bolt, "Agent") { act.onCloseMenu(); act.onOpenAgent() }
+                MenuRow(Icons.Default.AccountTree, "Flows") { act.onCloseMenu(); act.onNav("flows") }
+                MenuRow(Icons.Default.DevicesOther, "Device Hub") { act.onCloseMenu(); act.onOpenHub() }
+                MenuDivider()
+                MenuRow(Icons.Default.Settings, "Settings") { act.onCloseMenu(); act.onOpenSettings() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundIcon(icon: ImageVector, cd: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.size(44.dp).clip(CircleShape).background(cs.surfaceVariant).clickable { onClick() }, contentAlignment = Alignment.Center) {
+        Icon(icon, cd, tint = cs.onSurface, modifier = Modifier.size(21.dp))
+    }
+}
+
+@Composable
+private fun MenuRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(label, color = cs.onSurface, fontSize = 15.sp)
+    }
+}
+
+@Composable
+private fun MenuRowToggle(icon: ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(20.dp))
+        Text(label, color = cs.onSurface, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Box(Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).border(2.dp, if (on) Brand else cs.outline, RoundedCornerShape(5.dp)).background(if (on) Brand else Color.Transparent), contentAlignment = Alignment.Center) {
+            if (on) Icon(Icons.Default.Check, null, tint = BrandOn, modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+@Composable
+private fun MenuDivider() = HorizontalDivider(color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 
 /* ── Flows ─────────────────────────────────────────────────────────────────────────────────── */
 
@@ -194,9 +369,7 @@ private fun FlowsPane(shell: ShellUi, act: ShellActions, modifier: Modifier) {
         else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             shell.flows.value.forEach { f -> FlowCard(f) { act.onRunFlow(f.id, f.name) } }
         }
-
         Spacer(Modifier.height(20.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(16.dp))
-
         Text("New automation", style = MaterialTheme.typography.titleMedium)
         Text("One plain-language goal per line.", color = cs.onSurfaceVariant, fontSize = 12.sp)
         Spacer(Modifier.height(10.dp))
@@ -207,8 +380,7 @@ private fun FlowsPane(shell: ShellUi, act: ShellActions, modifier: Modifier) {
         OutlinedTextField(steps, { steps = it }, label = { Text("Steps — one goal per line") }, modifier = Modifier.fillMaxWidth().height(120.dp))
         Spacer(Modifier.height(10.dp))
         Button(onClick = { if (name.isNotBlank() && steps.isNotBlank()) { act.onCreateFlow(name, steps); name = ""; steps = "" } },
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = GbGreen, contentColor = Color(0xFF04140A))) { Text("Create on cluster") }
+            shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Create on cluster") }
         Spacer(Modifier.height(28.dp))
     }
 }
@@ -225,39 +397,78 @@ private fun FlowCard(f: FlowInfo, onRun: () -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             Button(onClick = onRun, shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = GbGreen, contentColor = Color(0xFF04140A))) { Text("Run") }
+                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Run") }
         }
     }
 }
 
-/* ── Tab switcher ──────────────────────────────────────────────────────────────────────────── */
+/* ── Tab grid (Chrome-style) ─────────────────────────────────────────────────────────────────── */
 
 @Composable
-private fun TabSwitcher(shell: ShellUi, act: ShellActions) {
+private fun TabGrid(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
+    var q by remember { mutableStateOf("") }
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Tabs", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                IconButton(onClick = act.onNewTab) { Icon(Icons.Default.Add, "New tab", tint = GbGreen) }
-                IconButton(onClick = act.onCloseSwitcher) { Icon(Icons.Default.Close, "Close", tint = cs.onSurfaceVariant) }
-            }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                shell.tabs.value.forEach { t ->
-                    Surface(
-                        color = if (t.active) GbGreenGhost else cs.surface, shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, if (t.active) GbGreen else cs.outline),
-                        modifier = Modifier.fillMaxWidth().clickable { act.onSelectTab(t.index) },
-                    ) {
-                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(t.title.ifBlank { "New tab" }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(t.host + (if (t.profile != "default") "  ·  ${t.profile}" else ""), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            IconButton(onClick = { act.onCloseTab(t.index) }) { Icon(Icons.Default.Close, "Close tab", tint = cs.onSurfaceVariant) }
-                        }
-                    }
+        Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(Brand).clickable { act.onNewTab() }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Add, "New tab", tint = BrandOn)
                 }
+                Spacer(Modifier.weight(1f))
+                Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                    Text("${shell.tabCount.value} tabs", Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = cs.onSurface, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = act.onCloseSwitcher) { Icon(Icons.Default.Close, "Done", tint = cs.onSurface) }
+            }
+            // search
+            Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = q, onValueChange = { q = it }, singleLine = true, modifier = Modifier.weight(1f),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 15.sp),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+                        decorationBox = { inner -> if (q.isEmpty()) Text("Search your tabs", color = cs.onSurfaceVariant, fontSize = 15.sp); inner() },
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            val tabs = shell.tabs.value.filter { q.isBlank() || it.title.contains(q, true) || it.host.contains(q, true) }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(tabs, key = { it.index }) { t -> TabCard(t, { act.onSelectTab(t.index) }, { act.onCloseTab(t.index) }) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TabCard(t: TabInfo, onOpen: () -> Unit, onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Surface(
+        color = cs.surface, shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(if (t.active) 2.dp else 1.dp, if (t.active) Brand else cs.outline),
+        modifier = Modifier.fillMaxWidth().clickable { onOpen() },
+    ) {
+        Column {
+            Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(16.dp).clip(CircleShape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
+                    Text(t.host.take(1).uppercase().ifBlank { "•" }, color = cs.onSurfaceVariant, fontSize = 9.sp)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(t.title.ifBlank { "New tab" }, color = cs.onSurface, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Box(Modifier.size(28.dp).clip(CircleShape).clickable { onClose() }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Close, "Close tab", tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(150.dp).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
+                if (t.thumb != null) androidx.compose.foundation.Image(bitmap = t.thumb, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+                else Text(t.host.ifBlank { "New tab" }, color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         }
     }
@@ -270,7 +481,7 @@ private fun AgentChat(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
     var toolView by remember { mutableStateOf<ChatMsg?>(null) }
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
             Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(shell.agentTitle.value, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 IconButton(onClick = act.onNewAgentChat) { Icon(Icons.Default.Add, "New chat", tint = cs.onSurfaceVariant) }
@@ -281,10 +492,8 @@ private fun AgentChat(shell: ShellUi, act: ShellActions) {
             val msgs = shell.agentMsgs.value
             LaunchedEffect(msgs.size, shell.agentBusy.value) { scroll.animateScrollTo(scroll.maxValue) }
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = 14.dp, vertical = 16.dp)) {
-                if (msgs.isEmpty()) {
-                    Text("What can I do for you?\n\nI can browse for you, build & run automations, inspect your platforms, or drive your other devices — just ask.",
-                        color = cs.onSurfaceVariant, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
-                }
+                if (msgs.isEmpty()) Text("What can I do for you?\n\nI can browse for you, build & run automations, inspect your platforms, or drive your other devices — just ask.",
+                    color = cs.onSurfaceVariant, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                 msgs.forEach { m ->
                     when (m.role) {
                         "user" -> Bubble(m.content, true)
@@ -310,9 +519,8 @@ private fun Bubble(text: String, user: Boolean) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Surface(
-            color = if (user) GbGreen else cs.surface,
-            contentColor = if (user) Color(0xFF04140A) else cs.onSurface,
-            shape = RoundedCornerShape(14.dp),
+            color = if (user) Brand else cs.surface, contentColor = if (user) BrandOn else cs.onSurface,
+            shape = RoundedCornerShape(16.dp),
             border = if (user) null else androidx.compose.foundation.BorderStroke(1.dp, cs.outline),
             modifier = Modifier.fillMaxWidth(0.85f),
         ) { Text(text, Modifier.padding(horizontal = 13.dp, vertical = 10.dp), fontSize = 15.sp) }
@@ -331,21 +539,24 @@ private fun ToolChip(name: String, onClick: () -> Unit) {
 private fun AgentInput(busy: Boolean, onSend: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth().background(cs.surface).padding(10.dp), verticalAlignment = Alignment.Bottom) {
-        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(18.dp), modifier = Modifier.weight(1f)) {
+    Row(Modifier.fillMaxWidth().background(cs.surface).padding(10.dp).navigationBarsPaddingSafe(), verticalAlignment = Alignment.Bottom) {
+        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(20.dp), modifier = Modifier.weight(1f)) {
             androidx.compose.foundation.text.BasicTextField(
                 value = text, onValueChange = { text = it },
                 textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 15.sp),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(GbGreen),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
                 decorationBox = { inner -> if (text.isEmpty()) Text("Message the agent…", color = cs.onSurfaceVariant, fontSize = 15.sp); inner() },
             )
         }
         Spacer(Modifier.width(8.dp))
         FilledIconButton(
-            onClick = { if (!busy && text.isNotBlank()) { onSend(text.trim()); text = "" } },
-            enabled = !busy,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = GbGreen, contentColor = Color(0xFF04140A)),
+            onClick = { if (!busy && text.isNotBlank()) { onSend(text.trim()); text = "" } }, enabled = !busy,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn),
         ) { Icon(Icons.Default.Send, "Send") }
     }
 }
+
+/* ── insets helpers (safe if window insets APIs vary) ─────────────────────────────────────────── */
+@Composable private fun Modifier.statusBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.statusBars))
+@Composable private fun Modifier.navigationBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.ime))

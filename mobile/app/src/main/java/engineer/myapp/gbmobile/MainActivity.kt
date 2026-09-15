@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.graphics.asImageBitmap
 import engineer.myapp.gbmobile.ui.DeviceOpt
 import engineer.myapp.gbmobile.ui.GbTheme
 import engineer.myapp.gbmobile.ui.RunSheet
@@ -56,6 +57,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     // --- tabs ---
     private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
         var web: WebView? = null
+        var thumb: Bitmap? = null   // last snapshot for the tab grid
     }
     private val tabs = mutableListOf<TabHandle>()
     private var activeTab = -1
@@ -249,7 +251,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     /** Rebuild the Compose tab list from the engine's tabs. */
     private fun syncTabs() {
         shellUi.tabs.value = tabs.mapIndexed { i, h ->
-            engineer.myapp.gbmobile.ui.TabInfo(i, if (h.title.isBlank()) "New tab" else h.title, hostLabel(h.url), h.profile, i == activeTab)
+            engineer.myapp.gbmobile.ui.TabInfo(i, if (h.title.isBlank()) "New tab" else h.title, hostLabel(h.url), h.profile, i == activeTab, h.thumb?.asImageBitmap())
         }
     }
 
@@ -340,6 +342,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (settingsVisible.value) { settingsVisible.value = false; settingsHost?.visibility = View.GONE; return true }
             if (runVisible.value && runPhase.value != "running") { runVisible.value = false; runHost?.visibility = View.GONE; return true }
+            if (shellUi.urlFocused.value) { shellUi.urlFocused.value = false; return true }
+            if (shellUi.menuOpen.value) { shellUi.menuOpen.value = false; return true }
             if (shellUi.agentOpen.value) { shellUi.agentOpen.value = false; return true }
             if (shellUi.switcherOpen.value) { shellUi.switcherOpen.value = false; return true }
             if (shellUi.screen.value != "browser") { shellUi.screen.value = "browser"; return true }
@@ -619,6 +623,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, prof, signedIn))
         }
         settingsUi.platforms.value = out
+        shellUi.platforms.value = out   // also feed the omnibox shortcuts
     }
 
     private fun profileHasSession(prof: String, site: String): Boolean {
@@ -1129,12 +1134,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     /** Build the shell (browser/flows/agent) actions. */
     private fun buildShellActions() = engineer.myapp.gbmobile.ui.ShellActions(
-        onUrlGo = { load(it) },
+        onUrlGo = { shellUi.urlFocused.value = false; load(it) },
+        onFocusUrl = { shellUi.urlFocused.value = true },
+        onCloseUrlFocus = { shellUi.urlFocused.value = false },
         onHome = { load(HOME) },
-        onNewTab = { newTab() },
-        onOpenSwitcher = { syncTabs(); shellUi.switcherOpen.value = true },
+        onNewTab = { shellUi.switcherOpen.value = false; newTab() },
+        onOpenSwitcher = { captureActiveThumb(); syncTabs(); shellUi.switcherOpen.value = true },
         onCloseSwitcher = { shellUi.switcherOpen.value = false },
-        onSelectTab = { i -> activateTab(i); shellUi.switcherOpen.value = false },
+        onSelectTab = { i -> activateTab(i); shellUi.switcherOpen.value = false; shellUi.urlFocused.value = false },
         onCloseTab = { i -> closeTab(i) },
         onNav = { s -> shellUi.screen.value = s; if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows") },
         onOpenSettings = { openSettings() },
@@ -1146,15 +1153,46 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onRunFlow = { id, name -> runFlow(id, name) },
         onCreateFlow = { name, steps -> createFlow(name, steps) },
         onLoadPlatforms = { loadPlatforms() },
-        onOpenPlatform = { prof, site -> openPlatform(prof, site) },
+        onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
+        onOpenMenu = { shellUi.desktopMode.value = tabs.getOrNull(activeTab)?.desktop == true; shellUi.menuOpen.value = true },
+        onCloseMenu = { shellUi.menuOpen.value = false },
+        onBack = { if (this::web.isInitialized && web.canGoBack()) web.goBack() },
+        onForward = { if (this::web.isInitialized && web.canGoForward()) web.goForward() },
+        onReload = { if (this::web.isInitialized) web.reload() },
+        onShare = { doShare() },
+        onToggleDesktop = { toggleDesktop(); shellUi.desktopMode.value = tabs.getOrNull(activeTab)?.desktop == true },
+        onFindInPage = { try { if (this::web.isInitialized) web.showFindDialog(null, true) } catch (e: Exception) { vm.log("! find in page unavailable") } },
+        onOpenHub = { doOpenHub() },
     )
+
+    /** Share the current page URL. */
+    private fun doShare() {
+        val u = if (this::web.isInitialized) (web.url ?: shellUi.url.value) else shellUi.url.value
+        if (u.isBlank()) return
+        try {
+            val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, u)
+            startActivity(Intent.createChooser(i, "Share"))
+        } catch (e: Exception) { vm.log("! share failed: ${e.message}") }
+    }
+
+    /** Snapshot the active tab's WebView into its thumbnail (for the tab grid). Cheap; best-effort. */
+    private fun captureActiveThumb() {
+        val i = activeTab; if (i !in tabs.indices) return
+        val w = tabs[i].web ?: return
+        if (w.width <= 0 || w.height <= 0) return
+        try {
+            val scale = 0.4f
+            val bw = (w.width * scale).toInt().coerceAtLeast(1); val bh = (w.height * scale).toInt().coerceAtLeast(1)
+            val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.RGB_565)
+            val c = android.graphics.Canvas(bmp); c.scale(scale, scale); w.draw(c)
+            tabs[i].thumb = bmp
+        } catch (e: Exception) {}
+    }
 
     // ---- S5 settings (Compose) ------------------------------------------------------------------
 
     @androidx.compose.runtime.Composable
-    private fun computeDark(): Boolean = when (settingsUi.themeMode.value) {
-        1 -> false; 2 -> true; else -> androidx.compose.foundation.isSystemInDarkTheme()
-    }
+    private fun computeDark(): Boolean = settingsUi.themeMode.value != 1   // 0=dark (default), 1=light
 
     private val settingsActions by lazy { buildSettingsActions() }
 
