@@ -34,6 +34,13 @@ class DesktopState {
     val activity = mutableStateOf("")
     val nodeStatus = mutableStateOf("node: connecting…")
     val dark = mutableStateOf(true)
+    // agent
+    val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
+    val agentBusy = mutableStateOf(false)
+    val endpoint = mutableStateOf("")
+    val apiKey = mutableStateOf("")
+    val model = mutableStateOf("llama3.1")
+    var gbJs = ""
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -216,6 +223,16 @@ fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices
             Text("This desktop operates on its own machine network. The cluster GB keeps its own in-image exit node.", fontSize = 13.sp)
         }
 
+        SectionD("⚡  AI model (Agent)") {
+            Text("An OpenAI-compatible endpoint the Agent uses (Ollama: http://localhost:11434/v1).", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(st.endpoint.value, { st.endpoint.value = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp)); OutlinedTextField(st.apiKey.value, { st.apiKey.value = it }, label = { Text("API key (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp)); OutlinedTextField(st.model.value, { st.model.value = it }, label = { Text("Model (e.g. llama3.1)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { Agent.save(st.endpoint.value, st.apiKey.value, st.model.value) }, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
+        }
+
         SectionD("🎨  Appearance") {
             Segmented(listOf("Dark", "Light"), if (st.dark.value) 0 else 1) { st.dark.value = it == 0 }
         }
@@ -254,5 +271,47 @@ private fun SectionD(title: String, content: @Composable ColumnScope.() -> Unit)
             Spacer(Modifier.height(12.dp))
             content()
         }
+    }
+}
+
+/* ── Agent chat (desktop) ─────────────────────────────────────────────────────────────────────── */
+@androidx.compose.runtime.Composable
+fun AgentChatD(st: DesktopState, main: org.cef.browser.CefBrowser?) {
+    val cs = MaterialTheme.colorScheme
+    var input by remember { mutableStateOf("") }
+    var toolView by remember { mutableStateOf<engineer.myapp.gb.shared.ChatMsg?>(null) }
+    Column(Modifier.fillMaxSize().background(cs.background)) {
+        Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Agent", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = { st.agentMsgs.value = emptyList() }) { Text("New chat") }
+        }
+        val scroll = rememberScrollState()
+        LaunchedEffect(st.agentMsgs.value.size, st.agentBusy.value) { scroll.animateScrollTo(scroll.maxValue) }
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(16.dp)) {
+            if (st.agentMsgs.value.isEmpty()) Text("What can I do for you?\n\nI can browse for you on this machine, run your automations, and inspect your platforms — just ask.", color = cs.onSurfaceVariant, fontSize = 15.sp, modifier = Modifier.padding(top = 20.dp))
+            st.agentMsgs.value.forEach { msg ->
+                when (msg.role) {
+                    "user" -> Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.End) {
+                        Surface(color = Brand, contentColor = BrandOn, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(0.8f)) { Text(msg.content, Modifier.padding(12.dp), fontSize = 14.sp) }
+                    }
+                    "assistant" -> Row(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        Surface(color = cs.surface, border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(0.85f)) { Text(msg.content, Modifier.padding(12.dp), fontSize = 14.sp) }
+                    }
+                    "tool" -> Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(9.dp), modifier = Modifier.padding(bottom = 8.dp).clickable { toolView = msg }) {
+                        Text("⚙ ${msg.tool}", Modifier.padding(horizontal = 11.dp, vertical = 7.dp), color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                }
+            }
+            if (st.agentBusy.value) Text("…thinking", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        Row(Modifier.fillMaxWidth().background(cs.surface).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { OutlinedTextField(input, { input = it }, placeholder = { Text("Message the agent…") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { if (!st.agentBusy.value && input.isNotBlank()) { Agent.send(st, main, input.trim()); input = "" } }, enabled = !st.agentBusy.value, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Send") }
+        }
+    }
+    toolView?.let { tv ->
+        AlertDialog(onDismissRequest = { toolView = null }, confirmButton = { TextButton(onClick = { toolView = null }) { Text("Close") } },
+            title = { Text("⚙ ${tv.tool}") }, text = { Column(Modifier.verticalScroll(rememberScrollState())) { Text(tv.content.ifBlank { "(empty)" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp) } })
     }
 }
