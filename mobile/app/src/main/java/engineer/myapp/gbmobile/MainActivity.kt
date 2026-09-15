@@ -691,6 +691,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     "fetch(p,o).then(function(r){return r.text()}).then(function(x){GBHost.result(t,x)}).catch(function(e){GBHost.result(t+'_err',String(e))})};", null)
                 apiReady = true
                 val q = ArrayList(apiQueue); apiQueue.clear(); for (fn in q) fn()
+                autoSyncSharedData()   // P0: shared data loads automatically on login — no manual fetch
             }
         }
         (b.root as ViewGroup).addView(w, 1, 1)
@@ -714,6 +715,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         apiReady = false; apiQueue.clear()
         apiWeb?.let { pw -> try { (pw.parent as? ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
         apiWeb = null
+    }
+
+    /** P0 — the shared brain auto-loads the moment we're logged in (API/SSO session ready): roles,
+     *  profiles/platforms and automations pull from the cluster automatically, so the data is just
+     *  there. Replaces the manual "fetch" buttons. UI-toolkit-independent — survives the Compose rewrite. */
+    private fun autoSyncSharedData() {
+        runOnUiThread { vm.log("↻ syncing your data from the cluster…") }
+        apiCall("GET", "/v1/agent/roles", null, "roles_list")
+        apiCall("GET", "/v1/profiles/presets", null, "platforms")
+        apiCall("GET", "/v1/workflows", null, "flows")
     }
 
     // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
