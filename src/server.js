@@ -1009,6 +1009,37 @@ app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() 
  * because there is nothing to type.
  */
 require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
+
+// --- On-device run journals (S1). A flow executed LOCALLY on a phone/desktop node POSTs its journal
+// here over the authed SSO API (no control channel needed), so on-device runs are visible in the shared
+// history alongside cluster runs. One JSON file per run on the same /profiles volume. ---
+const _devRunsDir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'device-runs');
+app.post('/v1/device-runs', authed, (req, res) => {
+  try {
+    const fs = require('fs'), path = require('path');
+    fs.mkdirSync(_devRunsDir, { recursive: true });
+    const b = req.body || {};
+    const id = String(b.id || (b.flowId || 'run') + '-' + Date.now()).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    const rec = {
+      id, deviceId: String(b.deviceId || ''), deviceName: String(b.deviceName || ''), target: String(b.target || ''),
+      flowId: String(b.flowId || ''), flowName: String(b.flowName || ''), goal: String(b.goal || '').slice(0, 4000),
+      steps: Array.isArray(b.steps) ? b.steps.slice(0, 500) : [], outcome: String(b.outcome || '').slice(0, 400),
+      status: String(b.status || 'done'), startedAt: Number(b.startedAt) || Date.now(), endedAt: Number(b.endedAt) || Date.now(),
+      owner: (req.client && req.client.owner) || '', savedAt: Date.now(),
+    };
+    fs.writeFileSync(path.join(_devRunsDir, id + '.json'), JSON.stringify(rec, null, 2), { mode: 0o600 });
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+});
+app.get('/v1/device-runs', authed, (req, res) => {
+  try {
+    const fs = require('fs'), path = require('path');
+    let names = []; try { names = fs.readdirSync(_devRunsDir).filter((f) => f.endsWith('.json')); } catch (e) {}
+    const runs = names.map((f) => { try { return JSON.parse(fs.readFileSync(path.join(_devRunsDir, f), 'utf8')); } catch (e) { return null; } })
+      .filter(Boolean).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0)).slice(0, 100);
+    res.json({ runs });
+  } catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+});
 app.get('/v1/profiles/presets', authed, (_req, res) =>
   // Detailed, so a login labelled for a site counts even when it is called something else.
   res.json({ presets: sites.list(pool.listProfilesDetailed()) }));
