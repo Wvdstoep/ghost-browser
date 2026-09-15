@@ -90,6 +90,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val settingsVisible: MutableState<Boolean> = mutableStateOf(false)
     private val settingsUi = engineer.myapp.gbmobile.ui.SettingsUi()
 
+    // S6: the whole app is now a Compose shell (top bar · tabs · flows · agent chat), hosting the real
+    // WebView(s) via AndroidView. `webHolder` is created in code and handed to Compose.
+    private lateinit var webHolder: android.widget.FrameLayout
+    private var appHost: ComposeView? = null
+    private val shellUi = engineer.myapp.gbmobile.ui.ShellUi()
+
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val flowRunDone = java.util.Collections.synchronizedSet(HashSet<String>())  // run ids already reported (poll fires 5x)
@@ -104,23 +110,37 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        b = ActivityMainBinding.inflate(layoutInflater)
+        b = ActivityMainBinding.inflate(layoutInflater)   // bare root FrameLayout (S6: UI is all Compose)
         setContentView(b.root)
-
-        // Compose overlay host for the Run sheet — the first screen of the new Compose UI. Kept GONE
-        // until shown; it renders over the existing view-based UI (incremental migration, not a rewrite).
         settingsUi.themeMode.value = vm.themeMode
+
+        gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
+        gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
+
+        restoreTabs()
+        try { agentChats = if (vm.agentChatsJson.isNotBlank()) JSONArray(vm.agentChatsJson) else JSONArray() } catch (e: Exception) { agentChats = JSONArray() }
+
+        // The real browser lives in this FrameLayout, hosted inside the Compose shell via AndroidView.
+        webHolder = android.widget.FrameLayout(this)
+
+        // S6: the whole app UI — one Compose host.
+        appHost = ComposeView(this).also { host ->
+            host.setContent {
+                GbTheme(dark = computeDark()) {
+                    engineer.myapp.gbmobile.ui.AppShell(shell = shellUi, act = buildShellActions(), webHolder = webHolder)
+                }
+            }
+            (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+
+        // Overlays over the shell: Run sheet + Settings (kept as their own hosts).
         runHost = ComposeView(this).also { host ->
             host.visibility = View.GONE
             host.setContent {
                 GbTheme(dark = computeDark()) {
                     RunSheet(
-                        visible = runVisible.value,
-                        flowName = runFlowName.value,
-                        devices = runDevices.value,
-                        phase = runPhase.value,
-                        status = runStatus.value,
-                        goalInitial = "",
+                        visible = runVisible.value, flowName = runFlowName.value, devices = runDevices.value,
+                        phase = runPhase.value, status = runStatus.value, goalInitial = "",
                         onRun = { target, goal -> onRunTarget(target, goal) },
                         onStop = { onRunStop() },
                         onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
@@ -129,8 +149,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
             (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-
-        // S5: settings overlay host — the new structured Compose settings, over the existing UI.
         settingsHost = ComposeView(this).also { host ->
             host.visibility = View.GONE
             host.setContent {
@@ -144,36 +162,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
-        gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
-        gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
-
-        restoreTabs()
-
-        // Chrome-like top bar
-        b.home.setOnClickListener { load(HOME) }
-        b.newTab.setOnClickListener { newTab() }
-        b.tabCount.setOnClickListener { openSwitcher() }
-        b.menuBtn.setOnClickListener { showMenu() }
-        b.url.setOnEditorActionListener { _, id, ev ->
-            if (id == EditorInfo.IME_ACTION_GO || (ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN)) { loadInBar(); true } else false
-        }
-
-        // tab switcher overlay
-        b.newTabInSwitcher.setOnClickListener { newTab(); closeSwitcher() }
-        b.closeSwitcher.setOnClickListener { closeSwitcher() }
-
-        // tabs -> flipper
-        b.tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) { b.flipper.displayedChild = tab.position }
-            override fun onTabUnselected(tab: TabLayout.Tab) {}
-            override fun onTabReselected(tab: TabLayout.Tab) {}
-        })
-
-        wireAgent()
-        wireProfiles()
-        wireFlows()
-        wireCluster()
-        wireAgentChat()
+        // show any persisted flows immediately
+        if (vm.flowsJson.isNotBlank()) try { renderFlows(JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()) } catch (e: Exception) {}
+        if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
+        renderRoleSpinner()
         observe()
 
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -223,12 +215,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val h = tabs[i]
         val w = ensureWeb(h)
         (w.parent as? ViewGroup)?.removeView(w)
-        b.webHolder.removeAllViews()
-        b.webHolder.addView(w)
+        webHolder.removeAllViews()
+        webHolder.addView(w)
         web = w; activeTab = i
         lastUrl = h.url
         if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
-        b.url.setText(if (h.url == HOME) "" else h.url)
+        shellUi.url.value = if (h.url == HOME) "" else h.url
+        shellUi.screen.value = "browser"
         updateTabCount()
     }
 
@@ -236,7 +229,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val prof = vm.currentProfile.value ?: "default"
         tabs.add(TabHandle(url, if (url == HOME) "New tab" else url, prof))
         if (activate) activateTab(tabs.size - 1) else updateTabCount()
-        b.panel.visibility = View.GONE
+        shellUi.switcherOpen.value = false; shellUi.screen.value = "browser"
     }
 
     private fun closeTab(i: Int) {
@@ -248,32 +241,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (i < activeTab) activeTab--
         if (activeTab >= tabs.size) activeTab = tabs.size - 1
         activateTab(activeTab)
-        if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
+        syncTabs()
     }
 
-    private fun updateTabCount() { b.tabCount.text = if (tabs.size > 99) "99" else tabs.size.toString() }
+    private fun updateTabCount() { shellUi.tabCount.value = tabs.size; syncTabs() }
 
-    private fun showMenu() {
-        val pm = PopupMenu(this, b.menuBtn)
-        val desk = tabs.getOrNull(activeTab)?.desktop == true
-        pm.menu.add(0, 6, 0, "Settings")
-        pm.menu.add(0, 1, 1, "Tools · Agent · Profiles · Flows (old)")
-        pm.menu.add(0, 2, 2, "New tab")
-        pm.menu.add(0, 3, 3, "Reload")
-        pm.menu.add(0, 5, 4, if (desk) "Request mobile site" else "Request desktop site")
-        pm.menu.add(0, 4, 5, "Close this tab")
-        pm.setOnMenuItemClickListener {
-            when (it.itemId) {
-                6 -> openSettings()
-                1 -> b.panel.visibility = if (b.panel.visibility == View.GONE) View.VISIBLE else View.GONE
-                2 -> newTab()
-                3 -> if (this::web.isInitialized) web.reload()
-                4 -> closeTab(activeTab)
-                5 -> toggleDesktop()
-            }
-            true
+    /** Rebuild the Compose tab list from the engine's tabs. */
+    private fun syncTabs() {
+        shellUi.tabs.value = tabs.mapIndexed { i, h ->
+            engineer.myapp.gbmobile.ui.TabInfo(i, if (h.title.isBlank()) "New tab" else h.title, hostLabel(h.url), h.profile, i == activeTab)
         }
-        pm.show()
     }
 
     /** Chrome-style "Request desktop site" — swaps the UA and reloads this tab (some portals, e.g.
@@ -292,54 +269,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         try { h.web?.let { (it.parent as? ViewGroup)?.removeView(it); it.destroy() } } catch (e: Exception) {}
         h.web = null
         activateTab(i)
-    }
-
-    // ---- tab switcher -----------------------------------------------------------------------------
-
-    private fun openSwitcher() { renderTabList(); b.tabSwitcher.visibility = View.VISIBLE }
-    private fun closeSwitcher() { b.tabSwitcher.visibility = View.GONE }
-
-    private fun renderTabList() {
-        b.tabList.removeAllViews()
-        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-        for (idx in tabs.indices) {
-            val h = tabs[idx]
-            val active = idx == activeTab
-            val row = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(14), dp(13), dp(8), dp(13))
-                background = getDrawable(R.drawable.bg_card_ripple)
-                val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
-            }
-            val col = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
-            }
-            col.addView(android.widget.TextView(this).apply {
-                text = if (h.title.isBlank()) "New tab" else h.title
-                setTextColor(getColor(if (active) R.color.accent else R.color.text)); textSize = 15f
-                typeface = resources.getFont(R.font.manrope_bold); maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-            })
-            col.addView(android.widget.TextView(this).apply {
-                text = hostLabel(h.url) + (if (h.profile != "default") "  ·  ${h.profile}" else "")
-                setTextColor(getColor(R.color.muted)); textSize = 12f
-                typeface = resources.getFont(R.font.manrope_regular); maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.END
-                setPadding(0, dp(2), 0, 0)
-            })
-            row.addView(col)
-            row.addView(android.widget.ImageButton(this).apply {
-                setImageResource(R.drawable.ic_close); setColorFilter(getColor(R.color.muted))
-                background = getDrawable(R.drawable.bg_icon_ripple)
-                layoutParams = android.widget.LinearLayout.LayoutParams(dp(38), dp(38))
-                setPadding(dp(9), dp(9), dp(9), dp(9))
-                setOnClickListener { closeTab(idx) }
-            })
-            row.setOnClickListener { activateTab(idx); closeSwitcher() }
-            b.tabList.addView(row)
-        }
     }
 
     private fun hostLabel(u: String): String {
@@ -373,20 +302,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 h.url = url ?: h.url
-                if (isActive(h)) { lastUrl = h.url; b.url.setText(if (h.url == HOME) "" else h.url) }
+                if (isActive(h)) { lastUrl = h.url; shellUi.url.value = if (h.url == HOME) "" else h.url }
             }
             override fun onPageFinished(view: WebView?, url: String?) {
                 h.url = url ?: h.url
                 if (isActive(h)) lastUrl = h.url
                 if (gbJs.isNotEmpty()) view?.evaluateJavascript(gbJs, null)
                 loadLatch?.countDown()
-                if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
+                syncTabs()
             }
         }
         w.webChromeClient = object : WebChromeClient() {
             override fun onReceivedTitle(view: WebView?, title: String?) {
                 if (!title.isNullOrBlank()) h.title = title
-                if (b.tabSwitcher.visibility == View.VISIBLE) renderTabList()
+                syncTabs()
             }
         }
         w.addJavascriptInterface(Bridge(), "GBHost")   // lets injected JS hand results back to the app
@@ -394,7 +323,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         return w
     }
 
-    private fun loadInBar() = load(b.url.text.toString())
+    private fun loadInBar() = load(shellUi.url.value)
 
     private fun load(raw: String) {
         var u = raw.trim(); if (u.isEmpty()) return
@@ -402,21 +331,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + Uri.encode(u)
         }
         u = mobileFbUrl(u)
-        b.url.setText(if (u == HOME) "" else u)
+        shellUi.url.value = if (u == HOME) "" else u
         if (this::web.isInitialized) web.loadUrl(u)
-        b.panel.visibility = View.GONE
+        shellUi.screen.value = "browser"; shellUi.switcherOpen.value = false
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (settingsVisible.value) { settingsVisible.value = false; settingsHost?.visibility = View.GONE; return true }
             if (runVisible.value && runPhase.value != "running") { runVisible.value = false; runHost?.visibility = View.GONE; return true }
-            if (b.agentOverlay.visibility == View.VISIBLE) {
-                if (b.agentHistoryWrap.visibility == View.VISIBLE) { b.agentHistoryWrap.visibility = View.GONE; return true }
-                b.agentOverlay.visibility = View.GONE; return true
-            }
-            if (b.tabSwitcher.visibility == View.VISIBLE) { closeSwitcher(); return true }
-            if (b.panel.visibility == View.VISIBLE) { b.panel.visibility = View.GONE; return true }
+            if (shellUi.agentOpen.value) { shellUi.agentOpen.value = false; return true }
+            if (shellUi.switcherOpen.value) { shellUi.switcherOpen.value = false; return true }
+            if (shellUi.screen.value != "browser") { shellUi.screen.value = "browser"; return true }
             if (this::web.isInitialized && web.canGoBack()) { web.goBack(); return true }
         }
         return super.onKeyDown(keyCode, event)
@@ -430,7 +356,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         u = mobileFbUrl(u)
         val latch = CountDownLatch(1); loadLatch = latch
         val fu = u
-        runOnUiThread { b.url.setText(fu); web.loadUrl(fu) }
+        runOnUiThread { shellUi.url.value = fu; web.loadUrl(fu) }
         latch.await(25, TimeUnit.SECONDS); Thread.sleep(400)
         waitSettle(6000)   // lazy-loaded pages (Facebook) fire onPageFinished on a skeleton — wait for real content
         return currentUrl()
@@ -557,95 +483,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         return fetchResults.remove(id) ?: "{\"error\":\"timeout\"}"
     }
 
-    // ---- Agent panel ----------------------------------------------------------------------------
-
-    private fun wireAgent() {
-        b.endpoint.setText(vm.endpoint); b.apiKey.setText(vm.apiKey); b.model.setText(vm.model); b.task.setText(vm.task)
-        b.customUrl.setText(vm.customUrl); b.useLocal.isChecked = vm.useLocal
-
-        val labels = ModelCatalog.models.map { it.label }
-        b.modelSpinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-        b.modelSpinner.setSelection(ModelCatalog.models.indexOfFirst { it.id == vm.selectedModel }.coerceAtLeast(0))
-        fun selModel() = ModelCatalog.models[b.modelSpinner.selectedItemPosition]
-        fun refreshModel() {
-            val m = selModel(); vm.selectedModel = m.id
-            b.modelNote.text = m.note
-            b.modelStatus.text = if (models.isReady(m.id)) "ready ✓" else "not downloaded"
-        }
-        b.modelSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) = refreshModel()
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
-        refreshModel()
-
-        b.downloadModel.setOnClickListener {
-            val m = selModel(); vm.customUrl = b.customUrl.text.toString().trim()
-            if (models.isReady(m.id) && m.id != "custom") { b.modelStatus.text = "ready ✓"; vm.log("● ${m.label} already downloaded"); return@setOnClickListener }
-            val url = if (m.id == "custom") vm.customUrl else m.url
-            if (url.isBlank()) { vm.log("! paste a .task URL for the Custom option"); return@setOnClickListener }
-            b.modelProgress.visibility = View.VISIBLE; b.modelProgress.progress = 0
-            b.modelStatus.text = "downloading…"; b.downloadModel.isEnabled = false
-            vm.log("↓ downloading ${m.label}…")
-            models.download(m.id, url, m.sizeMb, b.hfToken.text.toString(),
-                { p -> runOnUiThread { b.modelProgress.progress = p; b.modelStatus.text = "downloading… $p%" } },
-                { ok, msg -> runOnUiThread {
-                    b.downloadModel.isEnabled = true; b.modelProgress.visibility = View.GONE
-                    if (ok) { b.modelStatus.text = "ready ✓"; vm.log("● model ${m.label} ready — tick 'Use on-device model'") }
-                    else { b.modelStatus.text = "failed"; vm.log("! model download: $msg") }
-                } })
-        }
-
-        b.run.setOnClickListener {
-            if (vm.agentRunning.value == true) { vm.log("… agent already running"); return@setOnClickListener }
-            vm.endpoint = b.endpoint.text.toString(); vm.apiKey = b.apiKey.text.toString()
-            vm.model = b.model.text.toString(); vm.task = b.task.text.toString()
-            vm.useLocal = b.useLocal.isChecked; vm.selectedModel = selModel().id
-            val goal = vm.task.trim()
-            if (goal.isEmpty()) { vm.log("! enter a task first"); return@setOnClickListener }
-            val brain: Llm = if (vm.useLocal) {
-                if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — tap Download first"); return@setOnClickListener }
-                vm.log("▶ brain: on-device (${vm.selectedModel})"); LocalLlm(this, models.path(vm.selectedModel), ModelCatalog.byId(vm.selectedModel).family)
-            } else {
-                if (vm.endpoint.isBlank()) { vm.log("! set an Ollama endpoint, or tick 'Use on-device model'"); return@setOnClickListener }
-                vm.log("▶ brain: Ollama (${vm.model})"); OllamaClient(vm.endpoint, vm.apiKey, vm.model)
-            }
-            agentStop = false; vm.agentRunning.value = true; vm.log("▶ goal: $goal")
-            agentThread = Thread {
-                Agent(this, brain, { m -> vm.log(m) }, { agentStop }).run(goal)
-                runOnUiThread { vm.agentRunning.value = false; vm.log("— agent finished —") }
-            }.also { it.start() }
-        }
-        b.stop.setOnClickListener { agentStop = true; vm.log("… stopping") }
-    }
-
-    // ---- Profiles panel -------------------------------------------------------------------------
-
-    private fun wireProfiles() {
-        renderChips()
-        b.addProfile.setOnClickListener {
-            val name = b.newProfile.text.toString()
-            if (name.isBlank()) return@setOnClickListener
-            vm.addProfile(name); b.newProfile.setText("")
-            renderChips(); newTab()
-        }
-        b.loadPlatforms.setOnClickListener { loadPlatforms() }
-        // show the last fetched platforms immediately (persisted), so they don't vanish on relaunch
-        if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
-        // roles per profile
-        b.loadRoles.setOnClickListener {
-            if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
-            vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list")
-        }
-        b.roleSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                val names = roleNames(); if (pos !in names.indices) return
-                setRoleForProfile(vm.currentProfile.value ?: "default", names[pos])
-                b.roleNote.text = roleDescription(names[pos]).ifBlank { "The agent adopts this role when it works on this profile." }
-            }
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
-        renderRoleSpinner()
-    }
+    // ---- Roles (per profile) --------------------------------------------------------------------
 
     private fun roleNames(): List<String> {
         val out = arrayListOf("(none)")
@@ -666,14 +504,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             vm.profileRolesJson = o.toString()
         } catch (e: Exception) {}
     }
+    /** Push the current roles + this profile's role into the Compose settings state. */
     private fun renderRoleSpinner() {
-        val names = roleNames()
-        b.roleSpinner.adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
-        val cur = roleForProfile(vm.currentProfile.value ?: "default")
-        val idx = names.indexOf(cur).let { if (it < 0) 0 else it }
-        b.roleSpinner.setSelection(idx)
-        b.roleSpinner.post { renderProfileSummary() }   // after the note below is set; covers profile switch + role change
-        b.roleNote.text = if (cur.isNotBlank()) roleDescription(cur).ifBlank { "Role: $cur" } else "The agent adopts this role's behaviour when it works on this profile — like the platform's agent roles."
+        settingsUi.roleNames.value = roleNames()
+        settingsUi.roleForCurrent.value = roleForProfile(vm.currentProfile.value ?: "default").ifBlank { "(none)" }
     }
 
     /** Automations whose steps run on [profile] — read off the flow definitions (nodes[].profile), so the
@@ -693,38 +527,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         return out
     }
 
-    /** "This profile" card: its role (+ what that role does) and every automation that uses it, each
-     *  runnable right here — mirrors the platform GB, so the knowledge lives in the app, not in memory. */
-    private fun renderProfileSummary() {
-        val box = b.profileSummary; box.removeAllViews()
-        val p = vm.currentProfile.value ?: "default"
-        val role = roleForProfile(p); val autos = automationsForProfile(p)
-        fun line(t: String, muted: Boolean = false) = TextView(this).apply {
-            text = t; textSize = if (muted) 12f else 13f
-            setTextColor(getColor(if (muted) R.color.muted else R.color.text)); setPadding(0, 4, 0, 4)
-        }
-        box.addView(line("Role: " + (if (role.isBlank()) "none" else role)))
-        if (role.isNotBlank()) { val d = roleDescription(role); if (d.isNotBlank()) box.addView(line(d, true)) }
-        box.addView(line(if (autos.isEmpty()) "Automations: none use this profile" else "Automations using this profile: ${autos.size}", autos.isEmpty()))
-        for (w in autos) {
-            val id = w.optString("id"); val name = w.optString("name", id)
-            box.addView(flowCard(id, name, w.optJSONArray("nodes")?.length() ?: 0, "runs on $p"))
-        }
-    }
-
+    /** Push profiles + active profile into the Compose settings state. */
     private fun renderChips() {
-        b.profileChips.removeAllViews()
-        val cur = vm.currentProfile.value
-        for (p in vm.profiles.value ?: emptyList()) {
-            val chip = Chip(this).apply {
-                text = p; isCheckable = true; isChecked = (p == cur)
-                setOnClickListener { vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab() }
-            }
-            b.profileChips.addView(chip)
-        }
-        val r = roleForProfile(vm.currentProfile.value ?: "default")
-        b.currentProfileLabel.text = "Active: ${vm.currentProfile.value}" + (if (r.isNotBlank()) "  ·  role: $r" else "")
-        renderProfileSummary()
+        settingsUi.profiles.value = vm.profiles.value ?: listOf("default")
+        settingsUi.currentProfile.value = vm.currentProfile.value ?: "default"
+        renderRoleSpinner()
     }
 
     // ---- Same-origin authed API channel (fetch profiles, flows, run/create over the SSO session) ----
@@ -793,16 +600,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
 
     private fun loadPlatforms() {
-        if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
-        b.platformsHint.text = "loading…"
-        apiCall("GET", "/v1/profiles/presets", null, "platforms")
+        if (vm.clusterUrl.trim().isEmpty()) { vm.log("! sign in first (Settings → Account & sync)"); return }
+        vm.log("↑ loading platforms…"); apiCall("GET", "/v1/profiles/presets", null, "platforms")
     }
 
     private fun renderPlatforms(arr: JSONArray) {
-        b.platformCards.removeAllViews()
-        if (arr.length() == 0) { b.platformsHint.text = "no platforms on the cluster yet"; return }
-        b.platformsHint.text = "${arr.length()} platforms — tap to open & sign in here"
         val known = (vm.profiles.value ?: emptyList()).toSet()
+        val out = ArrayList<engineer.myapp.gbmobile.ui.PlatformOpt>()
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
             val key = p.optString("key")
@@ -810,11 +614,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val site = p.optString("site")
             if (key.isBlank() || site.isBlank()) continue
             val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
-            // "signed in" ONLY if this phone's profile actually holds a session cookie for the site —
-            // not merely because the profile exists (the phone is a separate browser from the cluster).
+            // "signed in" ONLY if this phone's profile actually holds a session cookie for the site.
             val signedIn = known.contains(prof) && profileHasSession(prof, site)
-            b.platformCards.addView(platformCard(label, site, prof, signedIn))
+            out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, prof, signedIn))
         }
+        settingsUi.platforms.value = out
     }
 
     private fun profileHasSession(prof: String, site: String): Boolean {
@@ -825,72 +629,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         } catch (e: Exception) { false }
     }
 
-    private fun platformCard(label: String, site: String, prof: String, onPhone: Boolean): View {
-        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-        val row = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(12), dp(12), dp(12))
-            background = getDrawable(R.drawable.bg_card_ripple)
-            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
-            setOnClickListener { openPlatform(prof, site) }
-        }
-        val col = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
-        }
-        col.addView(android.widget.TextView(this).apply {
-            text = label; setTextColor(getColor(R.color.text)); textSize = 15f
-            typeface = resources.getFont(R.font.manrope_bold)
-        })
-        val host = try { Uri.parse(site).host ?: site } catch (e: Exception) { site }
-        col.addView(android.widget.TextView(this).apply {
-            text = host + (if (onPhone) "   ·  signed in ✓" else "   ·  not signed in yet")
-            setTextColor(getColor(if (onPhone) R.color.accent else R.color.muted)); textSize = 12f
-            typeface = resources.getFont(R.font.manrope_regular); setPadding(0, dp(2), 0, 0)
-        })
-        row.addView(col)
-        row.addView(com.google.android.material.button.MaterialButton(
-            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
-        ).apply {
-            text = if (onPhone) "Open" else "Open & sign in"
-            isAllCaps = false
-            typeface = resources.getFont(R.font.manrope_semibold)
-            setOnClickListener { openPlatform(prof, site) }
-        })
-        return row
-    }
-
     private fun openPlatform(prof: String, site: String) {
         vm.addProfile(prof)              // creates it if new and selects it
         renderChips()
         val host = try { Uri.parse(site).host } catch (e: Exception) { null }
         val existing = tabs.indexOfFirst { it.profile == prof && host != null && (try { Uri.parse(it.url).host } catch (e: Exception) { null }) == host }
         if (existing >= 0) {             // don't spawn duplicates — focus the platform's own tab
-            activateTab(existing); b.panel.visibility = View.GONE
+            activateTab(existing)
             vm.log("↺ switched to the \"$prof\" tab for $host")
         } else {
             newTab(site)                 // open a new tab in this platform's isolated profile
             vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
         }
+        settingsVisible.value = false; settingsHost?.visibility = View.GONE   // jump to the browser
     }
 
-    // ---- Flows panel (automations — the same workflow engine GB runs) ---------------------------
+    // ---- Flows (automations — the same workflow engine GB runs) ---------------------------------
 
-    private fun wireFlows() {
-        b.loadFlows.setOnClickListener {
-            if (vm.clusterUrl.trim().isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
-            b.flowsHint.text = "loading…"; apiCall("GET", "/v1/workflows", null, "flows")
-        }
-        b.createFlow.setOnClickListener { createFlow() }
-        // show the last fetched automations immediately (persisted)
-        if (vm.flowsJson.isNotBlank()) try { renderFlows(JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()) } catch (e: Exception) {}
-    }
-
+    /** Push the flows into the Compose shell state. */
     private fun renderFlows(arr: JSONArray) {
-        b.flowCards.removeAllViews()
-        if (arr.length() == 0) { b.flowsHint.text = "no automations yet — build one below"; return }
-        b.flowsHint.text = "${arr.length()} automations — tap Run to fire one"
+        val out = ArrayList<engineer.myapp.gbmobile.ui.FlowInfo>()
         for (i in 0 until arr.length()) {
             val w = arr.optJSONObject(i) ?: continue
             val id = w.optString("id"); if (id.isBlank()) continue
@@ -899,42 +657,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val runs = w.optInt("runs", 0)
             val proof = if (w.optBoolean("verifiedEver")) (if (w.optBoolean("lastVerified")) " · ✓ verified" else " · was verified") else ""
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}$proof" else "never run"
-            b.flowCards.addView(flowCard(id, name, steps, last))
+            out.add(engineer.myapp.gbmobile.ui.FlowInfo(id, name, steps, last))
         }
-        renderProfileSummary()   // the per-profile card lists the automations that run on it
-    }
-
-    private fun flowCard(id: String, name: String, steps: Int, last: String): View {
-        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-        val row = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(12), dp(12), dp(12))
-            background = getDrawable(R.drawable.bg_card)
-            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dp(10); layoutParams = lp
-        }
-        val col = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            layoutParams = android.widget.LinearLayout.LayoutParams(0, -2, 1f)
-        }
-        col.addView(android.widget.TextView(this).apply {
-            text = name; setTextColor(getColor(R.color.text)); textSize = 15f
-            typeface = resources.getFont(R.font.manrope_bold)
-        })
-        col.addView(android.widget.TextView(this).apply {
-            text = "$steps steps  ·  $last"
-            setTextColor(getColor(R.color.muted)); textSize = 12f
-            typeface = resources.getFont(R.font.manrope_regular); setPadding(0, dp(2), 0, 0)
-        })
-        row.addView(col)
-        row.addView(com.google.android.material.button.MaterialButton(
-            this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
-        ).apply {
-            text = "Run"; isAllCaps = false
-            typeface = resources.getFont(R.font.manrope_semibold)
-            setOnClickListener { runFlow(id, name) }
-        })
-        return row
+        shellUi.flows.value = out
+        shellUi.flowsHint.value = if (out.isEmpty()) "No automations yet — build one below." else "${out.size} automations — tap Run to fire one."
     }
 
     private fun runFlow(id: String, name: String) {
@@ -1155,9 +881,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         runStatus.value = "Stopping…"
     }
 
-    private fun createFlow() {
-        val name = b.flowName.text.toString().trim()
-        val stepLines = b.flowSteps.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+    private fun createFlow(nameIn: String, stepsText: String) {
+        val name = nameIn.trim()
+        val stepLines = stepsText.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         if (name.length < 3) { vm.log("! give the automation a name (3+ chars)"); return }
         if (stepLines.isEmpty()) { vm.log("! add at least one step (one goal per line)"); return }
         val nodes = JSONArray()
@@ -1191,28 +917,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
-    private fun wireAgentChat() {
-        try { agentChats = if (vm.agentChatsJson.isNotBlank()) JSONArray(vm.agentChatsJson) else JSONArray() } catch (e: Exception) { agentChats = JSONArray() }
-        b.agentBtn.setOnClickListener { openAgentChat() }
-        b.agentClose.setOnClickListener { b.agentOverlay.visibility = View.GONE }
-        b.agentNew.setOnClickListener { newAgentChat() }
-        b.agentHistoryBtn.setOnClickListener {
-            b.agentHistoryWrap.visibility = if (b.agentHistoryWrap.visibility == View.GONE) { renderAgentChatList(); View.VISIBLE } else View.GONE
-        }
-        b.agentSettings.setOnClickListener {
-            b.agentOverlay.visibility = View.GONE; b.panel.visibility = View.VISIBLE
-            b.tabs.getTabAt(0)?.select(); b.flipper.displayedChild = 0
-            vm.log("· set your model in the Agent tab, then reopen the agent (⚡)")
-        }
-        b.agentSend.setOnClickListener { sendAgentMessage() }
-    }
-
     private fun openAgentChat() {
-        b.tabSwitcher.visibility = View.GONE
-        b.agentOverlay.visibility = View.VISIBLE
+        shellUi.switcherOpen.value = false
         if (agentChat == null) { if (agentChats.length() > 0) agentChat = agentChats.optJSONObject(0) else newAgentChat() }
-        renderAgentChat()
-        b.agentInput.requestFocus()
+        refreshAgentMsgs()
+        shellUi.agentOpen.value = true
     }
 
     private fun newAgentChat() {
@@ -1220,8 +929,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val next = JSONArray().put(c)
         for (i in 0 until agentChats.length()) next.put(agentChats.get(i))
         agentChats = next; agentChat = c
-        b.agentHistoryWrap.visibility = View.GONE
-        persistAgentChats(); renderAgentChat()
+        persistAgentChats(); refreshAgentMsgs()
     }
 
     private fun persistAgentChats() {
@@ -1233,99 +941,39 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val c = agentChat ?: return
         val msgs = c.optJSONArray("messages") ?: JSONArray().also { c.put("messages", it) }
         msgs.put(JSONObject().put("role", role).put("content", content).apply { if (name != null) put("name", name) })
-        if (role == "user" && (c.optString("title") == "New chat" || c.optString("title").isBlank())) {
-            c.put("title", content.take(42)); renderAgentChatList()
-        }
+        if (role == "user" && (c.optString("title") == "New chat" || c.optString("title").isBlank())) c.put("title", content.take(42))
         persistAgentChats()
+        runOnUiThread { refreshAgentMsgs() }
     }
 
-    private fun renderAgentChatList() {
-        b.agentChatList.removeAllViews()
-        for (i in 0 until agentChats.length()) {
-            val c = agentChats.optJSONObject(i) ?: continue
-            val id = c.optString("id")
-            val row = TextView(this).apply {
-                text = c.optString("title", "New chat"); setTextColor(getColor(R.color.text)); textSize = 14f
-                typeface = resources.getFont(R.font.manrope_medium)
-                setPadding(dpi(12), dpi(11), dpi(12), dpi(11)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                background = getDrawable(R.drawable.bg_card_ripple)
-                val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dpi(6); layoutParams = lp
-                setOnClickListener { agentChat = c; b.agentHistoryWrap.visibility = View.GONE; renderAgentChat() }
-            }
-            b.agentChatList.addView(row)
-        }
-    }
-
-    private fun renderAgentChat() {
-        b.agentMsgs.removeAllViews()
+    /** Rebuild the Compose chat message list from the active chat's persisted messages. */
+    private fun refreshAgentMsgs() {
         val c = agentChat
-        b.agentTitle.text = c?.optString("title", "Agent") ?: "Agent"
+        shellUi.agentTitle.value = c?.optString("title", "Agent") ?: "Agent"
         val msgs = c?.optJSONArray("messages")
-        if (msgs == null || msgs.length() == 0) {
-            b.agentMsgs.addView(TextView(this).apply {
-                text = "What can I do for you?\n\nI can browse for you, and build & run automations, inspect your platforms, or drive your other devices — just ask."
-                setTextColor(getColor(R.color.muted)); textSize = 15f; typeface = resources.getFont(R.font.manrope_regular)
-                setPadding(dpi(8), dpi(24), dpi(8), dpi(8))
-            })
-            return
-        }
-        for (i in 0 until msgs.length()) {
+        val out = ArrayList<engineer.myapp.gbmobile.ui.ChatMsg>()
+        if (msgs != null) for (i in 0 until msgs.length()) {
             val m = msgs.optJSONObject(i) ?: continue
             when (m.optString("role")) {
-                "user" -> addAgentBubble(true, m.optString("content"))
-                "assistant" -> addAgentBubble(false, m.optString("content"))
-                "tool" -> addAgentTool(m.optString("name", "tool"), m.optString("content"))
+                "user" -> out.add(engineer.myapp.gbmobile.ui.ChatMsg("user", safeText(m.optString("content"))))
+                "assistant" -> {
+                    val content = m.optString("content")
+                    // an assistant "tool call" record (JSON) is shown as a tool chip, not a raw bubble
+                    if (content.trimStart().startsWith("{\"tool\"")) {
+                        val nm = try { JSONObject(content).optString("tool", "tool") } catch (e: Exception) { "tool" }
+                        out.add(engineer.myapp.gbmobile.ui.ChatMsg("tool", safeText(content), nm))
+                    } else out.add(engineer.myapp.gbmobile.ui.ChatMsg("assistant", safeText(content)))
+                }
+                "tool" -> out.add(engineer.myapp.gbmobile.ui.ChatMsg("tool", safeText(m.optString("content")).take(6000), m.optString("name", "tool")))
             }
         }
-        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
+        shellUi.agentMsgs.value = out
     }
 
-    private fun addAgentBubble(user: Boolean, text: String) {
-        val bubble = TextView(this).apply {
-            this.text = safeText(text); textSize = 15f
-            typeface = resources.getFont(R.font.manrope_regular)
-            setPadding(dpi(13), dpi(10), dpi(13), dpi(10))
-            if (user) { setTextColor(getColor(R.color.onAccent)); setBackgroundColor(getColor(R.color.accent)); setTextIsSelectable(false) }
-            else { setTextColor(getColor(R.color.text)); background = getDrawable(R.drawable.bg_card); setTextIsSelectable(true) }
-        }
-        val wrap = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            val lp = android.widget.LinearLayout.LayoutParams(-1, -2); lp.bottomMargin = dpi(8); layoutParams = lp
-            gravity = if (user) Gravity.END else Gravity.START
-            val blp = android.widget.LinearLayout.LayoutParams(-2, -2); blp.width = (resources.displayMetrics.widthPixels * 0.82).toInt(); blp.weight = 0f
-            bubble.maxWidth = (resources.displayMetrics.widthPixels * 0.82).toInt()
-            addView(bubble)
-        }
-        b.agentMsgs.addView(wrap)
-        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
-    }
-
-    /** Strip characters that crash Android's TextView layout (surrogate pairs / private-use icon-font
-     *  glyphs like Facebook's , plus control chars). Tool results are full of these. */
+    /** Strip characters that crash text layout (surrogate pairs / private-use icon-font glyphs, control
+     *  chars). Tool results are full of these. */
     private fun safeText(s: String): String =
         s.replace(Regex("[\\uD800-\\uDFFF\\uE000-\\uF8FF]"), "").replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), " ")
-
-    private fun addAgentTool(name: String, result: String) {
-        val chip = TextView(this)
-        chip.text = "⚙ $name"; chip.setTextColor(getColor(R.color.muted)); chip.textSize = 12f
-        chip.typeface = android.graphics.Typeface.MONOSPACE
-        chip.setPadding(dpi(11), dpi(7), dpi(11), dpi(7)); chip.background = getDrawable(R.drawable.bg_chip_soft)
-        val lp = android.widget.LinearLayout.LayoutParams(-2, -2); lp.bottomMargin = dpi(8); chip.layoutParams = lp
-        val clean = safeText(result).take(6000)
-        // Show in an isolated, scrollable dialog — inline-expanding huge/odd tool JSON in a TextView
-        // can crash the chat's layout pass (list_workflows is a large payload).
-        chip.setOnClickListener {
-            try {
-                androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle("⚙ $name")
-                    .setMessage(if (clean.isBlank()) "(empty)" else clean)
-                    .setPositiveButton("Close", null)
-                    .show()
-            } catch (e: Exception) { vm.log("! could not show tool result: ${e.message}") }
-        }
-        b.agentMsgs.addView(chip)
-        b.agentScroll.post { b.agentScroll.fullScroll(View.FOCUS_DOWN) }
-    }
 
     private fun agentSystemPrompt(): String {
         val tools = listOf(
@@ -1352,46 +1000,42 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "Chain tools as needed; when done or you need the user, use reply. Be concise. Never invent tool results. Tools:\n" + tools
     }
 
-    private fun sendAgentMessage() {
+    private fun sendAgentMessage(input: String) {
         if (agentBusy) return
-        val text = b.agentInput.text.toString().trim(); if (text.isEmpty()) return
+        val text = input.trim(); if (text.isEmpty()) return
         val brain = buildBrain()
-        if (brain == null) { addAgentBubble(false, "Set your model first — tap ⚙ (Agent tab): a local Ollama (http://localhost:11434/v1) or any OpenAI-compatible endpoint."); return }
-        b.agentInput.setText("")
+        if (brain == null) {
+            if (agentChat == null) newAgentChat()
+            agentPushMsg("assistant", "Set your model first — Settings → Devices & ring: pick/download an on-device model, or set an Ollama endpoint.")
+            return
+        }
         if (agentChat == null) newAgentChat()
-        agentPushMsg("user", text, null); addAgentBubble(true, text)
+        agentPushMsg("user", text, null)
         // adopt the active profile's role (like the platform's per-profile agent roles)
         val roleName = roleForProfile(vm.currentProfile.value ?: "default")
         val sysPrompt = if (roleName.isNotBlank())
             "ROLE: you are acting as \"$roleName\" — ${roleDescription(roleName)} Stay within this role's remit.\n\n" + agentSystemPrompt()
         else agentSystemPrompt()
         if (roleName.isNotBlank()) vm.log("▶ agent role: $roleName (profile ${vm.currentProfile.value})")
-        agentBusy = true; b.agentSend.isEnabled = false
+        agentBusy = true; runOnUiThread { shellUi.agentBusy.value = true }
         agentExec.execute {
             try {
                 var toolCalls = 0
                 while (toolCalls < 12) {
                     val transcript = buildAgentTranscript()
-                    val reply = try { brain.chat(sysPrompt, transcript) } catch (e: Exception) { runOnUiThread { addAgentBubble(false, "⚠ model error: ${e.message}") }; agentPushMsg("assistant", "⚠ model error"); break }
+                    val reply = try { brain.chat(sysPrompt, transcript) } catch (e: Exception) { agentPushMsg("assistant", "⚠ model error: ${e.message}"); break }
                     val obj = extractJsonObj(reply)
-                    if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) {
-                        val t = reply.trim().ifBlank { "(no reply)" }
-                        runOnUiThread { addAgentBubble(false, t) }; agentPushMsg("assistant", t); break
-                    }
-                    if (!obj.isNull("reply")) {
-                        val t = obj.optString("reply"); runOnUiThread { addAgentBubble(false, t) }; agentPushMsg("assistant", t); break
-                    }
+                    if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) { agentPushMsg("assistant", reply.trim().ifBlank { "(no reply)" }); break }
+                    if (!obj.isNull("reply")) { agentPushMsg("assistant", obj.optString("reply")); break }
                     val name = obj.optString("tool"); val args = obj.optJSONObject("args") ?: JSONObject()
                     agentPushMsg("assistant", JSONObject().put("tool", name).put("args", args).toString(), null)
                     var result = try { runAgentTool(name, args) } catch (e: Exception) { "{\"error\":${JSONObject.quote(e.message ?: "error")}}" }
                     if (result.length > 3500) result = result.take(3500) + "…"
-                    val fr = result
-                    runOnUiThread { addAgentTool(name, fr) }
-                    agentPushMsg("tool", fr, name)
+                    agentPushMsg("tool", result, name)
                     toolCalls++
                 }
-                if (toolCalls >= 12) runOnUiThread { addAgentBubble(false, "(stopped — too many steps in one turn; ask me to continue)") }
-            } finally { runOnUiThread { agentBusy = false; b.agentSend.isEnabled = true } }
+                if (toolCalls >= 12) agentPushMsg("assistant", "(stopped — too many steps in one turn; ask me to continue)")
+            } finally { runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
         }
     }
 
@@ -1483,52 +1127,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     // ---- Cluster panel --------------------------------------------------------------------------
 
-    private fun wireCluster() {
-        b.clusterUrl.setText(vm.clusterUrl)
-        b.signin.setOnClickListener {
-            vm.clusterUrl = b.clusterUrl.text.toString().trim()
-            val platform = if (vm.clusterUrl.contains("://ghost-browser."))
-                vm.clusterUrl.replace("://ghost-browser.", "://") else "https://my-app.engineer"
-            load(platform)
-            vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ → Fetch")
-        }
-        b.fetchProfiles.setOnClickListener {
-            val js = "fetch('/v1/profiles/presets',{credentials:'include'})" +
-                ".then(function(r){return r.text()})" +
-                ".then(function(t){GBHost.result('profiles',t)})" +
-                ".catch(function(e){GBHost.result('error',String(e))})"
-            web.evaluateJavascript(js, null)
-            vm.log("↑ fetching cluster profiles…")
-        }
-        b.cluster.setOnClickListener {
-            if (ctrlWeb != null) {
-                stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
-                try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
-            } else {
-                vm.clusterUrl = b.clusterUrl.text.toString().trim()
-                val cookies = cookiesFor(vm.clusterUrl)
-                if (cookies.isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return@setOnClickListener }
-                vm.clusterInfo.value = "Cluster: connecting…"; vm.log("→ connecting (control channel on the GB origin)…")
-                startControlWeb()
-                try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
-            }
-        }
-        b.tailscaleBtn.setOnClickListener {
-            val pkg = "com.tailscale.ipn"
-            val i = packageManager.getLaunchIntentForPackage(pkg)
-                ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
-            try { startActivity(i) } catch (e: Exception) { vm.log("! could not open Tailscale: ${e.message}") }
-        }
-        // Device Hub — the SAME page the cluster and laptop show. Opened in the main WebView on the GB
-        // origin, so it rides this profile's SSO cookie; the API key is added in the hash as a fallback.
-        b.hubBtn.setOnClickListener {
-            val base = vm.clusterUrl.trim().trimEnd('/')
-            if (base.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return@setOnClickListener }
-            val k = vm.apiKey.trim()
-            val url = base + "/hub" + (if (k.isNotEmpty()) "#key=" + k else "")
-            load(url)
-        }
-    }
+    /** Build the shell (browser/flows/agent) actions. */
+    private fun buildShellActions() = engineer.myapp.gbmobile.ui.ShellActions(
+        onUrlGo = { load(it) },
+        onHome = { load(HOME) },
+        onNewTab = { newTab() },
+        onOpenSwitcher = { syncTabs(); shellUi.switcherOpen.value = true },
+        onCloseSwitcher = { shellUi.switcherOpen.value = false },
+        onSelectTab = { i -> activateTab(i); shellUi.switcherOpen.value = false },
+        onCloseTab = { i -> closeTab(i) },
+        onNav = { s -> shellUi.screen.value = s; if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows") },
+        onOpenSettings = { openSettings() },
+        onOpenAgent = { openAgentChat() },
+        onCloseAgent = { shellUi.agentOpen.value = false },
+        onNewAgentChat = { newAgentChat() },
+        onSendAgent = { t -> sendAgentMessage(t) },
+        onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
+        onRunFlow = { id, name -> runFlow(id, name) },
+        onCreateFlow = { name, steps -> createFlow(name, steps) },
+        onLoadPlatforms = { loadPlatforms() },
+        onOpenPlatform = { prof, site -> openPlatform(prof, site) },
+    )
 
     // ---- S5 settings (Compose) ------------------------------------------------------------------
 
@@ -1636,6 +1255,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(); syncSettingsUi() },
         onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
         onLoadRoles = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list") } },
+        onLoadPlatforms = { loadPlatforms() },
+        onOpenPlatform = { prof, site -> openPlatform(prof, site) },
         onSetUseLocal = { vm.useLocal = it; settingsUi.useLocal.value = it },
         onSelectModelIndex = { i -> settingsUi.modelIndex.value = i; vm.selectedModel = ModelCatalog.models.getOrElse(i) { ModelCatalog.models[0] }.id; refreshSettingsModel() },
         onDownloadModel = { startModelDownload(settingsUi.modelIndex.value) },
@@ -1652,19 +1273,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     // ---- observers ------------------------------------------------------------------------------
 
     private fun observe() {
-        vm.logText.observe(this) { t -> b.log.text = t; b.logScroll.post { b.logScroll.fullScroll(View.FOCUS_DOWN) } }
         vm.clusterInfo.observe(this) { t ->
-            b.clusterStatus.text = t
-            b.cluster.text = if (vm.clusterOn.value == true) "Disconnect" else "Connect to cluster"
             settingsUi.clusterStatus.value = t
             settingsUi.connected.value = vm.clusterOn.value == true
+            shellUi.clusterOn.value = vm.clusterOn.value == true
         }
         vm.profiles.observe(this) { settingsUi.profiles.value = it ?: listOf("default") }
         vm.currentProfile.observe(this) {
             settingsUi.currentProfile.value = it ?: "default"
             settingsUi.roleForCurrent.value = roleForProfile(it ?: "default").ifBlank { "(none)" }
         }
-        vm.agentRunning.observe(this) { running -> b.run.isEnabled = !running }
     }
 
     // JS -> app bridge: injected page code hands results back here.
@@ -1738,11 +1356,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     vm.platformsJson = data   // persist so it survives relaunch
                     vm.log("↓ your platforms (${arr.length()}) — tap one to open & sign in on this phone")
                 } catch (e: Exception) {
-                    b.platformsHint.text = "sign in on the Cluster tab first"
+                    shellUi.flowsHint.value = "Sign in first (Settings → Account & sync)"
                     vm.log("! could not read platforms — sign in via the Cluster tab (SSO), then Load. ${data.take(80)}")
                 }
             }
-            "platforms_err" -> { b.platformsHint.text = "sign in on the Cluster tab first"; vm.log("! load platforms: ${data.take(140)}") }
+            "platforms_err" -> { vm.log("! load platforms: ${data.take(140)}") }
             "flows" -> {
                 try {
                     val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
@@ -1750,11 +1368,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     vm.flowsJson = data       // persist so it survives relaunch
                     vm.log("↓ automations (${arr.length()})")
                 } catch (e: Exception) {
-                    b.flowsHint.text = "sign in on the Cluster tab first"
+                    shellUi.flowsHint.value = "Sign in first (Settings → Account & sync)"
                     vm.log("! could not read automations — sign in via the Cluster tab (SSO), then Load. ${data.take(80)}")
                 }
             }
-            "flows_err" -> { b.flowsHint.text = "sign in on the Cluster tab first"; vm.log("! load automations: ${data.take(140)}") }
+            "flows_err" -> { shellUi.flowsHint.value = "Sign in first (Settings → Account & sync)"; vm.log("! load automations: ${data.take(140)}") }
             "flowrun" -> try {
                 val o = JSONObject(data); val runId = o.optString("runId")
                 vm.log("● automation started (run $runId) — ${o.optString("status", "running")}")
@@ -1843,7 +1461,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "flowcreate" -> try {
                 val o = JSONObject(data)
                 if (o.has("error")) vm.log("! create automation: ${o.optString("error")}")
-                else { vm.log("✓ automation created: ${o.optString("name", o.optString("id"))}"); b.flowName.setText(""); b.flowSteps.setText(""); apiCall("GET", "/v1/workflows", null, "flows") }
+                else { vm.log("✓ automation created: ${o.optString("name", o.optString("id"))}"); apiCall("GET", "/v1/workflows", null, "flows") }
             } catch (e: Exception) { vm.log("! create: ${data.take(160)}") }
             "flowcreate_err" -> vm.log("! create automation: ${data.take(140)}")
             "roles_list" -> try {
