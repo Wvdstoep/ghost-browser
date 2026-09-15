@@ -30,7 +30,21 @@ import javax.swing.SwingUtilities
  * The Ghost Browser desktop app — SAME design system + scaffold as the phone (from :shared), now with
  * real Chromium (JCEF) AND a control channel that lets the cluster/ring drive it as a node (S8).
  */
-fun main() = application {
+fun main() {
+    // Any startup crash (esp. in a packaged app with no console) lands here so we can read the reason.
+    Thread.setDefaultUncaughtExceptionHandler { _, e -> writeCrash(e) }
+    try { runApp() } catch (e: Throwable) { writeCrash(e); throw e }
+}
+
+private fun writeCrash(e: Throwable) {
+    try {
+        val f = File(System.getProperty("user.home"), ".ghostbrowser/error.log")
+        f.parentFile?.mkdirs()
+        f.appendText("[" + java.util.Date() + "] " + e.toString() + "\n" + e.stackTraceToString() + "\n\n")
+    } catch (_: Throwable) {}
+}
+
+private fun runApp() = application {
     var mainBrowser by remember { mutableStateOf<CefBrowser?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val state = remember { DesktopState() }
