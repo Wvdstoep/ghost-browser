@@ -12,6 +12,21 @@ function mountDeviceHub(app, authed) {
   const dev = (id) => devices.get(String(id || ""));
   const ownerOf = (req) => (req.client && req.client.owner) || "anon";
 
+  // S4: normalise a device's advertised capability record to a stable shape so the router can trust it.
+  const normCaps = (c) => {
+    c = c || {};
+    const arr = (v) => Array.isArray(v) ? [...new Set(v.map((x) => String(x)))].slice(0, 100) : [];
+    return {
+      platform: (c.platform === "android" || c.platform === "desktop" || c.platform === "cluster") ? c.platform : "",
+      mobileApp: !!c.mobileApp,   // native Android app: real touch events
+      cdp: !!c.cdp,               // Chrome DevTools: drag-interception + self-saving downloads (desktop node)
+      model: !!c.model,           // an on-device LLM is present (can run the agent locally)
+      realIp: !!c.realIp,         // has a residential/stealth exit IP
+      profiles: arr(c.profiles),  // browser profiles held locally
+      features: arr(c.features),  // named primitives, e.g. upload_file, drag_xy, native_tap
+    };
+  };
+
   // Per-device activity log (ring buffer) so the operator/master can watch what the phone is doing —
   // both the on-device agent's own runs and commands we drive. Kept small and in-memory.
   const pushLog = (d, line) => {
@@ -29,17 +44,73 @@ function mountDeviceHub(app, authed) {
     if (!d.log) { d.log = []; d.logSeq = 0; }
     d.name = (req.body && req.body.name) || d.name || id;
     d.owner = ownerOf(req);
+    // S4: capability registry — the device advertises what it can DO so Auto/the ring can route to it
+    // instead of guessing. Merge (a device may re-register with a partial caps patch, e.g. profiles only).
+    if (req.body && req.body.caps && typeof req.body.caps === "object") {
+      d.caps = normCaps(Object.assign({}, d.caps || {}, req.body.caps));
+    } else if (!d.caps) {
+      d.caps = normCaps({});
+    }
     d.lastSeen = Date.now();
     devices.set(id, d);
-    res.json({ ok: true, deviceId: id });
+    res.json({ ok: true, deviceId: id, caps: d.caps });
   });
 
   app.get("/v1/device/list", authed, (_req, res) => {
     const now = Date.now();
     res.json({ devices: [...devices.entries()].map(([id, d]) => ({
       deviceId: id, name: d.name, owner: d.owner, queued: d.queue.length,
-      lastSeen: d.lastSeen, online: (now - d.lastSeen) < 40000,
+      lastSeen: d.lastSeen, online: (now - d.lastSeen) < 40000, caps: d.caps || normCaps({}),
     })) });
+  });
+
+  // S4: given a run's requirements, pick the device that can actually do it (not a guess). The device
+  // ring reads this; when nothing qualifies it returns deviceId:null so the caller falls back to the
+  // cluster. Body: { require:{ mobileApp?, cdp?, model?, realIp?, platform?, profile?, features?:[] },
+  //                   prefer?:{ profile?, model?, platform? } }. Scored, owner-scoped, online only.
+  app.post("/v1/device/route", authed, (req, res) => {
+    const now = Date.now();
+    const owner = ownerOf(req);
+    const b = req.body || {};
+    const need = b.require || {};
+    const prefer = b.prefer || {};
+    const online = [...devices.entries()]
+      .map(([id, d]) => ({ id, d }))
+      .filter(({ d }) => d.owner === owner && (now - d.lastSeen) < 40000)
+      .map(({ id, d }) => ({ id, name: d.name, caps: d.caps || normCaps({}), lastSeen: d.lastSeen }));
+
+    const misses = (c) => {
+      const m = [];
+      for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (need[k] && !c.caps[k]) m.push(k);
+      if (need.platform && c.caps.platform !== need.platform) m.push("platform:" + need.platform);
+      if (need.profile && !(c.caps.profiles || []).includes(need.profile)) m.push("profile:" + need.profile);
+      for (const f of (need.features || [])) if (!(c.caps.features || []).includes(f)) m.push("feature:" + f);
+      return m;
+    };
+    const score = (c) => {
+      let s = 0;
+      if (prefer.profile && (c.caps.profiles || []).includes(prefer.profile)) s += 3;
+      if (prefer.model && c.caps.model) s += 2;
+      if (prefer.platform && c.caps.platform === prefer.platform) s += 2;
+      if (c.caps.model) s += 1;         // a device that can run the agent itself beats one that can't
+      if (c.caps.realIp) s += 1;        // stealth exit is generally desirable
+      s += Math.min(1, c.lastSeen / (now + 1)); // freshest as a tiebreak (0..1)
+      return s;
+    };
+
+    const candidates = online
+      .map((c) => ({ deviceId: c.id, name: c.name, caps: c.caps, misses: misses(c), score: score(c) }))
+      .sort((a, b2) => b2.score - a.score);
+    const eligible = candidates.filter((c) => c.misses.length === 0);
+    const pick = eligible[0] || null;
+    res.json({
+      deviceId: pick ? pick.deviceId : null,
+      name: pick ? pick.name : null,
+      reason: pick
+        ? `matched ${pick.name} (score ${pick.score.toFixed(2)})`
+        : (online.length ? "no online device meets the requirements → use cluster" : "no online devices → use cluster"),
+      candidates,
+    });
   });
 
   // The device long-polls this: returns the next command immediately, or holds ~25s then 204.
