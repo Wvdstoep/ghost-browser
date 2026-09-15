@@ -8,3 +8,4 @@ local.properties
 captures/
 .DS_Store
 # NOTE: gradle/wrapper/gradle-wrapper.jar IS committed on purpose (needed to build).
+desktop/build/
