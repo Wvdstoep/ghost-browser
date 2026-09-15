@@ -294,6 +294,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
         w.webViewClient = object : WebViewClient() {
+            // Non-http(s) links (app deep links) crash a WebView with ERR_UNKNOWN_URL_SCHEME. Keep the
+            // user inside GB (real logged-in session): rewrite Messenger/app deep links to their web
+            // page, and hand any other scheme to Android — never let the WebView show the broken page.
+            override fun shouldOverrideUrlLoading(view: WebView?, req: android.webkit.WebResourceRequest?): Boolean {
+                val u = req?.url?.toString() ?: return false
+                if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:") ||
+                    u.startsWith("about:") || u.startsWith("javascript:") || u.startsWith("data:")) return false
+                if (u.startsWith("fb-messenger://") || u.startsWith("messenger://")) {
+                    view?.loadUrl(mobileFbUrl("https://www.facebook.com/messages/")); return true   // web Messenger, same session
+                }
+                if (u.startsWith("fb://") || u.startsWith("intent://") && u.contains("facebook")) {
+                    view?.loadUrl(mobileFbUrl("https://www.facebook.com/")); return true
+                }
+                return try {   // tel:, mailto:, whatsapp:, market:, intent:… → let Android handle it, or swallow
+                    val intent = if (u.startsWith("intent:")) Intent.parseUri(u, Intent.URI_INTENT_SCHEME) else Intent(Intent.ACTION_VIEW, Uri.parse(u))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent); true
+                } catch (e: Exception) { true }
+            }
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 h.url = url ?: h.url
                 if (isActive(h)) { lastUrl = h.url; shellUi.url.value = if (h.url == HOME) "" else h.url }
