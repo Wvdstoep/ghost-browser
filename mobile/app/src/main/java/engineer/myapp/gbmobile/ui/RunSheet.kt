@@ -36,6 +36,7 @@ fun RunSheet(
     status: String,
     goalInitial: String,
     onRun: (targetId: String, goal: String) -> Unit,
+    onStop: () -> Unit,
     onClose: () -> Unit,
 ) {
     if (!visible) return
@@ -108,6 +109,13 @@ fun RunSheet(
                     Text(status.ifBlank { if (phase == "running") "Working…" else "Done." },
                         style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                     Spacer(Modifier.height(18.dp))
+                    if (phase == "running") {
+                        OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(12.dp)) {
+                            Text("Stop", style = MaterialTheme.typography.labelLarge, color = cs.error)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
                     if (phase == "done") {
                         Button(onClick = onClose, modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(12.dp),
