@@ -115,6 +115,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         status = runStatus.value,
                         goalInitial = "",
                         onRun = { target, goal -> onRunTarget(target, goal) },
+                        onStop = { onRunStop() },
                         onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
                     )
                 }
@@ -966,28 +967,48 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             return
         }
         val goals = ArrayList<Pair<String, String>>()   // label -> goal
-        if (goal.isNotBlank()) goals.add("goal" to goal)
-        else try {
+        var profile = ""
+        try {
             val flows = JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()
             var wf: JSONObject? = null
             for (i in 0 until flows.length()) { val w = flows.optJSONObject(i); if (w?.optString("id") == flowId) { wf = w; break } }
             val nodes = wf?.optJSONArray("nodes") ?: JSONArray()
             for (i in 0 until nodes.length()) {
                 val nn = nodes.optJSONObject(i) ?: continue
-                if (nn.optString("type") == "agent") { val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(nn.optString("label", "step ${goals.size + 1}") to g) }
+                if (nn.optString("type") == "agent") {
+                    if (profile.isBlank()) profile = nn.optString("profile")
+                    if (goal.isBlank()) { val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(nn.optString("label", "step ${goals.size + 1}") to g) }
+                }
             }
         } catch (e: Exception) { }
+        if (goal.isNotBlank()) { goals.clear(); goals.add("goal" to goal) }
         if (goals.isEmpty()) { runPhase.value = "done"; runStatus.value = "Nothing to run — add a goal, or load the flow first."; return }
-        runStatus.value = "Running on this phone (0/${goals.size})…"
+
+        // The flow's profile decides WHERE the run starts. On the cluster the engine opens that profile's
+        // site automatically; on-device we must navigate there first, or a weak local model just operates
+        // whatever tab is open (the empty home page) and loops.
+        val startSite = when {
+            profile.contains("facebook", true) -> "https://www.facebook.com/"
+            profile.contains("messenger", true) -> "https://www.facebook.com/messages/"
+            profile.contains("linkedin", true) -> "https://www.linkedin.com/feed/"
+            profile.contains("instagram", true) -> "https://www.instagram.com/"
+            else -> ""
+        }
+        val host = if (startSite.isNotBlank()) (try { Uri.parse(startSite).host ?: "" } catch (e: Exception) { "" }) else ""
+        runStatus.value = if (startSite.isNotBlank()) "Opening $host…" else "Starting on this phone…"
         vm.log("▶ running \"${runFlowName.value}\" ON THIS PHONE (on-device engine, real IP) — ${goals.size} step(s)")
         agentStop = false
         agentThread = Thread {
+            if (startSite.isNotBlank() && !agentStop) {
+                try { runOnUiThread { navigate(startSite) }; Thread.sleep(4500) } catch (e: Exception) { }
+            }
             var i = 0
             for ((label, g) in goals) {
                 if (agentStop) break
                 i++
                 runOnUiThread { runStatus.value = "This phone · step $i/${goals.size}: $label" }
-                try { Agent(this, brain, { m -> runOnUiThread { vm.log(m) } }, { agentStop }).run(g) }
+                val ctx = if (host.isNotBlank()) "You are already on $host — do NOT open any home page; work from here. " else ""
+                try { Agent(this, brain, { m -> runOnUiThread { vm.log(m) } }, { agentStop }).run(ctx + g) }
                 catch (e: Exception) { runOnUiThread { vm.log("! step $i failed: ${e.message}") } }
             }
             runOnUiThread {
@@ -995,6 +1016,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 runStatus.value = if (agentStop) "Stopped." else "Done on this phone — ran ${goals.size} step(s). See the log for what it did."
             }
         }.also { it.start() }
+    }
+
+    /** Cancel a running on-device flow — the agent loop checks this flag between steps. */
+    private fun onRunStop() {
+        agentStop = true
+        runStatus.value = "Stopping…"
     }
 
     private fun createFlow() {
