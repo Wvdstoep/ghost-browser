@@ -1231,7 +1231,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         refreshSettingsModel()
         settingsUi.endpoint = vm.endpoint; settingsUi.apiKey = vm.apiKey; settingsUi.ollamaModel = vm.model; settingsUi.hfToken = vm.hfToken
         settingsUi.themeMode.value = vm.themeMode
-        settingsUi.flowCount.value = try { JSONObject(vm.flowsJson).optJSONArray("workflows")?.length() ?: 0 } catch (e: Exception) { 0 }
         settingsUi.devices.value = runDevices.value
     }
 
@@ -1306,11 +1305,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onRefreshDevices = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
         onOpenTailscale = { doOpenTailscale() },
         onSetTheme = { m -> vm.themeMode = m; settingsUi.themeMode.value = m },
+        onClearLog = { vm.clearLog() },
     )
 
     // ---- observers ------------------------------------------------------------------------------
 
     private fun observe() {
+        vm.logText.observe(this) { t -> settingsUi.log.value = t ?: "" }
         vm.clusterInfo.observe(this) { t ->
             settingsUi.clusterStatus.value = t
             settingsUi.connected.value = vm.clusterOn.value == true
