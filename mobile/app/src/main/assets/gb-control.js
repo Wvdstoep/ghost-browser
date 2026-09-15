@@ -11,6 +11,16 @@
   // S4: capability record — what this phone can do, so the cluster router can pick it for the right runs.
   var CAPS = __CAPS__;
 
+  // Same-origin authed cluster API over THIS (connected) session — so flows/devices/platforms load
+  // with the exact SSO session the control channel registered with, not a separate WebView on a
+  // possibly-different browser profile. Result comes back to the app as GBHost.result(tag, text).
+  window.__gbApi = function (m, p, b, t) {
+    var o = { method: m, credentials: 'include', headers: { 'Content-Type': 'application/json' } };
+    if (b) o.body = b;
+    fetch(p, o).then(function (r) { return r.text() }).then(function (x) { GBHost.result(t, x) })
+      .catch(function (e) { GBHost.result(t + '_err', String(e)) });
+  };
+
   window.__gbResult = function (id, status, bodyStr) {
     fetch('/v1/device/result', {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },

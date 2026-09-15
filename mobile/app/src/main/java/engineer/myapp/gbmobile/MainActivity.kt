@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var agentThread: Thread? = null
     @Volatile private var agentStop: Boolean = false
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
+    @Volatile private var ctrlApiReady = false           // control channel's __gbApi is live (registered)
     private var apiWeb: WebView? = null                  // hidden WebView on the GB origin = same-origin authed API channel
     @Volatile private var apiReady = false
     private val apiQueue = mutableListOf<() -> Unit>()
@@ -564,14 +565,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     /** Call the GB API over the SSO session; the response text comes back to onBridge as [tag]
-     *  (or [tag]_err on failure). */
+     *  (or [tag]_err on failure). Prefers the CONNECTED control channel (ctrlWeb) — it holds the exact
+     *  session that registered this device — so cluster reads never depend on the active browsing
+     *  profile. Falls back to the dedicated apiWeb when the control channel isn't connected. */
     private fun apiCall(method: String, path: String, body: String?, tag: String) {
-        ensureApiWeb()
-        val call: () -> Unit = {
-            val bodyJs = if (body == null) "null" else JSONObject.quote(body)
-            apiWeb?.evaluateJavascript("window.__gbApi(" + JSONObject.quote(method) + "," + JSONObject.quote(path) + "," + bodyJs + "," + JSONObject.quote(tag) + ")", null)
-            Unit
+        val js = "window.__gbApi(" + JSONObject.quote(method) + "," + JSONObject.quote(path) + "," +
+            (if (body == null) "null" else JSONObject.quote(body)) + "," + JSONObject.quote(tag) + ")"
+        if (ctrlWeb != null && ctrlApiReady) {
+            runOnUiThread { ctrlWeb?.evaluateJavascript(js, null) }
+            return
         }
+        ensureApiWeb()
+        val call: () -> Unit = { apiWeb?.evaluateJavascript(js, null); Unit }
         if (apiReady && apiWeb != null) call() else apiQueue.add(call)
     }
 
@@ -1350,7 +1355,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         @JavascriptInterface
         fun ctl(tag: String, data: String) = runOnUiThread {
             when (tag) {
-                "registered" -> { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"; vm.log("● registered with the cluster — waiting for commands") }
+                "registered" -> {
+                    vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"
+                    vm.log("● registered with the cluster — waiting for commands")
+                    ctrlApiReady = true                 // the control session can now serve cluster reads
+                    autoSyncSharedData()                // pull flows/platforms/roles over the connected session
+                    apiCall("GET", "/v1/device/list", null, "run_devices")
+                }
                 "regfail" -> vm.log("! register failed (in-webview): $data — reopen GB from the platform Tools")
                 "pollerr" -> vm.log("… poll: $data")
             }
@@ -1596,6 +1607,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun stopControlWeb() {
         vm.logSink = null
+        ctrlApiReady = false
         ctrlWeb?.let { cw -> try { (cw.parent as? ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
         ctrlWeb = null
     }
