@@ -204,9 +204,22 @@ async function execPath(wv, path, body) {
         out = JSON.stringify({ ok: true, from: [fx, fy], to: [tx, ty], mode: 'pointer' })
       }
     }
+    else if (path === '/v1/hover') {
+      // Move the real pointer over (x,y) and LEAVE it there — a genuine input event, so React
+      // hover state (onMouseEnter) fires and hover-only affordances render: CapCut's media cards
+      // show their "+ add to timeline" button only under a real hovering pointer, never for a
+      // synthetic DOM event. Hover, then screenshot to find the "+", then click_xy it.
+      const x = body.x | 0, y = body.y | 0
+      wv.sendInputEvent({ type: 'mouseMove', x, y })
+      out = JSON.stringify({ ok: true, x, y })
+    }
     else if (path === '/v1/click_xy') {
       const x = body.x | 0, y = body.y | 0, cc = body.clickCount || 1
+      // Optional hover-then-click: rest the pointer first (hoverMs) so a hover-revealed control is
+      // actually present when the press lands — e.g. clicking a CapCut media card's "+" that only
+      // exists while hovered. Without it a bare click on such a card does nothing.
       wv.sendInputEvent({ type: 'mouseMove', x, y })
+      if (body.hoverMs) await sleep(Math.min(Number(body.hoverMs) || 0, 3000))
       wv.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: cc })
       wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc })
       out = JSON.stringify({ ok: true, x, y })
@@ -390,8 +403,9 @@ function renderFlows(arr) {
     row.querySelector('.t').textContent = w.name || w.id
     row.querySelector('.s').textContent = steps + ' steps · ' + (w.runs ? w.runs + ' runs, last ' + (w.lastRunStatus || '?') : 'never run') + proof
     const hist = document.createElement('button'); hist.className = 'btn out'; hist.textContent = 'History'; hist.onclick = () => showHistory(w.id, w.name || w.id)
+    const here = document.createElement('button'); here.className = 'btn out'; here.textContent = 'Run here'; here.onclick = () => runFlowHere(w.id, w.name || w.id)
     const b = document.createElement('button'); b.className = 'btn out'; b.textContent = 'Run'; b.onclick = () => runFlow(w.id, w.name || w.id)
-    row.appendChild(hist); row.appendChild(b)
+    row.appendChild(hist); row.appendChild(here); row.appendChild(b)
     c.appendChild(row)
   })
 }
@@ -411,6 +425,63 @@ function runOutcomeText(run) {
   if (verifies.length) return verifies.every((s) => s.output && s.output.found) ? '· verified ✓' : '· could not confirm'
   return ''
 }
+// ---------- S2: local flow engine — run a flow HERE on this desktop node (real Chromium, home IP) ----------
+// Headless agent loop: the chat agent's loop without the UI. Runs ONE goal via the model + TOOLS,
+// streams lines to onLog, returns {ok, reply}. Reused per flow node by runFlowHere.
+async function runGoalHeadless(goal, sysExtra, onLog, isStopped, maxTools) {
+  const cfg = agCfg()
+  if (!cfg.endpoint) return { ok: false, reply: 'no model endpoint set (Agent settings)' }
+  const convo = [{ role: 'system', content: (sysExtra ? sysExtra + '\n\n' : '') + agentSystemPrompt() }, { role: 'user', content: goal }]
+  let calls = 0
+  while (calls < (maxTools || 14)) {
+    if (isStopped && isStopped()) return { ok: false, reply: 'stopped' }
+    const resp = await G.llm({ endpoint: cfg.endpoint, key: cfg.key, model: cfg.model, messages: convo, temperature: 0.3 })
+    if (!resp.ok) { onLog('model error: ' + resp.error); return { ok: false, reply: resp.error } }
+    const obj = extractJson(resp.text)
+    if (!obj || (obj.reply == null && !obj.tool)) { const t = (resp.text || '').trim() || '(no reply)'; onLog(t); return { ok: true, reply: t } }
+    if (obj.reply != null) { onLog(String(obj.reply)); return { ok: true, reply: String(obj.reply) } }
+    const nm = obj.tool, args = obj.args || {}
+    convo.push({ role: 'assistant', content: JSON.stringify({ tool: nm, args }) })
+    onLog('⚙ ' + nm + ' ' + JSON.stringify(args).slice(0, 80)); calls++
+    let result
+    try { result = TOOLS[nm] ? await TOOLS[nm].run(args) : { error: 'unknown tool: ' + nm } }
+    catch (e) { result = { error: String(e) } }
+    convo.push({ role: 'user', content: 'TOOL RESULT (' + nm + '): ' + JSON.stringify(result).slice(0, 2000) })
+  }
+  return { ok: true, reply: 'reached step limit' }
+}
+
+let flowHereBusy = false
+// Run a flow LOCALLY on this desktop: CODE opens the flow's profile + site (the agent never navigates),
+// then runs each agent node's goal via the headless loop, and journals the run to the SHARED history
+// (POST /v1/device-runs) so it shows up everywhere — same shape as a phone on-device run (S1).
+async function runFlowHere(id, name) {
+  if (flowHereBusy) { log('· a local run is already going'); return }
+  const wf = flowsArr().find((w) => w.id === id); if (!wf) { log('! flow not loaded — Load automations first'); return }
+  if (!agCfg().endpoint) { log('! set a model endpoint first (Agent settings) to run on this device'); return }
+  const nodes = (wf.nodes || []).filter((n) => n.type === 'agent')
+  const profile = (nodes[0] && nodes[0].profile) || ''
+  const goals = nodes.map((n) => ({ goal: n.goal || '', role: n.role || '' })).filter((g) => g.goal)
+  if (!goals.length) { log('! this flow has no agent steps'); return }
+  const site = /facebook/i.test(profile) ? 'https://www.facebook.com/' : /messenger/i.test(profile) ? 'https://www.facebook.com/messages/' : /linkedin/i.test(profile) ? 'https://www.linkedin.com/feed/' : /instagram/i.test(profile) ? 'https://www.instagram.com/' : ''
+  let host = ''; try { host = site ? new URL(site).host : '' } catch (e) {}
+  flowHereBusy = true
+  const started = Date.now(); const journal = []
+  const onLog = (m) => { journal.push(m); log(m) }
+  log('▶ running "' + name + '" ON THIS DESKTOP (real Chromium, home IP) — ' + goals.length + ' step(s)')
+  try {
+    if (site) { if (profile) { currentProfile = profile; LS.set('profile', profile); renderChips() } newTab(site); await sleep(5000) }
+    for (const g of goals) {
+      const sys = (g.role ? 'ROLE: act as "' + g.role + '" — ' + (roleDescription(g.role) || g.role) + '\n' : '') + (host ? 'You are already on ' + host + ' — do NOT open any home page; work from here.' : '')
+      await runGoalHeadless(g.goal, sys, onLog, () => false, 16)
+    }
+    const rec = { deviceName: (G.deviceName || 'Desktop'), deviceId: (G.deviceId || ''), target: 'local', flowId: id, flowName: name, goal: goals.map((g) => g.goal).join(' | '), outcome: 'done', status: 'done', startedAt: started, endedAt: Date.now(), steps: journal.slice(-200).map((l) => ({ line: l })) }
+    await apiJson('POST', '/v1/device-runs', JSON.stringify(rec))
+    log('✓ "' + name + '" done on this desktop — journaled to shared history')
+  } catch (e) { log('! local run: ' + String(e)) }
+  finally { flowHereBusy = false }
+}
+
 /** Fire the run, then POLL its status so "Run" closes the loop instead of firing blind — the same
  *  outcome semantics (done/error, verified/unconfirmed) the console itself uses. */
 async function runFlow(id, name) {
