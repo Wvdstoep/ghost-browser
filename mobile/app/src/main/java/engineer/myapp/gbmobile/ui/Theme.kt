@@ -13,49 +13,72 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * GB design system — the single source of brand style for every new (Compose) screen.
- * ONE green accent (#3fb950) on dark ink, calm spacing, no gradients/glow. This is the toolkit-level
- * home the whole UX overhaul (run sheet, settings, results) is built on.
+ * GB design system — one brand blue (#0B5FFF, the launcher-icon colour) on clean, near-neutral greys.
+ * Chrome-tight, calm, no gradients. Theme is Dark or Light only (no "system"). Every new screen reads
+ * its colours from MaterialTheme.colorScheme; the [Brand]/[BrandOn]/[BrandSoft] tokens below name the
+ * accent for the few places that want it directly.
  */
 
-val GbGreen = Color(0xFF3FB950)
-val GbGreenDim = Color(0xFF2B7D38)
-val GbGreenGhost = Color(0x1A3FB950)
+val Brand = Color(0xFF0B5FFF)          // the icon blue — buttons, FAB, selection
+val BrandOnDark = Color(0xFF7EA8FF)    // lightened accent for text/icons on dark surfaces
+val BrandOn = Color(0xFFFFFFFF)        // text/icon ON a brand-filled surface
+val BrandSoft = Color(0x1F0B5FFF)      // translucent brand fill (selected chips/rows)
 
-private val Ink = Color(0xFFE8F0EA)
-private val Muted = Color(0xFF93A79A)
-private val Bg = Color(0xFF0B0F0D)
-private val Surface = Color(0xFF121A16)
-private val SurfaceHi = Color(0xFF16211B)
-private val Line = Color(0xFF1F2C25)
+// Back-compat aliases (older screens reference these names).
+val GbGreen = Brand
+val GbGreenDim = Color(0xFF0A4FD6)
+val GbGreenGhost = BrandSoft
+
+// ── dark (default) — Chrome-like near-black ──
+private val DBg = Color(0xFF16171A)
+private val DSurface = Color(0xFF1F2024)
+private val DSurfaceHi = Color(0xFF292A2E)
+private val DText = Color(0xFFE6E7EA)
+private val DMuted = Color(0xFF9AA0A6)
+private val DLine = Color(0xFF34363B)
 
 private val GbDark = darkColorScheme(
-    primary = GbGreen,
-    onPrimary = Color(0xFF04140A),
-    primaryContainer = GbGreenDim,
-    onPrimaryContainer = Ink,
-    secondary = GbGreen,
-    background = Bg,
-    onBackground = Ink,
-    surface = Surface,
-    onSurface = Ink,
-    surfaceVariant = SurfaceHi,
-    onSurfaceVariant = Muted,
-    outline = Line,
-    outlineVariant = Line,
-    error = Color(0xFFE06C75),
+    primary = Brand,
+    onPrimary = BrandOn,
+    primaryContainer = Brand,
+    onPrimaryContainer = BrandOn,
+    secondary = BrandOnDark,
+    onSecondary = BrandOn,
+    background = DBg,
+    onBackground = DText,
+    surface = DSurface,
+    onSurface = DText,
+    surfaceVariant = DSurfaceHi,
+    onSurfaceVariant = DMuted,
+    outline = DLine,
+    outlineVariant = DLine,
+    error = Color(0xFFF2857D),
 )
 
+// ── light — clean white + brand blue ──
+private val LBg = Color(0xFFFFFFFF)
+private val LSurface = Color(0xFFF4F6FA)
+private val LSurfaceHi = Color(0xFFE9EDF4)
+private val LText = Color(0xFF16171A)
+private val LMuted = Color(0xFF5F6368)
+private val LLine = Color(0xFFDCE0E8)
+
 private val GbLight = lightColorScheme(
-    primary = GbGreenDim,
-    onPrimary = Color.White,
-    background = Color(0xFFF4F7F5),
-    onBackground = Color(0xFF0B0F0D),
-    surface = Color.White,
-    onSurface = Color(0xFF0B0F0D),
-    surfaceVariant = Color(0xFFE6EDE8),
-    onSurfaceVariant = Color(0xFF4B5A51),
-    outline = Color(0xFFD0DAD3),
+    primary = Brand,
+    onPrimary = BrandOn,
+    primaryContainer = Brand,
+    onPrimaryContainer = BrandOn,
+    secondary = Brand,
+    onSecondary = BrandOn,
+    background = LBg,
+    onBackground = LText,
+    surface = LSurface,
+    onSurface = LText,
+    surfaceVariant = LSurfaceHi,
+    onSurfaceVariant = LMuted,
+    outline = LLine,
+    outlineVariant = LLine,
+    error = Color(0xFFC5372C),
 )
 
 private val GbType = Typography(
@@ -66,6 +89,10 @@ private val GbType = Typography(
     labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 14.sp),
     labelSmall = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
 )
+
+/** The accent to use for text/icons on the current theme's surfaces (lighter on dark for contrast). */
+@Composable
+fun accentOn(dark: Boolean): Color = if (dark) BrandOnDark else Brand
 
 @Composable
 fun GbTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
