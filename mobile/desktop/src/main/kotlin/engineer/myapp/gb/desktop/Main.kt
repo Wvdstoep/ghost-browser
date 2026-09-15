@@ -75,7 +75,7 @@ private fun runApp() = application {
     }
 
     Window(onCloseRequest = ::exitApplication, title = "Ghost Browser", state = rememberWindowState(width = 1200.dp, height = 820.dp)) {
-        GbTheme(dark = true) { DesktopShell(mainBrowser, error, state) }
+        GbTheme(dark = state.dark.value) { DesktopShell(mainBrowser, error, state) }
     }
 }
 
@@ -93,12 +93,7 @@ private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: Deskto
             "browser" -> JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
             "flows" -> FlowsScreenD(state)
             "devices" -> DeviceHubScreenD(state)
-            "settings" -> Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 20.dp, vertical = 8.dp)) {
-                    TextButton(onClick = { screen = "devices" }) { Text("Open Device Hub") }
-                }
-                SettingsScreenD(state, openUrl)
-            }
+            "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
             else -> Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(56.dp).background(Brand, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 34.sp) }
