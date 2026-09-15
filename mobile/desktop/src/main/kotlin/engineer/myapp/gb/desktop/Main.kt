@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,7 +33,7 @@ import javax.swing.SwingUtilities
 fun main() = application {
     var mainBrowser by remember { mutableStateOf<CefBrowser?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var nodeStatus by remember { mutableStateOf("node: connecting…") }
+    val state = remember { DesktopState() }
 
     LaunchedEffect(Unit) {
         try {
@@ -55,48 +56,49 @@ fun main() = application {
             Cluster.clusterUrl = clusterUrl
             val gbJs = readResourceText("/gb.js")
             withContext(Dispatchers.IO) { Thread.sleep(1500) }
-            DesktopNode(mb, deviceId(), hostName(), gbJs) { line ->
-                println(line); nodeStatus = line
-            }.start()
+            DesktopNode(mb, deviceId(), hostName(), gbJs) { line -> println(line); state.log(line) }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
     }
 
     Window(onCloseRequest = ::exitApplication, title = "Ghost Browser", state = rememberWindowState(width = 1200.dp, height = 820.dp)) {
-        GbTheme(dark = true) { DesktopShell(mainBrowser, error, nodeStatus) }
+        GbTheme(dark = true) { DesktopShell(mainBrowser, error, state) }
     }
 }
 
 @Composable
-private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, nodeStatus: String) {
+private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: DesktopState) {
     val cs = MaterialTheme.colorScheme
     var screen by remember { mutableStateOf("browser") }
+    val openUrl: (String) -> Unit = { u -> mainBrowser?.loadURL(u); screen = "browser" }
     GbScaffold(
-        host = if (screen == "browser") "my-app.engineer" else "",
-        tabCount = 1, selected = screen,
+        host = if (screen == "browser") (mainBrowser?.url?.let { hostOf(it) } ?: "my-app.engineer") else "",
+        tabCount = 1, selected = if (screen == "devices") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
     ) {
-        if (screen == "browser") {
-            JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
-        } else Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(56.dp).background(Brand, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
-                    Text("G", color = BrandOn, fontSize = 34.sp)
+        when (screen) {
+            "browser" -> JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
+            "flows" -> FlowsScreenD(state)
+            "devices" -> DeviceHubScreenD(state)
+            "settings" -> Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 20.dp, vertical = 8.dp)) {
+                    TextButton(onClick = { screen = "devices" }) { Text("Open Device Hub") }
                 }
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    when (screen) {
-                        "agent" -> "Agent — shared with the phone (wires up next)"
-                        "flows" -> "Flows — shared with the phone (wires up next)"
-                        else -> "Settings — shared with the phone (wires up next)"
-                    },
-                    color = cs.onSurfaceVariant, fontSize = 15.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(nodeStatus, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                SettingsScreenD(state, openUrl)
+            }
+            else -> Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(56.dp).background(Brand, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 34.sp) }
+                    Spacer(Modifier.height(16.dp))
+                    Text("Agent chat lands next (LLM tool loop, drives this browser).", color = cs.onSurfaceVariant, fontSize = 15.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(state.nodeStatus.value, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                }
             }
         }
     }
 }
+
+private fun hostOf(url: String): String = try { java.net.URI(url).host?.removePrefix("www.") ?: url } catch (e: Exception) { url }
 
 private fun readResourceText(path: String): String =
     object {}.javaClass.getResourceAsStream(path)?.bufferedReader()?.use { it.readText() } ?: ""
