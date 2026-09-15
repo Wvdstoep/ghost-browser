@@ -47,6 +47,7 @@ data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: S
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
 data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)
+data class LearnItem(val slug: String, val title: String, val description: String)
 
 /** Reactive shell state the Activity keeps in sync. */
 class ShellUi {
@@ -70,6 +71,9 @@ class ShellUi {
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
+    // new-tab home feed (my-app.engineer /learn pages)
+    val homeFeed = mutableStateOf<List<LearnItem>>(emptyList())
+    val homeFeedLoading = mutableStateOf(false)
 }
 
 class ShellActions(
@@ -93,6 +97,8 @@ class ShellActions(
     val onCreateFlow: (String, String) -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
+    val onOpenLearn: (String) -> Unit,
+    val onRefreshHome: () -> Unit,
     // overflow menu / browser actions
     val onOpenMenu: () -> Unit,
     val onCloseMenu: () -> Unit,
@@ -135,6 +141,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                     "agent" -> AgentChat(shell, act)
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
                     "devices" -> DeviceHubScreen(shell, act)
+                    else -> if (shell.url.value.isBlank()) HomePage(shell, act)   // new/blank tab → native home
                 }
             }
             BottomBar(shell, act)
@@ -216,6 +223,88 @@ private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean
             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
     )
+}
+
+/* ── New-tab home (Google-style; feed = my-app /learn) ───────────────────────────────────────── */
+
+@Composable
+private fun HomePage(shell: ShellUi, act: ShellActions) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(48.dp))
+        // brand wordmark
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(Brand), contentAlignment = Alignment.Center) {
+                Text("G", color = BrandOn, fontSize = 24.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+            Spacer(Modifier.width(12.dp))
+            Row {
+                Text("Ghost", color = cs.onBackground, fontSize = 30.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text("Browser", color = Brand, fontSize = 30.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            }
+        }
+        Spacer(Modifier.height(26.dp))
+        // search pill (opens the omnibox)
+        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(26.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(52.dp).clickable { act.onFocusUrl() }) {
+            Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(14.dp))
+                Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 16.sp)
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        // platform shortcuts
+        if (shell.platforms.value.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                shell.platforms.value.take(12).forEach { p ->
+                    Column(Modifier.width(76.dp).clickable { act.onOpenPlatform(p.profile, p.site) }.padding(vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.size(50.dp).clip(CircleShape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
+                            Text(p.label.take(1).uppercase(), color = Brand, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(p.label, color = cs.onSurface, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+        }
+        // Learn feed
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("From my-app.engineer", color = cs.onSurfaceVariant, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (shell.homeFeedLoading.value) CircularProgressIndicator(Modifier.size(16.dp), color = Brand, strokeWidth = 2.dp)
+            else IconButton(onClick = act.onRefreshHome) { Icon(Icons.Default.Refresh, "Refresh", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (shell.homeFeed.value.isEmpty() && !shell.homeFeedLoading.value) {
+            Text("No articles yet.", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
+        } else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            shell.homeFeed.value.forEach { it2 -> LearnCard(it2) { act.onOpenLearn(it2.slug) } }
+        }
+        Spacer(Modifier.height(28.dp))
+    }
+}
+
+@Composable
+private fun LearnCard(item: LearnItem, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline),
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
+        Column(Modifier.padding(16.dp)) {
+            Text(item.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, lineHeight = 21.sp)
+            if (item.description.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(item.description, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(16.dp).clip(CircleShape).background(Brand), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 9.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }
+                Spacer(Modifier.width(8.dp))
+                Text("my-app.engineer · Learn", color = cs.onSurfaceVariant, fontSize = 11.sp)
+            }
+        }
+    }
 }
 
 /* ── Omnibox (focused URL, Chrome-style) ─────────────────────────────────────────────────────── */

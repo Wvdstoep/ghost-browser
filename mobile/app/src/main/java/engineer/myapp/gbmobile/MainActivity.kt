@@ -159,6 +159,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
         renderRoleSpinner()
         observe()
+        fetchLearnFeed()   // new-tab home feed (my-app.engineer /learn)
 
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -1143,6 +1144,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onCreateFlow = { name, steps -> createFlow(name, steps) },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
+        onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
+        onRefreshHome = { fetchLearnFeed() },
         onOpenMenu = { shellUi.desktopMode.value = tabs.getOrNull(activeTab)?.desktop == true; shellUi.menuOpen.value = true },
         onCloseMenu = { shellUi.menuOpen.value = false },
         onBack = { if (this::web.isInitialized && web.canGoBack()) web.goBack() },
@@ -1156,6 +1159,30 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onOpenAiSettings = { syncSettingsUi(); shellUi.aiSettingsOpen.value = true },
         onCloseAiSettings = { shellUi.aiSettingsOpen.value = false },
     )
+
+    /** The my-app.engineer /learn feed for the new-tab page. Public content, plain HTTP (no cookies),
+     *  parsed from the same index the crawler reads. Tapping a card opens the page on the platform. */
+    private val LEARN_SITE = "https://my-app.engineer"
+    private val learnExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private fun fetchLearnFeed() {
+        runOnUiThread { shellUi.homeFeedLoading.value = true }
+        learnExec.execute {
+            val items = ArrayList<engineer.myapp.gbmobile.ui.LearnItem>()
+            try {
+                val c = java.net.URL("$LEARN_SITE/learn/").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 12000; c.readTimeout = 12000; c.setRequestProperty("Accept", "text/html")
+                val html = java.io.BufferedReader(java.io.InputStreamReader(c.inputStream)).use { it.readText() }
+                val rx = Regex("<li><a href=\"/learn/([^\"]+)\"><b>(.*?)</b></a>(?:<span>(.*?)</span>)?</li>", RegexOption.DOT_MATCHES_ALL)
+                for (m in rx.findAll(html)) {
+                    val slug = m.groupValues[1]; val title = unescapeHtml(m.groupValues[2]); val desc = unescapeHtml(m.groupValues[3])
+                    if (slug.isNotBlank() && title.isNotBlank()) items.add(engineer.myapp.gbmobile.ui.LearnItem(slug, title, desc))
+                }
+            } catch (e: Exception) { runOnUiThread { vm.log("! learn feed: ${e.message}") } }
+            runOnUiThread { shellUi.homeFeed.value = items.take(30); shellUi.homeFeedLoading.value = false }
+        }
+    }
+    private fun unescapeHtml(s: String): String = s
+        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&#x27;", "'")
 
     /** Share the current page URL. */
     private fun doShare() {
