@@ -39,3 +39,15 @@ mouse-up never ended it, and the node stopped answering until a human touched th
 interception the renderer's drag request comes back to us as `Input.dragIntercepted` and we finish it
 with `dragEnter` / `dragOver` / `drop` at the target; canvas drags (no HTML5 DnD) just get the plain
 mouse events. The result `{ok, dnd:true|false}` tells you which path ran.
+
+
+## Importing media into CapCut = local upload, never a card drag
+
+CapCut auto-adds a freshly imported LOCAL file straight to the timeline, so `/v1/upload_file`
+(CDP `setFileInputFiles` on the general media input, `nth:2`) is the whole import - no drag. An
+already-uploaded Uploads card, by contrast, cannot be automated onto the timeline at all: it is a
+React pointer-drag with no HTML5 `draggable`, and neither synthetic click/hover/drag, nor a real
+OS-mouse click, nor a real OS-mouse drag finalizes the drop (the OS drag even starts a native
+browser drag loop an injected mouse-up cannot end - the drop zone highlights, nothing lands). Always
+import the local file fresh. The node also has `/v1/hover` (real move-only, for hover-revealed
+controls) but it does not rescue the card drop.
