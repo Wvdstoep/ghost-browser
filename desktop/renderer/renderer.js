@@ -175,11 +175,34 @@ async function execPath(wv, path, body) {
       out = JSON.stringify(await G.uploadFile(wv.getWebContentsId(), body.selector || 'input[type=file]', files, body.nth || 0))
     }
     else if (path === '/v1/drag') {
-      // Drag from (fromX,fromY) to (toX,toY) in guest-viewport pixels. Done in the main process by CDP with
-      // drag-interception: webview.sendInputEvent with the button held used to start a NATIVE drag loop on
-      // HTML5-draggable things (CapCut cards/clips) that no synthetic mouseUp could end — the node went deaf
-      // until a human moved the mouse. Canvas drags get plain mouse events; HTML5 drags get a real drop.
-      out = JSON.stringify(await G.dragCdp(wv.getWebContentsId(), { fromX: body.fromX | 0, fromY: body.fromY | 0, toX: body.toX | 0, toY: body.toY | 0, steps: body.steps, holdMs: body.holdMs }))
+      // Drag from (fromX,fromY) to (toX,toY) in device pixels (screenshot space). The RIGHT mechanism
+      // depends on the grabbed thing: a truly HTML5-draggable element (draggable="true" — some library
+      // cards) must go through CDP drag-interception, because webview.sendInputEvent with the button held
+      // makes Chromium start a NATIVE OS drag loop no synthetic mouseUp can end (the node goes deaf until
+      // a human moves the mouse). But a NON-draggable widget — a canvas timeline, or CapCut's React
+      // pointer-drag media card — is not moved by the interception path at all; it needs real compositor
+      // mouse input (sendInputEvent), which for a non-draggable target never starts that native loop. So
+      // probe the start point and pick: interception for draggable, compositor drag for everything else.
+      const fx = body.fromX | 0, fy = body.fromY | 0, tx = body.toX | 0, ty = body.toY | 0
+      const steps = Math.max(2, Math.min(80, (body.steps | 0) || 30)), holdMs = Math.min(1500, (body.holdMs | 0) || 180)
+      let draggable = false
+      try {
+        const probe = '(function(){var d=window.devicePixelRatio||1;var el=document.elementFromPoint(Math.round(' + fx + '/d),Math.round(' + fy + '/d));for(var n=el,i=0;i<6&&n;i++){if(n.draggable===true||(n.getAttribute&&n.getAttribute("draggable")==="true"))return JSON.stringify({d:true});n=n.parentElement}return JSON.stringify({d:false})})()'
+        const j = JSON.parse((await ex(wv, probe)) || '{}'); draggable = !!j.d
+      } catch (e) {}
+      if (draggable) {
+        out = JSON.stringify(await G.dragCdp(wv.getWebContentsId(), { fromX: fx, fromY: fy, toX: tx, toY: ty, steps: body.steps, holdMs: body.holdMs }))
+      } else {
+        // Compositor pointer-drag — the path that imported the first video's clip and moves timeline
+        // clips. Dwell after mousedown so a React-DnD long-press/threshold registers before the move.
+        wv.sendInputEvent({ type: 'mouseMove', x: fx, y: fy })
+        wv.sendInputEvent({ type: 'mouseDown', x: fx, y: fy, button: 'left', clickCount: 1 })
+        await sleep(holdMs)
+        for (let i = 1; i <= steps; i++) { wv.sendInputEvent({ type: 'mouseMove', x: Math.round(fx + (tx - fx) * i / steps), y: Math.round(fy + (ty - fy) * i / steps), button: 'left' }); await sleep(16) }
+        await sleep(140)
+        wv.sendInputEvent({ type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 })
+        out = JSON.stringify({ ok: true, from: [fx, fy], to: [tx, ty], mode: 'pointer' })
+      }
     }
     else if (path === '/v1/click_xy') {
       const x = body.x | 0, y = body.y | 0, cc = body.clickCount || 1
