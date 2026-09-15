@@ -32,6 +32,12 @@ import engineer.myapp.gbmobile.databinding.ActivityMainBinding
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import engineer.myapp.gbmobile.ui.DeviceOpt
+import engineer.myapp.gbmobile.ui.GbTheme
+import engineer.myapp.gbmobile.ui.RunSheet
 
 /**
  * GB Mobile — Ghost Browser as a real on-device browser (MVVM). A true multi-tab browser: each tab is
@@ -68,6 +74,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val apiQueue = mutableListOf<() -> Unit>()
     private var gbControlJs: String = ""
     private val cmdExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    // --- Run sheet (Compose) — the run-anywhere UX shell: pick device → goal → run → progress ---
+    private var runHost: ComposeView? = null
+    private val runVisible: MutableState<Boolean> = mutableStateOf(false)
+    private val runDevices: MutableState<List<DeviceOpt>> = mutableStateOf(emptyList())
+    private val runFlowId: MutableState<String?> = mutableStateOf(null)
+    private val runFlowName: MutableState<String?> = mutableStateOf(null)
+    private val runPhase: MutableState<String> = mutableStateOf("pick")   // pick | running | done
+    private val runStatus: MutableState<String> = mutableStateOf("")
+
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val flowRunDone = java.util.Collections.synchronizedSet(HashSet<String>())  // run ids already reported (poll fires 5x)
@@ -84,6 +100,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
+
+        // Compose overlay host for the Run sheet — the first screen of the new Compose UI. Kept GONE
+        // until shown; it renders over the existing view-based UI (incremental migration, not a rewrite).
+        runHost = ComposeView(this).also { host ->
+            host.visibility = View.GONE
+            host.setContent {
+                GbTheme {
+                    RunSheet(
+                        visible = runVisible.value,
+                        flowName = runFlowName.value,
+                        devices = runDevices.value,
+                        phase = runPhase.value,
+                        status = runStatus.value,
+                        goalInitial = "",
+                        onRun = { target, goal -> onRunTarget(target, goal) },
+                        onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
+                    )
+                }
+            }
+            (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
 
         gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
         gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
@@ -875,8 +912,45 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun runFlow(id: String, name: String) {
-        vm.log("▶ running automation \"$name\"…")
-        apiCall("POST", "/v1/workflows/$id/run", "{}", "flowrun")
+        // Instead of firing immediately, open the Run sheet: pick WHERE to run, confirm the goal, then run.
+        showRunSheet(id, name)
+    }
+
+    /** Open the run-anywhere sheet for [id]/[name]: seed the device list (cluster now, live devices from
+     *  the hub), reset to the pick phase, and reveal the Compose overlay. */
+    private fun showRunSheet(id: String, name: String) {
+        runFlowId.value = id; runFlowName.value = name
+        runPhase.value = "pick"; runStatus.value = ""
+        runDevices.value = baseRunDevices()
+        runVisible.value = true
+        runHost?.let { it.visibility = View.VISIBLE; it.bringToFront() }
+        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+    }
+
+    /** The always-available targets before the hub answers: Cluster (works today) + Auto. */
+    private fun baseRunDevices(): List<DeviceOpt> = listOf(
+        DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true),
+        DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false),
+    )
+
+    /** Fire the run on the chosen target. P0a: execution runs on the cluster flow engine (the only engine
+     *  today). On-device engines (run locally on this phone / the desktop) arrive in P1; until then a
+     *  device pick still runs on the cluster, and the status says so plainly. */
+    private fun onRunTarget(target: String, goal: String) {
+        val id = runFlowId.value
+        runPhase.value = "running"
+        val onDevice = target.startsWith("dev:")
+        runStatus.value = when {
+            onDevice -> "On-device engine lands in P1 — running on the cluster for now…"
+            target == "auto" -> "Auto-routing lands in P3 — running on the cluster for now…"
+            else -> "Started on the cluster…"
+        }
+        if (id != null) {
+            val body = if (goal.isBlank()) "{}" else JSONObject().put("input", JSONObject().put("goal", goal)).toString()
+            apiCall("POST", "/v1/workflows/$id/run", body, "sheetrun")
+        } else {
+            runStatus.value = "! no flow selected"; runPhase.value = "done"
+        }
     }
 
     private fun createFlow() {
@@ -1362,6 +1436,40 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             } catch (e: Exception) { vm.log("! run: ${data.take(160)}") }
             "flowrun_err" -> vm.log("! run automation: ${data.take(140)}")
+            "run_devices" -> try {
+                val arr = JSONObject(data).optJSONArray("devices") ?: JSONArray()
+                val list = ArrayList<DeviceOpt>()
+                list.add(DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true))
+                for (i in 0 until arr.length()) {
+                    val d = arr.optJSONObject(i) ?: continue
+                    val nm = d.optString("name"); val on = d.optBoolean("online")
+                    val phone = nm.contains("SM-", true) || nm.contains("phone", true) || nm.contains("pixel", true) || nm.contains("galaxy", true)
+                    list.add(DeviceOpt("dev:${d.optString("deviceId")}", nm,
+                        if (on) "real device · on-device engine (P1)" else "offline", if (phone) "📱" else "🖥", on))
+                }
+                list.add(DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false))
+                runDevices.value = list
+            } catch (e: Exception) { /* keep base list */ }
+            "run_devices_err" -> { /* keep base list */ }
+            "sheetrun" -> try {
+                val o = JSONObject(data); val runId = o.optString("runId")
+                if (o.has("error")) { runPhase.value = "done"; runStatus.value = "! ${o.optString("error")}" }
+                else {
+                    runStatus.value = "Running… (run $runId)"
+                    if (runId.isNotBlank()) {
+                        val h = android.os.Handler(mainLooper)
+                        for (dl in listOf(6000L, 15000L, 30000L, 50000L, 75000L, 110000L))
+                            h.postDelayed({ if (runVisible.value) apiCall("GET", "/v1/workflow-runs/$runId", null, "sheetstatus") }, dl)
+                    }
+                }
+            } catch (e: Exception) { runPhase.value = "done"; runStatus.value = "! ${data.take(120)}" }
+            "sheetrun_err" -> { runPhase.value = "done"; runStatus.value = "! ${data.take(140)}" }
+            "sheetstatus" -> try {
+                val o = JSONObject(data); val st = o.optString("status", "?")
+                if (st != "running") { runPhase.value = "done"; runStatus.value = "Done — $st. See the log for what it did." }
+                else runStatus.value = "Running…"
+            } catch (e: Exception) { }
+            "sheetstatus_err" -> { }
             "flowrunstatus" -> try {
                 val o = JSONObject(data)
                 val status = o.optString("status", "?")
