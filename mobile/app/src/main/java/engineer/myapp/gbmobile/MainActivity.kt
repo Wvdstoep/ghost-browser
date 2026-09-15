@@ -932,7 +932,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun baseRunDevices(): List<DeviceOpt> = listOf(
         DeviceOpt("local", "This phone", "on-device engine · real IP · runs now", "📱", true),
         DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true),
-        DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false),
+        DeviceOpt("auto", "Auto (let the ring choose)", "this phone if a model is set, else cluster", "🔀", true),
     )
 
     /** Fire the run on the chosen target. P0a: execution runs on the cluster flow engine (the only engine
@@ -941,11 +941,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun onRunTarget(target: String, goal: String) {
         val id = runFlowId.value
         runPhase.value = "running"
-        if (target == "local") { runFlowLocally(id, goal); return }   // P1: the on-device engine
-        val onDevice = target.startsWith("dev:")
+        // P2/P3 (ring): capability routing. Auto → this phone when a model is configured (real IP),
+        // otherwise the cluster. Full mid-run reroute (hop when a device stalls) is the remaining piece.
+        val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
+        val resolved = if (target == "auto") (if (hasModel) "local" else "cluster") else target
+        if (target == "auto") vm.log(if (hasModel) "🔀 ring → this phone (on-device model set · real IP)" else "🔀 ring → cluster (no on-device model)")
+        if (resolved == "local") { runFlowLocally(id, goal); return }   // P1: the on-device engine
+        val onDevice = resolved.startsWith("dev:")
         runStatus.value = when {
             onDevice -> "Local engine on other devices lands with P1 — running on the cluster for now…"
-            target == "auto" -> "Auto-routing lands in P3 — running on the cluster for now…"
+            target == "auto" && !hasModel -> "Ring chose the cluster (no on-device model)…"
             else -> "Started on the cluster…"
         }
         if (id != null) {
@@ -1000,7 +1005,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         agentStop = false
         agentThread = Thread {
             if (startSite.isNotBlank() && !agentStop) {
-                try { runOnUiThread { navigate(startSite) }; Thread.sleep(4500) } catch (e: Exception) { }
+                // CODE opens the profile + page deterministically — the agent must NOT have to navigate.
+                // openPlatform switches to the flow's profile (its logged-in session) and opens the site;
+                // navigate() is the fallback when the flow names no profile.
+                try {
+                    runOnUiThread { if (profile.isNotBlank()) openPlatform(profile, startSite) else navigate(startSite) }
+                    Thread.sleep(5000)
+                } catch (e: Exception) { }
             }
             var i = 0
             for ((label, g) in goals) {
@@ -1520,7 +1531,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     list.add(DeviceOpt("dev:${d.optString("deviceId")}", nm,
                         if (on) "real device · local engine coming (P1)" else "offline", if (phone) "📱" else "🖥", on))
                 }
-                list.add(DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false))
+                list.add(DeviceOpt("auto", "Auto (let the ring choose)", "this phone if a model is set, else cluster", "🔀", true))
                 runDevices.value = list
             } catch (e: Exception) { /* keep base list */ }
             "run_devices_err" -> { /* keep base list */ }
