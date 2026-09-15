@@ -88,8 +88,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @Volatile private var runUserStopped = false
 
     // S5: the redesigned Compose settings — reactive state + actions, hosted in its own overlay.
-    private var settingsHost: ComposeView? = null
-    private val settingsVisible: MutableState<Boolean> = mutableStateOf(false)
     private val settingsUi = engineer.myapp.gbmobile.ui.SettingsUi()
 
     // S6: the whole app is now a Compose shell (top bar · tabs · flows · agent chat), hosting the real
@@ -125,17 +123,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // The real browser lives in this FrameLayout, hosted inside the Compose shell via AndroidView.
         webHolder = android.widget.FrameLayout(this)
 
-        // S6: the whole app UI — one Compose host.
+        // S6: the whole app UI — one Compose host. Settings/Agent/Device Hub are screens INSIDE the
+        // shell (bottom nav stays visible); only the run sheet is a modal overlay of its own.
         appHost = ComposeView(this).also { host ->
             host.setContent {
                 GbTheme(dark = computeDark()) {
-                    engineer.myapp.gbmobile.ui.AppShell(shell = shellUi, act = buildShellActions(), webHolder = webHolder)
+                    engineer.myapp.gbmobile.ui.AppShell(
+                        shell = shellUi, act = buildShellActions(), webHolder = webHolder,
+                        settingsUi = settingsUi, settingsAct = buildSettingsActions(),
+                    )
                 }
             }
             (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
 
-        // Overlays over the shell: Run sheet + Settings (kept as their own hosts).
+        // Run sheet — a modal overlay of its own.
         runHost = ComposeView(this).also { host ->
             host.visibility = View.GONE
             host.setContent {
@@ -146,18 +148,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         onRun = { target, goal -> onRunTarget(target, goal) },
                         onStop = { onRunStop() },
                         onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
-                    )
-                }
-            }
-            (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-        settingsHost = ComposeView(this).also { host ->
-            host.visibility = View.GONE
-            host.setContent {
-                GbTheme(dark = computeDark()) {
-                    engineer.myapp.gbmobile.ui.SettingsScreen(
-                        visible = settingsVisible.value, ui = settingsUi, act = buildSettingsActions(),
-                        onClose = { settingsVisible.value = false; settingsHost?.visibility = View.GONE },
                     )
                 }
             }
@@ -340,11 +330,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
-            if (settingsVisible.value) { settingsVisible.value = false; settingsHost?.visibility = View.GONE; return true }
+            if (shellUi.aiSettingsOpen.value) { shellUi.aiSettingsOpen.value = false; return true }
             if (runVisible.value && runPhase.value != "running") { runVisible.value = false; runHost?.visibility = View.GONE; return true }
             if (shellUi.urlFocused.value) { shellUi.urlFocused.value = false; return true }
             if (shellUi.menuOpen.value) { shellUi.menuOpen.value = false; return true }
-            if (shellUi.agentOpen.value) { shellUi.agentOpen.value = false; return true }
             if (shellUi.switcherOpen.value) { shellUi.switcherOpen.value = false; return true }
             if (shellUi.screen.value != "browser") { shellUi.screen.value = "browser"; return true }
             if (this::web.isInitialized && web.canGoBack()) { web.goBack(); return true }
@@ -646,7 +635,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             newTab(site)                 // open a new tab in this platform's isolated profile
             vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
         }
-        settingsVisible.value = false; settingsHost?.visibility = View.GONE   // jump to the browser
+        shellUi.screen.value = "browser"   // jump to the browser
     }
 
     // ---- Flows (automations — the same workflow engine GB runs) ---------------------------------
@@ -926,7 +915,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         shellUi.switcherOpen.value = false
         if (agentChat == null) { if (agentChats.length() > 0) agentChat = agentChats.optJSONObject(0) else newAgentChat() }
         refreshAgentMsgs()
-        shellUi.agentOpen.value = true
+        shellUi.screen.value = "agent"
     }
 
     private fun newAgentChat() {
@@ -1146,7 +1135,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onNav = { s -> shellUi.screen.value = s; if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows") },
         onOpenSettings = { openSettings() },
         onOpenAgent = { openAgentChat() },
-        onCloseAgent = { shellUi.agentOpen.value = false },
+        onCloseAgent = { shellUi.screen.value = "browser" },
         onNewAgentChat = { newAgentChat() },
         onSendAgent = { t -> sendAgentMessage(t) },
         onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
@@ -1162,7 +1151,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onShare = { doShare() },
         onToggleDesktop = { toggleDesktop(); shellUi.desktopMode.value = tabs.getOrNull(activeTab)?.desktop == true },
         onFindInPage = { try { if (this::web.isInitialized) web.showFindDialog(null, true) } catch (e: Exception) { vm.log("! find in page unavailable") } },
-        onOpenHub = { doOpenHub() },
+        onOpenHub = { openDeviceHub() },
+        onRefreshHub = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
+        onOpenAiSettings = { syncSettingsUi(); shellUi.aiSettingsOpen.value = true },
+        onCloseAiSettings = { shellUi.aiSettingsOpen.value = false },
     )
 
     /** Share the current page URL. */
@@ -1198,9 +1190,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun openSettings() {
         syncSettingsUi()
-        settingsVisible.value = true
-        settingsHost?.let { it.visibility = View.VISIBLE; it.bringToFront() }
+        shellUi.screen.value = "settings"
         if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+    }
+
+    /** Native, local Device Hub screen — no cluster web page. Renders /v1/device/list as cards. */
+    private fun openDeviceHub() {
+        shellUi.screen.value = "devices"
+        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+        else vm.log("! sign in first (Settings → Account & sync)")
     }
 
     /** A short human summary of this phone's capabilities (from [phoneCaps]) for the settings screen. */
@@ -1268,13 +1266,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
-    private fun doOpenHub() {
-        val base = vm.clusterUrl.trim().trimEnd('/')
-        if (base.isEmpty()) { vm.log("! set the cluster URL first"); return }
-        val k = vm.apiKey.trim()
-        load(base + "/hub" + (if (k.isNotEmpty()) "#key=" + k else ""))
-    }
-
     private fun doOpenTailscale() {
         val pkg = "com.tailscale.ipn"
         val i = packageManager.getLaunchIntentForPackage(pkg)
@@ -1287,7 +1278,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onSignIn = { doSignIn() },
         onConnectToggle = { doConnectToggle() },
         onResync = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↻ re-syncing shared data…"); autoSyncSharedData() } },
-        onOpenHub = { doOpenHub() },
+        onOpenHub = { openDeviceHub() },
         onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(); syncSettingsUi() },
         onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(); syncSettingsUi() },
         onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
@@ -1437,6 +1428,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 list.add(DeviceOpt("auto", "Auto (let the ring choose)", "picks the best device for the flow", "🔀", true))
                 runDevices.value = list
                 settingsUi.devices.value = list
+                // native Device Hub cards (all registered nodes, with type/owner/last-seen/queued)
+                val hub = ArrayList<engineer.myapp.gbmobile.ui.HubDevice>()
+                var online = 0
+                for (i in 0 until arr.length()) {
+                    val d = arr.optJSONObject(i) ?: continue
+                    val on = d.optBoolean("online"); if (on) online++
+                    val caps = d.optJSONObject("caps")
+                    val plat = caps?.optString("platform") ?: ""
+                    val type = when { plat == "android" || caps?.optBoolean("mobileApp") == true -> "PHONE"; plat == "desktop" || caps?.optBoolean("cdp") == true -> "LAPTOP"; plat == "cluster" -> "CLUSTER"; else -> "NODE" }
+                    hub.add(engineer.myapp.gbmobile.ui.HubDevice(
+                        d.optString("name").ifBlank { d.optString("deviceId") }, d.optString("owner"),
+                        type, on, d.optLong("lastSeen", 0), d.optInt("queued", 0)))
+                }
+                shellUi.hubDevices.value = hub
+                shellUi.hubSummary.value = "$online online · ${arr.length()} registered"
             } catch (e: Exception) { /* keep base list */ }
             "run_devices_err" -> { /* keep base list */ }
             "route" -> try {
