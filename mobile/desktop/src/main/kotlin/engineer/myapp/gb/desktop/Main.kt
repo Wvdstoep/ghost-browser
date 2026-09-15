@@ -2,9 +2,20 @@ package engineer.myapp.gb.desktop
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,9 +99,13 @@ private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: Deskto
         host = if (screen == "browser") (mainBrowser?.url?.let { hostOf(it) } ?: "my-app.engineer") else "",
         tabCount = 1, selected = if (screen == "devices") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
+        showTopBar = false,     // desktop uses its own BrowserBar
     ) {
         when (screen) {
-            "browser" -> JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
+            "browser" -> Column(Modifier.fillMaxSize()) {
+                BrowserBar(mainBrowser)
+                JcefBrowserView(mainBrowser, error, Modifier.weight(1f).fillMaxWidth())
+            }
             "flows" -> FlowsScreenD(state)
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
@@ -108,6 +123,37 @@ private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: Deskto
 }
 
 private fun hostOf(url: String): String = try { java.net.URI(url).host?.removePrefix("www.") ?: url } catch (e: Exception) { url }
+
+/** Desktop browser navigation: back / forward / reload + an editable address bar (Enter to go). */
+@Composable
+private fun BrowserBar(browser: CefBrowser?) {
+    val cs = MaterialTheme.colorScheme
+    var text by remember(browser?.url) { mutableStateOf(browser?.url ?: "") }
+    fun go() {
+        var u = text.trim(); if (u.isEmpty()) return
+        if (!u.startsWith("http") && !u.startsWith("file:")) u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + java.net.URLEncoder.encode(u, "UTF-8")
+        browser?.loadURL(u)
+    }
+    Surface(color = cs.surface, contentColor = cs.onSurface) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { browser?.goBack() }) { Icon(Icons.Default.ArrowBack, "Back", tint = cs.onSurfaceVariant) }
+            IconButton(onClick = { browser?.goForward() }) { Icon(Icons.Default.ArrowForward, "Forward", tint = cs.onSurfaceVariant) }
+            IconButton(onClick = { browser?.reload() }) { Icon(Icons.Default.Refresh, "Reload", tint = cs.onSurfaceVariant) }
+            Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(20.dp), modifier = Modifier.weight(1f).height(40.dp)) {
+                Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = text, onValueChange = { text = it }, singleLine = true, modifier = Modifier.weight(1f),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 14.sp),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { go() }, onDone = { go() }),
+                        decorationBox = { inner -> if (text.isEmpty()) Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 14.sp); inner() },
+                    )
+                }
+            }
+        }
+    }
+}
 
 private fun readResourceText(path: String): String =
     object {}.javaClass.getResourceAsStream(path)?.bufferedReader()?.use { it.readText() } ?: ""
