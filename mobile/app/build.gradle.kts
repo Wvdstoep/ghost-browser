@@ -11,7 +11,7 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 42
+        versionCode = 43
         versionName = "0.32"
     }
 
