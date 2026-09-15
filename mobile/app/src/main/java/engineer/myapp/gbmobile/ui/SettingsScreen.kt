@@ -48,8 +48,7 @@ class SettingsUi {
     val modelProgress = mutableStateOf(-1)   // -1 hidden, else 0..100
     var endpoint = ""; var apiKey = ""; var ollamaModel = ""; var hfToken = ""
 
-    val rolesLoadedNote = mutableStateOf("")
-    val flowCount = mutableStateOf(0)
+    val log = mutableStateOf("")             // live activity log (restored)
 
     val themeMode = mutableStateOf(0)        // 0 dark, 1 light
 }
@@ -74,6 +73,7 @@ class SettingsActions(
     val onRefreshDevices: () -> Unit,
     val onOpenTailscale: () -> Unit,
     val onSetTheme: (Int) -> Unit,
+    val onClearLog: () -> Unit,
 )
 
 @Composable
@@ -199,12 +199,17 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                     else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { ds.forEach { DeviceRow(it) } }
                 }
 
-                // 4 ─ Automations & roles -------------------------------------------------------------
-                SectionCard("🔗", "Automations & roles", "Your flows and the roles the agent adopts") {
-                    Text("${ui.flowCount.value} automation(s) synced", fontSize = 13.sp)
-                    Text("${(ui.roleNames.value.size - 1).coerceAtLeast(0)} role(s) available", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                    Note("Browse, run and create flows from the Flows tab. Full flow management moves into this screen next (S6).")
-                    Ghost("Reload roles", Modifier.fillMaxWidth(), act.onLoadRoles)
+                // 4 ─ Activity ------------------------------------------------------------------------
+                SectionCard("📜", "Activity", "What this device and the agent are doing right now") {
+                    Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        val log = ui.log.value
+                        Text(
+                            if (log.isBlank()) "No activity yet." else log.takeLast(4000),
+                            modifier = Modifier.heightIn(min = 80.dp, max = 220.dp).verticalScroll(rememberScrollState()).padding(12.dp),
+                            color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp,
+                        )
+                    }
+                    TextButton(onClick = act.onClearLog) { Text("Clear") }
                 }
 
                 // 5 ─ Network & exit ------------------------------------------------------------------
