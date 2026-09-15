@@ -85,6 +85,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val runStatus: MutableState<String> = mutableStateOf("")
     @Volatile private var runUserStopped = false
 
+    // S5: the redesigned Compose settings — reactive state + actions, hosted in its own overlay.
+    private var settingsHost: ComposeView? = null
+    private val settingsVisible: MutableState<Boolean> = mutableStateOf(false)
+    private val settingsUi = engineer.myapp.gbmobile.ui.SettingsUi()
+
     private val fetchWaiters = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
     private val fetchResults = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val flowRunDone = java.util.Collections.synchronizedSet(HashSet<String>())  // run ids already reported (poll fires 5x)
@@ -104,10 +109,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
         // Compose overlay host for the Run sheet — the first screen of the new Compose UI. Kept GONE
         // until shown; it renders over the existing view-based UI (incremental migration, not a rewrite).
+        settingsUi.themeMode.value = vm.themeMode
         runHost = ComposeView(this).also { host ->
             host.visibility = View.GONE
             host.setContent {
-                GbTheme {
+                GbTheme(dark = computeDark()) {
                     RunSheet(
                         visible = runVisible.value,
                         flowName = runFlowName.value,
@@ -118,6 +124,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         onRun = { target, goal -> onRunTarget(target, goal) },
                         onStop = { onRunStop() },
                         onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
+                    )
+                }
+            }
+            (b.root as ViewGroup).addView(host, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+
+        // S5: settings overlay host — the new structured Compose settings, over the existing UI.
+        settingsHost = ComposeView(this).also { host ->
+            host.visibility = View.GONE
+            host.setContent {
+                GbTheme(dark = computeDark()) {
+                    engineer.myapp.gbmobile.ui.SettingsScreen(
+                        visible = settingsVisible.value, ui = settingsUi, act = buildSettingsActions(),
+                        onClose = { settingsVisible.value = false; settingsHost?.visibility = View.GONE },
                     )
                 }
             }
@@ -236,13 +256,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun showMenu() {
         val pm = PopupMenu(this, b.menuBtn)
         val desk = tabs.getOrNull(activeTab)?.desktop == true
-        pm.menu.add(0, 1, 0, "Tools · Agent · Profiles · Flows · Cluster")
-        pm.menu.add(0, 2, 1, "New tab")
-        pm.menu.add(0, 3, 2, "Reload")
-        pm.menu.add(0, 5, 3, if (desk) "Request mobile site" else "Request desktop site")
-        pm.menu.add(0, 4, 4, "Close this tab")
+        pm.menu.add(0, 6, 0, "Settings")
+        pm.menu.add(0, 1, 1, "Tools · Agent · Profiles · Flows (old)")
+        pm.menu.add(0, 2, 2, "New tab")
+        pm.menu.add(0, 3, 3, "Reload")
+        pm.menu.add(0, 5, 4, if (desk) "Request mobile site" else "Request desktop site")
+        pm.menu.add(0, 4, 5, "Close this tab")
         pm.setOnMenuItemClickListener {
             when (it.itemId) {
+                6 -> openSettings()
                 1 -> b.panel.visibility = if (b.panel.visibility == View.GONE) View.VISIBLE else View.GONE
                 2 -> newTab()
                 3 -> if (this::web.isInitialized) web.reload()
@@ -387,6 +409,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (settingsVisible.value) { settingsVisible.value = false; settingsHost?.visibility = View.GONE; return true }
+            if (runVisible.value && runPhase.value != "running") { runVisible.value = false; runHost?.visibility = View.GONE; return true }
             if (b.agentOverlay.visibility == View.VISIBLE) {
                 if (b.agentHistoryWrap.visibility == View.VISIBLE) { b.agentHistoryWrap.visibility = View.GONE; return true }
                 b.agentOverlay.visibility = View.GONE; return true
@@ -1506,6 +1530,125 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
+    // ---- S5 settings (Compose) ------------------------------------------------------------------
+
+    @androidx.compose.runtime.Composable
+    private fun computeDark(): Boolean = when (settingsUi.themeMode.value) {
+        1 -> false; 2 -> true; else -> androidx.compose.foundation.isSystemInDarkTheme()
+    }
+
+    private val settingsActions by lazy { buildSettingsActions() }
+
+    private fun openSettings() {
+        syncSettingsUi()
+        settingsVisible.value = true
+        settingsHost?.let { it.visibility = View.VISIBLE; it.bringToFront() }
+        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+    }
+
+    /** A short human summary of this phone's capabilities (from [phoneCaps]) for the settings screen. */
+    private fun phoneCapsText(): String {
+        val c = phoneCaps()
+        val model = if (c.optBoolean("model")) "model ✓" else "no model"
+        val nprof = c.optJSONArray("profiles")?.length() ?: 0
+        return "android · native touch · real IP · $model · $nprof profile(s)"
+    }
+
+    private fun refreshSettingsModel() {
+        val id = ModelCatalog.models.getOrNull(settingsUi.modelIndex.value)?.id ?: vm.selectedModel
+        settingsUi.modelStatus.value = if (models.isReady(id)) "ready ✓" else "not downloaded"
+    }
+
+    private fun syncSettingsUi() {
+        settingsUi.clusterUrl = vm.clusterUrl
+        settingsUi.clusterStatus.value = vm.clusterInfo.value ?: "Cluster: off"
+        settingsUi.connected.value = vm.clusterOn.value == true
+        settingsUi.profiles.value = vm.profiles.value ?: listOf("default")
+        settingsUi.currentProfile.value = vm.currentProfile.value ?: "default"
+        settingsUi.roleNames.value = roleNames()
+        settingsUi.roleForCurrent.value = roleForProfile(vm.currentProfile.value ?: "default").ifBlank { "(none)" }
+        settingsUi.phoneCaps.value = phoneCapsText()
+        settingsUi.useLocal.value = vm.useLocal
+        settingsUi.modelLabels.value = ModelCatalog.models.map { it.label }
+        settingsUi.modelIndex.value = ModelCatalog.models.indexOfFirst { it.id == vm.selectedModel }.coerceAtLeast(0)
+        refreshSettingsModel()
+        settingsUi.endpoint = vm.endpoint; settingsUi.apiKey = vm.apiKey; settingsUi.ollamaModel = vm.model; settingsUi.hfToken = vm.hfToken
+        settingsUi.themeMode.value = vm.themeMode
+        settingsUi.flowCount.value = try { JSONObject(vm.flowsJson).optJSONArray("workflows")?.length() ?: 0 } catch (e: Exception) { 0 }
+        settingsUi.devices.value = runDevices.value
+    }
+
+    private fun startModelDownload(idx: Int) {
+        val m = ModelCatalog.models.getOrNull(idx) ?: return
+        if (models.isReady(m.id) && m.id != "custom") { settingsUi.modelStatus.value = "ready ✓"; vm.log("● ${m.label} already downloaded"); return }
+        val url = if (m.id == "custom") vm.customUrl else m.url
+        if (url.isBlank()) { vm.log("! paste a .task URL for the Custom option"); return }
+        settingsUi.modelProgress.value = 0; settingsUi.modelStatus.value = "downloading…"; vm.log("↓ downloading ${m.label}…")
+        models.download(m.id, url, m.sizeMb, vm.hfToken,
+            { p -> runOnUiThread { settingsUi.modelProgress.value = p; settingsUi.modelStatus.value = "downloading… $p%" } },
+            { ok, msg -> runOnUiThread {
+                settingsUi.modelProgress.value = -1
+                if (ok) { settingsUi.modelStatus.value = "ready ✓"; vm.log("● model ${m.label} ready — tick 'Use on-device model'") }
+                else { settingsUi.modelStatus.value = "failed"; vm.log("! model download: $msg") }
+            } })
+    }
+
+    private fun doSignIn() {
+        val platform = if (vm.clusterUrl.contains("://ghost-browser."))
+            vm.clusterUrl.replace("://ghost-browser.", "://") else "https://my-app.engineer"
+        load(platform)
+        vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ Settings")
+    }
+
+    private fun doConnectToggle() {
+        if (ctrlWeb != null) {
+            stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
+            try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
+        } else {
+            if (cookiesFor(vm.clusterUrl).isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return }
+            vm.clusterInfo.value = "Cluster: connecting…"; vm.log("→ connecting (control channel on the GB origin)…")
+            startControlWeb()
+            try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
+        }
+    }
+
+    private fun doOpenHub() {
+        val base = vm.clusterUrl.trim().trimEnd('/')
+        if (base.isEmpty()) { vm.log("! set the cluster URL first"); return }
+        val k = vm.apiKey.trim()
+        load(base + "/hub" + (if (k.isNotEmpty()) "#key=" + k else ""))
+    }
+
+    private fun doOpenTailscale() {
+        val pkg = "com.tailscale.ipn"
+        val i = packageManager.getLaunchIntentForPackage(pkg)
+            ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$pkg"))
+        try { startActivity(i) } catch (e: Exception) { vm.log("! could not open Tailscale: ${e.message}") }
+    }
+
+    private fun buildSettingsActions() = engineer.myapp.gbmobile.ui.SettingsActions(
+        onSaveClusterUrl = { vm.clusterUrl = it.trim(); settingsUi.clusterUrl = vm.clusterUrl },
+        onSignIn = { doSignIn() },
+        onConnectToggle = { doConnectToggle() },
+        onResync = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↻ re-syncing shared data…"); autoSyncSharedData() } },
+        onOpenHub = { doOpenHub() },
+        onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(); syncSettingsUi() },
+        onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(); syncSettingsUi() },
+        onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
+        onLoadRoles = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list") } },
+        onSetUseLocal = { vm.useLocal = it; settingsUi.useLocal.value = it },
+        onSelectModelIndex = { i -> settingsUi.modelIndex.value = i; vm.selectedModel = ModelCatalog.models.getOrElse(i) { ModelCatalog.models[0] }.id; refreshSettingsModel() },
+        onDownloadModel = { startModelDownload(settingsUi.modelIndex.value) },
+        onSaveOllama = { ep, ak, m, hf ->
+            vm.endpoint = ep.trim(); vm.apiKey = ak.trim(); vm.model = m.trim(); vm.hfToken = hf.trim()
+            settingsUi.endpoint = vm.endpoint; settingsUi.apiKey = vm.apiKey; settingsUi.ollamaModel = vm.model; settingsUi.hfToken = vm.hfToken
+            vm.log("● endpoint saved")
+        },
+        onRefreshDevices = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
+        onOpenTailscale = { doOpenTailscale() },
+        onSetTheme = { m -> vm.themeMode = m; settingsUi.themeMode.value = m },
+    )
+
     // ---- observers ------------------------------------------------------------------------------
 
     private fun observe() {
@@ -1513,6 +1656,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         vm.clusterInfo.observe(this) { t ->
             b.clusterStatus.text = t
             b.cluster.text = if (vm.clusterOn.value == true) "Disconnect" else "Connect to cluster"
+            settingsUi.clusterStatus.value = t
+            settingsUi.connected.value = vm.clusterOn.value == true
+        }
+        vm.profiles.observe(this) { settingsUi.profiles.value = it ?: listOf("default") }
+        vm.currentProfile.observe(this) {
+            settingsUi.currentProfile.value = it ?: "default"
+            settingsUi.roleForCurrent.value = roleForProfile(it ?: "default").ifBlank { "(none)" }
         }
         vm.agentRunning.observe(this) { running -> b.run.isEnabled = !running }
     }
@@ -1629,6 +1779,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
                 list.add(DeviceOpt("auto", "Auto (let the ring choose)", "picks the best device for the flow", "🔀", true))
                 runDevices.value = list
+                settingsUi.devices.value = list
             } catch (e: Exception) { /* keep base list */ }
             "run_devices_err" -> { /* keep base list */ }
             "route" -> try {
@@ -1699,6 +1850,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 vm.rolesCacheJson = data
                 val n = JSONObject(data).optJSONArray("roles")?.length() ?: 0
                 vm.log("↓ agent roles ($n) — pick one per profile"); renderRoleSpinner()
+                settingsUi.roleNames.value = roleNames()
+                settingsUi.roleForCurrent.value = roleForProfile(vm.currentProfile.value ?: "default").ifBlank { "(none)" }
             } catch (e: Exception) { vm.log("! roles: ${data.take(80)}") }
             "roles_list_err" -> vm.log("! load roles: ${data.take(120)}")
             "profiles" -> try {
