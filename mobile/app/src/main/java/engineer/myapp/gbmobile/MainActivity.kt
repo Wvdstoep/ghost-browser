@@ -968,8 +968,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun runFlowLocally(flowId: String?, goal: String) {
         val brain = buildBrain()
         if (brain == null) {
-            runPhase.value = "done"
-            runStatus.value = "No on-device model set. Agent tab → pick/download a model (or set an Ollama endpoint), then retry."
+            // S3 reroute: no on-device model is a capability miss → hand the run to the cluster instead of
+            // dead-ending, so the ring still gets it done.
+            if (flowId != null) {
+                runPhase.value = "running"
+                runStatus.value = "No on-device model → rerouting to the cluster…"
+                vm.log("🔀 ring reroute: no on-device model → cluster")
+                val body = if (goal.isBlank()) "{}" else JSONObject().put("input", JSONObject().put("goal", goal)).toString()
+                apiCall("POST", "/v1/workflows/$flowId/run", body, "sheetrun")
+            } else {
+                runPhase.value = "done"
+                runStatus.value = "No on-device model set. Agent tab → pick/download a model, or run on the cluster."
+            }
             return
         }
         val goals = ArrayList<Pair<String, String>>()   // label -> goal
@@ -1040,9 +1050,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 catch (e: Exception) { logStep("! step $i failed: ${e.message}") }
             }
             agentStop = true   // release the watchdog
-            val outcome = if (stalled.get()) "stalled" else if (runUserStopped) "stopped" else "done"
-            // S1: journal this on-device run to the SHARED cluster history over the SSO API — no control
-            // channel needed — so runs are visible everywhere (GET /v1/device-runs), same as cluster runs.
+            val stalledNow = stalled.get()
+            val willReroute = stalledNow && flowId != null && !runUserStopped
+            val outcome = if (willReroute) "rerouted" else if (stalledNow) "stalled" else if (runUserStopped) "stopped" else "done"
+            // S1: journal this on-device attempt to the SHARED cluster history over the SSO API (no control
+            // channel) so runs are visible everywhere (GET /v1/device-runs), same as cluster runs.
             val rec = JSONObject()
                 .put("deviceName", android.os.Build.MODEL).put("deviceId", android.os.Build.MODEL)
                 .put("target", "local").put("flowId", flowId ?: "").put("flowName", runFlowName.value ?: "")
@@ -1053,11 +1065,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             rec.put("steps", stepsArr)
             runOnUiThread {
                 apiCall("POST", "/v1/device-runs", rec.toString(), "devrunsave")
-                runPhase.value = "done"
-                runStatus.value = when (outcome) {
-                    "stalled" -> "Stalled — no progress. Journaled to shared history."
-                    "stopped" -> "Stopped. Journaled to shared history."
-                    else -> "Done on this phone — ran ${goals.size} step(s). Journaled to shared history."
+                if (willReroute) {
+                    // S3: self-healing reroute — the on-device run stalled; hand it to the cluster and let the
+                    // cluster run drive the sheet to done (sheetrun/sheetstatus handlers).
+                    runStatus.value = "Stalled on this phone → rerouted to the cluster…"
+                    vm.log("🔀 ring reroute: on-device stalled → cluster")
+                    val body = if (goal.isBlank()) "{}" else JSONObject().put("input", JSONObject().put("goal", goal)).toString()
+                    apiCall("POST", "/v1/workflows/$flowId/run", body, "sheetrun")
+                } else {
+                    runPhase.value = "done"
+                    runStatus.value = when (outcome) {
+                        "stopped" -> "Stopped. Journaled to shared history."
+                        else -> "Done on this phone — ran ${goals.size} step(s). Journaled to shared history."
+                    }
                 }
             }
         }.also { it.start() }
