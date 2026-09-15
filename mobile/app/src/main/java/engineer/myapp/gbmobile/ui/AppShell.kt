@@ -46,26 +46,30 @@ data class TabInfo(val index: Int, val title: String, val host: String, val prof
 data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String)
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
+data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)
 
 /** Reactive shell state the Activity keeps in sync. */
 class ShellUi {
-    val screen = mutableStateOf("browser")      // browser | flows
+    val screen = mutableStateOf("browser")      // browser | flows | agent | settings | devices
     val url = mutableStateOf("")
     val tabCount = mutableStateOf(1)
     val switcherOpen = mutableStateOf(false)
     val menuOpen = mutableStateOf(false)
     val urlFocused = mutableStateOf(false)
+    val aiSettingsOpen = mutableStateOf(false)
     val desktopMode = mutableStateOf(false)
     val tabs = mutableStateOf<List<TabInfo>>(emptyList())
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
     // agent chat
-    val agentOpen = mutableStateOf(false)
     val agentTitle = mutableStateOf("Agent")
     val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
     val agentBusy = mutableStateOf(false)
     val clusterOn = mutableStateOf(false)
+    // device hub (native, local render)
+    val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
+    val hubSummary = mutableStateOf("")
 }
 
 class ShellActions(
@@ -99,6 +103,9 @@ class ShellActions(
     val onToggleDesktop: () -> Unit,
     val onFindInPage: () -> Unit,
     val onOpenHub: () -> Unit,
+    val onRefreshHub: () -> Unit,
+    val onOpenAiSettings: () -> Unit,
+    val onCloseAiSettings: () -> Unit,
 )
 
 private fun hostOf(url: String): String {
@@ -110,25 +117,33 @@ private fun hostOf(url: String): String {
 }
 
 @Composable
-fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout) {
+fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
     val cs = MaterialTheme.colorScheme
+    val screen = shell.screen.value
     Box(Modifier.fillMaxSize().background(cs.background)) {
         Column(Modifier.fillMaxSize()) {
-            TopBar(shell, act)
+            if (screen == "browser" || screen == "flows") TopBar(shell, act)
             Box(Modifier.weight(1f).fillMaxWidth()) {
+                // The real browser is always mounted so tab state/JS is never torn down; other screens
+                // draw over it (opaque) rather than unmounting it.
                 AndroidView(
                     factory = { (webHolder.parent as? ViewGroup)?.removeView(webHolder); webHolder },
                     modifier = Modifier.fillMaxSize(),
                 )
-                if (shell.screen.value == "flows") FlowsPane(shell, act, Modifier.fillMaxSize().background(cs.background))
+                when (screen) {
+                    "flows" -> FlowsPane(shell, act, Modifier.fillMaxSize().background(cs.background))
+                    "agent" -> AgentChat(shell, act)
+                    "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
+                    "devices" -> DeviceHubScreen(shell, act)
+                }
             }
             BottomBar(shell, act)
         }
 
         if (shell.switcherOpen.value) TabGrid(shell, act)
-        if (shell.agentOpen.value) AgentChat(shell, act)
         if (shell.menuOpen.value) OverflowMenu(shell, act)
         if (shell.urlFocused.value) Omnibox(shell, act)
+        if (shell.aiSettingsOpen.value) AiSettingsDialog(settingsUi, settingsAct, act.onCloseAiSettings)
     }
 }
 
@@ -184,9 +199,9 @@ private fun BottomBar(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
     NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
         NavItem(Icons.Default.Public, "Browser", shell.screen.value == "browser") { act.onNav("browser") }
-        NavItem(Icons.Default.Bolt, "Agent", false) { act.onOpenAgent() }
+        NavItem(Icons.Default.Bolt, "Agent", shell.screen.value == "agent") { act.onOpenAgent() }
         NavItem(Icons.Default.AccountTree, "Flows", shell.screen.value == "flows") { act.onNav("flows") }
-        NavItem(Icons.Default.Settings, "Settings", false) { act.onOpenSettings() }
+        NavItem(Icons.Default.Settings, "Settings", shell.screen.value == "settings") { act.onOpenSettings() }
     }
 }
 
@@ -485,7 +500,7 @@ private fun AgentChat(shell: ShellUi, act: ShellActions) {
             Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(shell.agentTitle.value, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 IconButton(onClick = act.onNewAgentChat) { Icon(Icons.Default.Add, "New chat", tint = cs.onSurfaceVariant) }
-                IconButton(onClick = act.onOpenSettings) { Icon(Icons.Default.Tune, "Settings", tint = cs.onSurfaceVariant) }
+                IconButton(onClick = act.onOpenAiSettings) { Icon(Icons.Default.Tune, "AI settings", tint = cs.onSurfaceVariant) }
                 IconButton(onClick = act.onCloseAgent) { Icon(Icons.Default.Close, "Close", tint = cs.onSurfaceVariant) }
             }
             val scroll = rememberScrollState()
@@ -554,6 +569,145 @@ private fun AgentInput(busy: Boolean, onSend: (String) -> Unit) {
             onClick = { if (!busy && text.isNotBlank()) { onSend(text.trim()); text = "" } }, enabled = !busy,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn),
         ) { Icon(Icons.Default.Send, "Send") }
+    }
+}
+
+/* ── Device Hub (native, renders locally) ────────────────────────────────────────────────────── */
+
+@Composable
+private fun DeviceHubScreen(shell: ShellUi, act: ShellActions) {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Device Hub", style = MaterialTheme.typography.headlineSmall)
+                    Text(shell.hubSummary.value.ifBlank { "Every node on your account" }, color = cs.onSurfaceVariant, fontSize = 12.sp)
+                }
+                IconButton(onClick = act.onRefreshHub) { Icon(Icons.Default.Refresh, "Refresh", tint = cs.onSurface) }
+            }
+            HorizontalDivider(color = cs.outline)
+            if (shell.hubDevices.value.isEmpty()) {
+                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Icon(Icons.Default.DevicesOther, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.height(10.dp))
+                    Text("No devices yet — sign in and connect.", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                }
+            } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                shell.hubDevices.value.forEach { d -> HubCard(d) }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HubCard(d: HubDevice) {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(if (d.online) Brand else cs.onSurfaceVariant))
+                Spacer(Modifier.width(10.dp))
+                Text(d.name, color = cs.onSurface, fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
+                    Text(d.type, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = cs.onSurfaceVariant, fontSize = 10.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                }
+            }
+            if (d.owner.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text(d.owner, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp)) }
+            Spacer(Modifier.height(12.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(12.dp))
+            Row {
+                HubStat("STATUS", if (d.online) "online" else "offline", if (d.online) Brand else cs.onSurfaceVariant, Modifier.weight(1f))
+                HubStat("LAST SEEN", relTime(d.lastSeenMs), cs.onSurface, Modifier.weight(1f))
+                HubStat("QUEUED", "${d.queued}", cs.onSurface, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun HubStat(label: String, value: String, valueColor: Color, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier) {
+        Text(label, color = cs.onSurfaceVariant, fontSize = 10.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Spacer(Modifier.height(3.dp))
+        Text(value, color = valueColor, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+    }
+}
+
+private fun relTime(ms: Long): String {
+    if (ms <= 0) return "—"
+    val s = ((System.currentTimeMillis() - ms) / 1000).coerceAtLeast(0)
+    return when {
+        s < 60 -> "${s}s ago"
+        s < 3600 -> "${s / 60}m ago"
+        s < 86400 -> "${s / 3600}h ago"
+        else -> "${s / 86400}d ago"
+    }
+}
+
+/* ── AI settings (small modal inside the Agent view) ─────────────────────────────────────────── */
+
+@Composable
+private fun AiSettingsDialog(ui: SettingsUi, act: SettingsActions, onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable { onClose() }, contentAlignment = Alignment.Center) {
+        Surface(color = cs.surface, contentColor = cs.onSurface, shape = RoundedCornerShape(20.dp), tonalElevation = 6.dp,
+            modifier = Modifier.padding(20.dp).fillMaxWidth().clickable(enabled = false) {}) {
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState())) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("AI model", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Close", tint = cs.onSurfaceVariant) }
+                }
+                Text("The brain the agent uses on this phone.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Use on-device model", fontSize = 14.sp)
+                        Text("Runs locally, no cluster needed", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    }
+                    Switch(checked = ui.useLocal.value, onCheckedChange = { act.onSetUseLocal(it) },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Brand, checkedThumbColor = Color.White))
+                }
+                Spacer(Modifier.height(12.dp))
+                AiDropdown(ui.modelLabels.value, ui.modelIndex.value) { act.onSelectModelIndex(it) }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(ui.modelStatus.value, color = if (ui.modelStatus.value.contains("✓")) Brand else cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    Button(onClick = act.onDownloadModel, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
+                        Text(if (ui.modelStatus.value.contains("✓")) "Re-download" else "Download")
+                    }
+                }
+                if (ui.modelProgress.value in 0..100) { Spacer(Modifier.height(8.dp)); LinearProgressIndicator(progress = { ui.modelProgress.value / 100f }, modifier = Modifier.fillMaxWidth(), color = Brand) }
+                Spacer(Modifier.height(16.dp))
+                Text("Or an Ollama / OpenAI-compatible endpoint", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Spacer(Modifier.height(6.dp))
+                var ep by remember { mutableStateOf(ui.endpoint) }
+                var ak by remember { mutableStateOf(ui.apiKey) }
+                var om by remember { mutableStateOf(ui.ollamaModel) }
+                OutlinedTextField(ep, { ep = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp)); OutlinedTextField(ak, { ak = it }, label = { Text("API key (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp)); OutlinedTextField(om, { om = it }, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { act.onSaveOllama(ep, ak, om, ui.hfToken); onClose() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiDropdown(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = options.getOrElse(selectedIndex) { options.firstOrNull() ?: "" }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(value = label, onValueChange = {}, readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor())
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEachIndexed { i, opt -> DropdownMenuItem(text = { Text(opt) }, onClick = { expanded = false; onSelect(i) }) }
+        }
     }
 }
 
