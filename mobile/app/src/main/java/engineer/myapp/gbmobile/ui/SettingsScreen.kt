@@ -37,6 +37,7 @@ class SettingsUi {
     val currentProfile = mutableStateOf("default")
     val roleNames = mutableStateOf<List<String>>(listOf("(none)"))
     val roleForCurrent = mutableStateOf("(none)")
+    val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
 
     val phoneCaps = mutableStateOf("")
     val devices = mutableStateOf<List<DeviceOpt>>(emptyList())
@@ -64,6 +65,8 @@ class SettingsActions(
     val onAddProfile: (String) -> Unit,
     val onSetRole: (String) -> Unit,
     val onLoadRoles: () -> Unit,
+    val onLoadPlatforms: () -> Unit,
+    val onOpenPlatform: (String, String) -> Unit,
     val onSetUseLocal: (Boolean) -> Unit,
     val onSelectModelIndex: (Int) -> Unit,
     val onDownloadModel: () -> Unit,
@@ -115,6 +118,26 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
 
                 // 2 ─ Profiles ------------------------------------------------------------------------
                 SectionCard("👤", "Profiles", "Isolated browser identities — each its own cookies and role") {
+                    Text("Open a platform", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                    Spacer(Modifier.height(6.dp))
+                    if (ui.platforms.value.isEmpty()) Text("Load your platforms from the cluster to open & sign in here.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                    else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ui.platforms.value.forEach { p ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(cs.surfaceVariant)
+                                    .clickable { act.onOpenPlatform(p.profile, p.site) }.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(p.label, fontSize = 14.sp)
+                                    Text(if (p.signedIn) "signed in on this phone" else "tap to open & sign in", color = if (p.signedIn) GbGreen else cs.onSurfaceVariant, fontSize = 11.sp)
+                                }
+                                Box(Modifier.size(9.dp).clip(RoundedCornerShape(5.dp)).background(if (p.signedIn) GbGreen else cs.onSurfaceVariant))
+                            }
+                        }
+                    }
+                    TextButton(onClick = act.onLoadPlatforms) { Text("Load platforms from cluster") }
+                    Spacer(Modifier.height(8.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(12.dp))
                     Text("Active", color = cs.onSurfaceVariant, fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))
                     FlowChips(ui.profiles.value, ui.currentProfile.value) { act.onSwitchProfile(it) }
