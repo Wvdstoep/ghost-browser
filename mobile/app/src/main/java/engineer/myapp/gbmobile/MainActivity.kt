@@ -927,8 +927,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
     }
 
-    /** The always-available targets before the hub answers: Cluster (works today) + Auto. */
+    /** The always-available targets before the hub answers: This phone (local engine), Cluster, Auto. */
     private fun baseRunDevices(): List<DeviceOpt> = listOf(
+        DeviceOpt("local", "This phone", "on-device engine · real IP · runs now", "📱", true),
         DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true),
         DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false),
     )
@@ -939,9 +940,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun onRunTarget(target: String, goal: String) {
         val id = runFlowId.value
         runPhase.value = "running"
+        if (target == "local") { runFlowLocally(id, goal); return }   // P1: the on-device engine
         val onDevice = target.startsWith("dev:")
         runStatus.value = when {
-            onDevice -> "On-device engine lands in P1 — running on the cluster for now…"
+            onDevice -> "Local engine on other devices lands with P1 — running on the cluster for now…"
             target == "auto" -> "Auto-routing lands in P3 — running on the cluster for now…"
             else -> "Started on the cluster…"
         }
@@ -951,6 +953,48 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         } else {
             runStatus.value = "! no flow selected"; runPhase.value = "done"
         }
+    }
+
+    /** P1 — the on-device engine. Runs a flow's agent-node goals LOCALLY on this phone via the same
+     *  on-device Agent that powers the chat (real WebView, real IP), instead of triggering the cluster.
+     *  Goals come from the typed goal, or from the flow definition in the shared cache. */
+    private fun runFlowLocally(flowId: String?, goal: String) {
+        val brain = buildBrain()
+        if (brain == null) {
+            runPhase.value = "done"
+            runStatus.value = "No on-device model set. Agent tab → pick/download a model (or set an Ollama endpoint), then retry."
+            return
+        }
+        val goals = ArrayList<Pair<String, String>>()   // label -> goal
+        if (goal.isNotBlank()) goals.add("goal" to goal)
+        else try {
+            val flows = JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()
+            var wf: JSONObject? = null
+            for (i in 0 until flows.length()) { val w = flows.optJSONObject(i); if (w?.optString("id") == flowId) { wf = w; break } }
+            val nodes = wf?.optJSONArray("nodes") ?: JSONArray()
+            for (i in 0 until nodes.length()) {
+                val nn = nodes.optJSONObject(i) ?: continue
+                if (nn.optString("type") == "agent") { val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(nn.optString("label", "step ${goals.size + 1}") to g) }
+            }
+        } catch (e: Exception) { }
+        if (goals.isEmpty()) { runPhase.value = "done"; runStatus.value = "Nothing to run — add a goal, or load the flow first."; return }
+        runStatus.value = "Running on this phone (0/${goals.size})…"
+        vm.log("▶ running \"${runFlowName.value}\" ON THIS PHONE (on-device engine, real IP) — ${goals.size} step(s)")
+        agentStop = false
+        agentThread = Thread {
+            var i = 0
+            for ((label, g) in goals) {
+                if (agentStop) break
+                i++
+                runOnUiThread { runStatus.value = "This phone · step $i/${goals.size}: $label" }
+                try { Agent(this, brain, { m -> runOnUiThread { vm.log(m) } }, { agentStop }).run(g) }
+                catch (e: Exception) { runOnUiThread { vm.log("! step $i failed: ${e.message}") } }
+            }
+            runOnUiThread {
+                runPhase.value = "done"
+                runStatus.value = if (agentStop) "Stopped." else "Done on this phone — ran ${goals.size} step(s). See the log for what it did."
+            }
+        }.also { it.start() }
     }
 
     private fun createFlow() {
@@ -1439,13 +1483,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "run_devices" -> try {
                 val arr = JSONObject(data).optJSONArray("devices") ?: JSONArray()
                 val list = ArrayList<DeviceOpt>()
+                list.add(DeviceOpt("local", "This phone", "on-device engine · real IP · runs now", "📱", true))
                 list.add(DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true))
                 for (i in 0 until arr.length()) {
                     val d = arr.optJSONObject(i) ?: continue
                     val nm = d.optString("name"); val on = d.optBoolean("online")
+                    if (nm.equals(android.os.Build.MODEL, true)) continue   // that's THIS phone — already the 'local' option
                     val phone = nm.contains("SM-", true) || nm.contains("phone", true) || nm.contains("pixel", true) || nm.contains("galaxy", true)
                     list.add(DeviceOpt("dev:${d.optString("deviceId")}", nm,
-                        if (on) "real device · on-device engine (P1)" else "offline", if (phone) "📱" else "🖥", on))
+                        if (on) "real device · local engine coming (P1)" else "offline", if (phone) "📱" else "🖥", on))
                 }
                 list.add(DeviceOpt("auto", "Auto (let the ring choose)", "match by capability · coming (P3)", "🔀", false))
                 runDevices.value = list
