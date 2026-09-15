@@ -13,8 +13,6 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import engineer.myapp.gb.shared.Brand
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import me.friwi.jcefmaven.CefAppBuilder
 import me.friwi.jcefmaven.impl.progress.ConsoleProgressHandler
 import org.cef.CefApp
@@ -22,24 +20,25 @@ import org.cef.CefClient
 import org.cef.browser.CefBrowser
 import java.awt.BorderLayout
 import java.io.File
+import java.util.concurrent.TimeUnit
 import javax.swing.JPanel
 
 /**
- * S8 — real Chromium on the desktop via JCEF, embedded in Compose through a SwingPanel. This is the
- * engine that replaces Electron's Chromium; the drag / self-saving download / upload_file capabilities
- * migrate onto it next, each verified before Electron is retired (S9). JCEF's native binaries download
- * once on first launch into ~/.ghostbrowser/jcef.
+ * Real Chromium (JCEF) for the desktop app. Besides rendering, this exposes the primitives the desktop
+ * NODE needs to be driven by the cluster/ring: [cdp] (DevTools) and [evalJs] (JS with a return value),
+ * so navigate / read / click / type / screenshot all run the same way the Electron node runs them.
  */
 object Cef {
     @Volatile private var app: CefApp? = null
+    @Volatile private var sharedClient: CefClient? = null
+    private val installDir = File(System.getProperty("user.home"), ".ghostbrowser/jcef")
 
-    /** Build (once) the CefApp — downloads the platform natives on first call. Runs off the UI thread. */
     fun ensureApp(): CefApp {
         app?.let { return it }
         synchronized(this) {
             app?.let { return it }
             val builder = CefAppBuilder()
-            builder.setInstallDir(File(System.getProperty("user.home"), ".ghostbrowser/jcef"))
+            builder.setInstallDir(installDir)
             builder.setProgressHandler(ConsoleProgressHandler())
             builder.cefSettings.apply {
                 windowless_rendering_enabled = false
@@ -51,39 +50,83 @@ object Cef {
             return built
         }
     }
+
+    fun client(): CefClient {
+        sharedClient?.let { return it }
+        synchronized(this) {
+            sharedClient?.let { return it }
+            val c = ensureApp().createClient()
+            sharedClient = c
+            return c
+        }
+    }
+
+    fun newBrowser(url: String): CefBrowser = client().createBrowser(url, false, false)
+
+    /** One DevTools call → JSON result (blocking; call off the UI thread). */
+    fun cdp(browser: CefBrowser, method: String, paramsJson: String = "{}"): String {
+        return try {
+            browser.devToolsClient.executeDevToolsMethod(method, paramsJson).get(30, TimeUnit.SECONDS) ?: "{}"
+        } catch (e: Throwable) { "{\"error\":${jsonStr(e.message ?: "cdp error")}}" }
+    }
+
+    /** Evaluate JS in the page and get the string result back (Runtime.evaluate, awaits promises). */
+    fun evalJs(browser: CefBrowser, expression: String): String {
+        val params = "{\"expression\":${jsonStr(expression)},\"returnByValue\":true,\"awaitPromise\":true}"
+        val raw = cdp(browser, "Runtime.evaluate", params)
+        // raw = {"result":{"type":"string","value":"..."}} — pull out .result.value as a string
+        return extractResultValue(raw)
+    }
 }
 
-/** A real Chromium view showing [url]. Shows a loading state while the natives download the first time. */
+/** Minimal JSON string-escape (avoids a JSON lib in the desktop primitive layer). */
+internal fun jsonStr(s: String): String {
+    val sb = StringBuilder("\"")
+    for (c in s) when (c) {
+        '\\' -> sb.append("\\\\"); '"' -> sb.append("\\\"")
+        '\n' -> sb.append("\\n"); '\r' -> sb.append("\\r"); '\t' -> sb.append("\\t")
+        else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
+    }
+    return sb.append("\"").toString()
+}
+
+/** Pull result.value out of a Runtime.evaluate response, returning it as a plain string. */
+private fun extractResultValue(raw: String): String {
+    val key = "\"value\":"
+    val i = raw.indexOf(key); if (i < 0) return raw
+    var j = i + key.length
+    while (j < raw.length && raw[j].isWhitespace()) j++
+    if (j >= raw.length) return raw
+    return if (raw[j] == '"') {                       // quoted string → unescape
+        val sb = StringBuilder(); j++
+        while (j < raw.length) {
+            val c = raw[j]
+            if (c == '\\' && j + 1 < raw.length) {
+                when (raw[j + 1]) { 'n' -> sb.append('\n'); 'r' -> sb.append('\r'); 't' -> sb.append('\t'); '"' -> sb.append('"'); '\\' -> sb.append('\\'); else -> sb.append(raw[j + 1]) }
+                j += 2
+            } else if (c == '"') break else { sb.append(c); j++ }
+        }
+        sb.toString()
+    } else {                                          // number/bool/object → take until the matching close
+        val end = raw.indexOf(",\"", j).let { if (it < 0) raw.lastIndexOf('}') else it }
+        raw.substring(j, end.coerceAtLeast(j)).trim().trimEnd('}').trim()
+    }
+}
+
+/** The visible Chromium view. */
 @Composable
-fun JcefBrowser(url: String, modifier: Modifier = Modifier) {
+fun JcefBrowserView(browser: CefBrowser?, error: String?, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
-    var client by remember { mutableStateOf<CefClient?>(null) }
-    var browser by remember { mutableStateOf<CefBrowser?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        try {
-            val c = withContext(Dispatchers.IO) { Cef.ensureApp().createClient() }
-            val b = c.createBrowser(url, false, false)
-            client = c; browser = b
-        } catch (e: Throwable) { error = e.message ?: "failed to start Chromium" }
-    }
-    DisposableEffect(Unit) {
-        onDispose { runCatching { browser?.close(true) }; runCatching { client?.dispose() } }
-    }
-
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val b = browser
         when {
             error != null -> Text("Chromium error: $error", color = cs.error, fontSize = 13.sp)
-            b == null -> {
+            browser == null -> {
                 CircularProgressIndicator(color = Brand)
                 Text("Starting Chromium… (first run downloads the engine)", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 60.dp))
             }
             else -> SwingPanel(
-                background = cs.background,
-                modifier = Modifier.fillMaxSize(),
-                factory = { JPanel(BorderLayout()).apply { add(b.uiComponent, BorderLayout.CENTER) } },
+                background = cs.background, modifier = Modifier.fillMaxSize(),
+                factory = { JPanel(BorderLayout()).apply { add(browser.uiComponent, BorderLayout.CENTER) } },
             )
         }
     }

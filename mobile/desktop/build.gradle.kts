@@ -22,6 +22,7 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
     implementation("me.friwi:jcefmaven:127.3.1")   // S8: real Chromium (JCEF), natives auto-downloaded on first run
+    implementation("org.json:json:20240303")        // parse device-hub command JSON
 }
 
 compose.desktop {
