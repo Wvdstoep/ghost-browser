@@ -933,33 +933,74 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun baseRunDevices(): List<DeviceOpt> = listOf(
         DeviceOpt("local", "This phone", "on-device engine · real IP · runs now", "📱", true),
         DeviceOpt("cluster", "Cluster", "headless · scale · runs now", "☁", true),
-        DeviceOpt("auto", "Auto (let the ring choose)", "this phone if a model is set, else cluster", "🔀", true),
+        DeviceOpt("auto", "Auto (let the ring choose)", "picks the best device for the flow", "🔀", true),
     )
 
-    /** Fire the run on the chosen target. P0a: execution runs on the cluster flow engine (the only engine
-     *  today). On-device engines (run locally on this phone / the desktop) arrive in P1; until then a
-     *  device pick still runs on the cluster, and the status says so plainly. */
+    /** S4: this phone's capability record — sent on register (gb-control.js) and used by the cluster
+     *  router (/v1/device/route) so the ring picks this device only for runs it can actually handle. */
+    private fun phoneCaps(): JSONObject {
+        val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
+        val profs = JSONArray(); for (p in (vm.profiles.value ?: emptyList())) profs.put(p)
+        val feats = JSONArray().put("native_tap").put("upload_file").put("click_xy").put("drag_xy")
+        return JSONObject()
+            .put("platform", "android")
+            .put("mobileApp", true)   // native app → real touch events
+            .put("model", hasModel)   // can run the agent locally
+            .put("realIp", true)      // a real mobile-device IP
+            .put("profiles", profs)
+            .put("features", feats)
+    }
+
+    /** The flow's browser profile (from the shared cache), used as a routing preference. */
+    private fun flowProfile(flowId: String?): String {
+        try {
+            val flows = JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()
+            for (i in 0 until flows.length()) {
+                val w = flows.optJSONObject(i) ?: continue
+                if (w.optString("id") != flowId) continue
+                val nodes = w.optJSONArray("nodes") ?: JSONArray()
+                for (j in 0 until nodes.length()) {
+                    val nn = nodes.optJSONObject(j) ?: continue
+                    val p = nn.optString("profile"); if (p.isNotBlank()) return p
+                }
+            }
+        } catch (_: Exception) {}
+        return ""
+    }
+
+    @Volatile private var pendingAutoGoal: String = ""
+
+    /** Fire the run on the chosen target. Auto (S4) asks the cluster capability router which device from
+     *  the SHARED registry best fits the flow; a concrete pick runs here (local) or on the cluster. */
     private fun onRunTarget(target: String, goal: String) {
         val id = runFlowId.value
         runPhase.value = "running"
-        // P2/P3 (ring): capability routing. Auto → this phone when a model is configured (real IP),
-        // otherwise the cluster. Full mid-run reroute (hop when a device stalls) is the remaining piece.
-        val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
-        val resolved = if (target == "auto") (if (hasModel) "local" else "cluster") else target
-        if (target == "auto") vm.log(if (hasModel) "🔀 ring → this phone (on-device model set · real IP)" else "🔀 ring → cluster (no on-device model)")
-        if (resolved == "local") { runFlowLocally(id, goal); return }   // P1: the on-device engine
-        val onDevice = resolved.startsWith("dev:")
-        runStatus.value = when {
-            onDevice -> "Local engine on other devices lands with P1 — running on the cluster for now…"
-            target == "auto" && !hasModel -> "Ring chose the cluster (no on-device model)…"
-            else -> "Started on the cluster…"
+        if (target == "auto") {
+            // S4: the ring decides from the shared capability registry (this phone + the desktop node + …),
+            // matched to the flow's needs — not a local guess. Falls back to a local guess if the router
+            // is unreachable (e.g. the control channel isn't connected).
+            pendingAutoGoal = goal
+            runStatus.value = "Ring choosing the best device…"
+            val prefer = JSONObject().put("model", true)
+            val fp = flowProfile(id); if (fp.isNotBlank()) prefer.put("profile", fp)
+            val req = JSONObject().put("require", JSONObject()).put("prefer", prefer)
+            if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/device/route", req.toString(), "route")
+            else onBridge("route_err", "no cluster url")
+            return
         }
+        resolveAndRun(target, goal, id)
+    }
+
+    /** Run a resolved target: "local" → the on-device engine; anything else → the cluster (remote
+     *  drive of a sibling device is the next increment, so a dev:* pick runs on the cluster for now). */
+    private fun resolveAndRun(resolved: String, goal: String, id: String?) {
+        if (resolved == "local") { runFlowLocally(id, goal); return }
+        runStatus.value = if (resolved.startsWith("dev:"))
+            "Remote device-drive lands next — running on the cluster for now…" else "Started on the cluster…"
         if (id != null) {
             val body = if (goal.isBlank()) "{}" else JSONObject().put("input", JSONObject().put("goal", goal)).toString()
             apiCall("POST", "/v1/workflows/$id/run", body, "sheetrun")
-        } else {
-            runStatus.value = "! no flow selected"; runPhase.value = "done"
-        }
+        } else { runStatus.value = "! no flow selected"; runPhase.value = "done" }
     }
 
     /** P1 — the on-device engine. Runs a flow's agent-node goals LOCALLY on this phone via the same
@@ -1586,10 +1627,29 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     list.add(DeviceOpt("dev:${d.optString("deviceId")}", nm,
                         if (on) "real device · local engine coming (P1)" else "offline", if (phone) "📱" else "🖥", on))
                 }
-                list.add(DeviceOpt("auto", "Auto (let the ring choose)", "this phone if a model is set, else cluster", "🔀", true))
+                list.add(DeviceOpt("auto", "Auto (let the ring choose)", "picks the best device for the flow", "🔀", true))
                 runDevices.value = list
             } catch (e: Exception) { /* keep base list */ }
             "run_devices_err" -> { /* keep base list */ }
+            "route" -> try {
+                // S4: the capability router answered. deviceId==this phone → run locally; a sibling device
+                // → cluster for now (remote drive is next); null → cluster.
+                val o = JSONObject(data)
+                val did = o.optString("deviceId", ""); val nm = o.optString("name", ""); val reason = o.optString("reason", "")
+                val g = pendingAutoGoal; pendingAutoGoal = ""; val id = runFlowId.value
+                when {
+                    did.isNotBlank() && did == vm.deviceToken -> { vm.log("🔀 ring → this phone ($reason)"); runFlowLocally(id, g) }
+                    did.isNotBlank() -> { vm.log("🔀 ring identified $nm; running on the cluster (remote device-drive next)"); resolveAndRun("cluster", g, id) }
+                    else -> { vm.log("🔀 ring → cluster ($reason)"); resolveAndRun("cluster", g, id) }
+                }
+            } catch (e: Exception) { onBridge("route_err", e.message ?: "route parse") }
+            "route_err" -> {
+                // router unreachable → fall back to the local capability guess (works without the control channel)
+                val g = pendingAutoGoal; pendingAutoGoal = ""
+                val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
+                vm.log(if (hasModel) "🔀 ring → this phone (router offline; local guess)" else "🔀 ring → cluster (router offline; no model)")
+                if (hasModel) runFlowLocally(runFlowId.value, g) else resolveAndRun("cluster", g, runFlowId.value)
+            }
             "sheetrun" -> try {
                 val o = JSONObject(data); val runId = o.optString("runId")
                 if (o.has("error")) { runPhase.value = "done"; runStatus.value = "! ${o.optString("error")}" }
@@ -1672,6 +1732,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (url != null && url.contains("ghost-browser") && gbControlJs.isNotEmpty()) {
                     val js = gbControlJs.replace("__DEVICE_ID__", vm.deviceToken)
                         .replace("__DEVICE_NAME__", android.os.Build.MODEL.replace("\"", "").replace("\\", ""))
+                        .replace("__CAPS__", phoneCaps().toString())
                     view?.evaluateJavascript(js, null)
                 }
             }

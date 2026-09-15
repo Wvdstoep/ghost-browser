@@ -8,6 +8,8 @@
   if (window.__gbctl) return;
   window.__gbctl = true;
   var DEV = "__DEVICE_ID__", NAME = "__DEVICE_NAME__";
+  // S4: capability record — what this phone can do, so the cluster router can pick it for the right runs.
+  var CAPS = __CAPS__;
 
   window.__gbResult = function (id, status, bodyStr) {
     fetch('/v1/device/result', {
@@ -43,7 +45,7 @@
   function reg() {
     fetch('/v1/device/register', {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: DEV, name: NAME })
+      body: JSON.stringify({ deviceId: DEV, name: NAME, caps: CAPS })
     }).then(function (r) {
       if (r.ok) { GBHost.ctl('registered', DEV); loop(); }
       else { GBHost.ctl('regfail', String(r.status)); setTimeout(reg, 4000); }

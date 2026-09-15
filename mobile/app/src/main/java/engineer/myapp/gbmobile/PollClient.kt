@@ -20,7 +20,10 @@ class PollClient(
     private val browser: Agent.DeviceBrowser,
     private val screenshot: () -> ByteArray,
     private val log: (String) -> Unit,
-    private val isStopped: () -> Boolean
+    private val isStopped: () -> Boolean,
+    // S4: what this phone can DO — read live at register time so the cluster router (/v1/device/route)
+    // and the device ring pick this device only for runs it can actually handle.
+    private val caps: () -> JSONObject = { JSONObject() }
 ) {
     private val root = base.trim().trimEnd('/')
 
@@ -57,7 +60,9 @@ class PollClient(
     private fun register(): Boolean {
         return try {
             val c = conn("/v1/device/register", "POST"); c.doOutput = true; c.readTimeout = 15000
-            c.outputStream.use { it.write(JSONObject().put("deviceId", deviceId).put("name", deviceName).toString().toByteArray()) }
+            val payload = JSONObject().put("deviceId", deviceId).put("name", deviceName)
+            try { payload.put("caps", caps()) } catch (_: Exception) {}
+            c.outputStream.use { it.write(payload.toString().toByteArray()) }
             val code = c.responseCode
             if (code in 200..299) return true
             val err = try { BufferedReader(InputStreamReader(c.errorStream ?: c.inputStream)).use { it.readText() } } catch (e: Exception) { "" }
