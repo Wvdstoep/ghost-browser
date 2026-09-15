@@ -984,20 +984,35 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "browser_posts: read the post-like text blocks of a feed (Facebook groups etc.) — use this to READ a social feed, not browser_read",
             "browser_type {index,text}: type into element i",
             "browser_scroll {dy}: scroll the page",
+            "switch_profile {name}: switch the active tab to another on-device profile (e.g. p_facebook) — its cookies/login",
             "fetch_url {url,method,body,headers}: authenticated same-origin fetch from the active tab",
             "list_workflows: automations with run counts + verified flags",
             "create_workflow {name,steps:[goal strings],role}: build a trigger->agent automation",
             "run_workflow {id}: run an automation and wait for its outcome",
             "get_run {runId} / workflow_runs {id}: run status/outcome / recent runs",
-            "list_profiles / list_platforms / list_roles",
+            "list_profiles: the ON-DEVICE browser profiles on THIS phone, which is active, and the current tab (url+profile)",
+            "list_platforms / list_roles",
             "list_devices: connected device nodes (phone/laptop)",
-            "device_command {deviceId,path,body}: drive another node (path e.g. /v1/navigate,/v1/info,/v1/fetch)"
+            "device_command {deviceId,path,body}: drive ANOTHER node — NOT for the user's own signed-in sites on this phone"
         ).joinToString("\n") { "- $it" }
-        return "You are the Ghost Browser agent — you can hold a normal conversation AND take real actions by calling tools. " +
+        return "You are the Ghost Browser agent running ON this phone. You DRIVE the phone's own real, " +
+            "logged-in browser tab — the user is often already signed in on it (e.g. Facebook in the " +
+            "p_facebook profile). To check messages, notifications, feeds or pages on a site the user " +
+            "uses, DO IT ON THE ACTIVE TAB: browser_navigate to the site, then browser_read / browser_posts; " +
+            "switch_profile first if the login lives in another profile. Do NOT use list_profiles or " +
+            "device_command to reach the user's own accounts — those are for cluster data and OTHER devices. " +
             "Each turn reply with EXACTLY ONE compact JSON object and nothing else:\n" +
             "  {\"reply\":\"text to the user\"}  — to talk, answer, or report what you did\n" +
             "  {\"tool\":\"<name>\",\"args\":{...}} — to act; you then get TOOL RESULT and continue\n" +
             "Chain tools as needed; when done or you need the user, use reply. Be concise. Never invent tool results. Tools:\n" + tools
+    }
+
+    /** Live context handed to the agent each turn: the tab it actually controls right now. */
+    private fun agentTabContext(): String {
+        val u = if (this::web.isInitialized) (web.url ?: "") else ""
+        val p = vm.currentProfile.value ?: "default"
+        return "CURRENT TAB: ${u.ifBlank { "(home)" }} — profile \"$p\". This is a REAL browser tab; the user " +
+            "may already be signed in here. Reach the user's own accounts through THIS tab (browser_*), not the cluster."
     }
 
     private fun sendAgentMessage(input: String) {
@@ -1013,9 +1028,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         agentPushMsg("user", text, null)
         // adopt the active profile's role (like the platform's per-profile agent roles)
         val roleName = roleForProfile(vm.currentProfile.value ?: "default")
-        val sysPrompt = if (roleName.isNotBlank())
+        val base = if (roleName.isNotBlank())
             "ROLE: you are acting as \"$roleName\" — ${roleDescription(roleName)} Stay within this role's remit.\n\n" + agentSystemPrompt()
         else agentSystemPrompt()
+        val sysPrompt = base + "\n\n" + agentTabContext()
         if (roleName.isNotBlank()) vm.log("▶ agent role: $roleName (profile ${vm.currentProfile.value})")
         agentBusy = true; runOnUiThread { shellUi.agentBusy.value = true }
         agentExec.execute {
@@ -1089,7 +1105,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
             "get_run" -> { val rr = apiAwait("GET", "/v1/workflow-runs/${a.optString("runId")}", null); val ro = try { JSONObject(rr) } catch (e: Exception) { null }; "{\"status\":${JSONObject.quote(ro?.optString("status") ?: "?")},\"outcome\":${JSONObject.quote(runOutcome(ro))}}" }
             "workflow_runs" -> apiAwait("GET", "/v1/workflows/${a.optString("id")}/runs", null)
-            "list_profiles" -> apiAwait("GET", "/v1/profiles", null)
+            "list_profiles" -> {
+                // The ON-DEVICE profiles on THIS phone (each its own cookies/login) + the current tab.
+                val arr = JSONArray(); for (p in (vm.profiles.value ?: emptyList())) arr.put(p)
+                val cur = vm.currentProfile.value ?: "default"
+                val u = if (this::web.isInitialized) (web.url ?: "") else ""
+                JSONObject().put("profiles", arr).put("active", cur)
+                    .put("currentTab", JSONObject().put("url", u).put("profile", cur)).toString()
+            }
+            "switch_profile" -> {
+                val name = a.optString("name").trim()
+                if (name.isBlank()) "{\"error\":\"name required\"}"
+                else { runOnUiThread { vm.selectProfile(name); renderChips(); newTab(); shellUi.screen.value = "agent" }; Thread.sleep(600); "{\"ok\":true,\"active\":${JSONObject.quote(name)}}" }
+            }
             "list_platforms" -> apiAwait("GET", "/v1/profiles/presets", null)
             "list_roles" -> apiAwait("GET", "/v1/agent/roles", null)
             "list_devices" -> apiAwait("GET", "/v1/device/list", null)
