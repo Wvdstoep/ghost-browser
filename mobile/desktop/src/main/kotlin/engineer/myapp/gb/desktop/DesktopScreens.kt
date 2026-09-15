@@ -33,6 +33,7 @@ class DesktopState {
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
     val activity = mutableStateOf("")
     val nodeStatus = mutableStateOf("node: connecting…")
+    val dark = mutableStateOf(true)
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -155,20 +156,31 @@ fun DeviceHubScreenD(st: DesktopState) {
 
 /* ── Settings ──────────────────────────────────────────────────────────────────────────────── */
 @Composable
-fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit) {
+fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    LaunchedEffect(Unit) { if (st.platforms.value.isEmpty()) loadPlatforms(st) }
+    LaunchedEffect(Unit) { if (st.platforms.value.isEmpty()) loadPlatforms(st); if (st.devices.value.isEmpty()) loadDevices(st) }
     Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall)
+        Text("Everything for this device and your account", color = cs.onSurfaceVariant, fontSize = 12.sp)
         Spacer(Modifier.height(16.dp))
-        SectionD("Account & sync") {
-            Text("Cluster: " + (if (Cluster.connected) "connected ✓" else "connecting…"), color = if (Cluster.connected) Brand else cs.onSurfaceVariant, fontSize = 13.sp)
+
+        SectionD("☁  Account & sync") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(9.dp).clip(CircleShape).background(if (Cluster.connected) Brand else cs.onSurfaceVariant))
+                Spacer(Modifier.width(8.dp))
+                Text(if (Cluster.connected) "Cluster: connected ✓" else "Cluster: connecting…", color = cs.onSurface, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(6.dp))
             Text(Cluster.clusterUrl, color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-            Spacer(Modifier.height(8.dp))
-            Text(st.nodeStatus.value, color = cs.onSurfaceVariant, fontSize = 11.sp)
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(onClick = { loadPlatforms(st); loadDevices(st); loadFlows(st) }, shape = RoundedCornerShape(12.dp)) { Text("Re-sync now") }
+            Note("Sign in on the Browser tab (my-app.engineer → open Ghost Browser from Tools). The node then auto-registers — one account, same data on every device.")
         }
-        SectionD("Platforms") {
-            if (st.platforms.value.isEmpty()) Text("Load platforms to open & sign in.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+
+        SectionD("👤  Profiles") {
+            Text("Open a platform", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Spacer(Modifier.height(6.dp))
+            if (st.platforms.value.isEmpty()) Text("Load your platforms from the cluster.", color = cs.onSurfaceVariant, fontSize = 12.sp)
             else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 st.platforms.value.forEach { p ->
                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant).clickable { onOpenUrl(p.site) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -178,9 +190,56 @@ fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit) {
             }
             TextButton(onClick = { loadPlatforms(st) }) { Text("Load platforms from cluster") }
         }
-        SectionD("Activity") {
+
+        SectionD("🖥  Devices & ring") {
+            Text("This machine", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Text("desktop · real Chromium (JCEF) · CDP", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(st.hubSummary.value.ifBlank { "Connected devices" }, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = { loadDevices(st) }) { Text("Refresh") }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                st.devices.value.forEach { d ->
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (d.online) Brand else cs.onSurfaceVariant))
+                        Spacer(Modifier.width(8.dp))
+                        Text(d.name, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(d.type, color = cs.onSurfaceVariant, fontSize = 10.sp)
+                    }
+                }
+            }
+            TextButton(onClick = onOpenDevices) { Text("Open full Device Hub") }
+        }
+
+        SectionD("🛡  Network & exit") {
+            Text("This desktop operates on its own machine network. The cluster GB keeps its own in-image exit node.", fontSize = 13.sp)
+        }
+
+        SectionD("🎨  Appearance") {
+            Segmented(listOf("Dark", "Light"), if (st.dark.value) 0 else 1) { st.dark.value = it == 0 }
+        }
+
+        SectionD("📜  Activity") {
             Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
                 Text(st.activity.value.ifBlank { "No activity yet." }, Modifier.heightIn(min = 60.dp, max = 200.dp).verticalScroll(rememberScrollState()).padding(12.dp), color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun Note(text: String) { Spacer(Modifier.height(10.dp)); Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp) }
+
+@Composable
+private fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, cs.outline, RoundedCornerShape(12.dp))) {
+        options.forEachIndexed { i, opt ->
+            val on = i == selected
+            Box(Modifier.weight(1f).background(if (on) Brand else androidx.compose.ui.graphics.Color.Transparent).clickable { onSelect(i) }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+                Text(opt, color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
             }
         }
     }
