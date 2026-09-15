@@ -3,6 +3,7 @@ package engineer.myapp.gb.desktop
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -10,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +43,9 @@ class DesktopState {
     val apiKey = mutableStateOf("")
     val model = mutableStateOf("llama3.1")
     var gbJs = ""
+    // new-tab home
+    val homeFeed = mutableStateOf<List<LearnItem>>(emptyList())
+    val homeLoading = mutableStateOf(false)
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -313,5 +318,74 @@ fun AgentChatD(st: DesktopState, main: org.cef.browser.CefBrowser?) {
     toolView?.let { tv ->
         AlertDialog(onDismissRequest = { toolView = null }, confirmButton = { TextButton(onClick = { toolView = null }) { Text("Close") } },
             title = { Text("⚙ ${tv.tool}") }, text = { Column(Modifier.verticalScroll(rememberScrollState())) { Text(tv.content.ifBlank { "(empty)" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp) } })
+    }
+}
+
+/* ── New-tab home + /learn feed (desktop) ─────────────────────────────────────────────────────── */
+fun loadLearn(st: DesktopState) = bg {
+    st.homeLoading.value = true
+    val items = ArrayList<LearnItem>()
+    try {
+        val c = java.net.URL("https://my-app.engineer/learn/").openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 12000; c.readTimeout = 12000; c.setRequestProperty("Accept", "text/html")
+        val html = c.inputStream.bufferedReader().use { it.readText() }
+        val rx = Regex("<li><a href=\"/learn/([^\"]+)\"><b>(.*?)</b></a>(?:<span>(.*?)</span>)?</li>", RegexOption.DOT_MATCHES_ALL)
+        for (m in rx.findAll(html)) {
+            val slug = m.groupValues[1]; val title = unesc(m.groupValues[2]); val desc = unesc(m.groupValues[3])
+            if (slug.isNotBlank() && title.isNotBlank()) items.add(LearnItem(slug, title, desc))
+        }
+    } catch (e: Exception) {}
+    st.homeFeed.value = items.take(30); st.homeLoading.value = false
+}
+private fun unesc(s: String) = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&#x27;", "'")
+
+@Composable
+fun HomePageD(st: DesktopState, onOpenUrl: (String) -> Unit, onSearch: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    LaunchedEffect(Unit) { if (st.homeFeed.value.isEmpty()) loadLearn(st); if (st.platforms.value.isEmpty()) loadPlatforms(st) }
+    Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(horizontal = 32.dp)) {
+        Spacer(Modifier.height(44.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Brand), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.width(12.dp))
+            Row { Text("Ghost", color = cs.onBackground, fontSize = 32.sp, fontWeight = FontWeight.SemiBold); Text("Browser", color = Brand, fontSize = 32.sp, fontWeight = FontWeight.SemiBold) }
+        }
+        Spacer(Modifier.height(24.dp))
+        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(26.dp), modifier = Modifier.fillMaxWidth(0.7f).align(Alignment.CenterHorizontally).height(52.dp).clickable { onSearch() }) {
+            Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(14.dp)); Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 16.sp)
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        if (st.platforms.value.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.Center) {
+                st.platforms.value.take(12).forEach { p ->
+                    Column(Modifier.width(84.dp).clickable { onOpenUrl(p.site) }.padding(vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(Modifier.size(50.dp).clip(CircleShape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) { Text(p.label.take(1).uppercase(), color = Brand, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                        Spacer(Modifier.height(6.dp)); Text(p.label, color = cs.onSurface, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+        }
+        Row(Modifier.fillMaxWidth(0.8f).align(Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+            Text("From my-app.engineer", color = cs.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (st.homeLoading.value) CircularProgressIndicator(Modifier.size(16.dp), color = Brand, strokeWidth = 2.dp) else TextButton(onClick = { loadLearn(st) }) { Text("Refresh") }
+        }
+        Spacer(Modifier.height(8.dp))
+        Column(Modifier.fillMaxWidth(0.8f).align(Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (st.homeFeed.value.isEmpty() && !st.homeLoading.value) Text("No articles yet.", color = cs.onSurfaceVariant, fontSize = 13.sp)
+            st.homeFeed.value.forEach { it2 ->
+                Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth().clickable { onOpenUrl("https://my-app.engineer/learn/" + it2.slug) }) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(it2.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 21.sp)
+                        if (it2.description.isNotBlank()) { Spacer(Modifier.height(6.dp)); Text(it2.description, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp) }
+                        Spacer(Modifier.height(8.dp)); Text("my-app.engineer · Learn", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(28.dp))
     }
 }
