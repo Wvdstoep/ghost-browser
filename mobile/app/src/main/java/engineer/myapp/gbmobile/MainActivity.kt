@@ -401,6 +401,38 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     override fun evalGb(expr: String): String = evalJs(gbJs + "\n" + expr)
     override fun currentUrl(): String = lastUrl
 
+    /** A REAL tap via MotionEvent — trusted input that JS-onClick sites (Facebook rows/buttons) actually
+     *  honor, unlike synthetic DOM events (window.__gb.tap), which they ignore. [coordsJson] is the
+     *  {x,y,iw,ih} object from window.__gb.coords/coordsText (element centre in CSS px + viewport size);
+     *  map CSS px -> View px by the WebView's on-screen size, then dispatch ACTION_DOWN+ACTION_UP. */
+    private fun nativeTapFromCoords(coordsJson: String): String {
+        val clean = coordsJson.trim()
+        val j = try { JSONObject(clean) } catch (e: Exception) {
+            try { JSONObject(clean.trim('"').replace("\\\"", "\"")) } catch (e2: Exception) {
+                return "{\"error\":\"badcoords\",\"raw\":" + JSONObject.quote(coordsJson) + "}"
+            }
+        }
+        if (j.has("err")) return j.toString()
+        val cssX = j.optDouble("x", -1.0); val cssY = j.optDouble("y", -1.0)
+        val iw = j.optDouble("iw", 0.0); val ih = j.optDouble("ih", 0.0)
+        if (cssX < 0 || iw <= 0.0) return "{\"error\":\"nocoords\"}"
+        val latch = CountDownLatch(1)
+        runOnUiThread {
+            try {
+                val vw = web.width.toDouble(); val vh = web.height.toDouble()
+                val x = (cssX * (if (iw > 0) vw / iw else 1.0)).toFloat()
+                val y = (cssY * (if (ih > 0) vh / ih else 1.0)).toFloat()
+                val dt = android.os.SystemClock.uptimeMillis()
+                val down = android.view.MotionEvent.obtain(dt, dt, android.view.MotionEvent.ACTION_DOWN, x, y, 0)
+                val up = android.view.MotionEvent.obtain(dt, dt + 70, android.view.MotionEvent.ACTION_UP, x, y, 0)
+                web.dispatchTouchEvent(down); web.dispatchTouchEvent(up)
+                down.recycle(); up.recycle()
+            } catch (e: Exception) { /* best-effort */ } finally { latch.countDown() }
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        return "{\"ok\":true,\"tap\":[${cssX.toInt()},${cssY.toInt()}]}"
+    }
+
     /** Cookies for [url] from the ACTIVE profile's store (multi-profile keeps them out of the global
      *  CookieManager). This is why the SSO session must be read per-profile, not globally. */
     private fun cookiesFor(url: String): String {
@@ -1098,8 +1130,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "browser_read" -> { waitSettle(4000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
             "browser_posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
             "browser_navigate", "open_tab" -> "{\"url\":" + JSONObject.quote(navigate(a.optString("url"))) + "}"
-            "browser_click_text" -> evalGb("window.__gb.clickText(" + JSONObject.quote(a.optString("text")) + "," + a.optInt("nth", 0) + ")")
-            "browser_click" -> evalGb("window.__gb.click(${a.optInt("index", -1)})")
+            "browser_click_text" -> nativeTapFromCoords(evalGb("window.__gb.coordsText(" + JSONObject.quote(a.optString("text")) + "," + a.optInt("nth", 0) + ")"))
+            "browser_click" -> nativeTapFromCoords(evalGb("window.__gb.coords(${a.optInt("index", -1)})"))
             "browser_type" -> evalGb("window.__gb.type(${a.optInt("index", -1)}," + JSONObject.quote(a.optString("text")) + ")")
             "browser_scroll" -> evalGb("window.__gb.scroll(${a.optInt("dy", 600)})")
             "fetch_url" -> fetchInPage(a)
@@ -1257,8 +1289,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                             waitSettle(6000)
                             "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
                         }
-                        "/v1/click_text" -> evalGb("window.__gb.clickText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")")
-                        "/v1/click" -> evalGb("window.__gb.click(${body.optInt("index", -1)})")
+                        "/v1/click_text" -> nativeTapFromCoords(evalGb("window.__gb.coordsText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")"))
+                        "/v1/click" -> nativeTapFromCoords(evalGb("window.__gb.coords(${body.optInt("index", -1)})"))
                         "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
                         "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
                         "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
