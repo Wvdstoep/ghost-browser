@@ -80,6 +80,9 @@ private fun runApp() = application {
             Cluster.control = control
             Cluster.clusterUrl = clusterUrl
             val gbJs = readResourceText("/gb.js")
+            state.gbJs = gbJs
+            val (ep, key, model) = Agent.load()
+            state.endpoint.value = ep; state.apiKey.value = key; state.model.value = model
             withContext(Dispatchers.IO) { Thread.sleep(1500) }
             DesktopNode(mb, deviceId(), hostName(), gbJs) { line -> println(line); state.log(line) }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
@@ -109,15 +112,8 @@ private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: Deskto
             "flows" -> FlowsScreenD(state)
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
-            else -> Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(56.dp).background(Brand, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 34.sp) }
-                    Spacer(Modifier.height(16.dp))
-                    Text("Agent chat lands next (LLM tool loop, drives this browser).", color = cs.onSurfaceVariant, fontSize = 15.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text(state.nodeStatus.value, color = cs.onSurfaceVariant, fontSize = 12.sp)
-                }
-            }
+            "agent" -> AgentChatD(state, mainBrowser)
+            else -> JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
         }
     }
 }
