@@ -14,7 +14,6 @@ import org.json.JSONObject
  */
 class DesktopNode(
     private val main: CefBrowser,
-    private val control: CefBrowser,
     private val deviceId: String,
     private val deviceName: String,
     private val gbJs: String,
@@ -31,19 +30,19 @@ class DesktopNode(
     fun start() { Thread({ runLoop() }, "gb-desktop-node").apply { isDaemon = true }.start() }
     fun stop() { stopped = true }
 
-    /** An authed cluster call as a same-origin fetch inside the control browser (SSO session). */
-    private fun authed(method: String, path: String, body: String?): String {
-        val opt = StringBuilder("{method:").append(jsonStr(method)).append(",credentials:'include',headers:{'Content-Type':'application/json'}")
-        if (body != null) opt.append(",body:").append(jsonStr(body))
-        opt.append("}")
-        return Cef.evalJs(control, "fetch(${jsonStr(path)},$opt).then(function(r){return r.text()})")
-    }
+    /** An authed cluster call (rides the control browser's session, on the GB origin). */
+    private fun authed(method: String, path: String, body: String?): String = Cluster.authed(method, path, body)
 
     private fun runLoop() {
-        while (!stopped) {                       // register (retries until the user is signed in)
+        var tries = 0
+        while (!stopped) {                       // register (retries until the user is signed in + GB opened)
             val reg = authed("POST", "/v1/device/register",
                 JSONObject().put("deviceId", deviceId).put("name", deviceName).put("caps", JSONObject(caps)).toString())
-            if (reg.contains("\"ok\":true") || reg.contains("\"deviceId\"")) { registered = true; log("● desktop node registered as \"$deviceName\""); break }
+            if (reg.contains("\"ok\":true") || reg.contains("\"deviceId\"")) {
+                registered = true; Cluster.connected = true
+                log("● desktop node registered as \"$deviceName\""); break
+            }
+            log("node: register reply = " + reg.replace("\n", " ").take(160))
             Thread.sleep(4000)
         }
         while (!stopped) {                        // poll → run → result

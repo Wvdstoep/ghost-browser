@@ -63,10 +63,15 @@ object Cef {
 
     fun newBrowser(url: String): CefBrowser = client().createBrowser(url, false, false)
 
-    /** One DevTools call → JSON result (blocking; call off the UI thread). */
+    /** One DevTools call → JSON result (blocking; call off the UI thread). Waits for the native browser
+     *  + its DevTools client to come up (getDevToolsClient() is null until the browser is created). */
     fun cdp(browser: CefBrowser, method: String, paramsJson: String = "{}"): String {
         return try {
-            browser.devToolsClient.executeDevToolsMethod(method, paramsJson).get(30, TimeUnit.SECONDS) ?: "{}"
+            var dt = browser.devToolsClient
+            var n = 0
+            while (dt == null && n < 40) { try { browser.createImmediately() } catch (_: Throwable) {}; Thread.sleep(300); dt = browser.devToolsClient; n++ }
+            if (dt == null) return "{\"error\":\"devtools not ready\"}"
+            dt.executeDevToolsMethod(method, paramsJson).get(30, TimeUnit.SECONDS) ?: "{}"
         } catch (e: Throwable) { "{\"error\":${jsonStr(e.message ?: "cdp error")}}" }
     }
 

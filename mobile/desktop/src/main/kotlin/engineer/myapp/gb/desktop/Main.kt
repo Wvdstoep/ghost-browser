@@ -49,10 +49,13 @@ fun main() = application {
                     isUndecorated = true; setSize(1, 1); setLocation(-4000, -4000)
                     add(control.uiComponent); isVisible = true
                 }
+                try { control.createImmediately() } catch (e: Throwable) {}   // ensure the native browser (+ devtools) comes up
             }
+            Cluster.control = control
+            Cluster.clusterUrl = clusterUrl
             val gbJs = readResourceText("/gb.js")
             withContext(Dispatchers.IO) { Thread.sleep(1500) }
-            DesktopNode(mb, control, deviceId(), hostName(), gbJs) { line ->
+            DesktopNode(mb, deviceId(), hostName(), gbJs) { line ->
                 println(line); nodeStatus = line
             }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
