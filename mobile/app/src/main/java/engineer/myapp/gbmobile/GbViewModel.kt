@@ -30,6 +30,12 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         set(v) { sp.edit().putString("customUrl", v).apply() }
     var useLocal: Boolean get() = sp.getBoolean("useLocal", false)
         set(v) { sp.edit().putBoolean("useLocal", v).apply() }
+    var hfToken: String get() = sp.getString("hfToken", "") ?: ""
+        set(v) { sp.edit().putString("hfToken", v).apply() }
+
+    // --- appearance --- (0 = follow system, 1 = light, 2 = dark)
+    var themeMode: Int get() = sp.getInt("themeMode", 0)
+        set(v) { sp.edit().putInt("themeMode", v).apply() }
 
     // --- cluster (my-app.engineer SSO) ---
     var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
