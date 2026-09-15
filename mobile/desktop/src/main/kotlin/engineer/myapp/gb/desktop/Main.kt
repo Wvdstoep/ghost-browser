@@ -33,8 +33,9 @@ fun main() = application {
 private fun DesktopShell() {
     val cs = MaterialTheme.colorScheme
     var screen by remember { mutableStateOf("browser") }
+    val homeUrl = "https://my-app.engineer"
     GbScaffold(
-        host = "",
+        host = if (screen == "browser") "my-app.engineer" else "",
         tabCount = 1,
         selected = screen,
         onFocusUrl = {},
@@ -42,7 +43,9 @@ private fun DesktopShell() {
         onOpenMenu = {},
         onNav = { screen = it },
     ) {
-        Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
+        if (screen == "browser") {
+            JcefBrowser(homeUrl, Modifier.fillMaxSize())   // real Chromium (S8)
+        } else Box(Modifier.fillMaxSize().background(cs.background), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.size(56.dp).background(Brand, androidx.compose.foundation.shape.RoundedCornerShape(16.dp)), contentAlignment = Alignment.Center) {
                     Text("G", color = BrandOn, fontSize = 34.sp)
@@ -50,10 +53,9 @@ private fun DesktopShell() {
                 Spacer(Modifier.height(16.dp))
                 Text(
                     when (screen) {
-                        "browser" -> "Real Chromium (JCEF) lands here in S8"
-                        "agent" -> "Agent — shared with the phone"
-                        "flows" -> "Flows — shared with the phone"
-                        else -> "Settings — shared with the phone"
+                        "agent" -> "Agent — shared with the phone (wires up next)"
+                        "flows" -> "Flows — shared with the phone (wires up next)"
+                        else -> "Settings — shared with the phone (wires up next)"
                     },
                     color = cs.onSurfaceVariant, fontSize = 15.sp,
                 )
