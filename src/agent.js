@@ -297,6 +297,7 @@ const TOOLS = [
       url: { type: 'string', description: 'exactly as listed by google() or seen on a page — never typed from memory' },
     }, required: ['url'] } } },
 
+  { type: 'function', function: { name: 'collect', description: 'Save ONE thing you found - a person, a company, an address, a profile with its photo, a job post, ANY item worth keeping. This is for data gathering of every shape, not just leads: put what it is in title, and every detail in fields as key/value (for example an email, a role, an address). Add url if it links somewhere, and image for a photo or avatar URL. Call it the moment you find each item, one call per item.', parameters: { type: 'object', properties: { title: { type: 'string', description: 'what this item is - a name, a company, a headline' }, fields: { type: 'object', description: 'every detail as key:value' }, url: { type: 'string', description: 'a link to it, if any' }, image: { type: 'string', description: 'a photo or avatar URL, if any' } }, required: ['title'] } } },
   { type: 'function', function: { name: 'save_lead', description: 'Record someone worth approaching. Do this the moment you find one — do not wait until the end. On a social site, a lead is a PERSON who wrote a PARTICULAR THING in a PARTICULAR PLACE: fill in the person, the post and the group, because a reply that does not refer to their own words is the one that reads as a bot.', parameters: { type: 'object', properties: {
       name: { type: 'string', description: 'the person, as their profile shows it' },
       why: { type: 'string', description: 'what in their own words makes them a lead' },
@@ -1932,6 +1933,12 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 + (r.emails.length ? `\nEmail on the page: ${r.emails.join(', ')}` : '')
                 + (r.phones.length ? `\nPhone on the page: ${r.phones.join(', ')}` : '')
                 + `\n\n${r.text}`);
+              break;
+            }
+            case 'collect': {
+              const item = jobsStore.addResult(job, { title: a.title, fields: (a.fields && typeof a.fields === 'object') ? a.fields : {}, url: a.url || '', image: a.image || '' });
+              if (item) { jobsStore.step(job, 'result', item.title, { url: item.url }); observe(`Saved "${item.title}". Keep going - collect each item as you find it, then finish.`); }
+              else observe('Already had that one - skip it and collect the next.');
               break;
             }
             case 'save_lead': {
