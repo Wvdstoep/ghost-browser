@@ -1422,7 +1422,7 @@ function makeRunAgent(client) {
   // 5-step flow whose thinking steps briefly overlap must not trip "your plan allows 3 sessions".
   const owner = client.owner;
   const maxConcurrent = Math.max(client.maxConcurrent || 2, Number(process.env.MAX_CONTEXTS) || 8);
-  return async ({ node, goal, autoApprove, workflowId, runId }) => {
+  return async ({ node, goal, autoApprove, workflowId, runId, context }) => {
     const cfg = { ...settingsStore.read() };
     // Auto-reply: when the owner has flipped an automation to auto-send, its acting steps approve
     // themselves instead of parking for a yes. The role's own judgment (skip your own post, skip
@@ -1439,7 +1439,9 @@ function makeRunAgent(client) {
     let s = want ? pool.listFor(owner).find((x) => x.profile === want) : null;
     if (s) s = pool.get(s.sessionId);
     if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want || undefined, takeover: true }); s = pool.get(o.sessionId); }
+    const _in = (context && context.input) || {};
     const job = jobs.create({ owner, goal: String(goal).slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: workflowId || null, runId: runId || null, nodeId: node.id || null,
+      feedKey: _in.feedKey || null, feedWorkflowId: _in.feedWorkflowId || null,
       /* The step's own budget (see cleanNode); 0 keeps the browser default. */
       maxSteps: Number(node.maxSteps) || 0, maxPages: Number(node.maxPages) || 0 });
     s.job = job.id; job.role = roles.canonical(node.role);

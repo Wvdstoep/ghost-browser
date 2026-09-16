@@ -2166,6 +2166,14 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
               if (!approved) {
                 const p = jobsStore.propose(job, { kind, index: Number(a.index), label, text, why: String(a.why || ''), url: page().url() });
                 proposedUrl = p.url || page().url();
+                /* WATCHER FOLLOW-UP DRAFT: if this act belongs to a watcher feed item, write the drafted
+                   text straight onto that item NOW, while the job is alive — so a job prune or a pod roll
+                   after this point can never lose the draft. This is the reliable path; the run-completion
+                   write-back and the reconcile sweep are only backups. */
+                if (job.feedWorkflowId && job.feedKey && text) {
+                  try { require('./watcherFeed').mark(job.feedWorkflowId, job.feedKey, { draft: text, draftJobId: job.id, draftPid: p.pid }); }
+                  catch (e) { /* best effort — the backups still cover it */ }
+                }
                 jobsStore.step(job, 'ask', `waiting for you: ${kind}${text ? ` — "${text.slice(0, 160)}"` : ` on "${label}"`}`, { pid: p.pid });
                 const decided = await awaitDecision(job, p.pid, signal, () => { try { session.lastUsed = Date.now(); } catch { /* session may be swapping */ } });
                 approved = decided?.state === 'approved';
