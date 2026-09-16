@@ -69,10 +69,13 @@ function persist(j) {
   } catch { /* a job that cannot be written is still a job worth finishing */ }
 }
 
-function create({ owner, goal, companyId, profile, sessionId, workflowId, runId, nodeId, maxSteps = 0, maxPages = 0 }) {
+function create({ owner, goal, companyId, profile, sessionId, workflowId, runId, nodeId, maxSteps = 0, maxPages = 0, feedKey = null, feedWorkflowId = null }) {
   const j = {
     id: id(), owner, goal, companyId: companyId || null, profile: profile || null, sessionId,
     workflowId: workflowId || null, runId: runId || null,
+    /* When this job is a watcher follow-up drafting a reply, the feed item it belongs to — so the
+       drafted proposal is written straight back onto that item the moment it is proposed. */
+    feedKey: feedKey || null, feedWorkflowId: feedWorkflowId || null,
     /* WHICH STEP of the flow this is. The route card's intent is the step, not the role: the same
        step does the same act on every run, which is the repetition a card pays for. */
     nodeId: nodeId || null,
