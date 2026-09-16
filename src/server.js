@@ -1551,6 +1551,10 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
   if (runningWatchers.has(wf.id)) return res.json({ runId: null, status: 'busy', note: 'a run for this watcher is already in progress' });
   runningWatchers.add(wf.id);
+  if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'posts') {
+    postWatchTick(wf, consoleOwner() || req.client.owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+    return res.json({ runId, status: 'running', mode: 'posts' });
+  }
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
     .then(() => triggerFollowUps(wf, req.client.owner))
     .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`))
@@ -1699,6 +1703,53 @@ function scheduleDue(cfg, lastMs, when) {
 const runningWatchers = new Set();
 
 /*
+ * POST WATCHER PASS. A watcher whose config says mode:"posts" is not driven as a flow: the server
+ * crawls each watched post on the profile session (deterministic, no model at the wheel), folds the
+ * comment tree into the feed with every branch's standing, and drafts one dedicated reply per person
+ * waiting on the owner - a text call with the post and the whole branch as context. See postWatch.js.
+ */
+async function postWatchTick(wf, owner) {
+  const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const cfg = feed.getConfig(wf.id);
+  const urls = pw.discover(wf.id, cfg, feed);
+  if (!urls.length) { log.info(`[post-watch] "${wf.name}": no posts to watch yet`); return; }
+  const llmCfg = settingsStore.read();
+  const want = profiles.safeName(cfg.profile || 'facebook');
+  const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  // oldest-crawled first, so a busy pass still gets round to every post over time
+  const last = cfg.lastCrawl || {};
+  const order = urls.slice().sort((a, b) => (last[a] || 0) - (last[b] || 0)).slice(0, Number(cfg.maxPostsPerPass) || 6);
+  for (const url of order) {
+    try {
+      let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
+      if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+      const tree = await pw.crawl(s.page, url, log);
+      pw.store(tree);
+      const entries = pw.ingest(wf.id, tree, cfg, feed);
+      const made = await pw.draftAll(wf.id, tree, entries, cfg, llmCfg, feed, log);
+      log.info(`[post-watch] ${url}: ${tree.nodes.length} message(s), ${entries.filter((e) => e.needsReply).length} waiting on you, ${made} new draft(s)`);
+      feed.setConfig(wf.id, { lastCrawl: Object.assign({}, feed.getConfig(wf.id).lastCrawl || {}, { [url]: Date.now() }) });
+    } catch (e) { log.error(`[post-watch] ${url}: ${e.message}`); }
+  }
+}
+// The posts a post-watcher follows: list / add one / remove one.
+app.get('/v1/watchers/:id/posts', authed, (req, res) => { try { const c = require('./watcherFeed').getConfig(req.params.id); res.json({ postUrls: c.postUrls || [], mode: c.mode || '', lastCrawl: c.lastCrawl || {} }); } catch (e) { res.json({ postUrls: [] }); } });
+app.post('/v1/watchers/:id/posts', authed, (req, res) => {
+  const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const url = String((req.body || {}).url || '').trim(); const pid = pw.postIdOf(url);
+  if (!pid) return res.status(400).json({ error: 'that is not a post link (needs post_id or /posts/<id>/)' });
+  const c = feed.getConfig(req.params.id); const urls = Array.isArray(c.postUrls) ? c.postUrls.slice() : [];
+  if (!urls.some((u) => pw.postIdOf(u) === pid)) urls.push(url);
+  res.json(feed.setConfig(req.params.id, { postUrls: urls, mode: 'posts' }));
+});
+app.delete('/v1/watchers/:id/posts', authed, (req, res) => {
+  const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const pid = pw.postIdOf(String((req.body || {}).url || req.query.url || ''));
+  const c = feed.getConfig(req.params.id);
+  res.json(feed.setConfig(req.params.id, { postUrls: (c.postUrls || []).filter((u) => pw.postIdOf(u) !== pid) }));
+});
+
+/*
  * FOLLOW-UPS (generic). After a watcher run, for each NEW collected item matching the watcher's
  * follow-up config, run the chosen follow-up flow ON that item (as the same owner, so it reuses the
  * one profile session by takeover rather than colliding). The flow's action is correlated back to the
@@ -1787,6 +1838,11 @@ async function scheduleTick() {
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
     runningWatchers.add(wf.id);
+    if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'posts') {
+      workflows.persistRun({ id: `${wf.id}-${Date.now()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: when.toISOString(), ended_at: when.toISOString(), steps: [] });
+      postWatchTick(wf, owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+      continue;
+    }
     workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
       .then(() => triggerFollowUps(wf, owner))
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`))
