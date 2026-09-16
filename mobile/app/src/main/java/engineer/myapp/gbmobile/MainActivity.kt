@@ -2027,42 +2027,22 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (names.isNotEmpty()) shellUi.watcherProfiles.value = names
             } catch (e: Exception) {}
             "profiles_list_err" -> {}
-            "wfeed" -> { pendingFeedJson = data; apiCall("GET", "/v1/agent/jobs", null, "wfeedjobs") }   // then correlate drafts
-            "wfeed_err" -> { vm.log("! results: ${data.take(140)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
-            "wfeedjobs" -> try {
-                // Map post-url -> a pending proposal (the draft), from all jobs.
-                val urlToProp = HashMap<String, JSONObject>()
-                val jr = JSONObject(data)
-                val allJobs = ArrayList<JSONObject>()
-                (jr.optJSONArray("jobs") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> allJobs.add(j) } }
-                (jr.optJSONArray("history") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> allJobs.add(j) } }
-                for (j in allJobs) {
-                    val props = j.optJSONArray("proposals") ?: continue
-                    for (k in 0 until props.length()) {
-                        val p = props.optJSONObject(k) ?: continue
-                        if (p.optString("state") != "pending") continue
-                        val u = p.optString("url"); if (u.isBlank()) continue
-                        if (!urlToProp.containsKey(u)) urlToProp[u] = JSONObject().put("jobId", j.optString("id")).put("pid", p.optString("pid")).put("text", p.optString("text"))
-                    }
-                }
-                val feedItems = JSONObject(pendingFeedJson).optJSONArray("items") ?: JSONArray()
+            "wfeed" -> try {
+                // The feed item carries its own draft (written back by the follow-up), keyed exactly — no URL matching.
+                val feedItems = JSONObject(data).optJSONArray("items") ?: JSONArray()
                 val items = JSONArray()
                 for (i in 0 until feedItems.length()) {
                     val it = feedItems.optJSONObject(i) ?: continue
                     if (it.optBoolean("handled")) continue
-                    val url = it.optString("url")
-                    val prop = urlToProp[url]
-                    val item = JSONObject()
+                    items.put(JSONObject()
                         .put("title", it.optString("title")).put("fields", it.optJSONObject("fields") ?: JSONObject())
-                        .put("url", url).put("image", it.optString("image")).put("kind", it.optString("kind"))
+                        .put("url", it.optString("url")).put("image", it.optString("image")).put("kind", it.optString("kind"))
                         .put("feedKey", it.optString("key"))
-                        .put("draft", prop?.optString("text") ?: it.optString("draft"))
-                        .put("jobId", prop?.optString("jobId") ?: "").put("pid", prop?.optString("pid") ?: "")
-                    items.put(item)
+                        .put("draft", it.optString("draft")).put("jobId", it.optString("draftJobId")).put("pid", it.optString("draftPid")))
                 }
                 showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", items, shellUi.flows.value))
             } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
-            "wfeedjobs_err" -> vm.log("! results: ${data.take(140)}")
+            "wfeed_err" -> { vm.log("! results: ${data.take(140)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
             "artifact_run" -> vm.log("● flow started — its action will appear in Approvals")
             "artifact_run_err" -> vm.log("! follow-up: ${data.take(140)}")
             "artifact_approve" -> vm.log("● approved — posting")

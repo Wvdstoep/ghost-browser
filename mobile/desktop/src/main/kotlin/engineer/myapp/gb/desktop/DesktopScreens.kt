@@ -283,29 +283,14 @@ fun openWatcherResultsD(st: DesktopState, id: String) = bg {
     st.artifactItems.value = emptyList(); st.artifactLoading.value = true; st.artifactVisible.value = true
     try {
         val feed = JSONObject(Cluster.authed("GET", "/v1/watchers/$id/feed", null)).optJSONArray("items") ?: org.json.JSONArray()
-        // pending proposals keyed by url (the draft, ready to post)
-        val urlToProp = HashMap<String, Triple<String, String, String>>()
-        val jl = JSONObject(Cluster.authed("GET", "/v1/agent/jobs", null))
-        for (arrName in listOf("jobs", "history")) {
-            val arr = jl.optJSONArray(arrName) ?: continue
-            for (i in 0 until arr.length()) { val j = arr.optJSONObject(i) ?: continue
-                val props = j.optJSONArray("proposals") ?: continue
-                for (k in 0 until props.length()) { val p = props.optJSONObject(k) ?: continue
-                    if (p.optString("state") != "pending") continue
-                    val u = p.optString("url"); if (u.isBlank()) continue
-                    if (!urlToProp.containsKey(u)) urlToProp[u] = Triple(j.optString("id"), p.optString("pid"), p.optString("text"))
-                }
-            }
-        }
         val items = ArrayList<engineer.myapp.gb.shared.ResultItem>()
         for (i in 0 until feed.length()) { val it = feed.optJSONObject(i) ?: continue
             if (it.optBoolean("handled")) continue
-            val url = it.optString("url")
             val f = it.optJSONObject("fields"); val fields = ArrayList<Pair<String, String>>()
             f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
-            val prop = urlToProp[url]
-            items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, url, it.optString("image"), it.optString("kind").ifBlank { "item" },
-                draft = prop?.third ?: it.optString("draft"), jobId = prop?.first ?: "", pid = prop?.second ?: "", feedKey = it.optString("key"), handled = false))
+            // The feed item carries its own draft (written back by the follow-up), keyed exactly.
+            items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" },
+                draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
