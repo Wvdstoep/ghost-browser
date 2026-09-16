@@ -1549,7 +1549,7 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   const runId = `${wf.id}-${Date.now()}`;
   /* The run's input, if the caller has one: {"input": {...}} becomes {{input.*}} in every goal. */
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
-  if (runningWatchers.has(wf.id)) return res.json({ runId: null, status: 'busy', note: 'a run for this watcher is already in progress' });
+  if (runningWatchers.size) return res.json({ runId: null, status: 'busy', note: `another watcher pass holds the browser (${[...runningWatchers].join(', ')}) — it starts as soon as that finishes` });
   runningWatchers.add(wf.id);
   if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'posts') {
     postWatchTick(wf, consoleOwner() || req.client.owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
@@ -1833,7 +1833,7 @@ async function scheduleTick() {
     if (cfg.type !== 'schedule') continue;
     const last = workflows.runsFor(wf.id, 1)[0];
     if (!scheduleDue(cfg, last ? Date.parse(last.started_at) : 0, when)) continue;
-    if (runningWatchers.has(wf.id)) { log.info(`[workflow-sched] "${wf.name}" still running a pass — skipping this tick`); continue; }
+    if (runningWatchers.size) { log.info(`[workflow-sched] "${wf.name}" waits — another watcher pass holds the browser (${[...runningWatchers].join(', ')})`); continue; }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
