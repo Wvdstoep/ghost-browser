@@ -71,6 +71,7 @@ class DesktopState {
     // watcher results artifact (native view)
     val artifactVisible = mutableStateOf(false)
     val artifactName = mutableStateOf("")
+    val artifactWid = mutableStateOf("")
     val artifactLoading = mutableStateOf(false)
     val artifactItems = mutableStateOf<List<engineer.myapp.gb.shared.ResultItem>>(emptyList())
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
@@ -228,14 +229,20 @@ fun loadWatchers(st: DesktopState) = bg {
             st.watcherRaw[id] = w
             val nmin = maxOf(1, cfg.optInt("n", 1)); val runs = w.optInt("runs", 0)
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
-            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps))
+            val fcfg = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/config", null)) } catch (e: Exception) { JSONObject() }
+            val fuFlow = fcfg.optString("followUpFlowId"); val fuReplies = (fcfg.optJSONArray("followUpKinds")?.length() ?: 0) > 0
+            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps, fuFlow, fuReplies))
         }
         st.watchers.value = out
     } catch (e: Exception) {}
     st.watchersLoading.value = false
 }
 private const val DEFAULT_WATCH_GOAL_D = "Run your watch now: carry out this role's task and record what you find with collect (or save_lead). Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish."
-fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) = bg {
+fun putWatcherConfigD(wid: String, followUpFlowId: String, repliesOnly: Boolean) {
+    val kinds = if (repliesOnly) org.json.JSONArray().put("reply").put("comment").put("mention") else org.json.JSONArray()
+    Cluster.authed("PUT", "/v1/watchers/$wid/config", JSONObject().put("followUpFlowId", followUpFlowId).put("followUpKinds", kinds).toString())
+}
+fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) = bg {
     val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
         .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
     val nodes = org.json.JSONArray().put(trigger); val edges = org.json.JSONArray()
@@ -257,8 +264,10 @@ fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role
         nodes.put(agent); edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
     }
     val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false).put("nodes", nodes).put("edges", edges).toString()
-    if (id.isNullOrBlank()) { Cluster.authed("POST", "/v1/workflows", body); st.log("● watcher \"$name\" created") }
-    else { Cluster.authed("PUT", "/v1/workflows/$id", body); st.log("✎ watcher \"$name\" saved") }
+    val res = if (id.isNullOrBlank()) Cluster.authed("POST", "/v1/workflows", body) else Cluster.authed("PUT", "/v1/workflows/$id", body)
+    val wid = if (!id.isNullOrBlank()) id else try { JSONObject(res).optString("id") } catch (e: Exception) { "" }
+    if (wid.isNotBlank()) putWatcherConfigD(wid, followUpFlowId, followUpRepliesOnly)
+    st.log(if (id.isNullOrBlank()) "● watcher \"$name\" created" else "✎ watcher \"$name\" saved")
     loadWatchers(st)
 }
 fun toggleWatcherD(st: DesktopState, id: String, active: Boolean) = bg {
@@ -267,40 +276,55 @@ fun toggleWatcherD(st: DesktopState, id: String, active: Boolean) = bg {
     Cluster.authed("PUT", "/v1/workflows/$id", raw.toString()); loadWatchers(st)
 }
 
-/** Open a watcher's results: find its newest job, read the full record, map results[]+leads[] to items. */
+/** Open a watcher's results: the deduped feed, with drafts correlated from pending proposals by URL. */
 fun openWatcherResultsD(st: DesktopState, id: String) = bg {
     st.artifactName.value = st.watchers.value.firstOrNull { it.id == id }?.name ?: "Watcher"
+    st.artifactWid.value = id
     st.artifactItems.value = emptyList(); st.artifactLoading.value = true; st.artifactVisible.value = true
     try {
+        val feed = JSONObject(Cluster.authed("GET", "/v1/watchers/$id/feed", null)).optJSONArray("items") ?: org.json.JSONArray()
+        // pending proposals keyed by url (the draft, ready to post)
+        val urlToProp = HashMap<String, Triple<String, String, String>>()
         val jl = JSONObject(Cluster.authed("GET", "/v1/agent/jobs", null))
-        val all = ArrayList<JSONObject>()
-        (jl.optJSONArray("jobs") ?: org.json.JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
-        (jl.optJSONArray("history") ?: org.json.JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
-        val jobId = all.firstOrNull { it.optString("workflowId") == id }?.optString("id")
+        for (arrName in listOf("jobs", "history")) {
+            val arr = jl.optJSONArray(arrName) ?: continue
+            for (i in 0 until arr.length()) { val j = arr.optJSONObject(i) ?: continue
+                val props = j.optJSONArray("proposals") ?: continue
+                for (k in 0 until props.length()) { val p = props.optJSONObject(k) ?: continue
+                    if (p.optString("state") != "pending") continue
+                    val u = p.optString("url"); if (u.isBlank()) continue
+                    if (!urlToProp.containsKey(u)) urlToProp[u] = Triple(j.optString("id"), p.optString("pid"), p.optString("text"))
+                }
+            }
+        }
         val items = ArrayList<engineer.myapp.gb.shared.ResultItem>()
-        if (!jobId.isNullOrBlank()) {
-            val j = JSONObject(Cluster.authed("GET", "/v1/agent/jobs/$jobId", null))
-            (j.optJSONArray("results") ?: org.json.JSONArray()).let { r ->
-                for (i in 0 until r.length()) { val it = r.optJSONObject(i) ?: continue
-                    val f = it.optJSONObject("fields"); val fields = ArrayList<Pair<String, String>>()
-                    f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
-                    items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" }))
-                }
-            }
-            (j.optJSONArray("leads") ?: org.json.JSONArray()).let { l ->
-                for (i in 0 until l.length()) { val ld = l.optJSONObject(i) ?: continue
-                    val fields = ArrayList<Pair<String, String>>()
-                    ld.optString("why").takeIf { it.isNotBlank() }?.let { fields.add("why" to it) }
-                    ld.optString("quote").takeIf { it.isNotBlank() }?.let { fields.add("what they wrote" to it) }
-                    ld.optString("groupName").takeIf { it.isNotBlank() }?.let { fields.add("group" to it) }
-                    ld.optString("contact").takeIf { it.isNotBlank() }?.let { fields.add("contact" to it) }
-                    items.add(engineer.myapp.gb.shared.ResultItem(ld.optString("name").ifBlank { "Lead" }, fields, ld.optString("url"), "", "lead"))
-                }
-            }
+        for (i in 0 until feed.length()) { val it = feed.optJSONObject(i) ?: continue
+            if (it.optBoolean("handled")) continue
+            val url = it.optString("url")
+            val f = it.optJSONObject("fields"); val fields = ArrayList<Pair<String, String>>()
+            f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
+            val prop = urlToProp[url]
+            items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, url, it.optString("image"), it.optString("kind").ifBlank { "item" },
+                draft = prop?.third ?: it.optString("draft"), jobId = prop?.first ?: "", pid = prop?.second ?: "", feedKey = it.optString("key"), handled = false))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
     st.artifactLoading.value = false
+}
+private fun markFeedHandledD(st: DesktopState, feedKey: String) {
+    val wid = st.artifactWid.value
+    if (wid.isBlank() || feedKey.isBlank()) return
+    try { Cluster.authed("POST", "/v1/watchers/$wid/feed/handled", JSONObject().put("key", feedKey).put("handled", true).toString()) } catch (e: Exception) {}
+}
+fun approveDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem, edited: String) = bg {
+    if (item.jobId.isNotBlank() && item.pid.isNotBlank())
+        Cluster.authed("POST", "/v1/agent/jobs/${item.jobId}/proposals/${item.pid}", JSONObject().put("approve", true).put("edit", edited).toString())
+    markFeedHandledD(st, item.feedKey); st.log("● approved — posting"); openWatcherResultsD(st, st.artifactWid.value)
+}
+fun denyDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem) = bg {
+    if (item.jobId.isNotBlank() && item.pid.isNotBlank())
+        Cluster.authed("POST", "/v1/agent/jobs/${item.jobId}/proposals/${item.pid}", JSONObject().put("approve", false).toString())
+    markFeedHandledD(st, item.feedKey); st.log("dismissed"); openWatcherResultsD(st, st.artifactWid.value)
 }
 fun runFlowOnItemD(st: DesktopState, flowId: String, item: engineer.myapp.gb.shared.ResultItem) = bg {
     val input = JSONObject()
@@ -308,7 +332,7 @@ fun runFlowOnItemD(st: DesktopState, flowId: String, item: engineer.myapp.gb.sha
     if (item.url.isNotBlank()) input.put("url", item.url)
     item.fields.forEach { (k, v) -> input.put(k, v) }
     Cluster.authed("POST", "/v1/workflows/$flowId/run", JSONObject().put("input", input).toString())
-    st.log("● follow-up flow started — its action will appear in Approvals")
+    st.log("● flow started — its action will appear in Approvals")
 }
 
 fun runFlow(id: String, st: DesktopState) = bg {
@@ -390,7 +414,7 @@ fun FlowsScreenD(st: DesktopState) {
         ) else engineer.myapp.gb.shared.WatchersScreen(
             watchers = st.watchers.value, roles = st.watcherRoles.value, profiles = st.watcherProfiles.value,
             automations = st.flows.value, loading = st.watchersLoading.value,
-            onSave = { id, n, m, r, g, p, aid, iv -> saveWatcherD(st, id, n, m, r, g, p, aid, iv) },
+            onSave = { id, n, m, r, g, p, aid, iv, fuF, fuR -> saveWatcherD(st, id, n, m, r, g, p, aid, iv, fuF, fuR) },
             onToggle = { id, a -> toggleWatcherD(st, id, a) },
             onOpenResults = { openWatcherResultsD(st, it) },
             onRefresh = { loadWatchers(st) }, modifier = Modifier.weight(1f).fillMaxWidth(),

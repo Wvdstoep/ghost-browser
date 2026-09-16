@@ -153,6 +153,8 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         watcherName = state.artifactName.value, items = state.artifactItems.value, flows = state.flows.value,
         loading = state.artifactLoading.value,
         onRunFlow = { flowId, item -> runFlowOnItemD(state, flowId, item) },
+        onApproveDraft = { item, edited -> approveDraftD(state, item, edited) },
+        onDenyDraft = { item -> denyDraftD(state, item) },
         onOpenUrl = { u -> Tabs.go(u); state.artifactVisible.value = false; screen = "browser" },
         onClose = { state.artifactVisible.value = false },
         modifier = Modifier.fillMaxSize().background(cs.background),

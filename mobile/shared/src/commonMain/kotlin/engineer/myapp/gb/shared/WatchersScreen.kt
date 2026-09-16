@@ -33,7 +33,7 @@ fun WatchersScreen(
     profiles: List<String>,
     automations: List<FlowInfo>,
     loading: Boolean,
-    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) -> Unit,
+    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) -> Unit,
     onToggle: (id: String, active: Boolean) -> Unit,
     onOpenResults: (id: String) -> Unit,
     onRefresh: () -> Unit,
@@ -59,7 +59,7 @@ fun WatchersScreen(
         if (formOpen) {
             WatcherForm(editTarget, roles, profiles, automations,
                 onCancel = { formOpen = false; editTarget = null },
-                onSave = { id, name, mode, role, goal, profile, autoId, iv -> onSave(id, name, mode, role, goal, profile, autoId, iv); formOpen = false; editTarget = null })
+                onSave = { id, name, mode, role, goal, profile, autoId, iv, fuFlow, fuReplies -> onSave(id, name, mode, role, goal, profile, autoId, iv, fuFlow, fuReplies); formOpen = false; editTarget = null })
         } else {
             Button(onClick = { editTarget = null; formOpen = true }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("+ New watcher", style = MaterialTheme.typography.labelLarge) }
@@ -83,7 +83,7 @@ fun WatchersScreen(
 private fun WatcherForm(
     edit: Watcher?, roles: List<String>, profiles: List<String>, automations: List<FlowInfo>,
     onCancel: () -> Unit,
-    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) -> Unit,
+    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var name by remember { mutableStateOf(edit?.name ?: "") }
@@ -93,6 +93,9 @@ private fun WatcherForm(
     var profile by remember { mutableStateOf(edit?.profile?.ifBlank { null } ?: profiles.firstOrNull() ?: "facebook") }
     var automationId by remember { mutableStateOf("") }
     var interval by remember { mutableStateOf(edit?.intervalMin ?: 5) }
+    var followUpOn by remember { mutableStateOf((edit?.followUpFlowId ?: "").isNotBlank()) }
+    var followUpFlowId by remember { mutableStateOf(edit?.followUpFlowId ?: "") }
+    var followUpRepliesOnly by remember { mutableStateOf(edit?.followUpRepliesOnly ?: true) }
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Text(if (edit == null) "New watcher" else "Edit watcher", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
@@ -144,10 +147,32 @@ private fun WatcherForm(
                 }
             }
         }
+        // Follow-up: auto-run a flow on each new collected item (generic — any flow).
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("FOLLOW-UP", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+                Text("Auto-run a flow on each new item (e.g. draft a reply)", fontSize = 11.sp, color = cs.onSurfaceVariant)
+            }
+            Switch(checked = followUpOn, onCheckedChange = { followUpOn = it }, colors = SwitchDefaults.colors(checkedThumbColor = BrandOn, checkedTrackColor = Brand))
+        }
+        if (followUpOn) {
+            Spacer(Modifier.height(8.dp))
+            val fuLabel = automations.firstOrNull { it.id == followUpFlowId }?.name ?: "Pick a flow to run"
+            PickerField(fuLabel, automations.map { it.name }) { picked -> followUpFlowId = automations.firstOrNull { it.name == picked }?.id ?: "" }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { followUpRepliesOnly = !followUpRepliesOnly }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(if (followUpRepliesOnly) Brand else Color.Transparent).border(1.dp, if (followUpRepliesOnly) Brand else cs.outline, RoundedCornerShape(5.dp)), contentAlignment = Alignment.Center) {
+                    if (followUpRepliesOnly) Text("✓", color = BrandOn, fontSize = 12.sp)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text("Only for replies & comments (not likes)", fontSize = 12.sp, color = cs.onSurface)
+            }
+        }
         Spacer(Modifier.height(14.dp))
         val valid = name.isNotBlank() && (if (mode == "role") role.isNotBlank() else automationId.isNotBlank())
         Row {
-            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval) }, enabled = valid,
+            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval, if (followUpOn) followUpFlowId else "", followUpRepliesOnly) }, enabled = valid,
                 modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text(if (edit == null) "Create watcher" else "Save changes", style = MaterialTheme.typography.labelLarge) }
             Spacer(Modifier.width(10.dp))

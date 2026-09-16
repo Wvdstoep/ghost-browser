@@ -399,11 +399,12 @@ function addResult(j, item) {
   const r = { at: now(), title: String(item.title || '').slice(0, 300),
     fields: (item.fields && typeof item.fields === 'object') ? item.fields : {},
     url: String(item.url || '').slice(0, 600), image: String(item.image || '').slice(0, 800),
-    kind: String(item.kind || '').slice(0, 60) };
+    draft: String(item.draft || '').slice(0, 4000), kind: String(item.kind || '').slice(0, 60) };
   /* Same item twice is one: title + url is the identity. */
   const key = (x) => `${(x.title || '').trim().toLowerCase()}|${(x.url || '').trim()}`;
   if (j.results.some((x) => key(x) === key(r))) return null;
   j.results.push(r);
+  if (j.workflowId) { try { require('./watcherFeed').upsert(j.workflowId, r); } catch (e) { /* feed best-effort */ } }
   bus.emit(j.id, { type: 'result', jobId: j.id, result: r });
   persist(j);
   return r;
