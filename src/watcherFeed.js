@@ -21,7 +21,7 @@ function persist(wid, data) {
 }
 
 // Mention/reply/comment matter more than a like; used to rank the feed.
-const URGENCY = { mention: 3, reply: 3, comment: 2, share: 2, reaction: 1, like: 1 };
+const URGENCY = { reply: 3, comment: 3, mention: 1, share: 1, reaction: 1, like: 1 };
 const keyOf = (item) => (String(item.url || '').trim() + '|' + String(item.title || '').trim().toLowerCase()).slice(0, 400);
 const typeOf = (item) => String((item.fields && (item.fields.type || item.fields.action)) || item.kind || '').toLowerCase();
 
@@ -54,7 +54,10 @@ function upsert(wid, item) {
 function list(wid) {
   const data = load(wid);
   return Object.values(data.items).sort((a, b) =>
-    (Number(a.handled) - Number(b.handled)) || (b.urgency - a.urgency) || (b.firstSeen - a.firstSeen));
+    (Number(a.handled) - Number(b.handled))
+    || (Number(!!b.draft) - Number(!!a.draft))
+    || (b.urgency - a.urgency)
+    || (b.firstSeen - a.firstSeen));
 }
 
 function markHandled(wid, key, handled = true) {
