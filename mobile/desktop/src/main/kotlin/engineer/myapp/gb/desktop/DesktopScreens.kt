@@ -290,26 +290,30 @@ fun openWatcherResultsD(st: DesktopState, id: String) = bg {
             f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
             // The feed item carries its own draft (written back by the follow-up), keyed exactly.
             items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" },
-                draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false))
+                draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false,
+                draftState = it.optString("draftState")))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
     st.artifactLoading.value = false
 }
-private fun markFeedHandledD(st: DesktopState, feedKey: String) {
-    val wid = st.artifactWid.value
-    if (wid.isBlank() || feedKey.isBlank()) return
-    try { Cluster.authed("POST", "/v1/watchers/$wid/feed/handled", JSONObject().put("key", feedKey).put("handled", true).toString()) } catch (e: Exception) {}
-}
+// Approve = the cluster re-opens the thread, checks nothing was answered meanwhile, and posts the exact
+// text (or hands the yes to a still-parked gate). Deny = mark handled. Both by feed key.
 fun approveDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem, edited: String) = bg {
-    if (item.jobId.isNotBlank() && item.pid.isNotBlank())
-        Cluster.authed("POST", "/v1/agent/jobs/${item.jobId}/proposals/${item.pid}", JSONObject().put("approve", true).put("edit", edited).toString())
-    markFeedHandledD(st, item.feedKey); st.log("● approved — posting"); openWatcherResultsD(st, st.artifactWid.value)
+    val wid = st.artifactWid.value
+    if (wid.isBlank() || item.feedKey.isBlank()) return@bg
+    try {
+        Cluster.authed("POST", "/v1/watchers/$wid/feed/approve", JSONObject().put("key", item.feedKey).put("text", edited).toString())
+        st.log("● approved — the cluster re-checks the thread, then posts your words")
+    } catch (e: Exception) { st.log("! approve: ${e.message}") }
+    openWatcherResultsD(st, wid)
 }
 fun denyDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem) = bg {
-    if (item.jobId.isNotBlank() && item.pid.isNotBlank())
-        Cluster.authed("POST", "/v1/agent/jobs/${item.jobId}/proposals/${item.pid}", JSONObject().put("approve", false).toString())
-    markFeedHandledD(st, item.feedKey); st.log("dismissed"); openWatcherResultsD(st, st.artifactWid.value)
+    val wid = st.artifactWid.value
+    if (wid.isBlank() || item.feedKey.isBlank()) return@bg
+    try { Cluster.authed("POST", "/v1/watchers/$wid/feed/deny", JSONObject().put("key", item.feedKey).toString()); st.log("○ dismissed") }
+    catch (e: Exception) { st.log("! deny: ${e.message}") }
+    openWatcherResultsD(st, wid)
 }
 fun runFlowOnItemD(st: DesktopState, flowId: String, item: engineer.myapp.gb.shared.ResultItem) = bg {
     val input = JSONObject()

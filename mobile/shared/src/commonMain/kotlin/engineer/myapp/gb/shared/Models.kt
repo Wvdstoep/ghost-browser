@@ -67,4 +67,5 @@ data class ResultItem(
     val pid: String = "",          // the pending proposal id (approve = post, deny = skip)
     val feedKey: String = "",      // this item's key in the watcher feed (to mark handled)
     val handled: Boolean = false,
+    val draftState: String = "",   // "" | drafting | drafted | none | skipped-old | posting | post-failed | handled
 )
