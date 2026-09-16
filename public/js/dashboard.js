@@ -63,7 +63,7 @@
     host.innerHTML = h;
   }
   window.__replyDesk = {
-    async start(btn) { if (btn) btn.disabled = true; try { await api('/v1/agent/jobs', { method: 'POST', body: JSON.stringify({ role: 'facebook.conversation', goal: RD_GOAL }) }); } catch (e) { alert('Could not start: ' + (e.message || e)); } if (btn) btn.disabled = false; refresh(); },
+    async start(btn) { if (btn) btn.disabled = true; try { const s = await api('/v1/sessions', { method: 'POST', body: JSON.stringify({ reuse: true, profile: 'facebook' }) }); await api('/v1/agent/jobs', { method: 'POST', body: JSON.stringify({ role: 'facebook.conversation', goal: RD_GOAL, sessionId: s.sessionId }) }); } catch (e) { alert('Could not start: ' + (e.message || e)); } if (btn) btn.disabled = false; refresh(); },
     async approve(jid, pid) { const t = el('rd_' + jid + '_' + pid); const edit = t ? t.value : undefined; try { await api('/v1/agent/jobs/' + jid + '/proposals/' + pid, { method: 'POST', body: JSON.stringify({ approve: true, edit: edit }) }); } catch (e) { alert(e.message || e); } refresh(); },
     async skip(jid, pid) { try { await api('/v1/agent/jobs/' + jid + '/proposals/' + pid, { method: 'POST', body: JSON.stringify({ approve: false }) }); } catch (e) { alert(e.message || e); } refresh(); },
     async say(jid) { const i = el('say_' + jid); const text = i ? i.value.trim() : ''; if (!text) return; try { await api('/v1/agent/jobs/' + jid + '/say', { method: 'POST', body: JSON.stringify({ text: text }) }); } catch (e) { alert(e.message || e); } if (i) i.value = ''; refresh(); },
