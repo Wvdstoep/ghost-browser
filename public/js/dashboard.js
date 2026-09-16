@@ -26,7 +26,50 @@
   const logoHtml = (p, extra) =>
     '<div class="logo ' + (p.monoLo ? 'mono-lo' : '') + ' ' + (extra || '') + '" style="--brand:' + p.brand + '">' + safe(p.mark) + '</div>';
 
-  let LAST = [];   // the computed rows, indexed by the data-* attributes the cards carry
+  let LAST = [];
+
+  /* ── Reply Desk — notification-watch -> draft -> approval gate (uses jobs + proposals engine) ── */
+  const RD_GOAL = "Open Facebook notifications and my recent posts. For each NEW comment or reaction on MY posts, read the whole thread for context, then draft ONE natural reply that continues the conversation and moves toward my-app.engineer only where it genuinely fits. Propose EVERY reply for my approval - never post without approval. Skip threads that are hostile, off-topic, already handled, or where I chose not to engage. Keep watching and check back periodically.";
+  function rdCard(job, p) {
+    return '<div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--panel)">'
+      + '<div style="color:var(--muted);font-size:12px;margin-bottom:6px">' + safe(p.why || p.label || 'reply')
+      + (p.url ? ' &middot; <a href="' + safe(p.url) + '" target="_blank" rel="noopener" style="color:var(--accent,#3fb950)">thread &#8599;</a>' : '') + '</div>'
+      + '<textarea id="rd_' + job.id + '_' + p.pid + '" style="width:100%;min-height:70px;box-sizing:border-box;background:var(--bg,#0b0f0d);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit">' + safe(p.text || '') + '</textarea>'
+      + '<div style="display:flex;gap:8px;margin-top:8px">'
+      + '<button onclick="window.__replyDesk.approve(\'' + job.id + '\',\'' + p.pid + '\')" style="background:var(--accent,#3fb950);color:#04140a;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer">Approve &amp; post</button>'
+      + '<button onclick="window.__replyDesk.skip(\'' + job.id + '\',\'' + p.pid + '\')" style="background:transparent;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer">Skip</button>'
+      + '</div></div>';
+  }
+  function rdJob(j) {
+    const steps = (j.steps || []).slice(-5).map(function (s) { return safe((s.kind || '') + ': ' + (s.text || s.detail || '')); }).join('<br>');
+    return '<div style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><b>' + safe(j.role || 'job') + '</b><span style="color:var(--muted);font-size:12px;flex:1">' + safe(j.status || '') + '</span>'
+      + '<button onclick="window.__replyDesk.stop(\'' + j.id + '\')" style="background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer">Stop</button></div>'
+      + '<div style="color:var(--muted);font-size:11px;font-family:monospace;line-height:1.5;max-height:90px;overflow:auto">' + (steps || '&hellip;') + '</div>'
+      + '<div style="display:flex;gap:6px;margin-top:8px"><input id="say_' + j.id + '" placeholder="Tell it something (e.g. skip the hostile thread)" style="flex:1;box-sizing:border-box;background:var(--bg,#0b0f0d);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit"><button onclick="window.__replyDesk.say(\'' + j.id + '\')" style="background:transparent;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer">Send</button></div>'
+      + '</div>';
+  }
+  function renderReplyDesk(jobs) {
+    const host = el('replyDesk'); if (!host) return;
+    const pend = [];
+    for (const j of (jobs || [])) for (const p of (j.proposals || [])) if (p && p.state === 'pending') pend.push({ job: j, p: p });
+    const active = (jobs || []).filter(function (j) { return j.status === 'running' || j.status === 'idle'; });
+    let h = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">'
+      + '<div><h2 style="margin:0">Reply desk</h2><p style="margin:2px 0 0;color:var(--muted);font-size:13px">Watch notifications, draft replies, approve before they post</p></div>'
+      + '<button onclick="window.__replyDesk.start(this)" style="background:var(--accent,#3fb950);color:#04140a;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;white-space:nowrap">Start reply watch</button></div>';
+    if (!pend.length) h += '<div style="color:var(--muted);font-size:13px;padding:8px 0">No replies waiting. Start the watch and drafts appear here for your approval.</div>';
+    else h += '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">' + pend.length + ' waiting for you</div>' + pend.map(function (x) { return rdCard(x.job, x.p); }).join('');
+    if (active.length) h += '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">' + active.map(rdJob).join('') + '</div>';
+    host.innerHTML = h;
+  }
+  window.__replyDesk = {
+    async start(btn) { if (btn) btn.disabled = true; try { await api('/v1/agent/jobs', { method: 'POST', body: JSON.stringify({ role: 'facebook.conversation', goal: RD_GOAL }) }); } catch (e) { alert('Could not start: ' + (e.message || e)); } if (btn) btn.disabled = false; refresh(); },
+    async approve(jid, pid) { const t = el('rd_' + jid + '_' + pid); const edit = t ? t.value : undefined; try { await api('/v1/agent/jobs/' + jid + '/proposals/' + pid, { method: 'POST', body: JSON.stringify({ approve: true, edit: edit }) }); } catch (e) { alert(e.message || e); } refresh(); },
+    async skip(jid, pid) { try { await api('/v1/agent/jobs/' + jid + '/proposals/' + pid, { method: 'POST', body: JSON.stringify({ approve: false }) }); } catch (e) { alert(e.message || e); } refresh(); },
+    async say(jid) { const i = el('say_' + jid); const text = i ? i.value.trim() : ''; if (!text) return; try { await api('/v1/agent/jobs/' + jid + '/say', { method: 'POST', body: JSON.stringify({ text: text }) }); } catch (e) { alert(e.message || e); } if (i) i.value = ''; refresh(); },
+    async stop(jid) { try { await api('/v1/agent/jobs/' + jid + '/stop', { method: 'POST' }); } catch (e) { alert(e.message || e); } refresh(); },
+  };
+   // the computed rows, indexed by the data-* attributes the cards carry
 
   // Join the real endpoints into one status per platform. All best-effort: a failing call just
   // leaves that dimension empty rather than blanking the whole board.
@@ -86,6 +129,7 @@
      * it is not the browser being busy.
      */
     const allJobs = (jobsR.jobs || []);
+    try { renderReplyDesk(allJobs); } catch (e) {}
     const runningJobs = allJobs.filter(j => j.status === 'running');
     const parkedJobs = allJobs.filter(j => j.status === 'idle');
     const jobByProfile = {};
