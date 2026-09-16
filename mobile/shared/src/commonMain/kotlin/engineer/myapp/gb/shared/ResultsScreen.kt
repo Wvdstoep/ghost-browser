@@ -64,15 +64,23 @@ private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (Stri
     val cs = MaterialTheme.colorScheme
     var picked by remember(item.title) { mutableStateOf<FlowInfo?>(null) }
     var status by remember(item.title) { mutableStateOf("") }
-    var draft by remember(item.pid, item.draft) { mutableStateOf(item.draft) }
-    var acted by remember(item.pid) { mutableStateOf(false) }
-    val hasDraft = item.draft.isNotBlank() && item.pid.isNotBlank()
+    var draft by remember(item.feedKey, item.draft) { mutableStateOf(item.draft) }
+    var acted by remember(item.feedKey, item.draftState) { mutableStateOf(false) }
+    val hasDraft = item.draft.isNotBlank() && item.feedKey.isNotBlank() && item.draftState != "posting"
+    // Where this item stands, so "no draft" never reads as "nothing happened".
+    val stateLabel = when (item.draftState) {
+        "drafting" -> "drafting…"; "none" -> "nothing to reply"; "skipped-old" -> "too old to answer"
+        "posting" -> "checking the thread, then posting…"; "post-failed" -> "post failed — approve again to retry"; else -> ""
+    }
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface)
         .border(1.dp, if (hasDraft) Brand else cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(item.kind.uppercase().ifBlank { "ITEM" }, color = Brand, fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp, modifier = Modifier.weight(1f))
             if (hasDraft) Box(Modifier.clip(RoundedCornerShape(50)).background(Brand).padding(horizontal = 8.dp, vertical = 2.dp)) { Text("DRAFT READY", color = BrandOn, fontSize = 9.sp, fontFamily = FontFamily.Monospace) }
+            else if (stateLabel.isNotBlank()) Box(Modifier.clip(RoundedCornerShape(50)).background(cs.surfaceVariant).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                Text(stateLabel, color = if (item.draftState == "post-failed") cs.error else cs.onSurfaceVariant, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+            }
         }
         Text(item.title.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
         if (item.url.isNotBlank()) {

@@ -1437,15 +1437,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     inner class GbArtifactBridge {
         @android.webkit.JavascriptInterface fun close() { hideArtifact() }
         @android.webkit.JavascriptInterface fun openUrl(url: String) { runOnUiThread { hideArtifact(); if (url.isNotBlank()) load(url) } }
+        // Approve = the cluster re-opens the thread, checks nothing was answered meanwhile, and posts
+        // the exact text (or hands the yes to a still-parked gate). Deny = mark handled. Both by feed key.
         @android.webkit.JavascriptInterface fun approveDraft(jobId: String, pid: String, text: String, feedKey: String) {
-            if (jobId.isNotBlank() && pid.isNotBlank())
-                apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", true).put("edit", text).toString(), "artifact_approve")
-            markFeedHandled(feedKey)
+            val wid = pendingResults?.first ?: return
+            if (feedKey.isBlank()) return
+            apiCall("POST", "/v1/watchers/$wid/feed/approve", JSONObject().put("key", feedKey).put("text", text).toString(), "artifact_approve")
         }
         @android.webkit.JavascriptInterface fun denyDraft(jobId: String, pid: String, feedKey: String) {
-            if (jobId.isNotBlank() && pid.isNotBlank())
-                apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", false).toString(), "artifact_approve")
-            markFeedHandled(feedKey)
+            val wid = pendingResults?.first ?: return
+            if (feedKey.isBlank()) return
+            apiCall("POST", "/v1/watchers/$wid/feed/deny", JSONObject().put("key", feedKey).toString(), "artifact_deny")
         }
         @android.webkit.JavascriptInterface fun runFlow(flowId: String, itemJson: String) {
             try {
@@ -1488,6 +1490,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
  .btnrow{display:flex;gap:8px;margin-top:8px} .approve{flex:1;background:var(--brand);color:var(--brandOn);border:0;border-radius:9px;padding:11px;font-weight:600}
  .deny{background:transparent;color:#F2857D;border:1px solid var(--line);border-radius:9px;padding:11px 16px}
  .card.hasdraft{border-color:var(--brand)}
+ .chip{display:inline-block;font:10px monospace;letter-spacing:.5px;border-radius:50px;padding:2px 8px;background:var(--hi);color:var(--text);margin-top:6px} .chip.dim{color:var(--muted)} .chip.err{color:#F2857D}
 </style></head><body>
 <header><h1>$safeName</h1><span class="count" id="count"></span><button class="x" onclick="GbArtifact.close()">Close</button></header>
 <div class="wrap" id="wrap"></div>
@@ -1502,11 +1505,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
    if(!ITEMS.length){ wrap.innerHTML='<div class="empty">Nothing collected yet. When this watcher next runs and finds something, it appears here.</div>'; return; }
    var html='';
    for(var i=0;i<ITEMS.length;i++){ var it=ITEMS[i];
-     var hasDraft = it.draft && it.pid;
+     var st=it.draftState||'';
+     var hasDraft = it.draft && it.feedKey && st!=='posting';
+     var chip=''; if(st==='drafting') chip='<span class="chip">drafting…</span>'; else if(st==='none') chip='<span class="chip dim">nothing to reply</span>';
+       else if(st==='skipped-old') chip='<span class="chip dim">too old to answer</span>'; else if(st==='posting') chip='<span class="chip">checking the thread, then posting…</span>';
+       else if(st==='post-failed') chip='<span class="chip err">post failed'+(it.posted?' · '+esc(String(it.posted).slice(0,80)):'')+' — approve again to retry</span>';
      html+='<div class="card'+(hasDraft?' hasdraft':'')+'" id="card'+i+'">';
      html+='<div class="top">';
      if(it.image) html+='<img class="avatar" src="'+esc(it.image)+'">';
-     html+='<div><div class="kind">'+esc(it.kind||'item')+'</div><div class="title">'+esc(it.title||'Untitled')+'</div>';
+     html+='<div><div class="kind">'+esc(it.kind||'item')+'</div><div class="title">'+esc(it.title||'Untitled')+'</div>'+chip;
      if(it.url) html+='<a class="link" href="javascript:void(0)" onclick="GbArtifact.openUrl(\''+esc(it.url).replace(/'/g,"\\'")+'\')">Open ↗</a>';
      html+='</div></div>';
      var fh=fieldsHtml(it.fields); if(fh) html+='<div class="fields">'+fh+'</div>';
@@ -1519,7 +1526,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
    wrap.innerHTML=html;
  }
  function fade(i){ var c=document.getElementById('card'+i); if(c) c.style.opacity=0.45; }
- function approveItem(i){ var it=ITEMS[i]; var t=document.getElementById('d'+i).value; try{ GbArtifact.approveDraft(it.jobId||'', it.pid||'', t, it.feedKey||''); document.getElementById('st'+i).textContent='Approved ✓ — posting.'; fade(i);}catch(e){document.getElementById('st'+i).textContent='Error: '+e;} }
+ function approveItem(i){ var it=ITEMS[i]; var t=document.getElementById('d'+i).value; try{ GbArtifact.approveDraft(it.jobId||'', it.pid||'', t, it.feedKey||''); document.getElementById('st'+i).textContent='Approved ✓ — re-checking the thread, then posting your words.'; fade(i);}catch(e){document.getElementById('st'+i).textContent='Error: '+e;} }
  function denyItem(i){ var it=ITEMS[i]; try{ GbArtifact.denyDraft(it.jobId||'', it.pid||'', it.feedKey||''); document.getElementById('st'+i).textContent='Dismissed.'; fade(i);}catch(e){document.getElementById('st'+i).textContent='Error: '+e;} }
  function runItem(i){ var sel=document.getElementById('sel'+i); var fid=sel.value; var st=document.getElementById('st'+i);
    if(!fid){ st.textContent='Pick a flow first.'; return; }
@@ -2038,15 +2045,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         .put("title", it.optString("title")).put("fields", it.optJSONObject("fields") ?: JSONObject())
                         .put("url", it.optString("url")).put("image", it.optString("image")).put("kind", it.optString("kind"))
                         .put("feedKey", it.optString("key"))
-                        .put("draft", it.optString("draft")).put("jobId", it.optString("draftJobId")).put("pid", it.optString("draftPid")))
+                        .put("draft", it.optString("draft")).put("jobId", it.optString("draftJobId")).put("pid", it.optString("draftPid"))
+                        .put("draftState", it.optString("draftState")).put("posted", it.optString("posted")))
                 }
                 showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", items, shellUi.flows.value))
             } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
             "wfeed_err" -> { vm.log("! results: ${data.take(140)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
             "artifact_run" -> vm.log("● flow started — its action will appear in Approvals")
             "artifact_run_err" -> vm.log("! follow-up: ${data.take(140)}")
-            "artifact_approve" -> vm.log("● approved — posting")
+            "artifact_approve" -> vm.log("● approved — the cluster re-checks the thread, then posts your words")
             "artifact_approve_err" -> vm.log("! approve: ${data.take(140)}")
+            "artifact_deny" -> vm.log("○ dismissed")
+            "artifact_deny_err" -> vm.log("! deny: ${data.take(140)}")
             "devrunsave" -> vm.log("↑ run journaled to shared history")
             "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {
