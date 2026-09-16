@@ -1,5 +1,6 @@
 package engineer.myapp.gbmobile.ui
 
+import engineer.myapp.gb.shared.DeviceOpt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable

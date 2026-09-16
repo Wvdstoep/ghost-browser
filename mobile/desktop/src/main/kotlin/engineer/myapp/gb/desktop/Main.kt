@@ -100,6 +100,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
     var screen by remember { mutableStateOf("browser") }
     val activeTab = Tabs.activeTab()
     val openUrl: (String) -> Unit = { u -> Tabs.go(u); screen = "browser" }
+    Box(Modifier.fillMaxSize()) {
     GbScaffold(
         host = "", tabCount = Tabs.list.size, selected = if (screen == "devices") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
@@ -118,10 +119,19 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
                 title = "Agent", messages = state.agentMsgs.value, busy = state.agentBusy.value,
                 onSend = { Agent.send(state, Tabs.activeBrowser(), it) }, onNew = { state.agentMsgs.value = emptyList() },
-                onSettings = { screen = "settings" }, onClose = { screen = "browser" },
+                onSettings = { state.aiModal.value = true }, onClose = { screen = "browser" },
             )
             else -> JcefBrowserView(Tabs.activeBrowser(), error, Modifier.fillMaxSize())
         }
+    }
+    // Overlays (same UX as the phone): the Run sheet and the AI-model modal.
+    if (state.runVisible.value) engineer.myapp.gb.shared.RunSheet(
+        visible = true, flowName = state.runFlowName.value, devices = state.runDevices.value,
+        phase = state.runPhase.value, status = state.runStatus.value, goalInitial = "",
+        onRun = { target, goal -> runTargetD(target, goal, state) },
+        onStop = { state.runVisible.value = false }, onClose = { state.runVisible.value = false },
+    )
+    if (state.aiModal.value) AiModalD(state) { state.aiModal.value = false }
     }
 }
 

@@ -36,9 +36,9 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.graphics.asImageBitmap
-import engineer.myapp.gbmobile.ui.DeviceOpt
+import engineer.myapp.gb.shared.DeviceOpt
 import engineer.myapp.gbmobile.ui.GbTheme
-import engineer.myapp.gbmobile.ui.RunSheet
+import engineer.myapp.gb.shared.RunSheet
 
 /**
  * GB Mobile — Ghost Browser as a real on-device browser (MVVM). A true multi-tab browser: each tab is
