@@ -57,7 +57,7 @@ describe('the Automation tab shows it, and does not offer to break it', () => {
   const api = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 
   it('a card says where the flow came from', () => {
-    expect(ui).toMatch(/const from = w\.owner \? '<span class="wpill from">from ' \+ esc\(w\.owner\) \+ '<\/span>' : '';/);
+    expect(ui).toMatch(/const from = w\.owner \? '<span class="auto-pill auto-pill--from">from ' \+ esc\(w\.owner\) \+ '<\/span>' : '';/);
   });
 
   /* "manual" would read as "nobody has pressed this", which is the opposite of the truth. */
@@ -66,7 +66,7 @@ describe('the Automation tab shows it, and does not offer to break it', () => {
   });
 
   it('the Delete button is not offered for an organ\'s flow', () => {
-    expect(ui).toMatch(/\(w\.owner \? '' : '<button class="btn ghost sm danger" data-del=/);
+    expect(ui).toMatch(/\(w\.owner \? '' : '<button class="btn btn-sm btn-ghost btn-danger" data-del=/);
   });
 
   it('and the API refuses it too, naming what to do instead', () => {
