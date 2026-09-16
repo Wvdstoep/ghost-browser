@@ -1627,17 +1627,17 @@ app.put('/v1/watchers/:id/config', authed, (req, res) => { try { res.json(requir
  */
 function posterFlow(dryRun) {
   const goal = dryRun
-    ? 'DRY RUN - verify only, post NOTHING. use_my_profile, then open {{input.url}}. Expand the notified sub-thread\'s hidden replies (at most 3 expands, only that sub-thread). Read it. Then call note with ONE line: (a) is the LAST message in that sub-thread already mine (yes/no) and (b) which numbered element is the Reply / Beantwoorden control under the latest person. Then finish. Do NOT call act, do NOT type.'
-    : 'use_my_profile, then open {{input.url}}. Expand the notified sub-thread\'s hidden replies (at most 3 expands, only that sub-thread). Read it. If the LAST message in that sub-thread is already mine, call note "already answered" and finish - post nothing. Otherwise call look, find the Reply / Beantwoorden control under the LATEST person in that sub-thread, and call act(kind: reply, index: <that element>, text: <EXACTLY the text below, unchanged, nothing added>). Then call note "posted" and finish.\n\nTEXT TO POST (verbatim):\n{{input.text}}';
+    ? 'DRY RUN - verify only, post NOTHING. use_my_profile, then open {{input.url}}. THE MESSAGE TO ANSWER is by {{input.author}} and begins: "{{input.said}}" - the comment_id in the URL points at it and Facebook highlights it. Find THAT message (expand its hidden replies if needed, at most 3 expands, only around it - ignore other threads on the page). Then call note with ONE line: (a) has {{input.author}} already received a reply from me AFTER that message (yes/no) and (b) which numbered element is the Reply / Beantwoorden control under {{input.author}}\'s message. Then finish. Do NOT call act, do NOT type.'
+    : 'use_my_profile, then open {{input.url}}. THE MESSAGE TO ANSWER is by {{input.author}} and begins: "{{input.said}}" - the comment_id in the URL points at it and Facebook highlights it. Find THAT message (expand its hidden replies if needed, at most 3 expands, only around it - ignore other threads on the page). If a reply from me to {{input.author}} already sits AFTER that message, call note "already answered" and finish - post nothing. Otherwise call look, find the Reply / Beantwoorden control directly under {{input.author}}\'s message, and call act(kind: reply, index: <that element>, text: <EXACTLY the text below, unchanged, nothing added>). Then call note "posted" and finish.\n\nTEXT TO POST (verbatim):\n{{input.text}}';
   return { id: 'watcher-post-approved-reply', name: 'Post approved reply', autoApprove: !dryRun,
     nodes: [{ id: 'trigger', type: 'trigger', label: 'Approved in Results', trigger: { type: 'manual' } },
-            { id: 'n0', type: 'agent', label: 'Re-check the thread, then post', role: 'facebook-post-approved-reply', profile: 'facebook', goal, maxSteps: 40, maxPages: 4 }],
+            { id: 'n0', type: 'agent', label: 'Re-check the thread, then post', role: 'facebook-post-approved-reply', profile: 'facebook', goal, maxSteps: 50, maxPages: 10 }],
     edges: [{ from: 'trigger', to: 'n0' }] };
 }
 const posterVerdict = (run) => {
   const notes = [];
   for (const st of ((run && run.steps) || [])) { const o = (st && st.output) || {}; for (const k of ['note', 'report', 'outcome']) if (o[k]) notes.push(String(o[k])); }
-  return notes.join(' | ').slice(0, 300);
+  return notes.join(' | ').slice(0, 700);
 };
 app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const feed = require('./watcherFeed'); const b = req.body || {}; const wid = req.params.id;
@@ -1658,7 +1658,7 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const runId = `watcher-post-approved-reply-${Date.now()}`;
   feed.mark(wid, it.key, dryRun ? { dryRunId: runId, dryRunResult: '' } : { posting: true, postFailed: false, postRunId: runId, draft: text });
   const c = { owner, maxConcurrent: 2 };
-  workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '' }, persist: workflows.persistRun, runId })
+  workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '', author: String((it.fields || {}).author || it.title || '').slice(0, 80), said: String((it.fields || {}).said || (it.fields || {}).detail || '').replace(/\s+/g, ' ').slice(0, 120) }, persist: workflows.persistRun, runId })
     .then((run) => {
       const ok = !!(run && run.status === 'done'); const verdict = posterVerdict(run);
       if (dryRun) feed.mark(wid, it.key, { dryRunResult: (ok ? 'ok: ' : 'failed: ') + verdict });
