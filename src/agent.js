@@ -137,8 +137,14 @@ function looksLikeWrite(el) {
   if (!el) return false;
   const labels = [el.text, el.ariaLabel].filter((x) => x && String(x).trim());
   return labels.some((raw) => {
-    const label = String(raw).trim().toLowerCase().replace(/^[^a-z]+/, '');
+    const rawLabel = String(raw).trim().toLowerCase();
+    const label = rawLabel.replace(/^[^a-z]+/, '');
     if (!label || label.length > 40) return false;
+    /* REVEAL controls expand hidden content and publish NOTHING — "11 antwoorden bekijken",
+       "Bekijk meer reacties", "View 3 replies", "See more", "Meer weergeven", "Verberg". A reply
+       thread cannot be read without them, and gating them deadlocked the reply flow. */
+    if (/bekijk|weergeven|verberg|see more|show more|\bview\b|more repl|more comment|meer reacti|meer antwoord|meer opmerking/.test(rawLabel)) return false;
+    if (/^\d+\s*(antwoord|reacti|opmerking|repl|comment)/.test(rawLabel)) return false;
     /* Prefix, not whole word: Dutch inflects these — "plaats" becomes "Plaatsen", "verzend"
        becomes "Verzenden" — and a boundary check rejected exactly the buttons this is for. The
        length cap above is what keeps a prefix match from swallowing a sentence. */
@@ -297,7 +303,7 @@ const TOOLS = [
       url: { type: 'string', description: 'exactly as listed by google() or seen on a page — never typed from memory' },
     }, required: ['url'] } } },
 
-  { type: 'function', function: { name: 'collect', description: 'Save ONE thing you found - a person, a company, an address, a profile with its photo, a job post, ANY item worth keeping. This is for data gathering of every shape, not just leads: put what it is in title, and every detail in fields as key/value (for example an email, a role, an address). Add url if it links somewhere, and image for a photo or avatar URL. Call it the moment you find each item, one call per item.', parameters: { type: 'object', properties: { title: { type: 'string', description: 'what this item is - a name, a company, a headline' }, fields: { type: 'object', description: 'every detail as key:value' }, url: { type: 'string', description: 'a link to it, if any' }, image: { type: 'string', description: 'a photo or avatar URL, if any' } }, required: ['title'] } } },
+  { type: 'function', function: { name: 'collect', description: 'Save ONE thing you found - a person, a company, an address, a profile with its photo, a job post, ANY item worth keeping. This is for data gathering of every shape, not just leads: put what it is in title, and every detail in fields as key/value (for example an email, a role, an address). Add url if it links somewhere, and image for a photo or avatar URL. Call it the moment you find each item, one call per item.', parameters: { type: 'object', properties: { title: { type: 'string', description: 'what this item is - a name, a company, a headline' }, fields: { type: 'object', description: 'every detail as key:value' }, url: { type: 'string', description: 'a link to it, if any' }, image: { type: 'string', description: 'a photo or avatar URL, if any' }, draft: { type: 'string', description: 'ONLY for a comment/reply that needs an answer: a ready reply draft' } }, required: ['title'] } } },
   { type: 'function', function: { name: 'save_lead', description: 'Record someone worth approaching. Do this the moment you find one — do not wait until the end. On a social site, a lead is a PERSON who wrote a PARTICULAR THING in a PARTICULAR PLACE: fill in the person, the post and the group, because a reply that does not refer to their own words is the one that reads as a bot.', parameters: { type: 'object', properties: {
       name: { type: 'string', description: 'the person, as their profile shows it' },
       why: { type: 'string', description: 'what in their own words makes them a lead' },
@@ -1772,7 +1778,12 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 break;
               }
               // Loop guard: has this same control been clicked before with no progress since?
-              const clickLabel = (el?.text || el?.ariaLabel || `#${a.index}`).trim().toLowerCase().slice(0, 60);
+              const rawClickLabel = (el?.text || el?.ariaLabel || '').trim().toLowerCase().slice(0, 60);
+              // Expanders ("1 antwoord bekijken" / "View replies") repeat the SAME label across many
+              // different threads; keying the loop guard on that shared text made expanding a second
+              // thread look like a loop and killed the run. Key those on the element index instead.
+              const isExpander = /bekijk|weergeven|antwoord|repl|meer reacti|meer opmerking|more comment/.test(rawClickLabel);
+              const clickLabel = isExpander ? `#${a.index}` : (rawClickLabel || `#${a.index}`);
               clickHistory.push(clickLabel);
               if (clickHistory.length > 8) clickHistory.shift();
               const repeats = clickHistory.filter((l) => l === clickLabel).length;
@@ -1936,7 +1947,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
               break;
             }
             case 'collect': {
-              const item = jobsStore.addResult(job, { title: a.title, fields: (a.fields && typeof a.fields === 'object') ? a.fields : {}, url: a.url || '', image: a.image || '' });
+              const item = jobsStore.addResult(job, { title: a.title, fields: (a.fields && typeof a.fields === 'object') ? a.fields : {}, url: a.url || '', image: a.image || '', draft: a.draft || '' });
               if (item) { jobsStore.step(job, 'result', item.title, { url: item.url }); observe(`Saved "${item.title}". Keep going - collect each item as you find it, then finish.`); }
               else observe('Already had that one - skip it and collect the next.');
               break;

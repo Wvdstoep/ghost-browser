@@ -1548,6 +1548,7 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   /* The run's input, if the caller has one: {"input": {...}} becomes {{input.*}} in every goal. */
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
+    .then(() => triggerFollowUps(wf, req.client.owner))
     .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`));
   res.json({ runId, status: 'running' });
 });
@@ -1593,6 +1594,18 @@ app.get('/v1/workflow-runs/:id', authed, (req, res) => {
   const r = workflows.readRun(req.params.id); if (!r) return res.status(404).json({ error: 'No such run.' });
   res.json(r);
 });
+// A watcher's deduped, accumulating result feed (only-new, urgency-ranked, handled-aware).
+app.get('/v1/watchers/:id/feed', authed, (req, res) => {
+  try { const wf = require('./watcherFeed'); res.json({ items: wf.list(req.params.id), counts: wf.counts(req.params.id) }); }
+  catch (e) { res.json({ items: [], counts: { total: 0, unhandled: 0 } }); }
+});
+app.post('/v1/watchers/:id/feed/handled', authed, (req, res) => {
+  try { const b = req.body || {}; res.json({ ok: require('./watcherFeed').markHandled(req.params.id, b.key, b.handled !== false) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// A watcher's follow-up config (generic): { followUpFlowId, followUpKinds:[] } — any flow, any item kinds.
+app.get('/v1/watchers/:id/config', authed, (req, res) => { try { res.json(require('./watcherFeed').getConfig(req.params.id)); } catch (e) { res.json({}); } });
+app.put('/v1/watchers/:id/config', authed, (req, res) => { try { res.json(require('./watcherFeed').setConfig(req.params.id, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); } });
 
 /*
  * THE AUTOMATION SCHEDULER. A quiet once-a-minute tick that fires ACTIVE workflows whose trigger is a
@@ -1614,6 +1627,33 @@ function scheduleDue(cfg, lastMs, when) {
   if (ms) { const n = Math.max(1, Number(cfg.n) || 1); return (Date.now() - lastMs) >= n * ms; }
   return false;
 }
+/*
+ * FOLLOW-UPS (generic). After a watcher run, for each NEW collected item matching the watcher's
+ * follow-up config, run the chosen follow-up flow ON that item (as the same owner, so it reuses the
+ * one profile session by takeover rather than colliding). The flow's action is correlated back to the
+ * item by URL in the UI. Nothing here is site- or reply-specific.
+ */
+async function triggerFollowUps(wf, owner) {
+  try {
+    if (!wf || !wf.id || !owner) return;
+    const feed = require('./watcherFeed');
+    const cfg = feed.getConfig(wf.id);
+    if (!cfg || !cfg.followUpFlowId) return;
+    const flow = workflows.read(cfg.followUpFlowId);
+    if (!flow) return;
+    const kinds = Array.isArray(cfg.followUpKinds) ? cfg.followUpKinds.map((k) => String(k).toLowerCase()) : [];
+    const kindOf = (it) => String((it.fields && (it.fields.type || it.fields.action)) || it.kind || '').toLowerCase();
+    const items = feed.list(wf.id).filter((it) => !it.followedUp && !it.handled && it.url && (!kinds.length || kinds.includes(kindOf(it))));
+    for (const it of items.slice(0, 6)) {
+      feed.mark(wf.id, it.key, { followedUp: true });
+      const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
+      try {
+        await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: `${flow.id}-${Date.now()}` });
+      } catch (e) { log.error(`[follow-up] ${flow.id} on ${it.key}: ${e.message}`); }
+    }
+  } catch (e) { log.error(`[follow-up] ${wf && wf.id}: ${e.message}`); }
+}
+
 async function scheduleTick() {
   const owner = consoleOwner(); if (!owner) return;
   const when = new Date();
@@ -1628,6 +1668,7 @@ async function scheduleTick() {
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
     workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
+      .then(() => triggerFollowUps(wf, owner))
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`));
   }
 }

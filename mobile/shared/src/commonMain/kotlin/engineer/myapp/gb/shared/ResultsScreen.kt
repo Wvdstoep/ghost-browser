@@ -30,6 +30,8 @@ fun ResultsScreen(
     flows: List<FlowInfo>,
     loading: Boolean,
     onRunFlow: (flowId: String, item: ResultItem) -> Unit,
+    onApproveDraft: (item: ResultItem, editedText: String) -> Unit,
+    onDenyDraft: (item: ResultItem) -> Unit,
     onOpenUrl: (String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -50,20 +52,28 @@ fun ResultsScreen(
             }
         } else {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-                items.forEach { it -> ResultCard(it, flows, onRunFlow, onOpenUrl); Spacer(Modifier.height(12.dp)) }
+                items.forEach { it -> ResultCard(it, flows, onRunFlow, onApproveDraft, onDenyDraft, onOpenUrl); Spacer(Modifier.height(12.dp)) }
             }
         }
     }
 }
 
 @Composable
-private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (String, ResultItem) -> Unit, onOpenUrl: (String) -> Unit) {
+private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (String, ResultItem) -> Unit,
+                      onApproveDraft: (ResultItem, String) -> Unit, onDenyDraft: (ResultItem) -> Unit, onOpenUrl: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     var picked by remember(item.title) { mutableStateOf<FlowInfo?>(null) }
     var status by remember(item.title) { mutableStateOf("") }
+    var draft by remember(item.pid, item.draft) { mutableStateOf(item.draft) }
+    var acted by remember(item.pid) { mutableStateOf(false) }
+    val hasDraft = item.draft.isNotBlank() && item.pid.isNotBlank()
 
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
-        Text(item.kind.uppercase().ifBlank { "ITEM" }, color = Brand, fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp)
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface)
+        .border(1.dp, if (hasDraft) Brand else cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(item.kind.uppercase().ifBlank { "ITEM" }, color = Brand, fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp, modifier = Modifier.weight(1f))
+            if (hasDraft) Box(Modifier.clip(RoundedCornerShape(50)).background(Brand).padding(horizontal = 8.dp, vertical = 2.dp)) { Text("DRAFT READY", color = BrandOn, fontSize = 9.sp, fontFamily = FontFamily.Monospace) }
+        }
         Text(item.title.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
         if (item.url.isNotBlank()) {
             Spacer(Modifier.height(2.dp))
@@ -80,14 +90,29 @@ private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (Stri
                 }
             }
         }
+        // A ready draft (from the follow-up flow) — edit + Approve & post / Deny, right here.
+        if (hasDraft) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(draft, { draft = it }, enabled = !acted, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                label = { Text("Draft reply") }, minLines = 3, shape = RoundedCornerShape(10.dp))
+            Spacer(Modifier.height(10.dp))
+            Row {
+                Button(onClick = { acted = true; status = "Posting…"; onApproveDraft(item, draft) }, enabled = !acted,
+                    modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Approve & post", style = MaterialTheme.typography.labelLarge) }
+                Spacer(Modifier.width(10.dp))
+                OutlinedButton(onClick = { acted = true; status = "Dismissed"; onDenyDraft(item) }, enabled = !acted, modifier = Modifier.height(46.dp), shape = RoundedCornerShape(10.dp)) { Text("Deny", color = cs.error) }
+            }
+        }
+        // Run any other flow on this item (react, DM, …).
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { FlowPicker(picked, flows) { picked = it } }
             Spacer(Modifier.width(10.dp))
             Button(onClick = {
                 val f = picked
-                if (f == null) status = "Pick a flow first." else { onRunFlow(f.id, item); status = "Started ✓ — approve it in Approvals."; picked = null }
-            }, shape = RoundedCornerShape(9.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Run") }
+                if (f == null) status = "Pick a flow first." else { onRunFlow(f.id, item); status = "Started ✓ — watch Approvals."; picked = null }
+            }, shape = RoundedCornerShape(9.dp), colors = ButtonDefaults.buttonColors(containerColor = cs.surfaceVariant, contentColor = cs.onSurface)) { Text("Run") }
         }
         if (status.isNotBlank()) { Spacer(Modifier.height(6.dp)); Text(status, fontSize = 11.sp, color = cs.onSurfaceVariant) }
     }

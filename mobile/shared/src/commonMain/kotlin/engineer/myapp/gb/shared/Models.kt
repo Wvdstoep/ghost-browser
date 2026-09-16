@@ -50,6 +50,8 @@ data class Watcher(
     val goal: String = "",         // the specific instruction (role mode), for edit pre-fill
     val mode: String = "role",     // "role" (role+goal) | "automation" (runs a saved flow)
     val stepCount: Int = 1,        // how many steps it runs (automation mode > 1)
+    val followUpFlowId: String = "",       // optional: auto-run this flow on new collected items
+    val followUpRepliesOnly: Boolean = true, // true = only reply/comment/mention items; false = all
 )
 
 /** One collected item in a watcher's results — schema-agnostic: whatever fields it has, plus an
@@ -60,4 +62,9 @@ data class ResultItem(
     val url: String,
     val image: String,
     val kind: String,
+    val draft: String = "",        // a ready draft (from a follow-up flow), editable + approvable in place
+    val jobId: String = "",        // the job holding the draft proposal (for approve/deny)
+    val pid: String = "",          // the pending proposal id (approve = post, deny = skip)
+    val feedKey: String = "",      // this item's key in the watcher feed (to mark handled)
+    val handled: Boolean = false,
 )

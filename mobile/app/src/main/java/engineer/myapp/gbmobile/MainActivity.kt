@@ -1283,7 +1283,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             else { vm.log("↑ starting Facebook reply watch…"); apiCall("POST", "/v1/sessions", JSONObject().put("reuse", true).put("profile", "facebook").toString(), "watch_session") }
         },
         onLoadWatchers = { loadWatchers() },
-        onSaveWatcher = { id, name, mode, role, goal, profile, autoId, iv -> saveWatcher(id, name, mode, role, goal, profile, autoId, iv) },
+        onSaveWatcher = { id, name, mode, role, goal, profile, autoId, iv, fuF, fuR -> saveWatcher(id, name, mode, role, goal, profile, autoId, iv, fuF, fuR) },
         onToggleWatcher = { id, active -> toggleWatcher(id, active) },
         onOpenWatcherResults = { id -> openWatcherResults(id) },
     )
@@ -1302,7 +1302,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val DEFAULT_WATCH_GOAL = "Run your watch now: carry out this role's task and record what you find with collect (or save_lead). Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish."
     /** Create or edit a watcher. Role mode = a schedule trigger + one agent node (role+goal). Automation
      *  mode = a schedule trigger + a COPY of the chosen automation's steps (the original is untouched). */
-    private fun saveWatcher(id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) {
+    @Volatile private var pendingFollowUp: Pair<String, Boolean>? = null   // (flowId, repliesOnly) applied after create
+    private val watcherCfg = java.util.Collections.synchronizedMap(HashMap<String, Pair<String, Boolean>>())
+    @Volatile private var lastWorkflowsJson: String = ""
+    private fun putWatcherConfig(wid: String, flowId: String, repliesOnly: Boolean) {
+        val kinds = if (repliesOnly) JSONArray().put("reply").put("comment").put("mention") else JSONArray()
+        watcherCfg[wid] = flowId to repliesOnly
+        apiCall("PUT", "/v1/watchers/$wid/config", JSONObject().put("followUpFlowId", flowId).put("followUpKinds", kinds).toString(), "watcher_cfg")
+    }
+    private fun saveWatcher(id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) {
         val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
             .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
         val nodes = JSONArray().put(trigger)
@@ -1329,8 +1337,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false)
             .put("nodes", nodes).put("edges", edges).toString()
-        if (id.isNullOrBlank()) { vm.log("+ creating watcher \"$name\" (every $intervalMin min)…"); apiCall("POST", "/v1/workflows", body, "watcher_create") }
-        else { vm.log("✎ saving watcher \"$name\"…"); apiCall("PUT", "/v1/workflows/$id", body, "watcher_create") }
+        if (id.isNullOrBlank()) {
+            pendingFollowUp = followUpFlowId to followUpRepliesOnly
+            vm.log("+ creating watcher \"$name\" (every $intervalMin min)…"); apiCall("POST", "/v1/workflows", body, "watcher_create")
+        } else {
+            vm.log("✎ saving watcher \"$name\"…"); apiCall("PUT", "/v1/workflows/$id", body, "watcher_create")
+            putWatcherConfig(id, followUpFlowId, followUpRepliesOnly)
+        }
     }
     private fun toggleWatcher(id: String, active: Boolean) {
         val raw = watcherRaw[id]
@@ -1340,15 +1353,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
     // The watcher whose results we're assembling (id → name), across the two-step fetch.
     @Volatile private var pendingResults: Pair<String, String>? = null
+    @Volatile private var pendingFeedJson: String = ""
     private fun openWatcherResults(id: String) {
         val name = shellUi.watchers.value.firstOrNull { it.id == id }?.name ?: "Watcher"
         pendingResults = id to name
         vm.log("↑ opening results for \"$name\"…")
-        apiCall("GET", "/v1/agent/jobs", null, "watcher_jobs")   // step 1: find this watcher's job(s)
+        apiCall("GET", "/v1/watchers/$id/feed", null, "wfeed")   // step 1: the deduped feed
     }
 
     /** Parse GET /v1/workflows → the ones with a schedule trigger are watchers. */
-    private fun parseWatchers(data: String) {
+    private fun parseWatchers(data: String, fetchCfg: Boolean = true) {
+        lastWorkflowsJson = data
         try {
             val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
             val out = ArrayList<engineer.myapp.gb.shared.Watcher>()
@@ -1374,9 +1389,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
                     lastRun = last, resultCount = 0, goal = agent?.optString("goal") ?: "",
                     mode = if (steps > 1) "automation" else "role", stepCount = steps,
+                    followUpFlowId = watcherCfg[id]?.first ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
                 ))
             }
             shellUi.watchers.value = out
+            if (fetchCfg) out.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}") }
         } catch (e: Exception) { vm.log("! watchers parse: ${data.take(120)}") }
         shellUi.watchersLoading.value = false
     }
@@ -1412,9 +1429,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
     private fun hideArtifact() { runOnUiThread { artHost?.visibility = View.GONE } }
 
+    private fun markFeedHandled(feedKey: String) {
+        val wid = pendingResults?.first ?: return
+        if (feedKey.isBlank()) return
+        apiCall("POST", "/v1/watchers/$wid/feed/handled", JSONObject().put("key", feedKey).put("handled", true).toString(), "artifact_run")
+    }
     inner class GbArtifactBridge {
         @android.webkit.JavascriptInterface fun close() { hideArtifact() }
         @android.webkit.JavascriptInterface fun openUrl(url: String) { runOnUiThread { hideArtifact(); if (url.isNotBlank()) load(url) } }
+        @android.webkit.JavascriptInterface fun approveDraft(jobId: String, pid: String, text: String, feedKey: String) {
+            if (jobId.isNotBlank() && pid.isNotBlank())
+                apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", true).put("edit", text).toString(), "artifact_approve")
+            markFeedHandled(feedKey)
+        }
+        @android.webkit.JavascriptInterface fun denyDraft(jobId: String, pid: String, feedKey: String) {
+            if (jobId.isNotBlank() && pid.isNotBlank())
+                apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", false).toString(), "artifact_approve")
+            markFeedHandled(feedKey)
+        }
         @android.webkit.JavascriptInterface fun runFlow(flowId: String, itemJson: String) {
             try {
                 val item = JSONObject(itemJson)
@@ -1449,8 +1481,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
  .row{display:flex;gap:8px;padding:3px 0;font-size:13px} .k{color:var(--muted);min-width:96px;flex:none} .v{color:var(--text);word-break:break-word}
  a.link{color:var(--brand);text-decoration:none;font-size:13px;display:inline-block;margin-top:8px}
  .act{display:flex;gap:8px;margin-top:12px;align-items:center} select{flex:1;background:var(--hi);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px}
- .run{background:var(--brand);color:var(--brandOn);border:0;border-radius:9px;padding:9px 16px;font-weight:600}
+ .run{background:var(--hi);color:var(--text);border:0;border-radius:9px;padding:9px 16px;font-weight:600}
  .status{color:var(--muted);font-size:12px;margin-top:6px;min-height:14px}
+ .dbadge{display:inline-block;background:var(--brand);color:var(--brandOn);font:11px monospace;border-radius:50px;padding:2px 9px;margin:10px 0 6px}
+ .draft{width:100%;box-sizing:border-box;min-height:80px;background:var(--bg);color:var(--text);border:1px solid var(--brand);border-radius:10px;padding:10px;font:inherit}
+ .btnrow{display:flex;gap:8px;margin-top:8px} .approve{flex:1;background:var(--brand);color:var(--brandOn);border:0;border-radius:9px;padding:11px;font-weight:600}
+ .deny{background:transparent;color:#F2857D;border:1px solid var(--line);border-radius:9px;padding:11px 16px}
+ .card.hasdraft{border-color:var(--brand)}
 </style></head><body>
 <header><h1>$safeName</h1><span class="count" id="count"></span><button class="x" onclick="GbArtifact.close()">Close</button></header>
 <div class="wrap" id="wrap"></div>
@@ -1465,22 +1502,28 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
    if(!ITEMS.length){ wrap.innerHTML='<div class="empty">Nothing collected yet. When this watcher next runs and finds something, it appears here.</div>'; return; }
    var html='';
    for(var i=0;i<ITEMS.length;i++){ var it=ITEMS[i];
-     html+='<div class="card">';
+     var hasDraft = it.draft && it.pid;
+     html+='<div class="card'+(hasDraft?' hasdraft':'')+'" id="card'+i+'">';
      html+='<div class="top">';
      if(it.image) html+='<img class="avatar" src="'+esc(it.image)+'">';
      html+='<div><div class="kind">'+esc(it.kind||'item')+'</div><div class="title">'+esc(it.title||'Untitled')+'</div>';
      if(it.url) html+='<a class="link" href="javascript:void(0)" onclick="GbArtifact.openUrl(\''+esc(it.url).replace(/'/g,"\\'")+'\')">Open ↗</a>';
      html+='</div></div>';
      var fh=fieldsHtml(it.fields); if(fh) html+='<div class="fields">'+fh+'</div>';
-     html+='<div class="act"><select id="sel'+i+'">'+flowOptions()+'</select><button class="run" onclick="runItem('+i+')">Run</button></div>';
+     if(hasDraft){ html+='<div class="dbadge">DRAFT READY</div><textarea class="draft" id="d'+i+'">'+esc(it.draft)+'</textarea>'
+       +'<div class="btnrow"><button class="approve" onclick="approveItem('+i+')">Approve &amp; post</button><button class="deny" onclick="denyItem('+i+')">Deny</button></div>'; }
+     html+='<div class="act"><select id="sel'+i+'">'+flowOptions()+'</select><button class="run" onclick="runItem('+i+')">Run flow</button></div>';
      html+='<div class="status" id="st'+i+'"></div>';
      html+='</div>';
    }
    wrap.innerHTML=html;
  }
+ function fade(i){ var c=document.getElementById('card'+i); if(c) c.style.opacity=0.45; }
+ function approveItem(i){ var it=ITEMS[i]; var t=document.getElementById('d'+i).value; try{ GbArtifact.approveDraft(it.jobId||'', it.pid||'', t, it.feedKey||''); document.getElementById('st'+i).textContent='Approved ✓ — posting.'; fade(i);}catch(e){document.getElementById('st'+i).textContent='Error: '+e;} }
+ function denyItem(i){ var it=ITEMS[i]; try{ GbArtifact.denyDraft(it.jobId||'', it.pid||'', it.feedKey||''); document.getElementById('st'+i).textContent='Dismissed.'; fade(i);}catch(e){document.getElementById('st'+i).textContent='Error: '+e;} }
  function runItem(i){ var sel=document.getElementById('sel'+i); var fid=sel.value; var st=document.getElementById('st'+i);
    if(!fid){ st.textContent='Pick a flow first.'; return; }
-   try{ GbArtifact.runFlow(fid, JSON.stringify(ITEMS[i])); st.textContent='Started ✓ — approve it in the Approvals tab when it drafts an action.'; sel.selectedIndex=0; }
+   try{ GbArtifact.runFlow(fid, JSON.stringify(ITEMS[i])); st.textContent='Started ✓ — approve it in the Approvals tab.'; sel.selectedIndex=0; }
    catch(e){ st.textContent='Could not start: '+e; }
  }
  render();
@@ -1779,6 +1822,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             agentApiWaiters.remove(id)?.countDown()
             return
         }
+        // Per-watcher follow-up config responses (tag "wcfg_<workflowId>").
+        if (tag.startsWith("wcfg_")) {
+            val wid = tag.removePrefix("wcfg_").removeSuffix("_err")
+            if (!tag.endsWith("_err")) try {
+                val o = JSONObject(data); val fid = o.optString("followUpFlowId")
+                val kinds = o.optJSONArray("followUpKinds") ?: JSONArray()
+                if (fid.isNotBlank()) watcherCfg[wid] = fid to (kinds.length() > 0)
+                else watcherCfg.remove(wid)
+                if (lastWorkflowsJson.isNotBlank()) parseWatchers(lastWorkflowsJson, false)
+            } catch (e: Exception) {}
+            return
+        }
         when (tag) {
             "platforms" -> {
                 try {
@@ -1950,8 +2005,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // ── Watchers ──────────────────────────────────────────────────────────────────────────
             "watchers" -> parseWatchers(data)
             "watchers_err" -> { shellUi.watchersLoading.value = false; vm.log("! watchers: ${data.take(120)}") }
-            "watcher_create" -> { vm.log("● watcher created — it now runs in the background on schedule"); loadWatchers() }
+            "watcher_create" -> {
+                val wid = try { JSONObject(data).optString("id") } catch (e: Exception) { "" }
+                val pf = pendingFollowUp; pendingFollowUp = null
+                if (wid.isNotBlank() && pf != null) putWatcherConfig(wid, pf.first, pf.second)
+                vm.log("● watcher saved — runs in the background on schedule"); loadWatchers()
+            }
             "watcher_create_err" -> vm.log("! create watcher: ${data.take(160)}")
+            "watcher_cfg" -> {}
+            "watcher_cfg_err" -> vm.log("! follow-up config: ${data.take(120)}")
             "watcher_toggle" -> loadWatchers()
             "watcher_toggle_err" -> { vm.log("! toggle watcher: ${data.take(140)}"); loadWatchers() }
             "profiles_list" -> try {
@@ -1965,40 +2027,46 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (names.isNotEmpty()) shellUi.watcherProfiles.value = names
             } catch (e: Exception) {}
             "profiles_list_err" -> {}
-            "watcher_jobs" -> try {
-                val wid = pendingResults?.first
-                val o = JSONObject(data)
-                val all = ArrayList<JSONObject>()
-                (o.optJSONArray("jobs") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
-                (o.optJSONArray("history") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
-                val mine = all.filter { it.optString("workflowId") == wid }
-                val jobId = mine.firstOrNull()?.optString("id")   // list is newest-first
-                if (jobId.isNullOrBlank()) { vm.log("↓ no runs yet for this watcher — it hasn't collected anything"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
-                else apiCall("GET", "/v1/agent/jobs/$jobId", null, "watcher_job")   // step 2: full record with results[] + leads[]
-            } catch (e: Exception) { vm.log("! results: ${data.take(120)}") }
-            "watcher_jobs_err" -> vm.log("! results: ${data.take(140)}")
-            "watcher_job" -> try {
-                val j = JSONObject(data)
-                val items = JSONArray()
-                // generic results (any shape)
-                (j.optJSONArray("results") ?: JSONArray()).let { r -> for (i in 0 until r.length()) r.optJSONObject(i)?.let { items.put(it) } }
-                // leads mapped into the same generic item shape, so lead-watchers show too
-                (j.optJSONArray("leads") ?: JSONArray()).let { l ->
-                    for (i in 0 until l.length()) {
-                        val ld = l.optJSONObject(i) ?: continue
-                        val fields = JSONObject()
-                        ld.optString("why").takeIf { it.isNotBlank() }?.let { fields.put("why", it) }
-                        ld.optString("quote").takeIf { it.isNotBlank() }?.let { fields.put("what they wrote", it) }
-                        ld.optString("groupName").takeIf { it.isNotBlank() }?.let { fields.put("group", it) }
-                        ld.optString("contact").takeIf { it.isNotBlank() }?.let { fields.put("contact", it) }
-                        items.put(JSONObject().put("title", ld.optString("name").ifBlank { "Lead" }).put("fields", fields).put("url", ld.optString("url")).put("kind", "lead"))
+            "wfeed" -> { pendingFeedJson = data; apiCall("GET", "/v1/agent/jobs", null, "wfeedjobs") }   // then correlate drafts
+            "wfeed_err" -> { vm.log("! results: ${data.take(140)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
+            "wfeedjobs" -> try {
+                // Map post-url -> a pending proposal (the draft), from all jobs.
+                val urlToProp = HashMap<String, JSONObject>()
+                val jr = JSONObject(data)
+                val allJobs = ArrayList<JSONObject>()
+                (jr.optJSONArray("jobs") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> allJobs.add(j) } }
+                (jr.optJSONArray("history") ?: JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> allJobs.add(j) } }
+                for (j in allJobs) {
+                    val props = j.optJSONArray("proposals") ?: continue
+                    for (k in 0 until props.length()) {
+                        val p = props.optJSONObject(k) ?: continue
+                        if (p.optString("state") != "pending") continue
+                        val u = p.optString("url"); if (u.isBlank()) continue
+                        if (!urlToProp.containsKey(u)) urlToProp[u] = JSONObject().put("jobId", j.optString("id")).put("pid", p.optString("pid")).put("text", p.optString("text"))
                     }
                 }
+                val feedItems = JSONObject(pendingFeedJson).optJSONArray("items") ?: JSONArray()
+                val items = JSONArray()
+                for (i in 0 until feedItems.length()) {
+                    val it = feedItems.optJSONObject(i) ?: continue
+                    if (it.optBoolean("handled")) continue
+                    val url = it.optString("url")
+                    val prop = urlToProp[url]
+                    val item = JSONObject()
+                        .put("title", it.optString("title")).put("fields", it.optJSONObject("fields") ?: JSONObject())
+                        .put("url", url).put("image", it.optString("image")).put("kind", it.optString("kind"))
+                        .put("feedKey", it.optString("key"))
+                        .put("draft", prop?.optString("text") ?: it.optString("draft"))
+                        .put("jobId", prop?.optString("jobId") ?: "").put("pid", prop?.optString("pid") ?: "")
+                    items.put(item)
+                }
                 showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", items, shellUi.flows.value))
-            } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}") }
-            "watcher_job_err" -> vm.log("! results: ${data.take(140)}")
-            "artifact_run" -> vm.log("● follow-up flow started — its action will appear in Approvals")
+            } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
+            "wfeedjobs_err" -> vm.log("! results: ${data.take(140)}")
+            "artifact_run" -> vm.log("● flow started — its action will appear in Approvals")
             "artifact_run_err" -> vm.log("! follow-up: ${data.take(140)}")
+            "artifact_approve" -> vm.log("● approved — posting")
+            "artifact_approve_err" -> vm.log("! approve: ${data.take(140)}")
             "devrunsave" -> vm.log("↑ run journaled to shared history")
             "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {
