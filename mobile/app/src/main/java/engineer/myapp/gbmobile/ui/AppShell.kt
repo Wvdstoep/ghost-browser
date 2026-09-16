@@ -149,8 +149,15 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         pip = shell.pipThumb.value, onExpandPip = { act.onNav("browser") }, topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
-                    "devices" -> DeviceHubScreen(shell, act)
-                    else -> if (shell.url.value.isBlank()) HomePage(shell, act)   // new/blank tab → native home
+                    "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
+                        shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
+                        topInset = Modifier.statusBarsPaddingSafe(),
+                    )
+                    else -> if (shell.url.value.isBlank()) engineer.myapp.gb.shared.HomeScreen(   // new/blank tab → shared home
+                        platforms = shell.platforms.value, feed = shell.homeFeed.value, loading = shell.homeFeedLoading.value,
+                        onSearch = { act.onFocusUrl() }, onOpenPlatform = { p -> act.onOpenPlatform(p.profile, p.site) },
+                        onOpenLearn = { act.onOpenLearn(it) }, onRefresh = { act.onRefreshHome() },
+                    )
                 }
             }
             BottomBar(shell, act)
@@ -232,88 +239,6 @@ private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean
             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
     )
-}
-
-/* ── New-tab home (Google-style; feed = my-app /learn) ───────────────────────────────────────── */
-
-@Composable
-private fun HomePage(shell: ShellUi, act: ShellActions) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState())) {
-        Spacer(Modifier.height(48.dp))
-        // brand wordmark
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(Brand), contentAlignment = Alignment.Center) {
-                Text("G", color = BrandOn, fontSize = 24.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-            }
-            Spacer(Modifier.width(12.dp))
-            Row {
-                Text("Ghost", color = cs.onBackground, fontSize = 30.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                Text("Browser", color = Brand, fontSize = 30.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-            }
-        }
-        Spacer(Modifier.height(26.dp))
-        // search pill (opens the omnibox)
-        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(26.dp),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(52.dp).clickable { act.onFocusUrl() }) {
-            Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(14.dp))
-                Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 16.sp)
-            }
-        }
-        Spacer(Modifier.height(22.dp))
-        // platform shortcuts
-        if (shell.platforms.value.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-                shell.platforms.value.take(12).forEach { p ->
-                    Column(Modifier.width(76.dp).clickable { act.onOpenPlatform(p.profile, p.site) }.padding(vertical = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(Modifier.size(50.dp).clip(CircleShape).background(cs.surfaceVariant), contentAlignment = Alignment.Center) {
-                            Text(p.label.take(1).uppercase(), color = Brand, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        Text(p.label, color = cs.onSurface, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-        }
-        // Learn feed
-        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("From my-app.engineer", color = cs.onSurfaceVariant, fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            if (shell.homeFeedLoading.value) CircularProgressIndicator(Modifier.size(16.dp), color = Brand, strokeWidth = 2.dp)
-            else IconButton(onClick = act.onRefreshHome) { Icon(Icons.Default.Refresh, "Refresh", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
-        }
-        Spacer(Modifier.height(6.dp))
-        if (shell.homeFeed.value.isEmpty() && !shell.homeFeedLoading.value) {
-            Text("No articles yet.", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-        } else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            shell.homeFeed.value.forEach { it2 -> LearnCard(it2) { act.onOpenLearn(it2.slug) } }
-        }
-        Spacer(Modifier.height(28.dp))
-    }
-}
-
-@Composable
-private fun LearnCard(item: LearnItem, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline),
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
-        Column(Modifier.padding(16.dp)) {
-            Text(item.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, lineHeight = 21.sp)
-            if (item.description.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(item.description, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 18.sp)
-            }
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(16.dp).clip(CircleShape).background(Brand), contentAlignment = Alignment.Center) { Text("G", color = BrandOn, fontSize = 9.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold) }
-                Spacer(Modifier.width(8.dp))
-                Text("my-app.engineer · Learn", color = cs.onSurfaceVariant, fontSize = 11.sp)
-            }
-        }
-    }
 }
 
 /* ── Omnibox (focused URL, Chrome-style) ─────────────────────────────────────────────────────── */
@@ -536,80 +461,6 @@ private fun TabCard(t: TabInfo, onOpen: () -> Unit, onClose: () -> Unit) {
                 else Text(t.host.ifBlank { "New tab" }, color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
         }
-    }
-}
-
-/* ── Device Hub (native, renders locally) ────────────────────────────────────────────────────── */
-
-@Composable
-private fun DeviceHubScreen(shell: ShellUi, act: ShellActions) {
-    val cs = MaterialTheme.colorScheme
-    Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Device Hub", style = MaterialTheme.typography.headlineSmall)
-                    Text(shell.hubSummary.value.ifBlank { "Every node on your account" }, color = cs.onSurfaceVariant, fontSize = 12.sp)
-                }
-                IconButton(onClick = act.onRefreshHub) { Icon(Icons.Default.Refresh, "Refresh", tint = cs.onSurface) }
-            }
-            HorizontalDivider(color = cs.outline)
-            if (shell.hubDevices.value.isEmpty()) {
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Icon(Icons.Default.DevicesOther, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(40.dp))
-                    Spacer(Modifier.height(10.dp))
-                    Text("No devices yet — sign in and connect.", color = cs.onSurfaceVariant, fontSize = 13.sp)
-                }
-            } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                shell.hubDevices.value.forEach { d -> HubCard(d) }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun HubCard(d: HubDevice) {
-    val cs = MaterialTheme.colorScheme
-    Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(10.dp).clip(CircleShape).background(if (d.online) Brand else cs.onSurfaceVariant))
-                Spacer(Modifier.width(10.dp))
-                Text(d.name, color = cs.onSurface, fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(8.dp)) {
-                    Text(d.type, Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = cs.onSurfaceVariant, fontSize = 10.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                }
-            }
-            if (d.owner.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text(d.owner, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 20.dp)) }
-            Spacer(Modifier.height(12.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(12.dp))
-            Row {
-                HubStat("STATUS", if (d.online) "online" else "offline", if (d.online) Brand else cs.onSurfaceVariant, Modifier.weight(1f))
-                HubStat("LAST SEEN", relTime(d.lastSeenMs), cs.onSurface, Modifier.weight(1f))
-                HubStat("QUEUED", "${d.queued}", cs.onSurface, Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun HubStat(label: String, value: String, valueColor: Color, modifier: Modifier) {
-    val cs = MaterialTheme.colorScheme
-    Column(modifier) {
-        Text(label, color = cs.onSurfaceVariant, fontSize = 10.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-        Spacer(Modifier.height(3.dp))
-        Text(value, color = valueColor, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-    }
-}
-
-private fun relTime(ms: Long): String {
-    if (ms <= 0) return "—"
-    val s = ((System.currentTimeMillis() - ms) / 1000).coerceAtLeast(0)
-    return when {
-        s < 60 -> "${s}s ago"
-        s < 3600 -> "${s / 60}m ago"
-        s < 86400 -> "${s / 3600}h ago"
-        else -> "${s / 86400}d ago"
     }
 }
 
