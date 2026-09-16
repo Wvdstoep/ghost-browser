@@ -1601,7 +1601,7 @@ app.get('/v1/workflow-runs/:id', authed, (req, res) => {
 });
 // A watcher's deduped, accumulating result feed (only-new, urgency-ranked, handled-aware).
 app.get('/v1/watchers/:id/feed', authed, (req, res) => {
-  try { const wf = require('./watcherFeed'); res.json({ items: wf.list(req.params.id), counts: wf.counts(req.params.id) }); }
+  try { const wf = require('./watcherFeed'); res.json({ items: wf.list(req.params.id).map((it) => ({ ...it, draftState: wf.stateOf(it) })), counts: wf.counts(req.params.id) }); }
   catch (e) { res.json({ items: [], counts: { total: 0, unhandled: 0 } }); }
 });
 app.post('/v1/watchers/:id/feed/handled', authed, (req, res) => {
@@ -1611,6 +1611,67 @@ app.post('/v1/watchers/:id/feed/handled', authed, (req, res) => {
 // A watcher's follow-up config (generic): { followUpFlowId, followUpKinds:[] } — any flow, any item kinds.
 app.get('/v1/watchers/:id/config', authed, (req, res) => { try { res.json(require('./watcherFeed').getConfig(req.params.id)); } catch (e) { res.json({}); } });
 app.put('/v1/watchers/:id/config', authed, (req, res) => { try { res.json(require('./watcherFeed').setConfig(req.params.id, req.body || {})); } catch (e) { res.status(400).json({ error: e.message }); } });
+
+/*
+ * APPROVE A DRAFT = POST IT. A follow-up drafts in draft-only mode (the flow saves the text and ends,
+ * so the one browser session is free for the next item) — which means nobody is parked at a gate
+ * waiting for this yes. So approving runs a small POSTER: open the thread, EXPAND it, re-check that
+ * nothing was answered in the meantime (a draft can sit in Results for hours; double-answering in
+ * public is the one failure that embarrasses), then post the owner's exact words. If the drafting job
+ * happens to still be parked (a live Reply Desk gate), the yes goes to that job instead. `dryRun`
+ * does everything except the final act — the safe way to prove the poster on a real thread.
+ */
+function posterFlow(dryRun) {
+  const goal = dryRun
+    ? 'DRY RUN - verify only, post NOTHING. use_my_profile, then open {{input.url}}. Expand the notified sub-thread\'s hidden replies (at most 3 expands, only that sub-thread). Read it. Then call note with ONE line: (a) is the LAST message in that sub-thread already mine (yes/no) and (b) which numbered element is the Reply / Beantwoorden control under the latest person. Then finish. Do NOT call act, do NOT type.'
+    : 'use_my_profile, then open {{input.url}}. Expand the notified sub-thread\'s hidden replies (at most 3 expands, only that sub-thread). Read it. If the LAST message in that sub-thread is already mine, call note "already answered" and finish - post nothing. Otherwise call look, find the Reply / Beantwoorden control under the LATEST person in that sub-thread, and call act(kind: reply, index: <that element>, text: <EXACTLY the text below, unchanged, nothing added>). Then call note "posted" and finish.\n\nTEXT TO POST (verbatim):\n{{input.text}}';
+  return { id: 'watcher-post-approved-reply', name: 'Post approved reply', autoApprove: !dryRun,
+    nodes: [{ id: 'trigger', type: 'trigger', label: 'Approved in Results', trigger: { type: 'manual' } },
+            { id: 'n0', type: 'agent', label: 'Re-check the thread, then post', role: 'facebook-post-approved-reply', profile: 'facebook', goal, maxSteps: 40, maxPages: 4 }],
+    edges: [{ from: 'trigger', to: 'n0' }] };
+}
+const posterVerdict = (run) => {
+  const notes = [];
+  for (const st of ((run && run.steps) || [])) { const o = (st && st.output) || {}; for (const k of ['note', 'report', 'outcome']) if (o[k]) notes.push(String(o[k])); }
+  return notes.join(' | ').slice(0, 300);
+};
+app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
+  const feed = require('./watcherFeed'); const b = req.body || {}; const wid = req.params.id;
+  const it = feed.list(wid).find((x) => x.key === b.key);
+  if (!it) return res.status(404).json({ error: 'no such item' });
+  const text = String(b.text || it.draft || '').trim();
+  if (!text) return res.status(400).json({ error: 'nothing to post' });
+  const dryRun = !!b.dryRun;
+  // still parked at a live gate? then the yes belongs to that job
+  let live = null; try { live = it.draftJobId ? jobs.get(it.draftJobId) : null; } catch (e) { live = null; }
+  const pend = live && (live.proposals || []).find((p) => p.pid === it.draftPid && p.state === 'pending');
+  if (pend && !jobs.isOver(live) && !dryRun) {
+    jobs.decide(live, it.draftPid, 'approved', text);
+    feed.mark(wid, it.key, { handled: true, posted: 'live', draft: text });
+    return res.json({ mode: 'live' });
+  }
+  const owner = consoleOwner() || req.client.owner;
+  const runId = `watcher-post-approved-reply-${Date.now()}`;
+  feed.mark(wid, it.key, dryRun ? { dryRunId: runId, dryRunResult: '' } : { posting: true, postFailed: false, postRunId: runId, draft: text });
+  const c = { owner, maxConcurrent: 2 };
+  workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '' }, persist: workflows.persistRun, runId })
+    .then((run) => {
+      const ok = !!(run && run.status === 'done'); const verdict = posterVerdict(run);
+      if (dryRun) feed.mark(wid, it.key, { dryRunResult: (ok ? 'ok: ' : 'failed: ') + verdict });
+      else if (ok) feed.mark(wid, it.key, { posting: false, handled: true, posted: verdict || 'posted' });
+      else feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + verdict });
+    })
+    .catch((e) => feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + e.message } : { posting: false, postFailed: true, posted: 'failed: ' + e.message }));
+  res.json({ mode: dryRun ? 'dry-run' : 'post', runId });
+});
+app.post('/v1/watchers/:id/feed/deny', authed, (req, res) => {
+  const feed = require('./watcherFeed'); const b = req.body || {}; const wid = req.params.id;
+  const it = feed.list(wid).find((x) => x.key === b.key);
+  if (!it) return res.status(404).json({ error: 'no such item' });
+  try { const live = it.draftJobId ? jobs.get(it.draftJobId) : null; if (live && !jobs.isOver(live)) jobs.decide(live, it.draftPid, 'skipped'); } catch (e) { /* no live gate */ }
+  feed.mark(wid, it.key, { handled: true, posted: 'denied' });
+  res.json({ ok: true });
+});
 
 /*
  * THE AUTOMATION SCHEDULER. A quiet once-a-minute tick that fires ACTIVE workflows whose trigger is a
@@ -1654,7 +1715,11 @@ async function triggerFollowUps(wf, owner) {
     const kinds = Array.isArray(cfg.followUpKinds) ? cfg.followUpKinds.map((k) => String(k).toLowerCase()) : [];
     const kindOf = (it) => String((it.fields && (it.fields.type || it.fields.action)) || it.kind || '').toLowerCase();
     const items = feed.list(wf.id).filter((it) => !it.followedUp && !it.handled && it.url && (!kinds.length || kinds.includes(kindOf(it))));
-    for (const it of items.slice(0, 6)) {
+    // A thread older than the watcher's horizon (default 7 days) nobody expects an answer on any
+    // more — mark it seen without the drive, so a pass spends its budget on what matters today.
+    const maxAge = Number(cfg.maxAgeDays) || 7; const fresh = [];
+    for (const it of items) { if (feed.ageDays(it) > maxAge) feed.mark(wf.id, it.key, { draftChecked: true, tooOld: true }); else fresh.push(it); }
+    for (const it of fresh.slice(0, 6)) {
       const rid = `${flow.id}-${Date.now()}`;
       feed.mark(wf.id, it.key, { followedUp: true, draftRunId: rid, followedUpAt: Date.now() });
       const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
