@@ -54,10 +54,14 @@ class DesktopState {
     val runPhase = mutableStateOf("pick")
     val runStatus = mutableStateOf("")
     val runDevices = mutableStateOf<List<DeviceOpt>>(emptyList())
+    val runActivity = mutableStateOf<List<String>>(emptyList())   // live steps in the Run sheet
     val aiModal = mutableStateOf(false)
     val ollamaModels = mutableStateOf<List<String>>(emptyList())
     val ollamaBusy = mutableStateOf(false)
     val ollamaNote = mutableStateOf("")
+    // approvals gate — running watchers + their pending proposals (drafts awaiting yes/no)
+    val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
+    val jobsLoading = mutableStateOf(false)
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -121,6 +125,60 @@ fun loadPlatforms(st: DesktopState) = bg {
     } catch (e: Exception) {}
 }
 
+/** The reply-watch goal — mirrors the console Reply Desk: watch notifications, draft, gate every act. */
+private const val RD_GOAL_D = "Open Facebook notifications and my recent posts. For each NEW comment or reaction on MY posts, read the whole thread for context, then draft ONE natural reply that continues the conversation and moves toward my-app.engineer only where it genuinely fits. Propose EVERY reply for my approval - never post without approval. Skip threads that are hostile, off-topic, already handled, or where I chose not to engage. Keep watching and check back periodically."
+
+/** The approval gate: pull running watchers + their pending proposals from the jobs engine. */
+fun loadApprovals(st: DesktopState) = bg {
+    st.jobsLoading.value = true
+    val r = Cluster.authed("GET", "/v1/agent/jobs", null)
+    try {
+        val arr = JSONObject(r).optJSONArray("jobs") ?: org.json.JSONArray()
+        val out = ArrayList<engineer.myapp.gb.shared.JobInfo>()
+        for (i in 0 until arr.length()) {
+            val j = arr.optJSONObject(i) ?: continue
+            val stepsArr = j.optJSONArray("steps") ?: org.json.JSONArray()
+            val steps = ArrayList<String>()
+            for (k in maxOf(0, stepsArr.length() - 8) until stepsArr.length()) {
+                val s = stepsArr.optJSONObject(k) ?: continue
+                val kind = s.optString("kind"); val txt = s.optString("text").ifBlank { s.optString("detail") }
+                steps.add((if (kind.isNotBlank()) "$kind: " else "") + txt)
+            }
+            val propArr = j.optJSONArray("proposals") ?: org.json.JSONArray()
+            val props = ArrayList<engineer.myapp.gb.shared.Proposal>()
+            for (k in 0 until propArr.length()) {
+                val p = propArr.optJSONObject(k) ?: continue
+                if (p.optString("state") != "pending") continue
+                props.add(engineer.myapp.gb.shared.Proposal(
+                    jobId = j.optString("id"), pid = p.optString("pid"),
+                    kind = p.optString("kind").ifBlank { "reply" },
+                    why = p.optString("why").ifBlank { p.optString("label") },
+                    url = p.optString("url"), text = p.optString("text"), jobRole = j.optString("role"),
+                ))
+            }
+            out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props))
+        }
+        st.jobs.value = out
+    } catch (e: Exception) {}
+    st.jobsLoading.value = false
+}
+
+fun approveD(st: DesktopState, jobId: String, pid: String, edited: String) = bg {
+    Cluster.authed("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", true).put("edit", edited).toString()); loadApprovals(st)
+}
+fun denyD(st: DesktopState, jobId: String, pid: String) = bg {
+    Cluster.authed("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", false).toString()); loadApprovals(st)
+}
+fun stopJobD(st: DesktopState, jobId: String) = bg { Cluster.authed("POST", "/v1/agent/jobs/$jobId/stop", "{}"); loadApprovals(st) }
+fun sayJobD(st: DesktopState, jobId: String, text: String) = bg { Cluster.authed("POST", "/v1/agent/jobs/$jobId/say", JSONObject().put("text", text).toString()); loadApprovals(st) }
+fun startWatchD(st: DesktopState) = bg {
+    val s = Cluster.authed("POST", "/v1/sessions", JSONObject().put("reuse", true).put("profile", "facebook").toString())
+    val sid = try { JSONObject(s).optString("sessionId") } catch (e: Exception) { "" }
+    if (sid.isBlank()) { st.log("! could not open the facebook session"); return@bg }
+    Cluster.authed("POST", "/v1/agent/jobs", JSONObject().put("role", "facebook.conversation").put("goal", RD_GOAL_D).put("sessionId", sid).toString())
+    st.log("● reply watch running — drafts appear in Approvals"); loadApprovals(st)
+}
+
 fun runFlow(id: String, st: DesktopState) = bg {
     st.log("▶ running $id on the cluster…")
     val r = Cluster.authed("POST", "/v1/workflows/$id/run", "{}")
@@ -144,18 +202,33 @@ fun showRunSheetD(id: String, name: String, st: DesktopState) {
 
 /** Fire the run on the cluster and stream status into the sheet (device target is a routing hint). */
 fun runTargetD(target: String, goal: String, st: DesktopState) = bg {
-    st.runPhase.value = "running"; st.runStatus.value = "Starting on the cluster…"
+    st.runPhase.value = "running"; st.runStatus.value = "Starting on the cluster…"; st.runActivity.value = emptyList()
     val id = st.runFlowId.value
     val body = if (goal.isBlank()) "{}" else JSONObject().put("input", JSONObject().put("goal", goal)).toString()
     val r = Cluster.authed("POST", "/v1/workflows/$id/run", body)
     val runId = try { JSONObject(r).optString("runId") } catch (e: Exception) { "" }
     if (runId.isBlank()) { st.runStatus.value = "! ${r.take(140)}"; st.runPhase.value = "done"; return@bg }
-    st.runStatus.value = "Running… (run $runId)"
-    repeat(40) {
+    st.runStatus.value = "Running…"
+    repeat(60) {
         Thread.sleep(3000)
         val rr = Cluster.authed("GET", "/v1/workflow-runs/$runId", null)
-        val s = try { JSONObject(rr).optString("status") } catch (e: Exception) { "" }
-        if (s.isNotBlank() && s != "running") { st.runStatus.value = "Finished: $s"; st.runPhase.value = "done"; return@bg }
+        try {
+            val o = JSONObject(rr)
+            val steps = o.optJSONArray("steps") ?: org.json.JSONArray()
+            if (steps.length() > 0) {
+                val lines = ArrayList<String>()
+                for (i in maxOf(0, steps.length() - 6) until steps.length()) {
+                    val s = steps.optJSONObject(i) ?: continue
+                    val label = s.optString("type").ifBlank { s.optString("kind") }
+                    val detail = s.optString("status").ifBlank { s.optString("text") }
+                    lines.add((if (label.isNotBlank()) label else "step") + if (detail.isNotBlank()) " · $detail" else "")
+                }
+                st.runActivity.value = lines
+            }
+            val s = o.optString("status")
+            if (s.isNotBlank() && s != "running") { st.runStatus.value = "Finished: $s"; st.runPhase.value = "done"; return@bg }
+        } catch (e: Exception) {}
+        loadApprovals(st)   // a step may hit the gate — surface it in the sheet + badge
     }
     st.runStatus.value = "Still running — check the cluster."; st.runPhase.value = "done"
 }

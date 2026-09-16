@@ -101,10 +101,17 @@ private fun DesktopShell(error: String?, state: DesktopState) {
     val activeTab = Tabs.activeTab()
     val openUrl: (String) -> Unit = { u -> Tabs.go(u); screen = "browser" }
     Box(Modifier.fillMaxSize()) {
+    // Poll the approvals gate while its screen is open, so drafts + activity stay live.
+    LaunchedEffect(screen) {
+        if (screen == "approvals") {
+            while (true) { loadApprovals(state); kotlinx.coroutines.delay(6000) }
+        }
+    }
     GbScaffold(
         host = "", tabCount = Tabs.list.size, selected = if (screen == "devices") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
         showTopBar = false,     // desktop uses its own BrowserBar + tab strip
+        approvalsBadge = state.jobs.value.sumOf { it.proposals.size },
     ) {
         when (screen) {
             "browser" -> Column(Modifier.fillMaxSize()) {
@@ -114,6 +121,13 @@ private fun DesktopShell(error: String?, state: DesktopState) {
                 else androidx.compose.runtime.key(Tabs.active) { JcefBrowserView(Tabs.activeBrowser(), error, Modifier.weight(1f).fillMaxWidth()) }
             }
             "flows" -> FlowsScreenD(state)
+            "approvals" -> engineer.myapp.gb.shared.ApprovalsScreen(
+                jobs = state.jobs.value, loading = state.jobsLoading.value,
+                onApprove = { j, p, t -> approveD(state, j, p, t) }, onDeny = { j, p -> denyD(state, j, p) },
+                onStop = { stopJobD(state, it) }, onSay = { j, t -> sayJobD(state, j, t) },
+                onOpenUrl = { u -> Tabs.go(u); screen = "browser" }, onStartWatch = { startWatchD(state) },
+                onRefresh = { loadApprovals(state) },
+            )
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
             "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
@@ -130,6 +144,9 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         phase = state.runPhase.value, status = state.runStatus.value, goalInitial = "",
         onRun = { target, goal -> runTargetD(target, goal, state) },
         onStop = { state.runVisible.value = false }, onClose = { state.runVisible.value = false },
+        activity = state.runActivity.value,
+        pendingApprovals = state.jobs.value.sumOf { it.proposals.size },
+        onReview = { state.runVisible.value = false; screen = "approvals" },
     )
     if (state.aiModal.value) AiModalD(state) { state.aiModal.value = false }
     }

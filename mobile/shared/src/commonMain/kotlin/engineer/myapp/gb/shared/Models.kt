@@ -14,3 +14,23 @@ data class PlatformOpt(val label: String, val site: String, val profile: String,
 data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)
 data class LearnItem(val slug: String, val title: String, val description: String)
 data class DeviceOpt(val id: String, val name: String, val sub: String, val emoji: String, val online: Boolean)
+
+/**
+ * The approval gate as data. A running watcher (e.g. the Facebook reply watch) drafts an action —
+ * a reply, a comment, a message — and it sits here as a [Proposal] until the owner approves or denies
+ * it. Nothing the outside world sees is sent without that yes. [JobInfo] is one running watcher with
+ * its recent activity (so a run is never a silent "Running…") and its pending proposals.
+ */
+data class Proposal(
+    val jobId: String, val pid: String,
+    val kind: String,      // reply | comment | message | join | follow | like | other
+    val why: String,       // what this is for, in one line ("replied to your post: …")
+    val url: String,       // WHERE it came from — the thread/post link
+    val text: String,      // the DRAFT the owner reviews and can edit before it posts
+    val jobRole: String,   // which watcher produced it
+)
+data class JobInfo(
+    val id: String, val role: String, val status: String,   // running | idle | done | failed
+    val steps: List<String>,                                 // recent activity lines (kind: text)
+    val proposals: List<Proposal>,                           // pending approvals from this job
+)

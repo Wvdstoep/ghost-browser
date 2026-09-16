@@ -75,6 +75,9 @@ class ShellUi {
     // new-tab home feed (my-app.engineer /learn pages)
     val homeFeed = mutableStateOf<List<LearnItem>>(emptyList())
     val homeFeedLoading = mutableStateOf(false)
+    // approvals — the gate: running watchers + their pending proposals (drafts awaiting yes/no)
+    val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
+    val jobsLoading = mutableStateOf(false)
 }
 
 class ShellActions(
@@ -113,6 +116,14 @@ class ShellActions(
     val onRefreshHub: () -> Unit,
     val onOpenAiSettings: () -> Unit,
     val onCloseAiSettings: () -> Unit,
+    // approvals gate
+    val onOpenApprovals: () -> Unit,
+    val onRefreshApprovals: () -> Unit,
+    val onApprove: (jobId: String, pid: String, edited: String) -> Unit,
+    val onDeny: (jobId: String, pid: String) -> Unit,
+    val onStopJob: (jobId: String) -> Unit,
+    val onSayJob: (jobId: String, text: String) -> Unit,
+    val onStartWatch: () -> Unit,
 )
 
 private fun hostOf(url: String): String {
@@ -147,6 +158,13 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         title = shell.agentTitle.value, messages = shell.agentMsgs.value, busy = shell.agentBusy.value,
                         onSend = { act.onSendAgent(it) }, onNew = act.onNewAgentChat, onSettings = act.onOpenAiSettings, onClose = act.onCloseAgent,
                         pip = shell.pipThumb.value, onExpandPip = { act.onNav("browser") }, topInset = Modifier.statusBarsPaddingSafe(),
+                    )
+                    "approvals" -> engineer.myapp.gb.shared.ApprovalsScreen(
+                        jobs = shell.jobs.value, loading = shell.jobsLoading.value,
+                        onApprove = { j, p, t -> act.onApprove(j, p, t) }, onDeny = { j, p -> act.onDeny(j, p) },
+                        onStop = { act.onStopJob(it) }, onSay = { j, t -> act.onSayJob(j, t) },
+                        onOpenUrl = { act.onUrlGo(it) }, onStartWatch = act.onStartWatch, onRefresh = act.onRefreshApprovals,
+                        topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
@@ -220,19 +238,25 @@ private fun TabCountButton(count: Int, onClick: () -> Unit) {
 @Composable
 private fun BottomBar(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
+    val pending = shell.jobs.value.sumOf { it.proposals.size }
     NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
         NavItem(Icons.Default.Public, "Browser", shell.screen.value == "browser") { act.onNav("browser") }
         NavItem(Icons.Default.Bolt, "Agent", shell.screen.value == "agent") { act.onOpenAgent() }
         NavItem(Icons.Default.AccountTree, "Flows", shell.screen.value == "flows") { act.onNav("flows") }
+        NavItem(Icons.Default.Verified, "Approvals", shell.screen.value == "approvals", badge = pending) { act.onOpenApprovals() }
         NavItem(Icons.Default.Settings, "Settings", shell.screen.value == "settings") { act.onOpenSettings() }
     }
 }
 
 @Composable
-private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean, badge: Int = 0, onClick: () -> Unit) {
     NavigationBarItem(
         selected = selected, onClick = onClick,
-        icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
+        icon = {
+            if (badge > 0) BadgedBox(badge = { Badge(containerColor = Brand, contentColor = BrandOn) { Text("$badge") } }) { Icon(icon, label) }
+            else Icon(icon, label)
+        },
+        label = { Text(label, fontSize = 11.sp) },
         colors = NavigationBarItemDefaults.colors(
             selectedIconColor = BrandOn, indicatorColor = Brand,
             selectedTextColor = Brand, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
