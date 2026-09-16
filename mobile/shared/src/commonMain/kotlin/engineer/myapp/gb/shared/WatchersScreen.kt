@@ -19,18 +19,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Watchers — background tasks that run a role on a schedule (1/5/10 min) on the always-on cluster, so
- * they keep watching even when the app is closed. Create one by picking a role + profile + interval;
- * it becomes an active scheduled workflow. The list shows each watcher's cadence, last run and result
- * count, an on/off toggle, and a way into its results. Phone and desktop share this exact screen.
+ * Watchers — background tasks that run on a schedule (1/5/10 min) on the always-on cluster, so they
+ * keep working even when the app is closed. A watcher does one of two things each tick:
+ *   • WATCH with a role + a goal (gather items), or
+ *   • RUN a saved automation (a multi-step flow).
+ * Either way its collected items land in the Results view (viewable/exportable) and any action it
+ * wants to take waits in Approvals. Phone and desktop share this screen.
  */
 @Composable
 fun WatchersScreen(
     watchers: List<Watcher>,
-    roles: List<String>,        // role names for the picker
-    profiles: List<String>,     // profile names for the picker
+    roles: List<String>,
+    profiles: List<String>,
+    automations: List<FlowInfo>,
     loading: Boolean,
-    onCreate: (name: String, role: String, profile: String, intervalMin: Int) -> Unit,
+    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) -> Unit,
     onToggle: (id: String, active: Boolean) -> Unit,
     onOpenResults: (id: String) -> Unit,
     onRefresh: () -> Unit,
@@ -38,7 +41,8 @@ fun WatchersScreen(
     topInset: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    var creating by remember { mutableStateOf(false) }
+    var formOpen by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<Watcher?>(null) }
 
     Column(modifier.fillMaxSize().background(cs.background).then(topInset).verticalScroll(rememberScrollState())
         .padding(start = 16.dp, end = 16.dp, bottom = 24.dp, top = 14.dp)) {
@@ -52,13 +56,13 @@ fun WatchersScreen(
         }
         Spacer(Modifier.height(14.dp))
 
-        // New watcher
-        if (!creating) {
-            Button(onClick = { creating = true }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("+ New watcher", style = MaterialTheme.typography.labelLarge) }
+        if (formOpen) {
+            WatcherForm(editTarget, roles, profiles, automations,
+                onCancel = { formOpen = false; editTarget = null },
+                onSave = { id, name, mode, role, goal, profile, autoId, iv -> onSave(id, name, mode, role, goal, profile, autoId, iv); formOpen = false; editTarget = null })
         } else {
-            NewWatcherForm(roles, profiles, onCancel = { creating = false },
-                onCreate = { n, r, p, iv -> onCreate(n, r, p, iv); creating = false })
+            Button(onClick = { editTarget = null; formOpen = true }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("+ New watcher", style = MaterialTheme.typography.labelLarge) }
         }
         Spacer(Modifier.height(18.dp))
 
@@ -67,37 +71,68 @@ fun WatchersScreen(
                 .border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No watchers yet", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
                 Spacer(Modifier.height(4.dp))
-                Text("Create one to watch your notifications, a site, or leads — on a schedule, in the background.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                Text("Create one to watch your notifications, a site, or leads — or run a saved automation — on a schedule, in the background.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
             }
         } else {
-            watchers.forEach { w -> WatcherCard(w, onToggle, onOpenResults); Spacer(Modifier.height(10.dp)) }
+            watchers.forEach { w -> WatcherCard(w, onToggle, onOpenResults, onEdit = { editTarget = w; formOpen = true }); Spacer(Modifier.height(10.dp)) }
         }
     }
 }
 
 @Composable
-private fun NewWatcherForm(
-    roles: List<String>, profiles: List<String>,
-    onCancel: () -> Unit, onCreate: (String, String, String, Int) -> Unit,
+private fun WatcherForm(
+    edit: Watcher?, roles: List<String>, profiles: List<String>, automations: List<FlowInfo>,
+    onCancel: () -> Unit,
+    onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
-    var name by remember { mutableStateOf("") }
-    var role by remember { mutableStateOf(roles.firstOrNull { it != "(none)" } ?: "") }
-    var profile by remember { mutableStateOf(profiles.firstOrNull() ?: "facebook") }
-    var interval by remember { mutableStateOf(5) }
+    var name by remember { mutableStateOf(edit?.name ?: "") }
+    var mode by remember { mutableStateOf(edit?.mode ?: "role") }        // role | automation
+    var role by remember { mutableStateOf(edit?.role?.takeIf { it.isNotBlank() && it != "general" } ?: roles.firstOrNull { it != "(none)" } ?: "") }
+    var goal by remember { mutableStateOf(edit?.goal ?: "") }
+    var profile by remember { mutableStateOf(edit?.profile?.ifBlank { null } ?: profiles.firstOrNull() ?: "facebook") }
+    var automationId by remember { mutableStateOf("") }
+    var interval by remember { mutableStateOf(edit?.intervalMin ?: 5) }
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
-        Text("New watcher", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
+        Text(if (edit == null) "New watcher" else "Edit watcher", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))
-        Spacer(Modifier.height(10.dp))
-        Text("ROLE — what it watches", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+        Spacer(Modifier.height(12.dp))
+
+        Text("WHAT SHOULD IT DO?", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
-        PickerField(role.ifBlank { "Pick a role" }, roles.filter { it != "(none)" }) { role = it }
-        Spacer(Modifier.height(10.dp))
-        Text("PROFILE — the login it runs as", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
-        Spacer(Modifier.height(6.dp))
-        PickerField(profile.ifBlank { "Pick a profile" }, profiles) { profile = it }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
+            listOf("role" to "Watch with a role", "automation" to "Run an automation").forEach { (m, lbl) ->
+                val on = mode == m
+                Box(Modifier.weight(1f).background(if (on) Brand else Color.Transparent).clickable { mode = m }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Text(lbl, color = if (on) BrandOn else cs.onSurface, fontSize = 12.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        if (mode == "role") {
+            Text("ROLE", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+            Spacer(Modifier.height(6.dp))
+            PickerField(role.ifBlank { "Pick a role" }, roles.filter { it != "(none)" }) { role = it }
+            Spacer(Modifier.height(10.dp))
+            Text("GOAL — what specifically to do (optional; the role has its own default)", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 0.5.sp)
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(value = goal, onValueChange = { goal = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 70.dp),
+                placeholder = { Text("e.g. check my notifications and collect every reaction & comment on my posts", fontSize = 13.sp) }, minLines = 2, shape = RoundedCornerShape(10.dp))
+            Spacer(Modifier.height(10.dp))
+            Text("PROFILE — the login it runs as", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 0.5.sp)
+            Spacer(Modifier.height(6.dp))
+            PickerField(profile.ifBlank { "Pick a profile" }, profiles) { profile = it }
+        } else {
+            Text("AUTOMATION — a saved flow to run each time", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 0.5.sp)
+            Spacer(Modifier.height(6.dp))
+            val autoLabel = automations.firstOrNull { it.id == automationId }?.name ?: "Pick an automation"
+            PickerField(autoLabel, automations.map { it.name }) { picked -> automationId = automations.firstOrNull { it.name == picked }?.id ?: "" }
+            if (automations.isEmpty()) { Spacer(Modifier.height(6.dp)); Text("No automations yet — create one in the Automations tab first.", fontSize = 11.sp, color = cs.onSurfaceVariant) }
+        }
+
         Spacer(Modifier.height(12.dp))
         Text("CHECK EVERY", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
@@ -110,11 +145,11 @@ private fun NewWatcherForm(
             }
         }
         Spacer(Modifier.height(14.dp))
+        val valid = name.isNotBlank() && (if (mode == "role") role.isNotBlank() else automationId.isNotBlank())
         Row {
-            Button(onClick = { if (name.isNotBlank() && role.isNotBlank()) onCreate(name.trim(), role, profile, interval) },
-                enabled = name.isNotBlank() && role.isNotBlank(),
+            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval) }, enabled = valid,
                 modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Create watcher", style = MaterialTheme.typography.labelLarge) }
+                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text(if (edit == null) "Create watcher" else "Save changes", style = MaterialTheme.typography.labelLarge) }
             Spacer(Modifier.width(10.dp))
             OutlinedButton(onClick = onCancel, modifier = Modifier.height(46.dp), shape = RoundedCornerShape(10.dp)) { Text("Cancel", color = cs.onSurfaceVariant) }
         }
@@ -137,13 +172,14 @@ private fun PickerField(current: String, options: List<String>, onPick: (String)
 }
 
 @Composable
-private fun WatcherCard(w: Watcher, onToggle: (String, Boolean) -> Unit, onOpenResults: (String) -> Unit) {
+private fun WatcherCard(w: Watcher, onToggle: (String, Boolean) -> Unit, onOpenResults: (String) -> Unit, onEdit: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).border(1.dp, if (w.active) Brand else cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(w.name, style = MaterialTheme.typography.titleMedium, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${w.role} · every ${w.intervalMin} min · ${w.profile}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val what = if (w.mode == "automation") "automation · ${w.stepCount} steps" else w.role
+                Text("$what · every ${w.intervalMin} min · ${w.profile}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Switch(checked = w.active, onCheckedChange = { onToggle(w.id, it) },
                 colors = SwitchDefaults.colors(checkedThumbColor = BrandOn, checkedTrackColor = Brand))
@@ -155,6 +191,7 @@ private fun WatcherCard(w: Watcher, onToggle: (String, Boolean) -> Unit, onOpenR
             }
             Spacer(Modifier.width(8.dp))
             Text(w.lastRun, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            TextButton(onClick = onEdit) { Text("Edit", color = cs.onSurfaceVariant) }
             TextButton(onClick = { onOpenResults(w.id) }) { Text(if (w.resultCount > 0) "Results (${w.resultCount})" else "Results", color = Brand) }
         }
     }

@@ -1283,7 +1283,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             else { vm.log("↑ starting Facebook reply watch…"); apiCall("POST", "/v1/sessions", JSONObject().put("reuse", true).put("profile", "facebook").toString(), "watch_session") }
         },
         onLoadWatchers = { loadWatchers() },
-        onCreateWatcher = { name, role, profile, iv -> createWatcher(name, role, profile, iv) },
+        onSaveWatcher = { id, name, mode, role, goal, profile, autoId, iv -> saveWatcher(id, name, mode, role, goal, profile, autoId, iv) },
         onToggleWatcher = { id, active -> toggleWatcher(id, active) },
         onOpenWatcherResults = { id -> openWatcherResults(id) },
     )
@@ -1299,18 +1299,38 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         apiCall("GET", "/v1/profiles", null, "profiles_list")
         if (vm.rolesCacheJson.isBlank()) apiCall("GET", "/v1/agent/roles", null, "roles_list")
     }
-    private fun createWatcher(name: String, role: String, profile: String, intervalMin: Int) {
+    private val DEFAULT_WATCH_GOAL = "Run your watch now: carry out this role's task and record what you find with collect (or save_lead). Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish."
+    /** Create or edit a watcher. Role mode = a schedule trigger + one agent node (role+goal). Automation
+     *  mode = a schedule trigger + a COPY of the chosen automation's steps (the original is untouched). */
+    private fun saveWatcher(id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) {
         val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
             .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
-        val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch")
-            .put("role", role).put("profile", profile)
-            .put("goal", "Run your watch now: carry out this role's task and record what you find. Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish.")
-        val nodes = JSONArray().put(trigger).put(agent)
-        val edges = JSONArray().put(JSONObject().put("from", "trigger").put("to", "n0"))
+        val nodes = JSONArray().put(trigger)
+        val edges = JSONArray()
+        if (mode == "automation") {
+            // Copy the automation's non-trigger steps into this watcher, chained after the schedule.
+            val src = try { JSONObject(vm.flowsJson).optJSONArray("workflows") } catch (e: Exception) { null }
+            var wf: JSONObject? = null
+            if (src != null) for (i in 0 until src.length()) { val w = src.optJSONObject(i); if (w?.optString("id") == automationId) { wf = w; break } }
+            val steps = wf?.optJSONArray("nodes") ?: JSONArray()
+            var prev = "trigger"; var k = 0
+            for (i in 0 until steps.length()) {
+                val n = steps.optJSONObject(i) ?: continue
+                if (n.optString("type") == "trigger") continue
+                val nid = "n$k"; k++
+                val copy = JSONObject(n.toString()).put("id", nid)
+                nodes.put(copy); edges.put(JSONObject().put("from", prev).put("to", nid)); prev = nid
+            }
+            if (k == 0) { vm.log("! that automation has no steps to run"); return }
+        } else {
+            val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch")
+                .put("role", role).put("profile", profile).put("goal", goal.ifBlank { DEFAULT_WATCH_GOAL })
+            nodes.put(agent); edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
+        }
         val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false)
             .put("nodes", nodes).put("edges", edges).toString()
-        vm.log("+ creating watcher \"$name\" (every $intervalMin min)…")
-        apiCall("POST", "/v1/workflows", body, "watcher_create")
+        if (id.isNullOrBlank()) { vm.log("+ creating watcher \"$name\" (every $intervalMin min)…"); apiCall("POST", "/v1/workflows", body, "watcher_create") }
+        else { vm.log("✎ saving watcher \"$name\"…"); apiCall("PUT", "/v1/workflows/$id", body, "watcher_create") }
     }
     private fun toggleWatcher(id: String, active: Boolean) {
         val raw = watcherRaw[id]
@@ -1336,11 +1356,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             for (i in 0 until arr.length()) {
                 val w = arr.optJSONObject(i) ?: continue
                 val nodes = w.optJSONArray("nodes") ?: JSONArray()
-                var trig: JSONObject? = null; var agent: JSONObject? = null
+                var trig: JSONObject? = null; var agent: JSONObject? = null; var steps = 0
                 for (j in 0 until nodes.length()) {
                     val n = nodes.optJSONObject(j) ?: continue
                     if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
-                    if (n.optString("type") == "agent" && agent == null) agent = n
+                    else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n }
                 }
                 val cfg = trig ?: w.optJSONObject("trigger")
                 if (cfg == null || cfg.optString("type") != "schedule") continue   // only scheduled = a watcher
@@ -1352,7 +1372,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 out.add(engineer.myapp.gb.shared.Watcher(
                     id = id, name = w.optString("name", id), role = agent?.optString("role") ?: "general",
                     profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
-                    lastRun = last, resultCount = 0,
+                    lastRun = last, resultCount = 0, goal = agent?.optString("goal") ?: "",
+                    mode = if (steps > 1) "automation" else "role", stepCount = steps,
                 ))
             }
             shellUi.watchers.value = out

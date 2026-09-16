@@ -250,7 +250,7 @@ isolated per-profile sessions, an on-device or **cluster** agent (no key needed 
 platform profiles, and the automations engine. So the backend can run a hunt — or a full **CapCut** edit
 — on whichever node you pick: phone (mobile identity) or laptop (desktop identity).
 
-Installer (primary): [mobile/desktop/dist/GhostBrowser-Setup-1.0.14.exe](mobile/desktop/dist/GhostBrowser-Setup-1.0.14.exe)
+Installer (primary): [mobile/desktop/dist/GhostBrowser-Setup-1.0.15.exe](mobile/desktop/dist/GhostBrowser-Setup-1.0.15.exe)
 — **updates in place** (no manual uninstall) and opens after install. Unsigned — SmartScreen: *More info →
 Run anyway*. Build from source: `./gradlew :desktop:packageExe` in [`mobile/`](mobile/).
 

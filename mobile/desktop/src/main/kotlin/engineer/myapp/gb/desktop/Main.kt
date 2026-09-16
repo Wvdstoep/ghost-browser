@@ -149,6 +149,14 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         onReview = { state.runVisible.value = false; screen = "approvals" },
     )
     if (state.aiModal.value) AiModalD(state) { state.aiModal.value = false }
+    if (state.artifactVisible.value) engineer.myapp.gb.shared.ResultsScreen(
+        watcherName = state.artifactName.value, items = state.artifactItems.value, flows = state.flows.value,
+        loading = state.artifactLoading.value,
+        onRunFlow = { flowId, item -> runFlowOnItemD(state, flowId, item) },
+        onOpenUrl = { u -> Tabs.go(u); state.artifactVisible.value = false; screen = "browser" },
+        onClose = { state.artifactVisible.value = false },
+        modifier = Modifier.fillMaxSize().background(cs.background),
+    )
     }
 }
 
