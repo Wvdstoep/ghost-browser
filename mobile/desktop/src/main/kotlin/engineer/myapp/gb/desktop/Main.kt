@@ -125,7 +125,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
                 jobs = state.jobs.value, loading = state.jobsLoading.value,
                 onApprove = { j, p, t -> approveD(state, j, p, t) }, onDeny = { j, p -> denyD(state, j, p) },
                 onStop = { stopJobD(state, it) }, onSay = { j, t -> sayJobD(state, j, t) },
-                onOpenUrl = { u -> Tabs.go(u); screen = "browser" }, onStartWatch = { startWatchD(state) },
+                onOpenUrl = { u -> Tabs.go(u); screen = "browser" },
                 onRefresh = { loadApprovals(state) },
             )
             "devices" -> DeviceHubScreenD(state)

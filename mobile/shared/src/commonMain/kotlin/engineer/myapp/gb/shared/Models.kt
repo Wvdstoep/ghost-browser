@@ -34,3 +34,17 @@ data class JobInfo(
     val steps: List<String>,                                 // recent activity lines (kind: text)
     val proposals: List<Proposal>,                           // pending approvals from this job
 )
+
+/**
+ * A [Watcher] — a background task that runs a chosen role on a schedule (every 1/5/10 min) on the
+ * always-on cluster, so it keeps watching even when the app is closed. It is an ACTIVE scheduled
+ * workflow underneath; the role decides WHAT it watches (notifications, a site, leads…). Its runs
+ * store results the user can open as an interactive artifact.
+ */
+data class Watcher(
+    val id: String, val name: String, val role: String, val profile: String,
+    val intervalMin: Int,          // 1 | 5 | 10
+    val active: Boolean,           // scheduled + firing, or paused
+    val lastRun: String,           // human "3 runs, last ok" / "never run"
+    val resultCount: Int,          // items collected on the latest run
+)

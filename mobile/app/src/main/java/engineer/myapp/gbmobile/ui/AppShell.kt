@@ -78,6 +78,11 @@ class ShellUi {
     // approvals — the gate: running watchers + their pending proposals (drafts awaiting yes/no)
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
+    // watchers — scheduled background tasks (own UI, separate from the gate)
+    val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
+    val watchersLoading = mutableStateOf(false)
+    val watcherRoles = mutableStateOf<List<String>>(emptyList())
+    val watcherProfiles = mutableStateOf<List<String>>(listOf("facebook"))
 }
 
 class ShellActions(
@@ -124,6 +129,11 @@ class ShellActions(
     val onStopJob: (jobId: String) -> Unit,
     val onSayJob: (jobId: String, text: String) -> Unit,
     val onStartWatch: () -> Unit,
+    // watchers
+    val onLoadWatchers: () -> Unit,
+    val onCreateWatcher: (name: String, role: String, profile: String, intervalMin: Int) -> Unit,
+    val onToggleWatcher: (id: String, active: Boolean) -> Unit,
+    val onOpenWatcherResults: (id: String) -> Unit,
 )
 
 private fun hostOf(url: String): String {
@@ -149,11 +159,32 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                     modifier = Modifier.fillMaxSize(),
                 )
                 when (screen) {
-                    "flows" -> engineer.myapp.gb.shared.FlowsScreen(
-                        flows = shell.flows.value, onLoad = act.onLoadFlows,
-                        onRun = { id, name -> act.onRunFlow(id, name) }, onCreate = { n, s -> act.onCreateFlow(n, s) },
-                        modifier = Modifier.fillMaxSize().background(cs.background),
-                    )
+                    "flows" -> {
+                        var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
+                        Column(Modifier.fillMaxSize().background(cs.background)) {
+                            Row(Modifier.fillMaxWidth().statusBarsPaddingSafe().padding(horizontal = 12.dp, vertical = 8.dp)
+                                .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
+                                listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
+                                    val on = sub == i
+                                    Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (on) Brand else Color.Transparent)
+                                        .clickable { sub = i; if (i == 1) act.onLoadWatchers() }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                        Text(lbl, color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                            if (sub == 0) engineer.myapp.gb.shared.FlowsScreen(
+                                flows = shell.flows.value, onLoad = act.onLoadFlows,
+                                onRun = { id, name -> act.onRunFlow(id, name) }, onCreate = { n, s -> act.onCreateFlow(n, s) },
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                            ) else engineer.myapp.gb.shared.WatchersScreen(
+                                watchers = shell.watchers.value, roles = shell.watcherRoles.value, profiles = shell.watcherProfiles.value,
+                                loading = shell.watchersLoading.value,
+                                onCreate = { n, r, p, iv -> act.onCreateWatcher(n, r, p, iv) },
+                                onToggle = { id, a -> act.onToggleWatcher(id, a) }, onOpenResults = { act.onOpenWatcherResults(it) },
+                                onRefresh = act.onLoadWatchers, modifier = Modifier.weight(1f).fillMaxWidth(),
+                            )
+                        }
+                    }
                     "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
                         title = shell.agentTitle.value, messages = shell.agentMsgs.value, busy = shell.agentBusy.value,
                         onSend = { act.onSendAgent(it) }, onNew = act.onNewAgentChat, onSettings = act.onOpenAiSettings, onClose = act.onCloseAgent,
@@ -163,7 +194,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         jobs = shell.jobs.value, loading = shell.jobsLoading.value,
                         onApprove = { j, p, t -> act.onApprove(j, p, t) }, onDeny = { j, p -> act.onDeny(j, p) },
                         onStop = { act.onStopJob(it) }, onSay = { j, t -> act.onSayJob(j, t) },
-                        onOpenUrl = { act.onUrlGo(it) }, onStartWatch = act.onStartWatch, onRefresh = act.onRefreshApprovals,
+                        onOpenUrl = { act.onUrlGo(it) }, onRefresh = act.onRefreshApprovals,
                         topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
