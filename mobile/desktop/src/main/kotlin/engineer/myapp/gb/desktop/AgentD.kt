@@ -49,8 +49,10 @@ object Agent {
 
     fun send(st: DesktopState, main: CefBrowser?, text: String) {
         if (st.agentBusy.value) return
+        // Cloud (default) uses the cluster's LLM via the control channel — no key needed. A custom
+        // self-hosted endpoint+key overrides.
         val ep = st.endpoint.value.trim()
-        if (ep.isBlank()) { push(st, "assistant", "Set an LLM endpoint first — Settings ▸ AI model (e.g. http://localhost:11434/v1)."); return }
+        val custom = ep.isNotBlank() && st.apiKey.value.isNotBlank() && !ep.contains("ollama.com")
         push(st, "user", text)
         st.agentBusy.value = true
         thread(isDaemon = true) {
@@ -58,7 +60,7 @@ object Agent {
                 val sys = systemPrompt(main)
                 var turns = 0
                 while (turns < 12) {
-                    val reply = try { chat(ep, st.apiKey.value, st.model.value, sys, transcript(st)) }
+                    val reply = try { if (custom) chat(ep, st.apiKey.value, st.model.value, sys, transcript(st)) else chatCluster(sys, transcript(st)) }
                     catch (e: Exception) { push(st, "assistant", "⚠ model error: ${e.message}"); break }
                     val obj = extractJson(reply)
                     if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) { push(st, "assistant", reply.trim().ifBlank { "(no reply)" }); break }
@@ -73,6 +75,15 @@ object Agent {
                 if (turns >= 12) push(st, "assistant", "(stopped — too many steps; ask me to continue)")
             } finally { st.agentBusy.value = false }
         }
+    }
+
+    /** Chat via the cluster's configured LLM (no key on this machine) over the control channel. */
+    private fun chatCluster(system: String, user: String): String {
+        val r = Cluster.authed("POST", "/v1/agent/chat", JSONObject().put("system", system).put("prompt", user).toString())
+        val o = try { JSONObject(r) } catch (e: Exception) { throw RuntimeException("cluster chat: ${r.take(120)}") }
+        val text = o.optString("text")
+        if (text.isBlank()) throw RuntimeException(o.optString("error", "no model set on the cluster (set one in the GB console)"))
+        return text
     }
 
     private fun push(st: DesktopState, role: String, content: String) { st.agentMsgs.value = st.agentMsgs.value + ChatMsg(role, content) }
