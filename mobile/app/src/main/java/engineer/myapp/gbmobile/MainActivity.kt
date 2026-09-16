@@ -940,6 +940,32 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (agentChat == null) { if (agentChats.length() > 0) agentChat = agentChats.optJSONObject(0) else newAgentChat() }
         refreshAgentMsgs()
         shellUi.screen.value = "agent"
+        startPipLoop()
+    }
+
+    private val pipHandler by lazy { android.os.Handler(mainLooper) }
+    /** While the agent chat is open, keep a small live snapshot of the active tab for the PiP window. */
+    private fun startPipLoop() {
+        pipHandler.removeCallbacksAndMessages(null)
+        pipHandler.post(object : Runnable {
+            override fun run() {
+                if (shellUi.screen.value != "agent") { shellUi.pipThumb.value = null; return }
+                try {
+                    val i = activeTab
+                    if (i in tabs.indices) {
+                        val w = tabs[i].web
+                        if (w != null && w.width > 0 && w.height > 0) {
+                            val scale = 0.35f
+                            val bw = (w.width * scale).toInt().coerceAtLeast(1); val bh = (w.height * scale).toInt().coerceAtLeast(1)
+                            val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.RGB_565)
+                            val c = android.graphics.Canvas(bmp); c.scale(scale, scale); w.draw(c)
+                            shellUi.pipThumb.value = bmp.asImageBitmap()
+                        }
+                    }
+                } catch (e: Exception) {}
+                pipHandler.postDelayed(this, 1200)
+            }
+        })
     }
 
     private fun newAgentChat() {

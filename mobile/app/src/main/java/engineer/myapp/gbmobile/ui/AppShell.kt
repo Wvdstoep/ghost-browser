@@ -67,6 +67,7 @@ class ShellUi {
     val agentTitle = mutableStateOf("Agent")
     val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
     val agentBusy = mutableStateOf(false)
+    val pipThumb = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)   // live snapshot of the tab the agent is driving
     val clusterOn = mutableStateOf(false)
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
@@ -584,6 +585,7 @@ private fun TabCard(t: TabInfo, onOpen: () -> Unit, onClose: () -> Unit) {
 private fun AgentChat(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
     var toolView by remember { mutableStateOf<ChatMsg?>(null) }
+    Box(Modifier.fillMaxSize()) {
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
             Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -608,6 +610,26 @@ private fun AgentChat(shell: ShellUi, act: ShellActions) {
                 if (shell.agentBusy.value) Text("…thinking", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
             }
             AgentInput(shell.agentBusy.value) { act.onSendAgent(it) }
+        }
+    }
+        // Picture-in-picture: a live snapshot of the tab the agent is driving. Tap to expand to Browser.
+        val pip = shell.pipThumb.value
+        if (pip != null) {
+            Surface(
+                color = cs.surface, shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(2.dp, Brand), tonalElevation = 8.dp,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 88.dp).width(132.dp).clickable { act.onNav("browser") },
+            ) {
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(Brand))
+                        Spacer(Modifier.width(6.dp))
+                        Text("live", color = cs.onSurface, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.OpenInFull, "Expand", tint = cs.onSurfaceVariant, modifier = Modifier.size(13.dp))
+                    }
+                    androidx.compose.foundation.Image(bitmap = pip, contentDescription = "what the agent is doing", modifier = Modifier.width(132.dp).height(188.dp), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
+                }
+            }
         }
     }
     toolView?.let { tv ->
