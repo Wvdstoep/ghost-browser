@@ -14,12 +14,13 @@ import org.json.JSONObject
  * S8.3 (next): CDP drag, self-saving downloads, upload_file — then CapCut end-to-end, then S9 retires Electron.
  */
 class DesktopNode(
-    private val main: CefBrowser,
+    private val active: () -> CefBrowser?,     // drive whichever tab is active
     private val deviceId: String,
     private val deviceName: String,
     private val gbJs: String,
     private val log: (String) -> Unit,
 ) {
+    private val main: CefBrowser get() = active() ?: throw IllegalStateException("no active tab")
     @Volatile private var stopped = false
     @Volatile var registered = false; private set
 
