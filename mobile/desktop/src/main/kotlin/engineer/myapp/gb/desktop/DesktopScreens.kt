@@ -68,6 +68,11 @@ class DesktopState {
     val watcherRoles = mutableStateOf<List<String>>(emptyList())
     val watcherProfiles = mutableStateOf<List<String>>(listOf("facebook"))
     val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
+    // watcher results artifact (native view)
+    val artifactVisible = mutableStateOf(false)
+    val artifactName = mutableStateOf("")
+    val artifactLoading = mutableStateOf(false)
+    val artifactItems = mutableStateOf<List<engineer.myapp.gb.shared.ResultItem>>(emptyList())
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -211,11 +216,11 @@ fun loadWatchers(st: DesktopState) = bg {
         for (i in 0 until arr.length()) {
             val w = arr.optJSONObject(i) ?: continue
             val nodes = w.optJSONArray("nodes") ?: org.json.JSONArray()
-            var trig: JSONObject? = null; var agent: JSONObject? = null
+            var trig: JSONObject? = null; var agent: JSONObject? = null; var steps = 0
             for (j in 0 until nodes.length()) {
                 val n = nodes.optJSONObject(j) ?: continue
                 if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
-                if (n.optString("type") == "agent" && agent == null) agent = n
+                else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n }
             }
             val cfg = trig ?: w.optJSONObject("trigger")
             if (cfg == null || cfg.optString("type") != "schedule") continue
@@ -223,26 +228,87 @@ fun loadWatchers(st: DesktopState) = bg {
             st.watcherRaw[id] = w
             val nmin = maxOf(1, cfg.optInt("n", 1)); val runs = w.optInt("runs", 0)
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
-            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0))
+            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps))
         }
         st.watchers.value = out
     } catch (e: Exception) {}
     st.watchersLoading.value = false
 }
-fun createWatcherD(name: String, role: String, profile: String, intervalMin: Int, st: DesktopState) = bg {
+private const val DEFAULT_WATCH_GOAL_D = "Run your watch now: carry out this role's task and record what you find with collect (or save_lead). Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish."
+fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) = bg {
     val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
         .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
-    val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch").put("role", role).put("profile", profile)
-        .put("goal", "Run your watch now: carry out this role's task and record what you find. Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish.")
-    val nodes = org.json.JSONArray().put(trigger).put(agent)
-    val edges = org.json.JSONArray().put(JSONObject().put("from", "trigger").put("to", "n0"))
+    val nodes = org.json.JSONArray().put(trigger); val edges = org.json.JSONArray()
+    if (mode == "automation") {
+        val wf = st.flows.value.firstOrNull { it.id == automationId }
+        // Fetch the automation's full graph and copy its steps in.
+        val full = try { JSONObject(Cluster.authed("GET", "/v1/workflows/$automationId", null)) } catch (e: Exception) { null }
+        val steps = full?.optJSONArray("nodes") ?: org.json.JSONArray()
+        var prev = "trigger"; var k = 0
+        for (i in 0 until steps.length()) {
+            val n = steps.optJSONObject(i) ?: continue
+            if (n.optString("type") == "trigger") continue
+            val nid = "n$k"; k++
+            nodes.put(JSONObject(n.toString()).put("id", nid)); edges.put(JSONObject().put("from", prev).put("to", nid)); prev = nid
+        }
+        if (k == 0) { st.log("! that automation has no steps"); return@bg }
+    } else {
+        val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch").put("role", role).put("profile", profile).put("goal", goal.ifBlank { DEFAULT_WATCH_GOAL_D })
+        nodes.put(agent); edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
+    }
     val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false).put("nodes", nodes).put("edges", edges).toString()
-    Cluster.authed("POST", "/v1/workflows", body); st.log("● watcher \"$name\" created (every $intervalMin min)"); loadWatchers(st)
+    if (id.isNullOrBlank()) { Cluster.authed("POST", "/v1/workflows", body); st.log("● watcher \"$name\" created") }
+    else { Cluster.authed("PUT", "/v1/workflows/$id", body); st.log("✎ watcher \"$name\" saved") }
+    loadWatchers(st)
 }
 fun toggleWatcherD(st: DesktopState, id: String, active: Boolean) = bg {
     val raw = st.watcherRaw[id] ?: return@bg
     try { raw.put("active", active) } catch (e: Exception) {}
     Cluster.authed("PUT", "/v1/workflows/$id", raw.toString()); loadWatchers(st)
+}
+
+/** Open a watcher's results: find its newest job, read the full record, map results[]+leads[] to items. */
+fun openWatcherResultsD(st: DesktopState, id: String) = bg {
+    st.artifactName.value = st.watchers.value.firstOrNull { it.id == id }?.name ?: "Watcher"
+    st.artifactItems.value = emptyList(); st.artifactLoading.value = true; st.artifactVisible.value = true
+    try {
+        val jl = JSONObject(Cluster.authed("GET", "/v1/agent/jobs", null))
+        val all = ArrayList<JSONObject>()
+        (jl.optJSONArray("jobs") ?: org.json.JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
+        (jl.optJSONArray("history") ?: org.json.JSONArray()).let { for (i in 0 until it.length()) it.optJSONObject(i)?.let { j -> all.add(j) } }
+        val jobId = all.firstOrNull { it.optString("workflowId") == id }?.optString("id")
+        val items = ArrayList<engineer.myapp.gb.shared.ResultItem>()
+        if (!jobId.isNullOrBlank()) {
+            val j = JSONObject(Cluster.authed("GET", "/v1/agent/jobs/$jobId", null))
+            (j.optJSONArray("results") ?: org.json.JSONArray()).let { r ->
+                for (i in 0 until r.length()) { val it = r.optJSONObject(i) ?: continue
+                    val f = it.optJSONObject("fields"); val fields = ArrayList<Pair<String, String>>()
+                    f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
+                    items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" }))
+                }
+            }
+            (j.optJSONArray("leads") ?: org.json.JSONArray()).let { l ->
+                for (i in 0 until l.length()) { val ld = l.optJSONObject(i) ?: continue
+                    val fields = ArrayList<Pair<String, String>>()
+                    ld.optString("why").takeIf { it.isNotBlank() }?.let { fields.add("why" to it) }
+                    ld.optString("quote").takeIf { it.isNotBlank() }?.let { fields.add("what they wrote" to it) }
+                    ld.optString("groupName").takeIf { it.isNotBlank() }?.let { fields.add("group" to it) }
+                    ld.optString("contact").takeIf { it.isNotBlank() }?.let { fields.add("contact" to it) }
+                    items.add(engineer.myapp.gb.shared.ResultItem(ld.optString("name").ifBlank { "Lead" }, fields, ld.optString("url"), "", "lead"))
+                }
+            }
+        }
+        st.artifactItems.value = items
+    } catch (e: Exception) { st.log("! results: ${e.message}") }
+    st.artifactLoading.value = false
+}
+fun runFlowOnItemD(st: DesktopState, flowId: String, item: engineer.myapp.gb.shared.ResultItem) = bg {
+    val input = JSONObject()
+    if (item.title.isNotBlank()) { input.put("title", item.title); input.put("name", item.title) }
+    if (item.url.isNotBlank()) input.put("url", item.url)
+    item.fields.forEach { (k, v) -> input.put(k, v) }
+    Cluster.authed("POST", "/v1/workflows/$flowId/run", JSONObject().put("input", input).toString())
+    st.log("● follow-up flow started — its action will appear in Approvals")
 }
 
 fun runFlow(id: String, st: DesktopState) = bg {
@@ -323,10 +389,10 @@ fun FlowsScreenD(st: DesktopState) {
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) else engineer.myapp.gb.shared.WatchersScreen(
             watchers = st.watchers.value, roles = st.watcherRoles.value, profiles = st.watcherProfiles.value,
-            loading = st.watchersLoading.value,
-            onCreate = { n, r, p, iv -> createWatcherD(n, r, p, iv, st) },
+            automations = st.flows.value, loading = st.watchersLoading.value,
+            onSave = { id, n, m, r, g, p, aid, iv -> saveWatcherD(st, id, n, m, r, g, p, aid, iv) },
             onToggle = { id, a -> toggleWatcherD(st, id, a) },
-            onOpenResults = { st.log("results view is next — watcher $it") },
+            onOpenResults = { openWatcherResultsD(st, it) },
             onRefresh = { loadWatchers(st) }, modifier = Modifier.weight(1f).fillMaxWidth(),
         )
     }

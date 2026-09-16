@@ -131,7 +131,7 @@ class ShellActions(
     val onStartWatch: () -> Unit,
     // watchers
     val onLoadWatchers: () -> Unit,
-    val onCreateWatcher: (name: String, role: String, profile: String, intervalMin: Int) -> Unit,
+    val onSaveWatcher: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int) -> Unit,
     val onToggleWatcher: (id: String, active: Boolean) -> Unit,
     val onOpenWatcherResults: (id: String) -> Unit,
 )
@@ -178,8 +178,8 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) else engineer.myapp.gb.shared.WatchersScreen(
                                 watchers = shell.watchers.value, roles = shell.watcherRoles.value, profiles = shell.watcherProfiles.value,
-                                loading = shell.watchersLoading.value,
-                                onCreate = { n, r, p, iv -> act.onCreateWatcher(n, r, p, iv) },
+                                automations = shell.flows.value, loading = shell.watchersLoading.value,
+                                onSave = { id, n, m, r, g, p, aid, iv -> act.onSaveWatcher(id, n, m, r, g, p, aid, iv) },
                                 onToggle = { id, a -> act.onToggleWatcher(id, a) }, onOpenResults = { act.onOpenWatcherResults(it) },
                                 onRefresh = act.onLoadWatchers, modifier = Modifier.weight(1f).fillMaxWidth(),
                             )

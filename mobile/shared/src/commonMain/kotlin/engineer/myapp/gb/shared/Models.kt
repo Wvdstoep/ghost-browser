@@ -47,4 +47,17 @@ data class Watcher(
     val active: Boolean,           // scheduled + firing, or paused
     val lastRun: String,           // human "3 runs, last ok" / "never run"
     val resultCount: Int,          // items collected on the latest run
+    val goal: String = "",         // the specific instruction (role mode), for edit pre-fill
+    val mode: String = "role",     // "role" (role+goal) | "automation" (runs a saved flow)
+    val stepCount: Int = 1,        // how many steps it runs (automation mode > 1)
+)
+
+/** One collected item in a watcher's results — schema-agnostic: whatever fields it has, plus an
+ *  optional image and link. Rendered by the results view; a follow-up flow can run on it. */
+data class ResultItem(
+    val title: String,
+    val fields: List<Pair<String, String>>,
+    val url: String,
+    val image: String,
+    val kind: String,
 )
