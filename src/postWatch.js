@@ -32,10 +32,23 @@ const SORT_ALL = /^(?:alle opmerkingen|all comments|alle reacties)$/i;
 /** Open the post on the given Playwright page, reveal the whole thread, and read it. */
 async function crawl(page, url, log) {
   const { dismissConsent, settle } = require('./inspector');
-  await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
-  try { await dismissConsent(page); } catch { /* no banner is the normal case */ }
-  try { await settle(page); } catch { /* may still be rendering */ }
-  await page.waitForTimeout(1500);
+  const pid = postIdOf(url);
+  // Land on the post and PROVE it before reading: another walk on this profile can navigate the
+  // session away mid-crawl, and a crawl of the wrong page reads "0 messages", which is worse than
+  // an error. If the post's comments are not on screen, try once more from the top.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try { await dismissConsent(page); } catch { /* no banner is the normal case */ }
+    try { await settle(page); } catch { /* may still be rendering */ }
+    await page.waitForTimeout(2500);
+    const onPost = await page.evaluate((id) => {
+      const here = location.href.includes(id) || !!document.querySelector(`a[href*="${id}"]`);
+      return here && document.querySelectorAll('[role="article"]').length > 0;
+    }, pid || '').catch(() => false);
+    if (onPost) break;
+    if (log) log.info(`[post-watch] not on the post yet (${page.url().slice(0, 80)}) — retrying`);
+    await page.waitForTimeout(4000);
+  }
   const clickMatching = async (re, limit) => {
     let n = 0;
     const handles = await page.$$('div[role="button"], span[role="button"], a[role="button"], [role="menuitem"]');
