@@ -45,6 +45,15 @@ object Cef {
                 cache_path = File(System.getProperty("user.home"), ".ghostbrowser/cache").absolutePath
                 persist_session_cookies = true
             }
+            // Keep compositing alive when the window is unfocused/occluded/minimized — otherwise
+            // Page.captureScreenshot returns 0 bytes on a background node (the CapCut e2e trap). These
+            // flags let the node be driven headlessly-in-the-background while another app is on top.
+            builder.addJcefArgs(
+                "--disable-features=CalculateNativeWinOcclusion",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-background-timer-throttling",
+            )
             val built = builder.build()
             app = built
             return built
