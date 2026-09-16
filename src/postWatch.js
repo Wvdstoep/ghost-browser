@@ -111,16 +111,22 @@ function extractInPage() {
   const cands = q('[role="article"]').filter((a) => !isC(a) && !a.closest('[role="complementary"]') && visible(a));
   // Deterministic: the post's own article links to ITS id (timestamp / permalink); suggestions link elsewhere.
   const pidNow = u.searchParams.get('post_id') || (location.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || '';
-  const linksTo = (a) => !!pidNow && q('a[href]', a).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('/posts/' + pidNow) || h.includes('post_id=' + pidNow) || h.includes('story_fbid=' + pidNow) || h.includes('fbid=' + pidNow); });
+  const linksTo = (a) => !!pidNow && q('a[href]', a).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('/posts/' + pidNow) || h.includes('/permalink/' + pidNow) || h.includes('post_id=' + pidNow) || h.includes('story_fbid=' + pidNow) || h.includes('fbid=' + pidNow) || h.includes('multi_permalinks=' + pidNow); });
+  const isBefore = (el) => arts[0] ? !!(el.compareDocumentPosition(arts[0]) & Node.DOCUMENT_POSITION_FOLLOWING) : true;
+  // Every visible post body on the page, ranked: links to THIS post id > sits before the first comment > longest.
+  const msgs = q('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]').filter(visible);
+  const scored = msgs.map((m) => { const sc = m.closest('[role="article"]') || m.parentElement; const txt = (m.innerText || m.textContent || '').trim(); return { m, byId: sc ? linksTo(sc) : false, before: isBefore(m), len: txt.length, txt }; })
+    .sort((a, b) => (Number(b.byId) - Number(a.byId)) || (Number(b.before) - Number(a.before)) || (b.len - a.len));
+  const msg = scored[0] ? scored[0].m : null;
   let postArt = cands.find(linksTo) || cands.find((a) => arts.some((c) => a.contains(c))) || null;
-  if (!postArt && arts[0]) { const before = cands.filter((a) => a.compareDocumentPosition(arts[0]) & Node.DOCUMENT_POSITION_FOLLOWING); postArt = before.sort((x, y) => (y.textContent || '').length - (x.textContent || '').length)[0] || null; }
-  const msg = postArt ? postArt.querySelector('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]') : null;
+  if (!postArt && arts[0]) { const before = cands.filter(isBefore); postArt = before.sort((x, y) => (y.textContent || '').length - (x.textContent || '').length)[0] || null; }
   const ownText = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[role="article"], form, [role="button"], [role="menu"], [aria-hidden="true"]').forEach((x) => x.remove()); return (c.textContent || '').replace(/\s+\n/g, '\n').replace(/[ \t]+/g, ' ').trim(); };
+  const probe = scored.slice(0, 6).map((s) => ({ byId: s.byId, before: s.before, len: s.len, text: s.txt.slice(0, 70) }));
   const postText = ((msg && (msg.innerText || msg.textContent)) || (postArt ? ownText(postArt) : '') || '').replace(/…?\s*(meer weergeven|see more|zie meer)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 2500);
   const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a, h2, h3, h4');
   const postAuthor = authorEl ? (authorEl.innerText || '').trim().split('\n')[0].trim() : '';
   let me = ''; try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
-  return { postId, group, postText, postAuthor, me, nodes: nodes.filter((n) => n.id && n.author) };
+  return { postId, group, postText, postAuthor, me, probe, nodes: nodes.filter((n) => n.id && n.author) };
 }
 
 function store(tree) {
