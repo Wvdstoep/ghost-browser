@@ -59,9 +59,20 @@ fun loadFlows(st: DesktopState) = bg {
         for (i in 0 until arr.length()) {
             val w = arr.optJSONObject(i) ?: continue
             val id = w.optString("id"); if (id.isBlank()) continue
+            val nodes = w.optJSONArray("nodes") ?: org.json.JSONArray()
+            var profile = ""; var role = ""; val goals = ArrayList<String>()
+            for (j in 0 until nodes.length()) {
+                val nn = nodes.optJSONObject(j) ?: continue
+                if (nn.optString("type") == "agent") {
+                    if (profile.isBlank()) profile = nn.optString("profile")
+                    if (role.isBlank()) role = nn.optString("role")
+                    val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(g)
+                }
+            }
             val runs = w.optInt("runs", 0)
+            val verified = w.optBoolean("lastVerified")
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
-            out.add(FlowInfo(id, w.optString("name", id), w.optJSONArray("nodes")?.length() ?: 0, last))
+            out.add(FlowInfo(id, w.optString("name", id), nodes.length(), last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified))
         }
         st.flows.value = out
         st.flowsHint.value = if (out.isEmpty()) "No automations yet." else "${out.size} automations — click Run to fire one."
@@ -110,26 +121,25 @@ fun runFlow(id: String, st: DesktopState) = bg {
 fun FlowsScreenD(st: DesktopState) {
     val cs = MaterialTheme.colorScheme
     LaunchedEffect(Unit) { if (st.flows.value.isEmpty()) loadFlows(st) }
-    Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Text("Automations", style = MaterialTheme.typography.headlineSmall)
-        Text(st.flowsHint.value, color = cs.onSurfaceVariant, fontSize = 12.sp)
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = { loadFlows(st) }, shape = RoundedCornerShape(12.dp)) { Text("Load from cluster") }
-        Spacer(Modifier.height(14.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            st.flows.value.forEach { f ->
-                Surface(color = cs.surface, shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${f.steps} step(s) · ${f.sub}", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Button(onClick = { runFlow(f.id, st) }, shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Run") }
-                    }
-                }
-            }
-        }
+    // S9: the SAME shared Automations screen the phone uses (grouped, expandable, build panel).
+    Box(Modifier.fillMaxSize().background(cs.background)) {
+        FlowsScreen(
+            flows = st.flows.value,
+            onLoad = { loadFlows(st) },
+            onRun = { id, _ -> runFlow(id, st) },
+            onCreate = { name, steps -> createFlowD(name, steps, st) },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
+}
+
+fun createFlowD(name: String, steps: String, st: DesktopState) = bg {
+    val goals = steps.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+    val nodes = org.json.JSONArray().put(org.json.JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
+    val edges = org.json.JSONArray(); var prev = "trigger"
+    goals.forEachIndexed { i, g -> val nid = "n$i"; nodes.put(org.json.JSONObject().put("id", nid).put("type", "agent").put("label", "Step ${i + 1}").put("goal", g)); edges.put(org.json.JSONObject().put("from", prev).put("to", nid)); prev = nid }
+    val body = org.json.JSONObject().put("name", name).put("nodes", nodes).put("edges", edges).toString()
+    Cluster.authed("POST", "/v1/workflows", body); st.log("+ created automation: $name"); loadFlows(st)
 }
 
 /* ── Device Hub ────────────────────────────────────────────────────────────────────────────── */
