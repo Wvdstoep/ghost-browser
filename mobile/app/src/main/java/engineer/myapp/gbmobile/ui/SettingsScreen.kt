@@ -46,7 +46,10 @@ class SettingsUi {
     val modelIndex = mutableStateOf(0)
     val modelStatus = mutableStateOf("not downloaded")
     val modelProgress = mutableStateOf(-1)   // -1 hidden, else 0..100
-    var endpoint = ""; var apiKey = ""; var ollamaModel = ""; var hfToken = ""
+    val endpoint = mutableStateOf(""); val apiKey = mutableStateOf(""); val ollamaModel = mutableStateOf(""); var hfToken = ""
+    val ollamaModels = mutableStateOf<List<String>>(emptyList())   // fetched from the endpoint
+    val ollamaBusy = mutableStateOf(false)
+    val ollamaNote = mutableStateOf("")
 
     val log = mutableStateOf("")             // live activity log (restored)
 
@@ -70,6 +73,8 @@ class SettingsActions(
     val onSelectModelIndex: (Int) -> Unit,
     val onDownloadModel: () -> Unit,
     val onSaveOllama: (endpoint: String, apiKey: String, model: String, hfToken: String) -> Unit,
+    val onFetchModels: (endpoint: String, apiKey: String) -> Unit,
+    val onPullClusterConfig: () -> Unit,
     val onRefreshDevices: () -> Unit,
     val onOpenTailscale: () -> Unit,
     val onSetTheme: (Int) -> Unit,
@@ -176,18 +181,26 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                         LinearProgressIndicator(progress = { ui.modelProgress.value / 100f }, modifier = Modifier.fillMaxWidth(), color = GbGreen)
                     }
                     Spacer(Modifier.height(14.dp))
-                    Text("Or an Ollama / OpenAI-compatible endpoint", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                    Spacer(Modifier.height(6.dp))
-                    var ep by remember { mutableStateOf(ui.endpoint) }
-                    var ak by remember { mutableStateOf(ui.apiKey) }
-                    var om by remember { mutableStateOf(ui.ollamaModel) }
-                    var hf by remember { mutableStateOf(ui.hfToken) }
-                    Field("Endpoint (http://host:11434)", ep, { ep = it }, mono = true)
-                    Spacer(Modifier.height(8.dp)); Field("API key (optional)", ak, { ak = it }, mono = true)
-                    Spacer(Modifier.height(8.dp)); Field("Model name", om, { om = it }, mono = true)
-                    Spacer(Modifier.height(8.dp)); Field("Hugging Face token (for gated downloads)", hf, { hf = it }, mono = true)
+                    Text("Or a cloud model (Ollama Cloud / OpenAI-compatible)", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                    Text("A capable cloud model is far stronger than the on-device one for real flows.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    Spacer(Modifier.height(8.dp))
+                    if (ui.endpoint.value.isBlank()) ui.endpoint.value = "https://ollama.com/v1"
+                    Ghost("Pull model + endpoint from cluster", Modifier.fillMaxWidth()) { act.onPullClusterConfig() }
+                    Spacer(Modifier.height(8.dp))
+                    Field("Endpoint", ui.endpoint.value, { ui.endpoint.value = it }, mono = true)
+                    Spacer(Modifier.height(8.dp)); PasswordField("API key", ui.apiKey.value) { ui.apiKey.value = it }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Model", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        if (ui.ollamaBusy.value) CircularProgressIndicator(Modifier.size(15.dp), color = GbGreen, strokeWidth = 2.dp)
+                        else TextButton(onClick = { act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }) { Text("Fetch models") }
+                    }
+                    if (ui.ollamaModels.value.isNotEmpty()) {
+                        Dropdown(ui.ollamaModels.value, ui.ollamaModels.value.indexOf(ui.ollamaModel.value).coerceAtLeast(0)) { i -> ui.ollamaModel.value = ui.ollamaModels.value.getOrElse(i) { ui.ollamaModel.value } }
+                    } else Field("Model name", ui.ollamaModel.value, { ui.ollamaModel.value = it }, mono = true)
+                    if (ui.ollamaNote.value.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(ui.ollamaNote.value, color = cs.onSurfaceVariant, fontSize = 11.sp) }
                     Spacer(Modifier.height(10.dp))
-                    Ghost("Save endpoint", Modifier.fillMaxWidth()) { act.onSaveOllama(ep, ak, om, hf) }
+                    Primary("Save cloud model", Modifier.fillMaxWidth()) { act.onSaveOllama(ui.endpoint.value, ui.apiKey.value, ui.ollamaModel.value, ui.hfToken) }
 
                     Spacer(Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -263,6 +276,18 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit, mono
         value = value, onValueChange = onChange, label = { Text(label) },
         singleLine = true, modifier = Modifier.fillMaxWidth(),
         textStyle = if (mono) LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp) else LocalTextStyle.current,
+    )
+}
+
+@Composable
+private fun PasswordField(label: String, value: String, onChange: (String) -> Unit) {
+    var show by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        visualTransformation = if (show) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        trailingIcon = { TextButton(onClick = { show = !show }) { Text(if (show) "Hide" else "Show", fontSize = 11.sp) } },
+        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
     )
 }
 
