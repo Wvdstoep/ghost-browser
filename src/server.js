@@ -1710,19 +1710,28 @@ const runningWatchers = new Set();
  */
 async function postWatchTick(wf, owner) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
-  const cfg = feed.getConfig(wf.id);
-  const urls = pw.discover(wf.id, cfg, feed);
-  if (!urls.length) { log.info(`[post-watch] "${wf.name}": no posts to watch yet`); return; }
+  let cfg = feed.getConfig(wf.id);
   const llmCfg = settingsStore.read();
   const want = profiles.safeName(cfg.profile || 'facebook');
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  const session = async () => { let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId); if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); } return s; };
+  // Stand alone: read the owner's notifications page for posts with activity, no other watcher needed.
+  if (cfg.selfDiscover !== false) {
+    try {
+      const found = await pw.discoverOnPage((await session()).page, log);
+      const have = new Set((cfg.postUrls || []).map((u) => pw.postIdOf(u)));
+      const add = found.filter((u) => !have.has(pw.postIdOf(u)));
+      if (add.length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add) }); log.info(`[post-watch] now watching ${add.length} new post(s)`); }
+    } catch (e) { log.error(`[post-watch] self-discovery: ${e.message}`); }
+  }
+  const urls = pw.discover(wf.id, cfg, feed);
+  if (!urls.length) { log.info(`[post-watch] "${wf.name}": no posts to watch yet`); return; }
   // oldest-crawled first, so a busy pass still gets round to every post over time
   const last = cfg.lastCrawl || {};
   const order = urls.slice().sort((a, b) => (last[a] || 0) - (last[b] || 0)).slice(0, Number(cfg.maxPostsPerPass) || 6);
   for (const url of order) {
     try {
-      let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
-      if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+      const s = await session();
       const tree = await pw.crawl(s.page, url, log);
       pw.store(tree);
       const entries = pw.ingest(wf.id, tree, cfg, feed);
