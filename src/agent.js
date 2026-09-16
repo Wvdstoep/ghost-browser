@@ -2175,7 +2175,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                      the job is alive — a prune or a pod roll after this can't lose it), then STOP: the
                      owner approves it later in Results, so the flow must NOT sit parked at the gate
                      holding the one browser session — that blocks every other item's draft. */
-                  try { require('./watcherFeed').mark(job.feedWorkflowId, job.feedKey, { draft: text, draftJobId: job.id, draftPid: p.pid }); }
+                  try { require('./watcherFeed').mark(job.feedWorkflowId, job.feedKey, { draft: require('./humanize')(text), draftJobId: job.id, draftPid: p.pid }); }
                   catch (e) { /* best effort — the backups still cover it */ }
                   jobsStore.step(job, 'drafted', `drafted a ${kind} — saved to Results for your approval, not sent`);
                   observe(`Drafted the ${kind} and saved it for the owner to approve later in Results. Do NOT send it and do NOT ask again — you are finished with this conversation. Call finish now.`);
