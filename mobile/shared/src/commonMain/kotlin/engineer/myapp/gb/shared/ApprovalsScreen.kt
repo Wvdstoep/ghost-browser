@@ -33,7 +33,6 @@ fun ApprovalsScreen(
     onStop: (jobId: String) -> Unit,
     onSay: (jobId: String, text: String) -> Unit,
     onOpenUrl: (String) -> Unit,
-    onStartWatch: () -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     topInset: Modifier = Modifier,
@@ -48,7 +47,7 @@ fun ApprovalsScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Approvals", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface)
-                Text("Review each draft before it's sent", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                Text("Every action a watcher or flow wants to take waits here for your yes", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
             }
             if (pending.isNotEmpty())
                 Box(Modifier.clip(RoundedCornerShape(50)).background(Brand).padding(horizontal = 11.dp, vertical = 5.dp)) {
@@ -66,8 +65,8 @@ fun ApprovalsScreen(
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Nothing waiting", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
                 Spacer(Modifier.height(4.dp))
-                Text(if (watchers.isEmpty()) "Start a reply watch — drafts will land here for your approval."
-                     else "The watcher is running. New drafts appear here the moment it has one.",
+                Text(if (watchers.isEmpty()) "When a watcher or flow wants to act, its draft lands here for you to approve. Create a watcher in the Watchers tab."
+                     else "Your watchers are running. The moment one wants to act, its draft appears here.",
                     style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
             }
         } else {
@@ -76,14 +75,11 @@ fun ApprovalsScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // ── The watchers (live activity) ──────────────────────────────────────────────────────────
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("WATCHERS", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, letterSpacing = 1.5.sp, modifier = Modifier.weight(1f))
-            TextButton(onClick = onStartWatch) { Text("+ Start reply watch", color = Brand, fontSize = 13.sp) }
-        }
+        // ── What's producing these, live (read-only context; manage in the Watchers tab) ───────────
+        Text("ACTIVE NOW", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, letterSpacing = 1.5.sp)
         Spacer(Modifier.height(8.dp))
         if (watchers.isEmpty()) {
-            Text("No watcher running.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+            Text("Nothing running right now.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
         } else {
             watchers.forEach { j -> WatcherCard(j, onStop, onSay); Spacer(Modifier.height(8.dp)) }
         }

@@ -62,6 +62,12 @@ class DesktopState {
     // approvals gate — running watchers + their pending proposals (drafts awaiting yes/no)
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
+    // watchers — scheduled background tasks
+    val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
+    val watchersLoading = mutableStateOf(false)
+    val watcherRoles = mutableStateOf<List<String>>(emptyList())
+    val watcherProfiles = mutableStateOf<List<String>>(listOf("facebook"))
+    val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
     fun log(line: String) { nodeStatus.value = line; activity.value = (activity.value + line + "\n").takeLast(6000) }
 }
 
@@ -179,6 +185,66 @@ fun startWatchD(st: DesktopState) = bg {
     st.log("● reply watch running — drafts appear in Approvals"); loadApprovals(st)
 }
 
+/* ── Watchers: scheduled background tasks = active workflows with a schedule trigger ──────────────── */
+fun loadWatchers(st: DesktopState) = bg {
+    st.watchersLoading.value = true
+    // roles for the picker
+    try {
+        val rr = Cluster.authed("GET", "/v1/agent/roles", null)
+        val ra = JSONObject(rr).optJSONArray("roles") ?: org.json.JSONArray()
+        val rn = ArrayList<String>(); for (i in 0 until ra.length()) ra.optJSONObject(i)?.optString("name")?.takeIf { it.isNotBlank() }?.let { rn.add(it) }
+        if (rn.isNotEmpty()) st.watcherRoles.value = rn
+    } catch (e: Exception) {}
+    // profiles for the picker
+    try {
+        val pr = Cluster.authed("GET", "/v1/profiles", null)
+        val pa = JSONObject(pr).optJSONArray("profiles") ?: org.json.JSONArray()
+        val pn = ArrayList<String>()
+        for (i in 0 until pa.length()) { val v = pa.opt(i); val nm = if (v is JSONObject) v.optString("name").ifBlank { v.optString("id") } else v?.toString() ?: ""; if (nm.isNotBlank() && !nm.startsWith("lost+")) pn.add(nm) }
+        if (pn.isNotEmpty()) st.watcherProfiles.value = pn
+    } catch (e: Exception) {}
+    // the watchers themselves = scheduled workflows
+    val r = Cluster.authed("GET", "/v1/workflows", null)
+    try {
+        val arr = JSONObject(r).optJSONArray("workflows") ?: org.json.JSONArray()
+        val out = ArrayList<engineer.myapp.gb.shared.Watcher>(); st.watcherRaw.clear()
+        for (i in 0 until arr.length()) {
+            val w = arr.optJSONObject(i) ?: continue
+            val nodes = w.optJSONArray("nodes") ?: org.json.JSONArray()
+            var trig: JSONObject? = null; var agent: JSONObject? = null
+            for (j in 0 until nodes.length()) {
+                val n = nodes.optJSONObject(j) ?: continue
+                if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
+                if (n.optString("type") == "agent" && agent == null) agent = n
+            }
+            val cfg = trig ?: w.optJSONObject("trigger")
+            if (cfg == null || cfg.optString("type") != "schedule") continue
+            val id = w.optString("id"); if (id.isBlank()) continue
+            st.watcherRaw[id] = w
+            val nmin = maxOf(1, cfg.optInt("n", 1)); val runs = w.optInt("runs", 0)
+            val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
+            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0))
+        }
+        st.watchers.value = out
+    } catch (e: Exception) {}
+    st.watchersLoading.value = false
+}
+fun createWatcherD(name: String, role: String, profile: String, intervalMin: Int, st: DesktopState) = bg {
+    val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
+        .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
+    val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch").put("role", role).put("profile", profile)
+        .put("goal", "Run your watch now: carry out this role's task and record what you find. Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish.")
+    val nodes = org.json.JSONArray().put(trigger).put(agent)
+    val edges = org.json.JSONArray().put(JSONObject().put("from", "trigger").put("to", "n0"))
+    val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false).put("nodes", nodes).put("edges", edges).toString()
+    Cluster.authed("POST", "/v1/workflows", body); st.log("● watcher \"$name\" created (every $intervalMin min)"); loadWatchers(st)
+}
+fun toggleWatcherD(st: DesktopState, id: String, active: Boolean) = bg {
+    val raw = st.watcherRaw[id] ?: return@bg
+    try { raw.put("active", active) } catch (e: Exception) {}
+    Cluster.authed("PUT", "/v1/workflows/$id", raw.toString()); loadWatchers(st)
+}
+
 fun runFlow(id: String, st: DesktopState) = bg {
     st.log("▶ running $id on the cluster…")
     val r = Cluster.authed("POST", "/v1/workflows/$id/run", "{}")
@@ -237,15 +303,31 @@ fun runTargetD(target: String, goal: String, st: DesktopState) = bg {
 @Composable
 fun FlowsScreenD(st: DesktopState) {
     val cs = MaterialTheme.colorScheme
+    var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
     LaunchedEffect(Unit) { if (st.flows.value.isEmpty()) loadFlows(st) }
-    // S9: the SAME shared Automations screen the phone uses (grouped, expandable, build panel).
-    Box(Modifier.fillMaxSize().background(cs.background)) {
-        FlowsScreen(
-            flows = st.flows.value,
-            onLoad = { loadFlows(st) },
+    Column(Modifier.fillMaxSize().background(cs.background)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
+            listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
+                val on = sub == i
+                Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (on) Brand else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable { sub = i; if (i == 1) loadWatchers(st) }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                    Text(lbl, color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
+                }
+            }
+        }
+        if (sub == 0) FlowsScreen(
+            flows = st.flows.value, onLoad = { loadFlows(st) },
             onRun = { id, name -> showRunSheetD(id, name, st) },
             onCreate = { name, steps -> createFlowD(name, steps, st) },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) else engineer.myapp.gb.shared.WatchersScreen(
+            watchers = st.watchers.value, roles = st.watcherRoles.value, profiles = st.watcherProfiles.value,
+            loading = st.watchersLoading.value,
+            onCreate = { n, r, p, iv -> createWatcherD(n, r, p, iv, st) },
+            onToggle = { id, a -> toggleWatcherD(st, id, a) },
+            onOpenResults = { st.log("results view is next — watcher $it") },
+            onRefresh = { loadWatchers(st) }, modifier = Modifier.weight(1f).fillMaxWidth(),
         )
     }
 }

@@ -1279,7 +1279,80 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)")
             else { vm.log("↑ starting Facebook reply watch…"); apiCall("POST", "/v1/sessions", JSONObject().put("reuse", true).put("profile", "facebook").toString(), "watch_session") }
         },
+        onLoadWatchers = { loadWatchers() },
+        onCreateWatcher = { name, role, profile, iv -> createWatcher(name, role, profile, iv) },
+        onToggleWatcher = { id, active -> toggleWatcher(id, active) },
+        onOpenWatcherResults = { id -> openWatcherResults(id) },
     )
+
+    /* ── Watchers: scheduled background tasks = active workflows with a schedule trigger ──────────── */
+    private val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
+
+    private fun loadWatchers() {
+        if (vm.clusterUrl.trim().isEmpty()) { vm.log("! sign in first (Settings → Account & sync)"); return }
+        shellUi.watchersLoading.value = true
+        shellUi.watcherRoles.value = roleNames().filter { it != "(none)" }
+        apiCall("GET", "/v1/workflows", null, "watchers")
+        apiCall("GET", "/v1/profiles", null, "profiles_list")
+        if (vm.rolesCacheJson.isBlank()) apiCall("GET", "/v1/agent/roles", null, "roles_list")
+    }
+    private fun createWatcher(name: String, role: String, profile: String, intervalMin: Int) {
+        val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
+            .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
+        val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch")
+            .put("role", role).put("profile", profile)
+            .put("goal", "Run your watch now: carry out this role's task and record what you find. Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish.")
+        val nodes = JSONArray().put(trigger).put(agent)
+        val edges = JSONArray().put(JSONObject().put("from", "trigger").put("to", "n0"))
+        val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false)
+            .put("nodes", nodes).put("edges", edges).toString()
+        vm.log("+ creating watcher \"$name\" (every $intervalMin min)…")
+        apiCall("POST", "/v1/workflows", body, "watcher_create")
+    }
+    private fun toggleWatcher(id: String, active: Boolean) {
+        val raw = watcherRaw[id]
+        if (raw == null) { vm.log("! watcher not loaded — refresh"); return }
+        try { raw.put("active", active) } catch (e: Exception) {}
+        apiCall("PUT", "/v1/workflows/$id", raw.toString(), "watcher_toggle")
+    }
+    private fun openWatcherResults(id: String) {
+        // Phase 2 builds the interactive results artifact; for now open the latest run's data on the cluster.
+        vm.log("↑ opening results for watcher $id…")
+        apiCall("GET", "/v1/workflows/$id/runs", null, "watcher_results")
+    }
+
+    /** Parse GET /v1/workflows → the ones with a schedule trigger are watchers. */
+    private fun parseWatchers(data: String) {
+        try {
+            val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
+            val out = ArrayList<engineer.myapp.gb.shared.Watcher>()
+            watcherRaw.clear()
+            for (i in 0 until arr.length()) {
+                val w = arr.optJSONObject(i) ?: continue
+                val nodes = w.optJSONArray("nodes") ?: JSONArray()
+                var trig: JSONObject? = null; var agent: JSONObject? = null
+                for (j in 0 until nodes.length()) {
+                    val n = nodes.optJSONObject(j) ?: continue
+                    if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
+                    if (n.optString("type") == "agent" && agent == null) agent = n
+                }
+                val cfg = trig ?: w.optJSONObject("trigger")
+                if (cfg == null || cfg.optString("type") != "schedule") continue   // only scheduled = a watcher
+                val id = w.optString("id"); if (id.isBlank()) continue
+                watcherRaw[id] = w
+                val n = maxOf(1, cfg.optInt("n", 1))
+                val runs = w.optInt("runs", 0)
+                val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
+                out.add(engineer.myapp.gb.shared.Watcher(
+                    id = id, name = w.optString("name", id), role = agent?.optString("role") ?: "general",
+                    profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
+                    lastRun = last, resultCount = 0,
+                ))
+            }
+            shellUi.watchers.value = out
+        } catch (e: Exception) { vm.log("! watchers parse: ${data.take(120)}") }
+        shellUi.watchersLoading.value = false
+    }
 
     /** The reply-watch goal — mirrors the console Reply Desk: watch notifications, draft, gate every act. */
     private val RD_GOAL = "Open Facebook notifications and my recent posts. For each NEW comment or reaction on MY posts, read the whole thread for context, then draft ONE natural reply that continues the conversation and moves toward my-app.engineer only where it genuinely fits. Propose EVERY reply for my approval - never post without approval. Skip threads that are hostile, off-topic, already handled, or where I chose not to engage. Keep watching and check back periodically."
@@ -1741,6 +1814,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "watch_started_err" -> vm.log("! start watch: ${data.take(140)}")
             "approval_act" -> pollApprovals()
             "approval_act_err" -> { vm.log("! action: ${data.take(140)}"); pollApprovals() }
+            // ── Watchers ──────────────────────────────────────────────────────────────────────────
+            "watchers" -> parseWatchers(data)
+            "watchers_err" -> { shellUi.watchersLoading.value = false; vm.log("! watchers: ${data.take(120)}") }
+            "watcher_create" -> { vm.log("● watcher created — it now runs in the background on schedule"); loadWatchers() }
+            "watcher_create_err" -> vm.log("! create watcher: ${data.take(160)}")
+            "watcher_toggle" -> loadWatchers()
+            "watcher_toggle_err" -> { vm.log("! toggle watcher: ${data.take(140)}"); loadWatchers() }
+            "profiles_list" -> try {
+                val arr = JSONObject(data).optJSONArray("profiles") ?: JSONArray()
+                val names = ArrayList<String>()
+                for (i in 0 until arr.length()) {
+                    val v = arr.opt(i)
+                    val nm = if (v is JSONObject) v.optString("name").ifBlank { v.optString("id") } else v?.toString() ?: ""
+                    if (nm.isNotBlank() && !nm.startsWith("lost+")) names.add(nm)
+                }
+                if (names.isNotEmpty()) shellUi.watcherProfiles.value = names
+            } catch (e: Exception) {}
+            "profiles_list_err" -> {}
+            "watcher_results" -> { val n = try { JSONObject(data).optJSONArray("runs")?.length() ?: 0 } catch (e: Exception) { 0 }; vm.log("↓ watcher has $n run(s) — the interactive results view lands next") }
+            "watcher_results_err" -> vm.log("! results: ${data.take(120)}")
             "devrunsave" -> vm.log("↑ run journaled to shared history")
             "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {
