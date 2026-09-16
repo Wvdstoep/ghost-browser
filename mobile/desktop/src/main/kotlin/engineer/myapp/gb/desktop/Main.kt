@@ -1,12 +1,15 @@
 package engineer.myapp.gb.desktop
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
@@ -57,7 +60,6 @@ private fun writeCrash(e: Throwable) {
 }
 
 private fun runApp() = application {
-    var mainBrowser by remember { mutableStateOf<CefBrowser?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val state = remember { DesktopState() }
 
@@ -65,58 +67,83 @@ private fun runApp() = application {
         try {
             withContext(Dispatchers.IO) { Cef.ensureApp() }               // first run downloads Chromium
             val client = Cef.client()
-            val mb = client.createBrowser("https://my-app.engineer", false, false)
-            mainBrowser = mb
             val clusterUrl = "https://ghost-browser.mavicpro-fan.my-app.engineer"
             val control = client.createBrowser(clusterUrl, false, false)
-            // Realize the control browser off-screen so it actually loads the GB origin (shares the SSO
-            // cookie the user signs in with on the visible browser).
+            // Realize the control browser off-screen so it loads the GB origin (shares the SSO cookie).
             SwingUtilities.invokeLater {
                 JFrame("gb-control").apply {
                     isUndecorated = true; setSize(1, 1); setLocation(-4000, -4000)
                     add(control.uiComponent); isVisible = true
                 }
-                try { control.createImmediately() } catch (e: Throwable) {}   // ensure the native browser (+ devtools) comes up
+                try { control.createImmediately() } catch (e: Throwable) {}
             }
             Cluster.control = control
             Cluster.clusterUrl = clusterUrl
+            Tabs.open("https://my-app.engineer")                          // first tab
             val gbJs = readResourceText("/gb.js")
             state.gbJs = gbJs
             val (ep, key, model) = Agent.load()
             state.endpoint.value = ep; state.apiKey.value = key; state.model.value = model
             withContext(Dispatchers.IO) { Thread.sleep(1500) }
-            DesktopNode(mb, deviceId(), hostName(), gbJs) { line -> println(line); state.log(line) }.start()
+            DesktopNode({ Tabs.activeBrowser() }, deviceId(), hostName(), gbJs) { line -> println(line); state.log(line) }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
     }
 
     Window(onCloseRequest = ::exitApplication, title = "Ghost Browser", state = rememberWindowState(width = 1200.dp, height = 820.dp)) {
-        GbTheme(dark = state.dark.value) { DesktopShell(mainBrowser, error, state) }
+        GbTheme(dark = state.dark.value) { DesktopShell(error, state) }
     }
 }
 
 @Composable
-private fun DesktopShell(mainBrowser: CefBrowser?, error: String?, state: DesktopState) {
+private fun DesktopShell(error: String?, state: DesktopState) {
     val cs = MaterialTheme.colorScheme
     var screen by remember { mutableStateOf("browser") }
-    var atHome by remember { mutableStateOf(false) }
-    val openUrl: (String) -> Unit = { u -> atHome = false; mainBrowser?.loadURL(u); screen = "browser" }
+    val activeTab = Tabs.activeTab()
+    val openUrl: (String) -> Unit = { u -> Tabs.go(u); screen = "browser" }
     GbScaffold(
-        host = if (screen == "browser") (mainBrowser?.url?.let { hostOf(it) } ?: "my-app.engineer") else "",
-        tabCount = 1, selected = if (screen == "devices") "settings" else screen,
+        host = "", tabCount = Tabs.list.size, selected = if (screen == "devices") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
-        showTopBar = false,     // desktop uses its own BrowserBar
+        showTopBar = false,     // desktop uses its own BrowserBar + tab strip
     ) {
         when (screen) {
             "browser" -> Column(Modifier.fillMaxSize()) {
-                BrowserBar(mainBrowser, onHome = { atHome = true }, onNavigated = { atHome = false })
-                if (atHome) HomePageD(state, onOpenUrl = { u -> atHome = false; mainBrowser?.loadURL(u) }, onSearch = { atHome = false })
-                else JcefBrowserView(mainBrowser, error, Modifier.weight(1f).fillMaxWidth())
+                TabStrip()
+                BrowserBar(Tabs.activeBrowser(), onHome = { activeTab?.home = true }, onNavigated = { activeTab?.home = false })
+                if (activeTab?.home == true) HomePageD(state, onOpenUrl = { u -> Tabs.go(u) }, onSearch = { /* focus handled by BrowserBar */ })
+                else androidx.compose.runtime.key(Tabs.active) { JcefBrowserView(Tabs.activeBrowser(), error, Modifier.weight(1f).fillMaxWidth()) }
             }
             "flows" -> FlowsScreenD(state)
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
-            "agent" -> AgentChatD(state, mainBrowser)
-            else -> JcefBrowserView(mainBrowser, error, Modifier.fillMaxSize())
+            "agent" -> AgentChatD(state, Tabs.activeBrowser())
+            else -> JcefBrowserView(Tabs.activeBrowser(), error, Modifier.fillMaxSize())
+        }
+    }
+}
+
+/** Chrome-style tab strip: a chip per tab (host + close) and a new-tab button. */
+@Composable
+private fun TabStrip() {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.surface, contentColor = cs.onSurface) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f)) {
+                Tabs.list.forEachIndexed { i, _ ->
+                    val on = i == Tabs.active
+                    Surface(
+                        color = if (on) cs.surfaceVariant else cs.surface,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (on) Brand else cs.outline),
+                        shape = RoundedCornerShape(9.dp),
+                        modifier = Modifier.padding(end = 6.dp).height(30.dp).widthIn(max = 180.dp).clickable { Tabs.select(i) },
+                    ) {
+                        Row(Modifier.padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(Tabs.hostLabel(i), color = if (on) cs.onSurface else cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 130.dp))
+                            IconButton(onClick = { Tabs.close(i) }, modifier = Modifier.size(22.dp)) { Icon(androidx.compose.material.icons.Icons.Default.Close, "Close tab", tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp)) }
+                        }
+                    }
+                }
+            }
+            IconButton(onClick = { Tabs.open(null) }) { Icon(androidx.compose.material.icons.Icons.Default.Add, "New tab", tint = cs.onSurface) }
         }
     }
 }
