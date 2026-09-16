@@ -1647,8 +1647,14 @@ async function triggerFollowUps(wf, owner) {
     for (const it of items.slice(0, 6)) {
       feed.mark(wf.id, it.key, { followedUp: true });
       const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
+      const rid = `${flow.id}-${Date.now()}`;
       try {
-        await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: `${flow.id}-${Date.now()}` });
+        await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
+        // Write the draft straight back onto the feed item, keyed exactly by feedKey — no fragile URL matching.
+        let fjob = null; try { for (const j of jobs.jobs.values()) if (j.runId === rid) { fjob = j; break; } } catch (e) {}
+        const fprop = fjob && (fjob.proposals || []).find((pp) => pp.state === 'pending');
+        if (fprop) feed.mark(wf.id, it.key, { draft: fprop.text || '', draftJobId: fjob.id, draftPid: fprop.pid });
+        else feed.mark(wf.id, it.key, { draftChecked: true });
       } catch (e) { log.error(`[follow-up] ${flow.id} on ${it.key}: ${e.message}`); }
     }
   } catch (e) { log.error(`[follow-up] ${wf && wf.id}: ${e.message}`); }
