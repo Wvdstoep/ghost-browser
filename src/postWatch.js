@@ -107,12 +107,15 @@ function extractInPage() {
      post in the sidebar (one pass drafted as a Dutch fish-keeper). The real post is the article that
      CONTAINS the comment thread; failing that, the largest one before the first comment, never in the
      complementary (sidebar) region. Its own text = its content minus the nested comments/controls. */
-  const msg = document.querySelector('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]');
   const cands = q('[role="article"]').filter((a) => !isC(a) && !a.closest('[role="complementary"]'));
-  let postArt = cands.find((a) => arts.some((c) => a.contains(c))) || null;
+  // Deterministic: the post's own article links to ITS id (timestamp / permalink); suggestions link elsewhere.
+  const pidNow = u.searchParams.get('post_id') || (location.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || '';
+  const linksTo = (a) => !!pidNow && q('a[href]', a).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('/posts/' + pidNow) || h.includes('post_id=' + pidNow) || h.includes('story_fbid=' + pidNow) || h.includes('fbid=' + pidNow); });
+  let postArt = cands.find(linksTo) || cands.find((a) => arts.some((c) => a.contains(c))) || null;
   if (!postArt && arts[0]) { const before = cands.filter((a) => a.compareDocumentPosition(arts[0]) & Node.DOCUMENT_POSITION_FOLLOWING); postArt = before.sort((x, y) => (y.textContent || '').length - (x.textContent || '').length)[0] || null; }
+  const msg = postArt ? postArt.querySelector('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]') : null;
   const ownText = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[role="article"], form, [role="button"], [role="menu"], [aria-hidden="true"]').forEach((x) => x.remove()); return (c.textContent || '').replace(/\s+\n/g, '\n').replace(/[ \t]+/g, ' ').trim(); };
-  const postText = (msg ? msg.innerText : (postArt ? ownText(postArt) : '')).trim().slice(0, 2500);
+  const postText = (msg ? msg.innerText : (postArt ? ownText(postArt) : '')).replace(/…?\s*(meer weergeven|see more|zie meer)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 2500);
   const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a, h2, h3, h4');
   const postAuthor = authorEl ? (authorEl.innerText || '').trim().split('\n')[0].trim() : '';
   let me = ''; try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
@@ -173,7 +176,7 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
   for (const e of todo) {
     const transcript = e.branch.map((n) => `${e.isMe(n) ? 'YOU' : n.author}${n.replyTo ? ' (to ' + (e.isMe({ author: n.replyTo }) ? 'you' : n.replyTo) + ')' : ''}: ${n.text}`).join('\n');
     const sys = `You draft replies for the owner of a Facebook post, written AS the owner in first person. ${VOICE} `
-      + 'Write in the language the person wrote in (the thread\'s language) - an English thread gets an English reply. Use ONLY what the post and '
+      + 'Write in the language of the POST and the thread (an English post gets English replies even when someone answers with one word). Use ONLY what the post and '
       + 'the thread say: never invent facts, projects, problems or a persona for the owner; if you lack context, keep it short and about their message. '
       + 'Output ONLY the reply text - no quotes, no preamble.';
     const user = `YOUR POST (you wrote this):\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\nWrite ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
