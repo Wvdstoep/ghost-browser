@@ -82,7 +82,9 @@ function extractInPage() {
   const q = (s, r) => Array.from((r || document).querySelectorAll(s));
   const label = (a) => a.getAttribute('aria-label') || '';
   const isC = (a) => /^(comment|opmerking|reply|antwoord)\b/i.test(label(a));
-  const arts = q('[role="article"]').filter(isC);
+  const shown = (el) => !!el && el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"]');
+  // visible only: Facebook keeps a hidden second copy of the thread, which doubled every root comment
+  const arts = q('[role="article"]').filter((a) => isC(a) && shown(a));
   /* The label is "Opmerking van <Name> een dag geleden" or "Antwoord van <Name> op het antwoord van
      <Other> ongeveer een uur geleden" (EN: "Comment by <Name> 2 hours ago", "Reply by <Name> on the
      reply by <Other>"). It names the author AND who they answered - the reply target is more exact
@@ -113,6 +115,9 @@ function extractInPage() {
     return { i, id: rid || cid, cid, rid, isReply, author, replyTo, text: text.trim().slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
   });
   for (const n of nodes) { n.parentId = n.rid ? n.cid : (n.parentIdx >= 0 ? nodes[n.parentIdx].id : null); delete n.parentIdx; }
+  // one node per id, whichever copy carries the words
+  const byIdOnce = new Map(); for (const n of nodes) { if (!n.id) continue; const ex = byIdOnce.get(n.id); if (!ex || (n.text || '').length > (ex.text || '').length) byIdOnce.set(n.id, n); }
+  const uniq = [...byIdOnce.values()].sort((a, b) => a.i - b.i);
   const u = new URL(location.href);
   const postId = u.searchParams.get('post_id') || (location.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null;
   const group = (location.pathname.match(/\/groups\/([^/]+)/) || [])[1] || null;
@@ -139,7 +144,7 @@ function extractInPage() {
   const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a, h2, h3, h4');
   const postAuthor = authorEl ? (authorEl.innerText || '').trim().split('\n')[0].trim() : '';
   let me = ''; try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
-  return { postId, group, postText, postAuthor, me, probe, nodes: nodes.filter((n) => n.id && n.author) };
+  return { postId, group, postText, postAuthor, me, probe, nodes: uniq.filter((n) => n.id && n.author) };
 }
 
 function store(tree) {
@@ -158,22 +163,31 @@ function ingest(wid, tree, cfg, feed) {
   const branches = {}; tree.nodes.forEach((n) => { const r = rootOf(n); (branches[r] = branches[r] || []).push(n); });
   const out = [];
   const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const mentionsMe = (n) => !!me && String(n.text || '').trim().toLowerCase().startsWith(me);
   for (const [rootId, list] of Object.entries(branches)) {
+    const rootAuthor = (byId[rootId] || list[0] || {}).author || '';
     list.forEach((n, i) => {
       const parent = byId[n.parentId];
       const mine = isMe(n);
+      /* WHO IS THIS FOR. A root comment is to the owner. A reply is to the owner when it answers the
+         owner, @mentions them, or carries on a thread the owner is already in. People talking to each
+         other under the post (Peter arguing with Dennis) are a side conversation: shown nowhere,
+         drafted never - the owner is not the one being asked. */
+      const talkedBefore = list.slice(0, i).some(isMe);
+      const toMe = n.isReply && (same(n.replyTo, me) || mentionsMe(n) || (same(n.replyTo, rootAuthor) && talkedBefore));
+      const addressed = !mine && (!n.isReply || toMe);
       // A person is answered only when a LATER reply of the owner's in this branch is TO THEM (the
       // label says who each reply answers). Replying to Dennis does not answer Peter.
-      const answered = !mine && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
-      const status = mine ? 'you' : (answered ? 'answered' : 'waiting on you');
+      const answered = addressed && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
+      const status = mine ? 'you' : (!addressed ? 'side conversation' : (answered ? 'answered' : 'waiting on you'));
       const target = n.replyTo || (parent ? parent.author : '');
-      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${target ? (same(target, me) ? 'you' : target) : 'a comment'}` : `${n.author} commented on your post`);
+      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${mentionsMe(n) || same(target, me) ? 'you' : (target || 'a comment')}` : `${n.author} commented on your post`);
       const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, postId: tree.postId, commentId: n.id, rootId, replyTo: target };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
-      if (mine || status === 'answered') patch.handled = true;    // nothing to do here, and it stays gone
+      if (mine || answered || !addressed) patch.handled = true;    // nothing for the owner to do here, and it stays gone
       feed.mark(wid, item.key, patch);
-      out.push({ node: n, key: item.key, rootId, branch: list, needsReply: !mine && status === 'waiting on you', isMe });
+      out.push({ node: n, key: item.key, rootId, branch: list, needsReply: addressed && !answered, isMe });
     });
   }
   return out;
@@ -189,7 +203,7 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
     if (!it || it.handled || it.draft || it.draftChecked) return false;
     if (feed.ageDays(it) > maxAge) { feed.mark(wid, e.key, { draftChecked: true, tooOld: true }); return false; }
     // a sticker / photo / "follow" with no words: nothing to answer, and a model would only invent one
-    if (!String(e.node.text || '').trim()) { feed.mark(wid, e.key, { draftChecked: true, noText: true }); return false; }
+    if (!String(e.node.text || '').trim()) { feed.mark(wid, e.key, { draftChecked: true, noText: true, handled: true }); return false; }
     return true;
   }).sort((a, b) => b.node.i - a.node.i).slice(0, cap);
   let made = 0;
