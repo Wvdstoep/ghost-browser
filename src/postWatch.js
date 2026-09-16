@@ -174,7 +174,9 @@ function ingest(wid, tree, cfg, feed) {
          other under the post (Peter arguing with Dennis) are a side conversation: shown nowhere,
          drafted never - the owner is not the one being asked. */
       const talkedBefore = list.slice(0, i).some(isMe);
-      const toMe = n.isReply && (same(n.replyTo, me) || mentionsMe(n) || (same(n.replyTo, rootAuthor) && talkedBefore));
+      // "continuing": the root author carrying on their OWN thread after the owner answered them
+      // (Peter answering the owner's question) - not anyone replying to the root author.
+      const toMe = n.isReply && (same(n.replyTo, me) || mentionsMe(n) || (same(n.author, rootAuthor) && same(n.replyTo, rootAuthor) && talkedBefore));
       const addressed = !mine && (!n.isReply || toMe);
       // A person is answered only when a LATER reply of the owner's in this branch is TO THEM (the
       // label says who each reply answers). Replying to Dennis does not answer Peter.
