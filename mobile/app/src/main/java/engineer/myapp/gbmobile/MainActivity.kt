@@ -671,11 +671,22 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val w = arr.optJSONObject(i) ?: continue
             val id = w.optString("id"); if (id.isBlank()) continue
             val name = w.optString("name", id)
-            val steps = w.optJSONArray("nodes")?.length() ?: w.optInt("nodes", 0)
+            val nodes = w.optJSONArray("nodes") ?: JSONArray()
+            val steps = nodes.length()
+            var profile = ""; var role = ""; val goals = ArrayList<String>()
+            for (j in 0 until nodes.length()) {
+                val nn = nodes.optJSONObject(j) ?: continue
+                if (nn.optString("type") == "agent") {
+                    if (profile.isBlank()) profile = nn.optString("profile")
+                    if (role.isBlank()) role = nn.optString("role")
+                    val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(g)
+                }
+            }
             val runs = w.optInt("runs", 0)
-            val proof = if (w.optBoolean("verifiedEver")) (if (w.optBoolean("lastVerified")) " · ✓ verified" else " · was verified") else ""
+            val verified = w.optBoolean("lastVerified")
+            val proof = if (w.optBoolean("verifiedEver")) (if (verified) " · ✓ verified" else " · was verified") else ""
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}$proof" else "never run"
-            out.add(engineer.myapp.gbmobile.ui.FlowInfo(id, name, steps, last))
+            out.add(engineer.myapp.gbmobile.ui.FlowInfo(id, name, steps, last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified))
         }
         shellUi.flows.value = out
         shellUi.flowsHint.value = if (out.isEmpty()) "No automations yet — build one below." else "${out.size} automations — tap Run to fire one."
@@ -1065,7 +1076,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val brain = buildBrain()
         if (brain == null) {
             if (agentChat == null) newAgentChat()
-            agentPushMsg("assistant", "Set your model first — Settings → Devices & ring: pick/download an on-device model, or set an Ollama endpoint.")
+            val msg = if (vm.useLocal)
+                "You're on ON-DEVICE mode but no model is downloaded. Tap ⚙ → choose **Cloud model** (recommended — far stronger), press **Use Ollama Cloud**, add your key, Fetch models, pick one."
+            else
+                "No cloud model set. Tap ⚙ → **Use Ollama Cloud**, paste your key, **Fetch models**, pick one (e.g. gpt-oss:120b), Save."
+            agentPushMsg("assistant", msg)
             return
         }
         if (agentChat == null) newAgentChat()

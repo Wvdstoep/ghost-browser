@@ -185,7 +185,10 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                     Text("A capable cloud model is far stronger than the on-device one for real flows.", color = cs.onSurfaceVariant, fontSize = 11.sp)
                     Spacer(Modifier.height(8.dp))
                     if (ui.endpoint.value.isBlank()) ui.endpoint.value = "https://ollama.com/v1"
-                    Ghost("Pull model + endpoint from cluster", Modifier.fillMaxWidth()) { act.onPullClusterConfig() }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Primary("Use Ollama Cloud", Modifier.weight(1f)) { ui.endpoint.value = "https://ollama.com/v1"; act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }
+                        Ghost("Self-hosted", Modifier.weight(1f)) { act.onPullClusterConfig() }
+                    }
                     Spacer(Modifier.height(8.dp))
                     Field("Endpoint", ui.endpoint.value, { ui.endpoint.value = it }, mono = true)
                     Spacer(Modifier.height(8.dp)); PasswordField("API key", ui.apiKey.value) { ui.apiKey.value = it }

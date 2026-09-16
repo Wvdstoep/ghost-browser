@@ -43,7 +43,9 @@ import androidx.compose.ui.unit.sp
  */
 
 data class TabInfo(val index: Int, val title: String, val host: String, val profile: String, val active: Boolean, val thumb: ImageBitmap? = null)
-data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String)
+data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String,
+                    val profile: String = "", val role: String = "", val goals: List<String> = emptyList(),
+                    val runs: Int = 0, val lastStatus: String = "", val verified: Boolean = false)
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
 data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)
@@ -461,49 +463,126 @@ private fun MenuDivider() = HorizontalDivider(color = MaterialTheme.colorScheme.
 /* ── Flows ─────────────────────────────────────────────────────────────────────────────────── */
 
 @Composable
+private fun groupOf(f: FlowInfo): String {
+    val p = f.profile.lowercase(); val n = (f.name + " " + f.role).lowercase()
+    return when {
+        p.contains("facebook") || n.contains("facebook") -> "Facebook"
+        p.contains("linkedin") || n.contains("linkedin") -> "LinkedIn"
+        p.contains("google") || n.contains("google") -> "Google"
+        p.contains("capcut") || n.contains("capcut") -> "CapCut"
+        p.contains("reddit") || n.contains("reddit") -> "Reddit"
+        p.contains("useme") || n.contains("useme") -> "Useme"
+        p.contains("herald") || n.contains("herald") -> "Herald"
+        p.contains("probe") || n.contains("probe") -> "Probe"
+        f.profile.isNotBlank() -> f.profile.replaceFirstChar { it.uppercase() }
+        else -> "Other"
+    }
+}
+
+@Composable
 private fun FlowsPane(shell: ShellUi, act: ShellActions, modifier: Modifier) {
     val cs = MaterialTheme.colorScheme
+    var q by remember { mutableStateOf("") }
+    var showBuild by remember { mutableStateOf(false) }
+    val all = shell.flows.value.filter { q.isBlank() || it.name.contains(q, true) || it.profile.contains(q, true) || it.role.contains(q, true) }
+    val groups = all.groupBy { groupOf(it) }.toList().sortedByDescending { it.second.size }
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Automations", style = MaterialTheme.typography.headlineSmall)
-        Text(shell.flowsHint.value.ifBlank { "The same flows your Ghost Browser runs — tap Run to fire one." },
-            color = cs.onSurfaceVariant, fontSize = 12.sp)
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = act.onLoadFlows, shape = RoundedCornerShape(12.dp)) { Text("Load from cluster") }
-        Spacer(Modifier.height(12.dp))
-        if (shell.flows.value.isEmpty()) Text("No automations yet — build one below.", color = cs.onSurfaceVariant, fontSize = 13.sp)
-        else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            shell.flows.value.forEach { f -> FlowCard(f) { act.onRunFlow(f.id, f.name) } }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Automations", style = MaterialTheme.typography.headlineSmall)
+                Text("${shell.flows.value.size} flows · ${groups.size} groups", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            }
+            TextButton(onClick = act.onLoadFlows) { Text("Reload") }
         }
-        Spacer(Modifier.height(20.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(16.dp))
-        Text("New automation", style = MaterialTheme.typography.titleMedium)
-        Text("One plain-language goal per line.", color = cs.onSurfaceVariant, fontSize = 12.sp)
         Spacer(Modifier.height(10.dp))
-        var name by remember { mutableStateOf("") }
-        var steps by remember { mutableStateOf("") }
-        OutlinedTextField(name, { name = it }, label = { Text("Automation name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(steps, { steps = it }, label = { Text("Steps — one goal per line") }, modifier = Modifier.fillMaxWidth().height(120.dp))
-        Spacer(Modifier.height(10.dp))
-        Button(onClick = { if (name.isNotBlank() && steps.isNotBlank()) { act.onCreateFlow(name, steps); name = ""; steps = "" } },
-            shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Create on cluster") }
+        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(10.dp))
+                androidx.compose.foundation.text.BasicTextField(q, { q = it }, singleLine = true, modifier = Modifier.weight(1f),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 15.sp), cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
+                    decorationBox = { inner -> if (q.isEmpty()) Text("Search automations", color = cs.onSurfaceVariant, fontSize = 15.sp); inner() })
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        if (shell.flows.value.isEmpty()) Text("No automations yet — Reload, or build one below.", color = cs.onSurfaceVariant, fontSize = 13.sp)
+        groups.forEach { (group, flows) -> FlowGroup(group, flows) { id, name -> act.onRunFlow(id, name) } }
+
+        Spacer(Modifier.height(20.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { showBuild = !showBuild }) {
+            Text("Build a new automation", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Icon(if (showBuild) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = cs.onSurfaceVariant)
+        }
+        if (showBuild) {
+            Spacer(Modifier.height(8.dp))
+            var name by remember { mutableStateOf("") }
+            var steps by remember { mutableStateOf("") }
+            Text("A manual trigger + one agent step per line, chained for you.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(steps, { steps = it }, label = { Text("Steps — one goal per line") }, modifier = Modifier.fillMaxWidth().height(140.dp))
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = { if (name.isNotBlank() && steps.isNotBlank()) { act.onCreateFlow(name, steps); name = ""; steps = "" } },
+                shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Create on cluster") }
+        }
         Spacer(Modifier.height(28.dp))
+    }
+}
+
+@Composable
+private fun FlowGroup(group: String, flows: List<FlowInfo>, onRun: (String, String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Column(Modifier.padding(bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(cs.surfaceVariant).clickable { open = !open }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(group, color = cs.onSurface, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("${flows.size}", color = cs.onSurfaceVariant, fontSize = 13.sp); Spacer(Modifier.width(8.dp))
+            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = cs.onSurfaceVariant)
+        }
+        if (open) Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            flows.forEach { f -> FlowCard(f) { onRun(f.id, f.name) } }
+        }
     }
 }
 
 @Composable
 private fun FlowCard(f: FlowInfo, onRun: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
     Surface(color = cs.surface, shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${f.steps} step(s) · ${f.sub}", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (f.verified) Brand else cs.outline), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).clickable { open = !open }) {
+                    Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${f.steps} step(s) · ${f.sub}", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.width(10.dp))
+                Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, "Details", tint = cs.onSurfaceVariant, modifier = Modifier.clickable { open = !open })
+                Spacer(Modifier.width(6.dp))
+                Button(onClick = onRun, shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Run") }
             }
-            Spacer(Modifier.width(10.dp))
-            Button(onClick = onRun, shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Run") }
+            if (open) {
+                Spacer(Modifier.height(10.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(10.dp))
+                if (f.profile.isNotBlank()) DetailRow("Profile", f.profile)
+                if (f.role.isNotBlank()) DetailRow("Role", f.role)
+                DetailRow("Runs", if (f.runs > 0) "${f.runs} · last ${f.lastStatus.ifBlank { "?" }}" else "never run")
+                if (f.verified) DetailRow("Verified", "✓ last run verified")
+                if (f.goals.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp)); Text("Steps", color = cs.onSurfaceVariant, fontSize = 11.sp); Spacer(Modifier.height(4.dp))
+                    f.goals.forEachIndexed { i, g -> Text("${i + 1}. $g", color = cs.onSurface, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(bottom = 3.dp)) }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun DetailRow(k: String, v: String) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.padding(bottom = 4.dp)) {
+        Text(k, color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.width(64.dp))
+        Text(v, color = cs.onSurface, fontSize = 12.sp, modifier = Modifier.weight(1f))
     }
 }
 
@@ -771,45 +850,49 @@ private fun AiSettingsDialog(ui: SettingsUi, act: SettingsActions, onClose: () -
                     IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Close", tint = cs.onSurfaceVariant) }
                 }
                 Text("The brain the agent uses on this phone.", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                Spacer(Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Use on-device model", fontSize = 14.sp)
-                        Text("Runs locally, no cluster needed", color = cs.onSurfaceVariant, fontSize = 11.sp)
-                    }
-                    Switch(checked = ui.useLocal.value, onCheckedChange = { act.onSetUseLocal(it) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Brand, checkedThumbColor = Color.White))
-                }
-                Spacer(Modifier.height(12.dp))
-                AiDropdown(ui.modelLabels.value, ui.modelIndex.value) { act.onSelectModelIndex(it) }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(ui.modelStatus.value, color = if (ui.modelStatus.value.contains("✓")) Brand else cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                    Button(onClick = act.onDownloadModel, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
-                        Text(if (ui.modelStatus.value.contains("✓")) "Re-download" else "Download")
+                Spacer(Modifier.height(14.dp))
+                // Cloud vs on-device — explicit, so it's obvious what the agent will use.
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, cs.outline, RoundedCornerShape(12.dp))) {
+                    listOf("Cloud model", "On-device").forEachIndexed { i, lbl ->
+                        val on = (if (ui.useLocal.value) 1 else 0) == i
+                        Box(Modifier.weight(1f).background(if (on) Brand else Color.Transparent).clickable { act.onSetUseLocal(i == 1) }.padding(vertical = 11.dp), contentAlignment = Alignment.Center) {
+                            Text(lbl, color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
+                        }
                     }
                 }
-                if (ui.modelProgress.value in 0..100) { Spacer(Modifier.height(8.dp)); LinearProgressIndicator(progress = { ui.modelProgress.value / 100f }, modifier = Modifier.fillMaxWidth(), color = Brand) }
-                Spacer(Modifier.height(16.dp))
-                Text("Or a cloud model (Ollama Cloud / OpenAI-compatible) — far stronger than on-device", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                Spacer(Modifier.height(8.dp))
-                if (ui.endpoint.value.isBlank()) ui.endpoint.value = "https://ollama.com/v1"
-                OutlinedButton(onClick = { act.onPullClusterConfig() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Pull model + endpoint from cluster") }
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(ui.endpoint.value, { ui.endpoint.value = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(ui.apiKey.value, { ui.apiKey.value = it }, label = { Text("API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Model", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                    if (ui.ollamaBusy.value) CircularProgressIndicator(Modifier.size(15.dp), color = Brand, strokeWidth = 2.dp)
-                    else TextButton(onClick = { act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }) { Text("Fetch models") }
+                Spacer(Modifier.height(6.dp))
+                Text(if (ui.useLocal.value) "Runs on this phone — small & weak; only ok for simple steps." else "A hosted model — far stronger for real flows (recommended).", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                Spacer(Modifier.height(14.dp))
+                if (ui.useLocal.value) {
+                    AiDropdown(ui.modelLabels.value, ui.modelIndex.value) { act.onSelectModelIndex(it) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(ui.modelStatus.value, color = if (ui.modelStatus.value.contains("✓")) Brand else cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Button(onClick = act.onDownloadModel, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text(if (ui.modelStatus.value.contains("✓")) "Re-download" else "Download") }
+                    }
+                    if (ui.modelProgress.value in 0..100) { Spacer(Modifier.height(8.dp)); LinearProgressIndicator(progress = { ui.modelProgress.value / 100f }, modifier = Modifier.fillMaxWidth(), color = Brand) }
+                } else {
+                    if (ui.endpoint.value.isBlank()) ui.endpoint.value = "https://ollama.com/v1"
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { ui.endpoint.value = "https://ollama.com/v1"; act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Use Ollama Cloud") }
+                        OutlinedButton(onClick = { act.onPullClusterConfig() }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Self-hosted") }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(ui.endpoint.value, { ui.endpoint.value = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(ui.apiKey.value, { ui.apiKey.value = it }, label = { Text("API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Model", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        if (ui.ollamaBusy.value) CircularProgressIndicator(Modifier.size(15.dp), color = Brand, strokeWidth = 2.dp)
+                        else TextButton(onClick = { act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }) { Text("Fetch models") }
+                    }
+                    if (ui.ollamaModels.value.isNotEmpty())
+                        AiDropdown(ui.ollamaModels.value, ui.ollamaModels.value.indexOf(ui.ollamaModel.value).coerceAtLeast(0)) { i -> ui.ollamaModel.value = ui.ollamaModels.value.getOrElse(i) { ui.ollamaModel.value } }
+                    else OutlinedTextField(ui.ollamaModel.value, { ui.ollamaModel.value = it }, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    if (ui.ollamaNote.value.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(ui.ollamaNote.value, color = cs.onSurfaceVariant, fontSize = 11.sp) }
                 }
-                if (ui.ollamaModels.value.isNotEmpty())
-                    AiDropdown(ui.ollamaModels.value, ui.ollamaModels.value.indexOf(ui.ollamaModel.value).coerceAtLeast(0)) { i -> ui.ollamaModel.value = ui.ollamaModels.value.getOrElse(i) { ui.ollamaModel.value } }
-                else OutlinedTextField(ui.ollamaModel.value, { ui.ollamaModel.value = it }, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                if (ui.ollamaNote.value.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(ui.ollamaNote.value, color = cs.onSurfaceVariant, fontSize = 11.sp) }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = { act.onSaveOllama(ui.endpoint.value, ui.apiKey.value, ui.ollamaModel.value, ui.hfToken); onClose() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
