@@ -70,8 +70,17 @@ function extractInPage() {
   const label = (a) => a.getAttribute('aria-label') || '';
   const isC = (a) => /^(comment|opmerking|reply|antwoord)\b/i.test(label(a));
   const arts = q('[role="article"]').filter(isC);
-  const nameOf = (a) => label(a).replace(/^(comment|opmerking|reply|antwoord)\s+(by|van|from|door)\s+/i, '').replace(/\s+\d+\s*(u|m|d|w|h|min|uur|dag|dagen|wk|week|weken|jaar|y|mo|mnd)\b.*$/i, '').trim();
-  const ACTION = /^(vind ik leuk|like|leuk|beantwoorden|reply|delen|share|bewerken|edit|verbergen|hide|meer weergeven|see more|zie meer|geliked|verzenden|send|auteur|author|·|\d+\s*(u|m|d|w|j|h|min|uur|dag|dagen|wk|week|weken|jaar|y|mo|mnd)\.?|\d+)$/i;
+  /* The label is "Opmerking van <Name> een dag geleden" or "Antwoord van <Name> op het antwoord van
+     <Other> ongeveer een uur geleden" (EN: "Comment by <Name> 2 hours ago", "Reply by <Name> on the
+     reply by <Other>"). It names the author AND who they answered - the reply target is more exact
+     than DOM nesting, since Facebook flattens replies under the root comment. */
+  const AGO = /\s+(?:ongeveer\s+|about\s+|over\s+)?(?:een|one|an?|\d+)\s+(?:seconde|second|minuut|minute|min|uur|hour|hr|dag|day|week|wk|maand|month|jaar|year)\w*\s+(?:geleden|ago)\b.*$/i;
+  const parts = (a) => {
+    const s = label(a).replace(/^(comment|opmerking|reply|antwoord)\s+(by|van|from|door)\s+/i, '').replace(AGO, '').trim();
+    const m = s.match(/^(.*?)\s+(?:op (?:het antwoord|de opmerking|een opmerking) van|on (?:the |a )?(?:reply|comment) (?:by|from|of))\s+(.+)$/i);
+    return m ? { author: m[1].trim(), replyTo: m[2].trim() } : { author: s, replyTo: '' };
+  };
+  const ACTION = /^(vind ik leuk|like|leuk|beantwoorden|reply|delen|share|bewerken|edit|verbergen|hide|meer weergeven|see more|zie meer|geliked|verzenden|send|auteur|author|volgen|follow|topbijdrager|top contributor|beheerder|admin|moderator|nieuw lid|new member|groepsexpert|group expert|·|\d+\s*(u|m|d|w|j|h|min|uur|dag|dagen|wk|week|weken|jaar|y|mo|mnd)\.?|\d+)$/i;
   const nodes = arts.map((a, i) => {
     const inner = q('[role="article"]', a);
     const links = q('a[href*="comment_id="]', a).filter((l) => !inner.some((x) => x.contains(l)));
@@ -79,13 +88,16 @@ function extractInPage() {
     let cid = null, rid = null; try { const u = new URL(link.href); cid = u.searchParams.get('comment_id'); rid = u.searchParams.get('reply_comment_id'); } catch (e) { /* no link */ }
     const isReply = /^(reply|antwoord)/i.test(label(a));
     const parentArt = a.parentElement && a.parentElement.closest('[role="article"]');
-    const author = nameOf(a);
+    const { author, replyTo } = parts(a);
     const lines = q('div[dir="auto"], span[dir="auto"]', a).filter((d) => !inner.some((x) => x.contains(d)))
-      .map((d) => (d.innerText || '').trim()).filter((t) => t && t !== author && !ACTION.test(t) && t.length > 1);
+      .map((d) => (d.innerText || '').trim()).filter((t) => t && t !== author && t !== replyTo && !ACTION.test(t) && t.length > 1);
     const body = []; const seen = new Set();
     for (const t of lines) { if (seen.has(t)) continue; seen.add(t); if (lines.some((o) => o !== t && o.includes(t))) continue; body.push(t); }
+    let text = body.join('\n');
+    if (text.startsWith(author + '\n')) text = text.slice(author.length + 1);          // the name line
+    if (replyTo && text.startsWith(replyTo + ' ')) text = text.slice(replyTo.length + 1); // the @mention prefix
     const when = link ? (link.innerText || '').trim() : '';
-    return { i, id: rid || cid, cid, rid, isReply, author, text: body.join('\n').slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
+    return { i, id: rid || cid, cid, rid, isReply, author, replyTo, text: text.trim().slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
   });
   for (const n of nodes) { n.parentId = n.rid ? n.cid : (n.parentIdx >= 0 ? nodes[n.parentIdx].id : null); delete n.parentIdx; }
   const u = new URL(location.href);
@@ -94,8 +106,8 @@ function extractInPage() {
   const msg = document.querySelector('[data-ad-preview="message"], [data-ad-rendering-role="story_message"]');
   const postArt = q('[role="article"]').find((a) => !isC(a));
   const postText = (msg ? msg.innerText : (postArt ? postArt.innerText : '')).trim().slice(0, 2500);
-  const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
-  const postAuthor = authorEl ? (authorEl.innerText || '').trim() : '';
+  const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a, h2, h3, h4');
+  const postAuthor = authorEl ? (authorEl.innerText || '').trim().split('\n')[0].trim() : '';
   let me = ''; try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
   return { postId, group, postText, postAuthor, me, nodes: nodes.filter((n) => n.id && n.author) };
 }
@@ -115,14 +127,18 @@ function ingest(wid, tree, cfg, feed) {
   const rootOf = (n) => { let cur = n, g = 0; while (cur.parentId && byId[cur.parentId] && g++ < 12) cur = byId[cur.parentId]; return cur.id; };
   const branches = {}; tree.nodes.forEach((n) => { const r = rootOf(n); (branches[r] = branches[r] || []).push(n); });
   const out = [];
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   for (const [rootId, list] of Object.entries(branches)) {
-    let lastMe = -1; list.forEach((n, i) => { if (isMe(n)) lastMe = i; });
     list.forEach((n, i) => {
       const parent = byId[n.parentId];
       const mine = isMe(n);
-      const status = mine ? 'you' : (i > lastMe ? 'waiting on you' : 'answered');
-      const title = mine ? 'you replied' : (n.isReply ? `${n.author} replied to ${parent ? (isMe(parent) ? 'you' : parent.author) : 'a comment'}` : `${n.author} commented on your post`);
-      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, postId: tree.postId, commentId: n.id, rootId, replyTo: parent ? parent.author : '' };
+      // A person is answered only when a LATER reply of the owner's in this branch is TO THEM (the
+      // label says who each reply answers). Replying to Dennis does not answer Peter.
+      const answered = !mine && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
+      const status = mine ? 'you' : (answered ? 'answered' : 'waiting on you');
+      const target = n.replyTo || (parent ? parent.author : '');
+      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${target ? (same(target, me) ? 'you' : target) : 'a comment'}` : `${n.author} commented on your post`);
+      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, postId: tree.postId, commentId: n.id, rootId, replyTo: target };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
       if (mine || status === 'answered') patch.handled = true;    // nothing to do here, and it stays gone
@@ -146,7 +162,7 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
   }).sort((a, b) => b.node.i - a.node.i).slice(0, cap);
   let made = 0;
   for (const e of todo) {
-    const transcript = e.branch.map((n) => `${e.isMe(n) ? 'YOU' : n.author}: ${n.text}`).join('\n');
+    const transcript = e.branch.map((n) => `${e.isMe(n) ? 'YOU' : n.author}${n.replyTo ? ' (to ' + (e.isMe({ author: n.replyTo }) ? 'you' : n.replyTo) + ')' : ''}: ${n.text}`).join('\n');
     const sys = `You draft replies for the owner of a Facebook post, written AS the owner in first person. ${VOICE} Output ONLY the reply text - no quotes, no preamble.`;
     const user = `YOUR POST:\n${tree.postText || '(no text captured)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\nWrite ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
     try {
