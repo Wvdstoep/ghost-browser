@@ -1681,6 +1681,20 @@ app.post('/v1/agent/models', authed, async (req, res) => {
 
 /* Prove the key, host and model work together BEFORE a job is started — otherwise the first sign
    that the model is wrong is a job that dies forty seconds in with a 404 nobody can read. */
+/* The on-device agent (phone) posts here so it never needs its own model key — it uses the
+ * cluster's configured LLM. Body: {system, prompt} or {messages:[{role,content}]}. Returns {text}. */
+app.post('/v1/agent/chat', authed, async (req, res) => {
+  const cfg = settingsStore.read();
+  if (!cfg.llmModel) return res.status(400).json({ error: 'no model configured on the cluster - set one in the GB console agent settings' });
+  const b = req.body || {};
+  const messages = (Array.isArray(b.messages) && b.messages.length) ? b.messages
+    : [ ...(b.system ? [{ role: 'system', content: String(b.system) }] : []), { role: 'user', content: String(b.prompt || b.text || '') } ];
+  try {
+    const out = await llm.chat({ host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey, messages });
+    res.json({ text: (out && out.content) || '', model: cfg.llmModel });
+  } catch (e) { res.status(e.status || 502).json({ error: e.message }); }
+});
+
 app.post('/v1/agent/test', authed, async (req, res) => {
   const cur = settingsStore.read();
   try {

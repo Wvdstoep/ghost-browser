@@ -942,7 +942,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (!models.isReady(vm.selectedModel)) { vm.log("! on-device model not downloaded — Agent tab → Download"); null }
             else LocalLlm(this, models.path(vm.selectedModel), ModelCatalog.byId(vm.selectedModel).family)
         } else {
-            if (vm.endpoint.isBlank()) null else OllamaClient(vm.endpoint, vm.apiKey, vm.model)
+            // Cloud: by default use the CLUSTER's LLM — no key needed on the phone (and it dodges the
+            // Cloudflare block a direct ollama.com call hits). A custom self-hosted endpoint+key still wins.
+            val custom = vm.endpoint.isNotBlank() && vm.apiKey.isNotBlank() && !vm.endpoint.contains("ollama.com")
+            when {
+                custom -> OllamaClient(vm.endpoint, vm.apiKey, vm.model)
+                vm.clusterUrl.trim().isNotEmpty() -> ClusterLlm(vm.clusterUrl) { cookiesFor(vm.clusterUrl) }
+                else -> null
+            }
         }
     }
 
@@ -1078,9 +1085,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (brain == null) {
             if (agentChat == null) newAgentChat()
             val msg = if (vm.useLocal)
-                "You're on ON-DEVICE mode but no model is downloaded. Tap ⚙ → choose **Cloud model** (recommended — far stronger), press **Use Ollama Cloud**, add your key, Fetch models, pick one."
+                "You're on ON-DEVICE mode but no model is downloaded. Tap ⚙ → switch to **Cloud model** — it uses your cluster's LLM, no key needed."
             else
-                "No cloud model set. Tap ⚙ → **Use Ollama Cloud**, paste your key, **Fetch models**, pick one (e.g. gpt-oss:120b), Save."
+                "Cloud mode uses your cluster's LLM, but you're not connected. Settings ▸ Account & sync → Sign in + open Ghost Browser from Tools, and make sure a model is set in the GB console."
             agentPushMsg("assistant", msg)
             return
         }

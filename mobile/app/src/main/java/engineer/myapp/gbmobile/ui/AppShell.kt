@@ -861,7 +861,7 @@ private fun AiSettingsDialog(ui: SettingsUi, act: SettingsActions, onClose: () -
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(if (ui.useLocal.value) "Runs on this phone — small & weak; only ok for simple steps." else "A hosted model — far stronger for real flows (recommended).", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                Text(if (ui.useLocal.value) "Runs on this phone — small & weak; only ok for simple steps." else "Uses your cluster's LLM — no key needed on this phone (recommended). Advanced: set a self-hosted endpoint + key below to override.", color = cs.onSurfaceVariant, fontSize = 11.sp)
                 Spacer(Modifier.height(14.dp))
                 if (ui.useLocal.value) {
                     AiDropdown(ui.modelLabels.value, ui.modelIndex.value) { act.onSelectModelIndex(it) }
