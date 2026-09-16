@@ -2171,8 +2171,15 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                    after this point can never lose the draft. This is the reliable path; the run-completion
                    write-back and the reconcile sweep are only backups. */
                 if (job.feedWorkflowId && job.feedKey && text) {
+                  /* WATCHER FOLLOW-UP DRAFT-ONLY. Write the drafted text onto the feed item now (while
+                     the job is alive — a prune or a pod roll after this can't lose it), then STOP: the
+                     owner approves it later in Results, so the flow must NOT sit parked at the gate
+                     holding the one browser session — that blocks every other item's draft. */
                   try { require('./watcherFeed').mark(job.feedWorkflowId, job.feedKey, { draft: text, draftJobId: job.id, draftPid: p.pid }); }
                   catch (e) { /* best effort — the backups still cover it */ }
+                  jobsStore.step(job, 'drafted', `drafted a ${kind} — saved to Results for your approval, not sent`);
+                  observe(`Drafted the ${kind} and saved it for the owner to approve later in Results. Do NOT send it and do NOT ask again — you are finished with this conversation. Call finish now.`);
+                  break;
                 }
                 jobsStore.step(job, 'ask', `waiting for you: ${kind}${text ? ` — "${text.slice(0, 160)}"` : ` on "${label}"`}`, { pid: p.pid });
                 const decided = await awaitDecision(job, p.pid, signal, () => { try { session.lastUsed = Date.now(); } catch { /* session may be swapping */ } });
