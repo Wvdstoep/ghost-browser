@@ -1645,9 +1645,9 @@ async function triggerFollowUps(wf, owner) {
     const kindOf = (it) => String((it.fields && (it.fields.type || it.fields.action)) || it.kind || '').toLowerCase();
     const items = feed.list(wf.id).filter((it) => !it.followedUp && !it.handled && it.url && (!kinds.length || kinds.includes(kindOf(it))));
     for (const it of items.slice(0, 6)) {
-      feed.mark(wf.id, it.key, { followedUp: true });
-      const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
       const rid = `${flow.id}-${Date.now()}`;
+      feed.mark(wf.id, it.key, { followedUp: true, draftRunId: rid, followedUpAt: Date.now() });
+      const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
       try {
         await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
         // Write the draft straight back onto the feed item, keyed exactly by feedKey — no fragile URL matching.
@@ -1658,6 +1658,35 @@ async function triggerFollowUps(wf, owner) {
       } catch (e) { log.error(`[follow-up] ${flow.id} on ${it.key}: ${e.message}`); }
     }
   } catch (e) { log.error(`[follow-up] ${wf && wf.id}: ${e.message}`); }
+}
+
+/*
+ * RESTART-SAFE DRAFT RECONCILE. The follow-up flow can be interrupted by a pod roll (the 15-min
+ * auto-deploy) and RESUME in a fresh process — but the in-process .then() that wrote the draft back
+ * onto the feed item died with the old process. So we also reconcile out-of-band: for every feed item
+ * that was followed-up but has no draft yet, look up its follow-up run by the STABLE runId (which
+ * survives resume) and, once that run has a pending proposal, write it onto the item. If the run has
+ * finished with nothing to propose (e.g. already-answered), mark it checked so it stops pending.
+ */
+async function reconcileDrafts() {
+  try {
+    const feed = require('./watcherFeed');
+    for (const wf of workflows.all()) {
+      let items; try { items = feed.list(wf.id); } catch (e) { continue; }
+      for (const it of items) {
+        if (!it.followedUp || it.draft || it.draftChecked) continue;
+        if (!it.draftRunId) { if (it.followedUpAt && Date.now() - it.followedUpAt > 20 * 60000) feed.mark(wf.id, it.key, { draftChecked: true }); continue; }
+        let fjob = null; try { for (const j of jobs.jobs.values()) if (j.runId === it.draftRunId) { fjob = j; break; } } catch (e) {}
+        if (fjob) {
+          const fprop = (fjob.proposals || []).find((pp) => pp.state === 'pending');
+          if (fprop) { feed.mark(wf.id, it.key, { draft: fprop.text || '', draftJobId: fjob.id, draftPid: fprop.pid }); continue; }
+          const st = String(fjob.status || '').toLowerCase();
+          if (st === 'done' || st === 'error' || st === 'failed' || st === 'stopped') { feed.mark(wf.id, it.key, { draftChecked: true }); continue; }
+        }
+        if (it.followedUpAt && Date.now() - it.followedUpAt > 20 * 60000) feed.mark(wf.id, it.key, { draftChecked: true });
+      }
+    }
+  } catch (e) { log.error(`[reconcile-drafts] ${e.message}`); }
 }
 
 async function scheduleTick() {
@@ -1678,7 +1707,8 @@ async function scheduleTick() {
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`));
   }
 }
-const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); }, 60000);
+const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); reconcileDrafts().catch(() => {}); }, 60000);
+setTimeout(() => reconcileDrafts().catch(() => {}), 20000);
 if (_schedTimer.unref) _schedTimer.unref();
 
 // Create / edit / forget an authored role. Editing and deleting only ever touch the user store, so a
