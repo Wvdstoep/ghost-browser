@@ -115,7 +115,11 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             "flows" -> FlowsScreenD(state)
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
-            "agent" -> AgentChatD(state, Tabs.activeBrowser())
+            "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
+                title = "Agent", messages = state.agentMsgs.value, busy = state.agentBusy.value,
+                onSend = { Agent.send(state, Tabs.activeBrowser(), it) }, onNew = { state.agentMsgs.value = emptyList() },
+                onSettings = { screen = "settings" }, onClose = { screen = "browser" },
+            )
             else -> JcefBrowserView(Tabs.activeBrowser(), error, Modifier.fillMaxSize())
         }
     }
