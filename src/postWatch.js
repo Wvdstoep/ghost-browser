@@ -243,8 +243,35 @@ function discover(wid, cfg, feed) {
   if (urls.length !== (cfg.postUrls || []).length) feed.setConfig(wid, { postUrls: urls });
   return urls;
 }
+/** Self-discovery: a quick read of the owner's notifications page for "commented on your post"
+ *  rows - each names a post of the owner's that has activity. Deterministic, ~20s, no model, so the
+ *  post watcher stands on its own (no other watcher has to be running). */
+async function discoverOnPage(page, log) {
+  const { settle } = require('./inspector');
+  await page.goto('https://www.facebook.com/notifications', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  try { await settle(page); } catch { /* still rendering */ }
+  await page.waitForTimeout(2500);
+  for (let i = 0; i < 2; i++) { try { await page.mouse.wheel(0, 1600); } catch { /* no wheel */ } await page.waitForTimeout(1200); }
+  const found = await page.evaluate(() => {
+    const out = []; const seen = new Set();
+    for (const a of Array.from(document.querySelectorAll('a[href*="notif_id="], a[href*="notif_t="]'))) {
+      const href = a.href || '';
+      const txt = ((a.getAttribute('aria-label') || '') + ' ' + (a.innerText || '')).replace(/\s+/g, ' ').trim();
+      if (!/(je bericht|jouw bericht|your post)/i.test(txt)) continue;
+      let u; try { u = new URL(href); } catch (e) { continue; }
+      const pid = u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || '';
+      const g = (u.pathname.match(/\/groups\/([^/?]+)/) || [])[1] || '';
+      if (!pid || !g || seen.has(pid)) continue;
+      seen.add(pid); out.push({ postId: pid, group: g, text: txt.slice(0, 120) });
+    }
+    return out;
+  }).catch(() => []);
+  if (log) log.info(`[post-watch] notifications page: ${found.length} post(s) of yours with activity`);
+  return found.map((f) => `https://www.facebook.com/groups/${f.group}/posts/${f.postId}/`);
+}
+
 function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, draftAll, discover, postIdOf, VOICE };
+module.exports = { crawl, store, ingest, draftAll, discover, discoverOnPage, postIdOf, VOICE };
