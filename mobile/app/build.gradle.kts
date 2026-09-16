@@ -11,7 +11,7 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
+        versionCode = 49
         versionName = "0.32"
     }
 
@@ -30,6 +30,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared"))   // S9: one codebase — shared screens (Flows, …) with the desktop
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
