@@ -961,6 +961,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         pipHandler.post(object : Runnable {
             override fun run() {
                 if (shellUi.screen.value != "agent") { shellUi.pipThumb.value = null; return }
+                if (!agentBusy) { shellUi.pipThumb.value = null; pipHandler.postDelayed(this, 800); return }  // show only while working
                 try {
                     val i = activeTab
                     if (i in tabs.indices) {
@@ -1420,30 +1421,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onPullClusterConfig = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ pulling model config from cluster…"); apiCall("GET", "/v1/agent/settings", null, "agentcfg") } },
     )
 
-    private val ollamaExec = java.util.concurrent.Executors.newSingleThreadExecutor()
-    /** List models from an OpenAI-compatible endpoint (GET <ep>/models, Bearer key) → the picker. */
+    /** List models via the CLUSTER (POST /v1/agent/models) — the phone's direct call to ollama.com is
+     *  blocked by Cloudflare's bot check, but the cluster (datacenter) reaches it fine and falls back to
+     *  a curated cloud-model list. Reuses the SSO session. */
     private fun fetchOllamaModels(endpoint: String, apiKey: String) {
-        val ep = endpoint.trim().trimEnd('/'); if (ep.isBlank()) { settingsUi.ollamaNote.value = "enter an endpoint first"; return }
-        settingsUi.ollamaBusy.value = true; settingsUi.ollamaNote.value = ""
-        ollamaExec.execute {
-            val models = ArrayList<String>(); var err = ""
-            try {
-                val c = java.net.URL("$ep/models").openConnection() as java.net.HttpURLConnection
-                c.connectTimeout = 12000; c.readTimeout = 12000; c.setRequestProperty("Accept", "application/json")
-                if (apiKey.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $apiKey")
-                val code = c.responseCode
-                val txt = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().use { it.readText() }
-                if (code in 200..299) {
-                    val arr = JSONObject(txt).optJSONArray("data") ?: JSONArray()
-                    for (i in 0 until arr.length()) { val id = arr.optJSONObject(i)?.optString("id"); if (!id.isNullOrBlank()) models.add(id) }
-                    if (models.isEmpty()) err = "no models returned"
-                } else err = "HTTP $code — check the key/endpoint"
-            } catch (e: Exception) { err = e.message ?: "fetch failed" }
-            runOnUiThread {
-                settingsUi.ollamaBusy.value = false; settingsUi.ollamaModels.value = models
-                settingsUi.ollamaNote.value = if (models.isNotEmpty()) "${models.size} models — pick one" else "! $err"
-            }
-        }
+        if (vm.clusterUrl.trim().isEmpty()) { settingsUi.ollamaNote.value = "connect to the cluster first"; return }
+        // /api/tags lives at the host root, not under /v1 — hand the cluster the bare host.
+        val host = endpoint.trim().removeSuffix("/").removeSuffix("/v1").ifBlank { "https://ollama.com" }
+        settingsUi.ollamaBusy.value = true; settingsUi.ollamaNote.value = "fetching via cluster…"
+        val body = JSONObject().put("llmHost", host).put("llmKey", apiKey).toString()
+        apiCall("POST", "/v1/agent/models", body, "ollamamodels")
     }
 
     // ---- observers ------------------------------------------------------------------------------
@@ -1679,6 +1666,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 vm.log("↓ cluster model config: ${host.ifBlank { "(no host)" }} / ${model.ifBlank { "(no model)" }}")
             } catch (e: Exception) { vm.log("! agent config: ${data.take(100)}") }
             "agentcfg_err" -> settingsUi.ollamaNote.value = "! could not reach cluster config"
+            "ollamamodels" -> try {
+                val o = JSONObject(data)
+                val arr = o.optJSONArray("models") ?: JSONArray()
+                val list = ArrayList<String>(); for (i in 0 until arr.length()) { val m = arr.optString(i); if (m.isNotBlank()) list.add(m) }
+                settingsUi.ollamaBusy.value = false
+                settingsUi.ollamaModels.value = list
+                if (list.isNotEmpty() && settingsUi.ollamaModel.value.isBlank()) settingsUi.ollamaModel.value = list[0]
+                settingsUi.ollamaNote.value = when {
+                    list.isEmpty() -> "! no models — ${o.optString("reason", "check endpoint")}"
+                    o.optBoolean("fetched", true) -> "${list.size} models — pick one"
+                    else -> "${list.size} known cloud models (couldn't reach host: ${o.optString("reason", "?")})"
+                }
+            } catch (e: Exception) { settingsUi.ollamaBusy.value = false; settingsUi.ollamaNote.value = "! ${data.take(80)}" }
+            "ollamamodels_err" -> { settingsUi.ollamaBusy.value = false; settingsUi.ollamaNote.value = "! model fetch failed — ${data.take(80)}" }
             "profiles" -> try {
                 val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                 vm.log("↓ cluster profiles (${arr.length()}):")
