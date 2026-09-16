@@ -1549,9 +1549,12 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   const runId = `${wf.id}-${Date.now()}`;
   /* The run's input, if the caller has one: {"input": {...}} becomes {{input.*}} in every goal. */
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
+  if (runningWatchers.has(wf.id)) return res.json({ runId: null, status: 'busy', note: 'a run for this watcher is already in progress' });
+  runningWatchers.add(wf.id);
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
     .then(() => triggerFollowUps(wf, req.client.owner))
-    .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`));
+    .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`))
+    .finally(() => runningWatchers.delete(wf.id));
   res.json({ runId, status: 'running' });
 });
 
@@ -1629,6 +1632,11 @@ function scheduleDue(cfg, lastMs, when) {
   if (ms) { const n = Math.max(1, Number(cfg.n) || 1); return (Date.now() - lastMs) >= n * ms; }
   return false;
 }
+/* One watcher pass at a time. A second pass (a schedule firing, or a hand-started run) that
+   overlaps the first fights it for the one browser session and every follow-up draft errors on a
+   busy profile. This gate makes collect finish and free the session before the follow-ups draft. */
+const runningWatchers = new Set();
+
 /*
  * FOLLOW-UPS (generic). After a watcher run, for each NEW collected item matching the watcher's
  * follow-up config, run the chosen follow-up flow ON that item (as the same owner, so it reuses the
@@ -1650,14 +1658,17 @@ async function triggerFollowUps(wf, owner) {
       const rid = `${flow.id}-${Date.now()}`;
       feed.mark(wf.id, it.key, { followedUp: true, draftRunId: rid, followedUpAt: Date.now() });
       const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
+      let rres = null;
       try {
-        await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
-        // Write the draft straight back onto the feed item, keyed exactly by feedKey — no fragile URL matching.
-        let fjob = null; try { for (const j of jobs.jobs.values()) if (j.runId === rid) { fjob = j; break; } } catch (e) {}
-        const fprop = fjob && (fjob.proposals || []).find((pp) => pp.state === 'pending');
-        if (fprop) feed.mark(wf.id, it.key, { draft: fprop.text || '', draftJobId: fjob.id, draftPid: fprop.pid });
-        else feed.mark(wf.id, it.key, { draftChecked: true });
+        rres = await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
       } catch (e) { log.error(`[follow-up] ${flow.id} on ${it.key}: ${e.message}`); }
+      /* The draft, if one was made, was written onto the item at propose-time (agent.js draft-only).
+         Decide the item's fate from what actually happened. */
+      const cur = feed.list(wf.id).find((x) => x.key === it.key);
+      if (cur && cur.draft) continue;                                     // drafted — done
+      const errored = !rres || ['error', 'interrupted', 'failed'].includes(String(rres.status || '').toLowerCase());
+      if (errored) feed.mark(wf.id, it.key, { followedUp: false, draftRunId: null });   // transient — retry next pass
+      else feed.mark(wf.id, it.key, { draftChecked: true });               // ran clean, nothing to say (already answered)
     }
   } catch (e) { log.error(`[follow-up] ${wf && wf.id}: ${e.message}`); }
 }
@@ -1683,7 +1694,12 @@ async function reconcileDrafts() {
           const fprop = (fjob.proposals || []).find((pp) => pp.state === 'pending');
           if (fprop) { feed.mark(wf.id, it.key, { draft: fprop.text || '', draftJobId: fjob.id, draftPid: fprop.pid }); continue; }
           const st = String(fjob.status || '').toLowerCase();
-          if (st === 'done' || st === 'error' || st === 'failed' || st === 'stopped') { feed.mark(wf.id, it.key, { draftChecked: true }); continue; }
+          if (st === 'done') { feed.mark(wf.id, it.key, { draftChecked: true }); continue; }
+          if (st === 'error' || st === 'failed' || st === 'stopped') {
+            if (it.followedUpAt && Date.now() - it.followedUpAt > 20 * 60000) feed.mark(wf.id, it.key, { draftChecked: true });
+            else feed.mark(wf.id, it.key, { followedUp: false, draftRunId: null });
+            continue;
+          }
         }
         if (it.followedUpAt && Date.now() - it.followedUpAt > 20 * 60000) feed.mark(wf.id, it.key, { draftChecked: true });
       }
@@ -1701,12 +1717,15 @@ async function scheduleTick() {
     if (cfg.type !== 'schedule') continue;
     const last = workflows.runsFor(wf.id, 1)[0];
     if (!scheduleDue(cfg, last ? Date.parse(last.started_at) : 0, when)) continue;
+    if (runningWatchers.has(wf.id)) { log.info(`[workflow-sched] "${wf.name}" still running a pass — skipping this tick`); continue; }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
+    runningWatchers.add(wf.id);
     workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
       .then(() => triggerFollowUps(wf, owner))
-      .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`));
+      .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`))
+      .finally(() => runningWatchers.delete(wf.id));
   }
 }
 const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); reconcileDrafts().catch(() => {}); }, 60000);
