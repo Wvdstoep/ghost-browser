@@ -769,16 +769,27 @@ private fun AiSettingsDialog(ui: SettingsUi, act: SettingsActions, onClose: () -
                 }
                 if (ui.modelProgress.value in 0..100) { Spacer(Modifier.height(8.dp)); LinearProgressIndicator(progress = { ui.modelProgress.value / 100f }, modifier = Modifier.fillMaxWidth(), color = Brand) }
                 Spacer(Modifier.height(16.dp))
-                Text("Or an Ollama / OpenAI-compatible endpoint", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                Spacer(Modifier.height(6.dp))
-                var ep by remember { mutableStateOf(ui.endpoint) }
-                var ak by remember { mutableStateOf(ui.apiKey) }
-                var om by remember { mutableStateOf(ui.ollamaModel) }
-                OutlinedTextField(ep, { ep = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp)); OutlinedTextField(ak, { ak = it }, label = { Text("API key (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp)); OutlinedTextField(om, { om = it }, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Text("Or a cloud model (Ollama Cloud / OpenAI-compatible) — far stronger than on-device", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                if (ui.endpoint.value.isBlank()) ui.endpoint.value = "https://ollama.com/v1"
+                OutlinedButton(onClick = { act.onPullClusterConfig() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Pull model + endpoint from cluster") }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(ui.endpoint.value, { ui.endpoint.value = it }, label = { Text("Endpoint") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(ui.apiKey.value, { ui.apiKey.value = it }, label = { Text("API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Model", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    if (ui.ollamaBusy.value) CircularProgressIndicator(Modifier.size(15.dp), color = Brand, strokeWidth = 2.dp)
+                    else TextButton(onClick = { act.onFetchModels(ui.endpoint.value, ui.apiKey.value) }) { Text("Fetch models") }
+                }
+                if (ui.ollamaModels.value.isNotEmpty())
+                    AiDropdown(ui.ollamaModels.value, ui.ollamaModels.value.indexOf(ui.ollamaModel.value).coerceAtLeast(0)) { i -> ui.ollamaModel.value = ui.ollamaModels.value.getOrElse(i) { ui.ollamaModel.value } }
+                else OutlinedTextField(ui.ollamaModel.value, { ui.ollamaModel.value = it }, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (ui.ollamaNote.value.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(ui.ollamaNote.value, color = cs.onSurfaceVariant, fontSize = 11.sp) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = { act.onSaveOllama(ep, ak, om, ui.hfToken); onClose() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+                Button(onClick = { act.onSaveOllama(ui.endpoint.value, ui.apiKey.value, ui.ollamaModel.value, ui.hfToken); onClose() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
             }
         }

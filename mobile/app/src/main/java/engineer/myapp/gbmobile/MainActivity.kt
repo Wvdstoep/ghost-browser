@@ -1305,7 +1305,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         settingsUi.modelLabels.value = ModelCatalog.models.map { it.label }
         settingsUi.modelIndex.value = ModelCatalog.models.indexOfFirst { it.id == vm.selectedModel }.coerceAtLeast(0)
         refreshSettingsModel()
-        settingsUi.endpoint = vm.endpoint; settingsUi.apiKey = vm.apiKey; settingsUi.ollamaModel = vm.model; settingsUi.hfToken = vm.hfToken
+        settingsUi.endpoint.value = vm.endpoint; settingsUi.apiKey.value = vm.apiKey; settingsUi.ollamaModel.value = vm.model; settingsUi.hfToken = vm.hfToken
         settingsUi.themeMode.value = vm.themeMode
         settingsUi.devices.value = runDevices.value
     }
@@ -1368,14 +1368,42 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onDownloadModel = { startModelDownload(settingsUi.modelIndex.value) },
         onSaveOllama = { ep, ak, m, hf ->
             vm.endpoint = ep.trim(); vm.apiKey = ak.trim(); vm.model = m.trim(); vm.hfToken = hf.trim()
-            settingsUi.endpoint = vm.endpoint; settingsUi.apiKey = vm.apiKey; settingsUi.ollamaModel = vm.model; settingsUi.hfToken = vm.hfToken
+            settingsUi.endpoint.value = vm.endpoint; settingsUi.apiKey.value = vm.apiKey; settingsUi.ollamaModel.value = vm.model; settingsUi.hfToken = vm.hfToken
             vm.log("● endpoint saved")
         },
         onRefreshDevices = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
         onOpenTailscale = { doOpenTailscale() },
         onSetTheme = { m -> vm.themeMode = m; settingsUi.themeMode.value = m },
         onClearLog = { vm.clearLog() },
+        onFetchModels = { ep, key -> fetchOllamaModels(ep, key) },
+        onPullClusterConfig = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ pulling model config from cluster…"); apiCall("GET", "/v1/agent/settings", null, "agentcfg") } },
     )
+
+    private val ollamaExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    /** List models from an OpenAI-compatible endpoint (GET <ep>/models, Bearer key) → the picker. */
+    private fun fetchOllamaModels(endpoint: String, apiKey: String) {
+        val ep = endpoint.trim().trimEnd('/'); if (ep.isBlank()) { settingsUi.ollamaNote.value = "enter an endpoint first"; return }
+        settingsUi.ollamaBusy.value = true; settingsUi.ollamaNote.value = ""
+        ollamaExec.execute {
+            val models = ArrayList<String>(); var err = ""
+            try {
+                val c = java.net.URL("$ep/models").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 12000; c.readTimeout = 12000; c.setRequestProperty("Accept", "application/json")
+                if (apiKey.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $apiKey")
+                val code = c.responseCode
+                val txt = (if (code in 200..299) c.inputStream else c.errorStream).bufferedReader().use { it.readText() }
+                if (code in 200..299) {
+                    val arr = JSONObject(txt).optJSONArray("data") ?: JSONArray()
+                    for (i in 0 until arr.length()) { val id = arr.optJSONObject(i)?.optString("id"); if (!id.isNullOrBlank()) models.add(id) }
+                    if (models.isEmpty()) err = "no models returned"
+                } else err = "HTTP $code — check the key/endpoint"
+            } catch (e: Exception) { err = e.message ?: "fetch failed" }
+            runOnUiThread {
+                settingsUi.ollamaBusy.value = false; settingsUi.ollamaModels.value = models
+                settingsUi.ollamaNote.value = if (models.isNotEmpty()) "${models.size} models — pick one" else "! $err"
+            }
+        }
+    }
 
     // ---- observers ------------------------------------------------------------------------------
 
@@ -1601,6 +1629,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 settingsUi.roleForCurrent.value = roleForProfile(vm.currentProfile.value ?: "default").ifBlank { "(none)" }
             } catch (e: Exception) { vm.log("! roles: ${data.take(80)}") }
             "roles_list_err" -> vm.log("! load roles: ${data.take(120)}")
+            "agentcfg" -> try {
+                val o = JSONObject(data)
+                val host = o.optString("llmHost"); val model = o.optString("llmModel")
+                if (host.isNotBlank()) { vm.endpoint = host; settingsUi.endpoint.value = host }
+                if (model.isNotBlank()) { vm.model = model; settingsUi.ollamaModel.value = model }
+                settingsUi.ollamaNote.value = if (host.isNotBlank() || model.isNotBlank()) "pulled from cluster — add your key, then Fetch models" else "cluster has no model set yet"
+                vm.log("↓ cluster model config: ${host.ifBlank { "(no host)" }} / ${model.ifBlank { "(no model)" }}")
+            } catch (e: Exception) { vm.log("! agent config: ${data.take(100)}") }
+            "agentcfg_err" -> settingsUi.ollamaNote.value = "! could not reach cluster config"
             "profiles" -> try {
                 val arr = JSONObject(data).optJSONArray("presets") ?: JSONArray()
                 vm.log("↓ cluster profiles (${arr.length()}):")
