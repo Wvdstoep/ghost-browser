@@ -86,6 +86,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val runFlowName: MutableState<String?> = mutableStateOf(null)
     private val runPhase: MutableState<String> = mutableStateOf("pick")   // pick | running | done
     private val runStatus: MutableState<String> = mutableStateOf("")
+    private val runActivity: MutableState<List<String>> = mutableStateOf(emptyList())   // live steps in the Run sheet
+    @Volatile private var currentRunId = ""                                             // workflow run being polled
     @Volatile private var runUserStopped = false
 
     // S5: the redesigned Compose settings — reactive state + actions, hosted in its own overlay.
@@ -149,6 +151,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         onRun = { target, goal -> onRunTarget(target, goal) },
                         onStop = { onRunStop() },
                         onClose = { runVisible.value = false; runHost?.visibility = View.GONE },
+                        activity = runActivity.value,
+                        pendingApprovals = shellUi.jobs.value.sumOf { it.proposals.size },
+                        onReview = { runVisible.value = false; runHost?.visibility = View.GONE; shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() },
                     )
                 }
             }
@@ -612,6 +617,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         apiCall("GET", "/v1/agent/roles", null, "roles_list")
         apiCall("GET", "/v1/profiles/presets", null, "platforms")
         apiCall("GET", "/v1/workflows", null, "flows")
+        pollApprovals(); startApprovalsPolling()   // populate the Approvals badge + keep it live if a watcher is running
     }
 
     // ---- "Your platforms" — mirror the cluster's platform list; sign in once per platform on-device --
@@ -753,7 +759,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  the SHARED registry best fits the flow; a concrete pick runs here (local) or on the cluster. */
     private fun onRunTarget(target: String, goal: String) {
         val id = runFlowId.value
-        runPhase.value = "running"
+        runPhase.value = "running"; runActivity.value = emptyList()
         if (target == "auto") {
             // S4: the ring decides from the shared capability registry (this phone + the desktop node + …),
             // matched to the flow's needs — not a local guess. Falls back to a local guess if the router
@@ -838,7 +844,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val journal = java.util.Collections.synchronizedList(ArrayList<String>())
         val lastActivity = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
         val stalled = java.util.concurrent.atomic.AtomicBoolean(false)
-        val logStep: (String) -> Unit = { m -> journal.add(m); lastActivity.set(System.currentTimeMillis()); runOnUiThread { vm.log(m) } }
+        val logStep: (String) -> Unit = { m -> journal.add(m); lastActivity.set(System.currentTimeMillis()); runOnUiThread { vm.log(m); runActivity.value = (runActivity.value + m).takeLast(6) } }
         agentThread = Thread {
             if (startSite.isNotBlank() && !agentStop) {
                 // CODE opens the profile + page deterministically — the agent must NOT have to navigate.
@@ -1258,7 +1264,49 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onRefreshHub = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
         onOpenAiSettings = { syncSettingsUi(); shellUi.aiSettingsOpen.value = true },
         onCloseAiSettings = { shellUi.aiSettingsOpen.value = false },
+        onOpenApprovals = { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() },
+        onRefreshApprovals = { pollApprovals() },
+        onApprove = { jobId, pid, edited ->
+            val b = JSONObject().put("approve", true).put("edit", edited).toString()
+            apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", b, "approval_act")
+        },
+        onDeny = { jobId, pid ->
+            apiCall("POST", "/v1/agent/jobs/$jobId/proposals/$pid", JSONObject().put("approve", false).toString(), "approval_act")
+        },
+        onStopJob = { jobId -> apiCall("POST", "/v1/agent/jobs/$jobId/stop", "{}", "approval_act") },
+        onSayJob = { jobId, text -> apiCall("POST", "/v1/agent/jobs/$jobId/say", JSONObject().put("text", text).toString(), "approval_act") },
+        onStartWatch = {
+            if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)")
+            else { vm.log("↑ starting Facebook reply watch…"); apiCall("POST", "/v1/sessions", JSONObject().put("reuse", true).put("profile", "facebook").toString(), "watch_session") }
+        },
     )
+
+    /** The reply-watch goal — mirrors the console Reply Desk: watch notifications, draft, gate every act. */
+    private val RD_GOAL = "Open Facebook notifications and my recent posts. For each NEW comment or reaction on MY posts, read the whole thread for context, then draft ONE natural reply that continues the conversation and moves toward my-app.engineer only where it genuinely fits. Propose EVERY reply for my approval - never post without approval. Skip threads that are hostile, off-topic, already handled, or where I chose not to engage. Keep watching and check back periodically."
+
+    private var approvalsPolling = false
+    private val approvalsHandler by lazy { android.os.Handler(mainLooper) }
+    /** Poll the jobs+proposals engine so the Approvals screen (and the nav badge) stay live. Runs while
+     *  the Approvals screen is open or any watcher is still running. */
+    private fun pollApprovals() {
+        if (vm.clusterUrl.trim().isEmpty()) return
+        shellUi.jobsLoading.value = true
+        apiCall("GET", "/v1/agent/jobs", null, "approvals")
+    }
+    private fun startApprovalsPolling() {
+        if (approvalsPolling) return
+        approvalsPolling = true
+        val tick = object : Runnable {
+            override fun run() {
+                val running = shellUi.jobs.value.any { it.status == "running" || it.status == "idle" }
+                val keep = shellUi.screen.value == "approvals" || running
+                if (!keep) { approvalsPolling = false; return }
+                pollApprovals()
+                approvalsHandler.postDelayed(this, if (shellUi.screen.value == "approvals") 6000L else 20000L)
+            }
+        }
+        approvalsHandler.postDelayed(tick, 6000L)
+    }
 
     /** The my-app.engineer /learn feed for the new-tab page. Public content, plain HTTP (no cookies),
      *  parsed from the same index the crawler reads. Tapping a card opens the page on the platform. */
@@ -1615,21 +1663,84 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val o = JSONObject(data); val runId = o.optString("runId")
                 if (o.has("error")) { runPhase.value = "done"; runStatus.value = "! ${o.optString("error")}" }
                 else {
-                    runStatus.value = "Running… (run $runId)"
+                    runStatus.value = "Running…"; runActivity.value = emptyList()
+                    // A workflow step may hit the approval gate — surface those live in the Run sheet.
+                    pollApprovals(); startApprovalsPolling()
                     if (runId.isNotBlank()) {
-                        val h = android.os.Handler(mainLooper)
-                        for (dl in listOf(6000L, 15000L, 30000L, 50000L, 75000L, 110000L))
-                            h.postDelayed({ if (runVisible.value) apiCall("GET", "/v1/workflow-runs/$runId", null, "sheetstatus") }, dl)
+                        currentRunId = runId
+                        android.os.Handler(mainLooper).postDelayed({ if (runVisible.value) apiCall("GET", "/v1/workflow-runs/$runId", null, "sheetstatus") }, 4000L)
                     }
                 }
             } catch (e: Exception) { runPhase.value = "done"; runStatus.value = "! ${data.take(120)}" }
             "sheetrun_err" -> { runPhase.value = "done"; runStatus.value = "! ${data.take(140)}" }
             "sheetstatus" -> try {
                 val o = JSONObject(data); val st = o.optString("status", "?")
-                if (st != "running") { runPhase.value = "done"; runStatus.value = "Done — $st. See the log for what it did." }
-                else runStatus.value = "Running…"
+                // Live steps → the Run sheet activity box, so "Running…" always shows what it's doing.
+                val steps = o.optJSONArray("steps") ?: JSONArray()
+                if (steps.length() > 0) {
+                    val lines = ArrayList<String>()
+                    for (i in maxOf(0, steps.length() - 6) until steps.length()) {
+                        val s = steps.optJSONObject(i) ?: continue
+                        val label = s.optString("type").ifBlank { s.optString("kind") }
+                        val detail = s.optString("status").ifBlank { s.optString("text") }
+                        lines.add((if (label.isNotBlank()) "$label" else "step") + if (detail.isNotBlank()) " · $detail" else "")
+                    }
+                    runActivity.value = lines
+                }
+                if (st != "running") { runPhase.value = "done"; runStatus.value = "Done — $st." }
+                else {
+                    runStatus.value = "Running…"
+                    val rid = currentRunId
+                    if (rid.isNotBlank()) android.os.Handler(mainLooper).postDelayed({ if (runVisible.value && runPhase.value == "running") apiCall("GET", "/v1/workflow-runs/$rid", null, "sheetstatus") }, 5000L)
+                }
             } catch (e: Exception) { }
             "sheetstatus_err" -> { }
+            // ── Approvals gate: jobs + proposals ──────────────────────────────────────────────────
+            "approvals" -> try {
+                shellUi.jobsLoading.value = false
+                val o = JSONObject(data)
+                val arr = o.optJSONArray("jobs") ?: JSONArray()
+                val out = ArrayList<engineer.myapp.gb.shared.JobInfo>()
+                for (i in 0 until arr.length()) {
+                    val j = arr.optJSONObject(i) ?: continue
+                    val stepsArr = j.optJSONArray("steps") ?: JSONArray()
+                    val steps = ArrayList<String>()
+                    for (k in maxOf(0, stepsArr.length() - 8) until stepsArr.length()) {
+                        val s = stepsArr.optJSONObject(k) ?: continue
+                        val kind = s.optString("kind"); val txt = s.optString("text").ifBlank { s.optString("detail") }
+                        steps.add((if (kind.isNotBlank()) "$kind: " else "") + txt)
+                    }
+                    val propArr = j.optJSONArray("proposals") ?: JSONArray()
+                    val props = ArrayList<engineer.myapp.gb.shared.Proposal>()
+                    for (k in 0 until propArr.length()) {
+                        val p = propArr.optJSONObject(k) ?: continue
+                        if (p.optString("state") != "pending") continue
+                        props.add(engineer.myapp.gb.shared.Proposal(
+                            jobId = j.optString("id"), pid = p.optString("pid"),
+                            kind = p.optString("kind").ifBlank { "reply" },
+                            why = p.optString("why").ifBlank { p.optString("label") },
+                            url = p.optString("url"), text = p.optString("text"),
+                            jobRole = j.optString("role"),
+                        ))
+                    }
+                    out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props))
+                }
+                shellUi.jobs.value = out
+            } catch (e: Exception) { shellUi.jobsLoading.value = false; vm.log("! approvals parse: ${data.take(120)}") }
+            "approvals_err" -> { shellUi.jobsLoading.value = false; vm.log("! approvals: ${data.take(120)}") }
+            "watch_session" -> try {
+                val sid = JSONObject(data).optString("sessionId")
+                if (sid.isBlank()) { vm.log("! could not open the facebook session"); }
+                else {
+                    val b = JSONObject().put("role", "facebook.conversation").put("goal", RD_GOAL).put("sessionId", sid).toString()
+                    apiCall("POST", "/v1/agent/jobs", b, "watch_started")
+                }
+            } catch (e: Exception) { vm.log("! start watch: ${data.take(120)}") }
+            "watch_session_err" -> vm.log("! open facebook session: ${data.take(140)}")
+            "watch_started" -> { vm.log("● reply watch running — drafts will appear in Approvals"); pollApprovals(); startApprovalsPolling() }
+            "watch_started_err" -> vm.log("! start watch: ${data.take(140)}")
+            "approval_act" -> pollApprovals()
+            "approval_act_err" -> { vm.log("! action: ${data.take(140)}"); pollApprovals() }
             "devrunsave" -> vm.log("↑ run journaled to shared history")
             "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {

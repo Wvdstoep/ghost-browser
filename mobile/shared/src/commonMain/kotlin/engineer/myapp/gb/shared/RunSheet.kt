@@ -34,6 +34,9 @@ fun RunSheet(
     onRun: (targetId: String, goal: String) -> Unit,
     onStop: () -> Unit,
     onClose: () -> Unit,
+    activity: List<String> = emptyList(),   // live steps while running — so a run is never a silent bar
+    pendingApprovals: Int = 0,              // drafts waiting at the gate for this/any run
+    onReview: () -> Unit = {},              // open the Approvals screen
 ) {
     if (!visible) return
     val cs = MaterialTheme.colorScheme
@@ -74,6 +77,23 @@ fun RunSheet(
                         Spacer(Modifier.height(14.dp))
                     }
                     Text(status.ifBlank { if (phase == "running") "Working…" else "Done." }, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                    // Approvals waiting — the loud, clear call to act.
+                    if (pendingApprovals > 0) {
+                        Spacer(Modifier.height(14.dp))
+                        Button(onClick = onReview, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
+                            Text("$pendingApprovals approval${if (pendingApprovals == 1) "" else "s"} waiting — Review", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                    // Live activity — what it's actually doing, so "Running…" is never blind.
+                    if (activity.isNotEmpty()) {
+                        Spacer(Modifier.height(14.dp))
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.surfaceVariant).padding(10.dp)) {
+                            activity.takeLast(6).forEach { line ->
+                                Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(18.dp))
                     if (phase == "running") {
                         OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp)) { Text("Stop", style = MaterialTheme.typography.labelLarge, color = cs.error) }

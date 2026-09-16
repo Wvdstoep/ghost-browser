@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -36,6 +37,7 @@ fun GbScaffold(
     onOpenMenu: () -> Unit,
     onNav: (String) -> Unit,
     showTopBar: Boolean = true,     // desktop supplies its own address bar, so it hides this one
+    approvalsBadge: Int = 0,        // pending approvals — shown as a badge on the Approvals nav item
     content: @Composable () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -65,16 +67,21 @@ fun GbScaffold(
             navItem(GbIcons.browser, "Browser", selected == "browser") { onNav("browser") }
             navItem(GbIcons.agent, "Agent", selected == "agent") { onNav("agent") }
             navItem(GbIcons.flows, "Flows", selected == "flows") { onNav("flows") }
+            navItem(Icons.Default.Verified, "Approvals", selected == "approvals", badge = approvalsBadge) { onNav("approvals") }
             navItem(Icons.Default.Settings, "Settings", selected == "settings") { onNav("settings") }
         }
     }
 }
 
 @Composable
-private fun RowScope.navItem(icon: ImageVector, label: String, sel: Boolean, onClick: () -> Unit) {
+private fun RowScope.navItem(icon: ImageVector, label: String, sel: Boolean, badge: Int = 0, onClick: () -> Unit) {
     NavigationBarItem(
         selected = sel, onClick = onClick,
-        icon = { Icon(icon, label) }, label = { Text(label, fontSize = 11.sp) },
+        icon = {
+            if (badge > 0) BadgedBox(badge = { Badge(containerColor = Brand, contentColor = BrandOn) { Text("$badge") } }) { Icon(icon, label) }
+            else Icon(icon, label)
+        },
+        label = { Text(label, fontSize = 11.sp) },
         colors = NavigationBarItemDefaults.colors(
             selectedIconColor = BrandOn, indicatorColor = Brand, selectedTextColor = Brand,
             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
