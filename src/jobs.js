@@ -53,7 +53,7 @@ const persistable = (j) => ({
    * The failure is silent by construction — a missing key reads as an empty list, and an empty list
    * is a perfectly ordinary outcome for a young property. Nothing anywhere could tell the two apart.
    */
-  error: j.error || null, steps: j.steps, leads: j.leads, proposals: j.proposals, gigs: j.gigs || [], replies: j.replies || [], reach: j.reach || [], keywords: j.keywords || [], searchQueries: j.searchQueries || [], gscHealth: j.gscHealth || [], gscToken: j.gscToken || null, opportunities: j.opportunities || [], data: j.data || {},
+  error: j.error || null, steps: j.steps, leads: j.leads, proposals: j.proposals, results: j.results || [], gigs: j.gigs || [], replies: j.replies || [], reach: j.reach || [], keywords: j.keywords || [], searchQueries: j.searchQueries || [], gscHealth: j.gscHealth || [], gscToken: j.gscToken || null, opportunities: j.opportunities || [], data: j.data || {},
   // Where the leads are going, so the panel can say it rather than the person guessing.
   sink: j.sink || null,
   // Which specialist ran it, so a conversation reopened later reads correctly.
@@ -81,7 +81,7 @@ function create({ owner, goal, companyId, profile, sessionId, workflowId, runId,
     maxSteps: Number(maxSteps) > 0 ? Number(maxSteps) : 0,
     maxPages: Number(maxPages) > 0 ? Number(maxPages) : 0,
     status: 'running', createdAt: now(), endedAt: null, error: null,
-    steps: [], leads: [], proposals: [], gigs: [], replies: [], reach: [], keywords: [], searchQueries: [], gscToken: null, opportunities: [], inbox: [], transcript: [], data: {},
+    steps: [], leads: [], proposals: [], results: [], gigs: [], replies: [], reach: [], keywords: [], searchQueries: [], gscToken: null, opportunities: [], inbox: [], transcript: [], data: {},
     report: null,
     stop: new AbortController(),
   };
@@ -394,6 +394,21 @@ function addReply(j, reply) {
  * text — under a name. This is the data seam of an automation: one step stores it, the next reads it
  * (the run threads j.data into the following step's goal). Not a record like a lead; an arbitrary value.
  */
+function addResult(j, item) {
+  j.results = j.results || [];
+  const r = { at: now(), title: String(item.title || '').slice(0, 300),
+    fields: (item.fields && typeof item.fields === 'object') ? item.fields : {},
+    url: String(item.url || '').slice(0, 600), image: String(item.image || '').slice(0, 800),
+    kind: String(item.kind || '').slice(0, 60) };
+  /* Same item twice is one: title + url is the identity. */
+  const key = (x) => `${(x.title || '').trim().toLowerCase()}|${(x.url || '').trim()}`;
+  if (j.results.some((x) => key(x) === key(r))) return null;
+  j.results.push(r);
+  bus.emit(j.id, { type: 'result', jobId: j.id, result: r });
+  persist(j);
+  return r;
+}
+
 function storeData(j, key, value) {
   j.data = j.data || {};
   const k = String(key || '').slice(0, 120).trim();
@@ -404,4 +419,4 @@ function storeData(j, key, value) {
   return j.data;
 }
 
-module.exports = { create, step, setReport, isOver, switchedSession, addLead, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
+module.exports = { create, step, setReport, isOver, switchedSession, addLead, addResult, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
