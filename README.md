@@ -168,7 +168,7 @@ IP, the hardware fingerprint, and which walls it can walk through.
 | Surface | What it is | Best for | Status |
 |---|---|---|---|
 | **Cluster** (server) | GB on your server — its own browser pool + the automations engine, behind the HTTP API | always-on jobs, scheduled flows, the API | live |
-| **Desktop node** ([`desktop/`](desktop/)) | GB as a Windows app (Electron) — real desktop Chromium on your laptop’s home IP | desktop-only portals + Cloudflare, hands-on use | live · installer below |
+| **Desktop node** ([`mobile/desktop/`](mobile/desktop/)) | GB as a Windows app (Compose + **JCEF** Chromium) — one codebase with the phone, real desktop Chromium on your laptop’s home IP | desktop-only portals + Cloudflare, hands-on use, heavy web apps (CapCut) | live · installer below |
 | **Phone node** ([`mobile/`](mobile/)) | GB as an Android app — real mobile Chromium on your residential IP | a real mobile identity, beating bot-detection a server can’t | live · APK below |
 
 **One cluster, many nodes.** A laptop or phone **dials out** to the cluster’s device hub and registers as a drivable node (Android/
@@ -240,16 +240,22 @@ Prebuilt debug APK: [mobile/dist/app-debug.apk](mobile/dist/app-debug.apk). Buil
 
 ## GB Desktop — Ghost Browser on your laptop
 
-`desktop/` is Ghost Browser as a native **Windows app** (Electron): a real desktop Chromium on your
-own laptop’s residential IP. Desktop-only portals load **and** Cloudflare passes — a desktop browser on
-desktop hardware has no fingerprint mismatch to flag. It joins the cluster as a drivable node exactly
-like GB Mobile: same reverse channel, same `/v1/*` commands (navigate / analyze / click / type / fetch /
-eval), isolated per-profile sessions, an on-device agent (your own Ollama/OpenAI-compatible endpoint),
-your platform profiles, and the automations engine — same design language as the mobile app. So the
-backend can run a hunt on whichever node you pick: phone (mobile identity) or laptop (desktop identity).
+[`mobile/desktop/`](mobile/desktop/) is Ghost Browser as a native **Windows app** built from the **same
+Compose codebase as the phone**, with real **JCEF** Chromium: one build, one design language, phone +
+desktop. A real desktop Chromium on your own laptop’s residential IP — desktop-only portals load **and**
+Cloudflare passes, because a desktop browser on desktop hardware has no fingerprint mismatch to flag. It
+joins the cluster as a drivable node exactly like GB Mobile: same reverse channel, same `/v1/*` commands
+(navigate / analyze / click / type / fetch / eval / **click_xy / drag / upload_file / screenshot**),
+isolated per-profile sessions, an on-device or **cluster** agent (no key needed on the device), your
+platform profiles, and the automations engine. So the backend can run a hunt — or a full **CapCut** edit
+— on whichever node you pick: phone (mobile identity) or laptop (desktop identity).
 
-Installer: [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe)
-(unsigned — SmartScreen: *More info → Run anyway*). Build from source: see [desktop/README.md](desktop/README.md).
+Installer (primary): [mobile/desktop/dist/GhostBrowser-Setup-1.0.12.exe](mobile/desktop/dist/GhostBrowser-Setup-1.0.12.exe)
+— **updates in place** (no manual uninstall) and opens after install. Unsigned — SmartScreen: *More info →
+Run anyway*. Build from source: `./gradlew :desktop:packageExe` in [`mobile/`](mobile/).
+
+Legacy fallback (Electron): [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe)
+— the original Electron node, kept for anyone who needs it; the Compose + JCEF build above supersedes it.
 
 Connect: Cluster tab → your GB URL → Sign in (SSO) → open Ghost Browser from Tools → Connect. The laptop
 registers with the device hub and appears in `/v1/device/list` next to your phone.
