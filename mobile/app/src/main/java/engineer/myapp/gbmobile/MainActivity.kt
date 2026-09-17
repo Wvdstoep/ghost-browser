@@ -1329,15 +1329,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (first != null) assistantLoad(first.id) else assistantNew()
             } else assistantLoad(assistantChatId)
         }
-        startPipLoop()
+        // no PiP of the phone's own tab any more: the cluster browser is the backdrop of the chat itself
     }
     private fun assistantRefreshChats() { val list = AssistantJson.chats(apiAwait("GET", "/v1/assistant/chats", null)); runOnUiThread { ASSIST.chats.value = list } }
     /** Load a chat (worker thread) and, while a turn runs, keep polling it every 2.5 s. */
     private fun assistantLoad(id: String) {
         val raw = apiAwait("GET", "/v1/assistant/chats/$id", null)
         val v = AssistantJson.chat(raw)
+        // the live frame of the browser the agent works in — decoded here, off the main thread
+        val frame = v?.live?.backdrop?.takeIf { it.isNotBlank() }?.let { d -> try { ASSIST.decodeImage?.invoke(d) } catch (e: Throwable) { null } }
         runOnUiThread {
             if (v == null) { ASSIST.error.value = "Could not reach your Ghost Browser (${raw.take(80)})"; shellUi.agentBusy.value = false; return@runOnUiThread }
+            if (frame != null) { ASSIST.backdrop.value = frame; ASSIST.backdropProfile.value = v.live?.backdropProfile ?: "" }
             assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.error.value = ""
             shellUi.agentBusy.value = v.live != null
             assistantPollH.removeCallbacksAndMessages(null)
