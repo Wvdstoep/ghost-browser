@@ -157,6 +157,19 @@ private fun WatcherForm(
         Spacer(Modifier.height(14.dp))
         Text("ROUTING — what happens to each kind of item", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Text("Pick the kinds, then the flow that runs on them. No kinds = every kind. First matching route wins.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+        // DEFAULT ROUTES as toggles (roadmap Phase 2): one tap wires a kind to the flow that ships for it.
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            DEFAULT_ROUTES.forEach { d ->
+                val flowKnown = automations.any { it.id == d.flowId }
+                val on = routes.any { it.flowId == d.flowId && d.kinds.all { k -> k in it.kinds } }
+                Box(Modifier.padding(end = 6.dp).clip(RoundedCornerShape(50)).background(if (on) Brand.copy(alpha = 0.16f) else Color.Transparent).border(1.dp, if (on) Brand else cs.outline, RoundedCornerShape(50))
+                    .clickable(enabled = flowKnown) { routes = if (on) routes.filterNot { it.flowId == d.flowId } else routes + FollowUpRoute(d.kinds, d.flowId) }
+                    .padding(horizontal = 10.dp, vertical = 5.dp)) {
+                    Text((if (on) "✓ " else "") + d.label + (if (!flowKnown) " (flow missing)" else ""), color = if (!flowKnown) cs.onSurfaceVariant else if (on) Brand else cs.onSurface, fontSize = 11.sp)
+                }
+            }
+        }
         routes.forEachIndexed { idx, r ->
             Spacer(Modifier.height(8.dp))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.background).border(1.dp, cs.outline, RoundedCornerShape(10.dp)).padding(10.dp)) {

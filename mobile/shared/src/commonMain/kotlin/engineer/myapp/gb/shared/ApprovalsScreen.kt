@@ -36,6 +36,7 @@ fun ApprovalsScreen(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     topInset: Modifier = Modifier,
+    leads: List<PersonInfo> = emptyList(),   // people memory: the ones worth your words (empty = section hidden)
 ) {
     val cs = MaterialTheme.colorScheme
     val pending = jobs.flatMap { it.proposals }
@@ -71,6 +72,33 @@ fun ApprovalsScreen(
             }
         } else {
             pending.forEach { p -> ApprovalCard(p, onApprove, onDeny, onOpenUrl); Spacer(Modifier.height(10.dp)) }
+        }
+
+        // ── People worth your words (people memory, roadmap Phase 3) ─────────────────────────────
+        if (leads.isNotEmpty()) {
+            Spacer(Modifier.height(18.dp))
+            Text("PEOPLE WORTH YOUR WORDS", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+            Text("Who showed buying interest or keeps coming back — from every post the watchers read.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            leads.sortedByDescending { it.worth }.take(8).forEach { p ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).background(cs.surface).border(1.dp, if (p.lead) Brand.copy(alpha = 0.5f) else cs.outline, RoundedCornerShape(12.dp)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(p.name, style = MaterialTheme.typography.titleSmall, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            if (p.lead) { Spacer(Modifier.width(6.dp)); Box(Modifier.clip(RoundedCornerShape(50)).background(Brand.copy(alpha = 0.14f)).padding(horizontal = 7.dp, vertical = 1.dp)) { Text("LEAD", color = Brand, fontSize = 9.sp, fontFamily = FontFamily.Monospace) } }
+                        }
+                        val bits = buildList { add("${p.exchanges} exchange${if (p.exchanges == 1) "" else "s"}"); if (p.posts > 1) add("${p.posts} posts"); if (p.repliedBack > 0) add("came back ×${p.repliedBack}") }
+                        Text(bits.joinToString(" · "), fontSize = 11.sp, color = cs.onSurfaceVariant)
+                        p.signals.lastOrNull()?.let { Text("“${it.take(110)}”", fontSize = 12.sp, color = cs.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
+                        p.promises.lastOrNull()?.let { Text("you promised: ${it.take(90)}", fontSize = 11.sp, color = Brand, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)) }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("${p.worth}", style = MaterialTheme.typography.titleLarge, color = if (p.worth >= 60) Brand else cs.onSurface)
+                        Text("worth", fontSize = 9.sp, color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

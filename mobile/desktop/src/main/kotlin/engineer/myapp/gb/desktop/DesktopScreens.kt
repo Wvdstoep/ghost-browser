@@ -65,6 +65,7 @@ class DesktopState {
     // approvals gate — running watchers + their pending proposals (drafts awaiting yes/no)
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
+    val leads = mutableStateOf<List<engineer.myapp.gb.shared.PersonInfo>>(emptyList())   // people worth your words
     // watchers — scheduled background tasks
     val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
     val watchersLoading = mutableStateOf(false)
@@ -146,6 +147,7 @@ private const val RD_GOAL_D = "Open Facebook notifications and my recent posts. 
 /** The approval gate: pull running watchers + their pending proposals from the jobs engine. */
 fun loadApprovals(st: DesktopState) = bg {
     st.jobsLoading.value = true
+    try { st.leads.value = AssistantJson.people(Cluster.authed("GET", "/v1/people?platform=facebook", null)) } catch (e: Exception) { /* the section stays hidden */ }
     val r = Cluster.authed("GET", "/v1/agent/jobs", null)
     try {
         val arr = JSONObject(r).optJSONArray("jobs") ?: org.json.JSONArray()

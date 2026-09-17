@@ -1809,6 +1809,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.clusterUrl.trim().isEmpty()) return
         shellUi.jobsLoading.value = true
         apiCall("GET", "/v1/agent/jobs", null, "approvals")
+        apiCall("GET", "/v1/people?platform=facebook", null, "people")   // the people worth your words, same screen
     }
     private fun startApprovalsPolling() {
         if (approvalsPolling) return
@@ -2265,6 +2266,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 shellUi.jobs.value = out
             } catch (e: Exception) { shellUi.jobsLoading.value = false; vm.log("! approvals parse: ${data.take(120)}") }
             "approvals_err" -> { shellUi.jobsLoading.value = false; vm.log("! approvals: ${data.take(120)}") }
+            "people" -> shellUi.leads.value = AssistantJson.people(data)
+            "people_err" -> {}
             "watch_session" -> try {
                 val sid = JSONObject(data).optString("sessionId")
                 if (sid.isBlank()) { vm.log("! could not open the facebook session"); }
