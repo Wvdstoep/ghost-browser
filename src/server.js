@@ -1664,20 +1664,36 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const owner = consoleOwner() || req.client.owner;
   const runId = `watcher-post-approved-reply-${Date.now()}`;
   feed.mark(wid, it.key, dryRun ? { dryRunId: runId, dryRunResult: '' } : { posting: true, postFailed: false, postRunId: runId, draft: text });
-  const c = { owner, maxConcurrent: 2 };
-  /* The poster shares the one browser with the watcher passes: wait for a running pass to finish
-     (up to 4 min) and hold the lock while posting, so neither steals the session from the other. */
+  /* THE POSTER IS CODE, NOT AN AGENT (see postWatch.postReply): open the comment's own deep link, find
+     that comment by id, press its Reply, type the exact words, submit, and prove the reply is on the
+     page with the owner's name — never typing twice. Shares the one browser with the watcher passes:
+     wait for a running pass (up to 4 min) and hold the lock while posting. */
   const lockKey = `poster:${wid}`;
-  const waitIdle = async () => { const t0 = Date.now(); while (runningWatchers.size && Date.now() - t0 < 240000) await new Promise((r) => setTimeout(r, 2000)); runningWatchers.add(lockKey); };
-  waitIdle().then(() => workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '', author: String((it.fields || {}).author || it.title || '').slice(0, 80), said: String((it.fields || {}).said || (it.fields || {}).detail || '').replace(/\s+/g, ' ').slice(0, 120) }, persist: workflows.persistRun, runId })
-    .then((run) => {
-      const ok = !!(run && run.status === 'done'); const verdict = posterVerdict(run);
-      if (dryRun) feed.mark(wid, it.key, { dryRunResult: (ok ? 'ok: ' : 'failed: ') + verdict });
-      else if (ok) feed.mark(wid, it.key, { posting: false, handled: true, posted: verdict || 'posted' });
-      else feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + verdict });
-    })
-    .catch((e) => feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + e.message } : { posting: false, postFailed: true, posted: 'failed: ' + e.message }))
-    .finally(() => runningWatchers.delete(lockKey)));
+  const cfgP = feed.getConfig(wid) || {};
+  const want = profiles.safeName(cfgP.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  const session = async () => {
+    let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
+    let dead = false; try { dead = !s || !s.page || (s.page.isClosed && s.page.isClosed()); } catch (e) { dead = true; }
+    if (dead) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+    return s;
+  };
+  const touch = () => { try { const s = pool.listFor(owner).find((x) => x.profile === want); const live = s && pool.get(s.sessionId); if (live) live.lastUsed = Date.now(); } catch (e) { /* best effort */ } };
+  (async () => {
+    const t0 = Date.now(); while (runningWatchers.size && Date.now() - t0 < 240000) await new Promise((r) => setTimeout(r, 2000));
+    runningWatchers.add(lockKey);
+    try {
+      const pw = require('./postWatch');
+      const r = await pw.postReply((await session()).page, it.url, text, { meName: cfgP.meName || '', dryRun, touch });
+      log.info(`[poster] ${it.fields && it.fields.author}: ${JSON.stringify(r)}`);
+      if (dryRun) feed.mark(wid, it.key, { dryRunResult: (r.dryRun ? 'ok: ' : 'failed: ') + r.detail });
+      else if (r.posted) feed.mark(wid, it.key, { posting: false, handled: true, posted: 'posted — ' + r.detail, fields: Object.assign({}, it.fields, { status: 'answered' }) });
+      else if (r.alreadyAnswered) feed.mark(wid, it.key, { posting: false, handled: true, posted: 'already answered on the page', fields: Object.assign({}, it.fields, { status: 'answered' }) });
+      else feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + r.detail });
+    } catch (e) {
+      log.error(`[poster] ${e.message}`);
+      feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + e.message } : { posting: false, postFailed: true, posted: 'failed: ' + e.message });
+    } finally { runningWatchers.delete(lockKey); }
+  })();
   res.json({ mode: dryRun ? 'dry-run' : 'post', runId });
 });
 app.post('/v1/watchers/:id/feed/deny', authed, (req, res) => {
