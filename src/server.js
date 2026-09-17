@@ -1665,14 +1665,19 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const runId = `watcher-post-approved-reply-${Date.now()}`;
   feed.mark(wid, it.key, dryRun ? { dryRunId: runId, dryRunResult: '' } : { posting: true, postFailed: false, postRunId: runId, draft: text });
   const c = { owner, maxConcurrent: 2 };
-  workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '', author: String((it.fields || {}).author || it.title || '').slice(0, 80), said: String((it.fields || {}).said || (it.fields || {}).detail || '').replace(/\s+/g, ' ').slice(0, 120) }, persist: workflows.persistRun, runId })
+  /* The poster shares the one browser with the watcher passes: wait for a running pass to finish
+     (up to 4 min) and hold the lock while posting, so neither steals the session from the other. */
+  const lockKey = `poster:${wid}`;
+  const waitIdle = async () => { const t0 = Date.now(); while (runningWatchers.size && Date.now() - t0 < 240000) await new Promise((r) => setTimeout(r, 2000)); runningWatchers.add(lockKey); };
+  waitIdle().then(() => workflows.drive(posterFlow(dryRun), { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: { url: it.url, text, dryRun: dryRun ? 'yes' : '', author: String((it.fields || {}).author || it.title || '').slice(0, 80), said: String((it.fields || {}).said || (it.fields || {}).detail || '').replace(/\s+/g, ' ').slice(0, 120) }, persist: workflows.persistRun, runId })
     .then((run) => {
       const ok = !!(run && run.status === 'done'); const verdict = posterVerdict(run);
       if (dryRun) feed.mark(wid, it.key, { dryRunResult: (ok ? 'ok: ' : 'failed: ') + verdict });
       else if (ok) feed.mark(wid, it.key, { posting: false, handled: true, posted: verdict || 'posted' });
       else feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + verdict });
     })
-    .catch((e) => feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + e.message } : { posting: false, postFailed: true, posted: 'failed: ' + e.message }));
+    .catch((e) => feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + e.message } : { posting: false, postFailed: true, posted: 'failed: ' + e.message }))
+    .finally(() => runningWatchers.delete(lockKey)));
   res.json({ mode: dryRun ? 'dry-run' : 'post', runId });
 });
 app.post('/v1/watchers/:id/feed/deny', authed, (req, res) => {
