@@ -227,6 +227,10 @@ const deepLink = (tree, n) => `https://www.facebook.com/groups/${tree.group || '
 
 /** Fold the tree into the watcher's feed: one item per message, keyed by its ids, with the standing
  *  of its branch. Returns the entries in branch order with what each one needs. */
+/** A name as the page shows it minus a trailing relative time ("2 weken geleden", "3 h", "about an hour ago"). */
+function cleanName(v) {
+  return String(v || '').replace(/\s+(?:ongeveer\s+|about\s+|over\s+)?(?:een|one|an?|\d+)\s*(?:seconde|second|sec|minuut|minute|min|uur|hour|hr|dag|day|week|wk|maand|month|mnd|jaar|year|yr|[umdwhjy]|mo)\w*\.?(?:\s+(?:geleden|ago))?\s*$/i, '').replace(/\s*·\s*$/, '').trim();
+}
 function ingest(wid, tree, cfg, feed) {
   const me = String(cfg.meName || tree.me || tree.postAuthor || '').trim().toLowerCase();
   const isMe = (n) => !!me && String(n.author || '').trim().toLowerCase() === me;
@@ -239,8 +243,16 @@ function ingest(wid, tree, cfg, feed) {
   /* SOMEONE ELSE'S POST. The owner commented under a post of another person's; that person (or anyone)
      replied. Only the branches the owner is in are the owner's business here: a root comment by
      somebody else is their conversation with the post's author, never the owner's to answer. */
-  // the page does not always yield the post's author; the discovery knew ("replied to your comment"), and the config remembers
-  const theirs = (Array.isArray(cfg.theirsIds) && cfg.theirsIds.includes(String(tree.postId))) || (!!tree.postAuthor && !!me && !same(tree.postAuthor, me));
+  /* NAMES. A label sometimes keeps its time ("Wesley Stoep 2 weken geleden"); strip it once here, so the
+     owner is recognised as the owner and a person is one person. */
+  tree.nodes.forEach((n) => { n.author = cleanName(n.author); n.replyTo = cleanName(n.replyTo); });
+  /* WHOSE POST. The page's author when it yields one; else what the discovery knew — "replied to your
+     comment" rows mark a post as theirs, "your post" rows mark it as the owner's (that wins); else,
+     with no author and no discovery, an owner who wrote a ROOT comment there is a guest. */
+  const mineIds = Array.isArray(cfg.mineIds) ? cfg.mineIds.map(String) : [];
+  const theirsIds = Array.isArray(cfg.theirsIds) ? cfg.theirsIds.map(String) : [];
+  const pid = String(tree.postId);
+  const theirs = tree.postAuthor ? (!!me && !same(tree.postAuthor, me)) : (!mineIds.includes(pid) && (theirsIds.includes(pid) || tree.nodes.some((n) => !n.isReply && isMe(n))));
   const whose = tree.postAuthor && !same(tree.postAuthor, me) ? `${tree.postAuthor}'s` : 'their';
   for (const [rootId, list] of Object.entries(branches)) {
     const rootAuthor = (byId[rootId] || list[0] || {}).author || '';
@@ -277,6 +289,12 @@ function ingest(wid, tree, cfg, feed) {
       feed.mark(wid, item.key, patch);
       out.push({ node: n, key: item.key, rootId, branch: list, needsReply: addressed && !answered, isMe });
     });
+  }
+  /* THEIR POST, STALE ITEMS: what this pass did not produce there (a stranger's root comment kept from
+     a pass that thought the post was the owner's) is not the owner's to answer — folded away. */
+  if (theirs) {
+    const produced = new Set(out.map((e) => e.key));
+    for (const it of feed.list(wid)) if (it && (it.fields || {}).postId === pid && !produced.has(it.key) && !it.handled) feed.mark(wid, it.key, { handled: true, fields: Object.assign({}, it.fields, { status: 'side conversation', why: 'on someone else\'s post, not addressed to you', theirs: true }) });
   }
   /* PEOPLE MEMORY (people.js): every branch lands on the records of the people the owner talks with;
      a person with a commercial signal is a lead, and the card says so. Never breaks a pass. */
@@ -352,7 +370,8 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
       + 'Output ONLY the reply text - no quotes, no preamble.';
     // what is known about this person from other posts, and what the owner tends to change in drafts
     let memory = ''; let lessons = ''; try { memory = people.profileOf('facebook', e.node.author, { exceptPostId: tree.postId }); lessons = people.editLessons(); } catch (err) { memory = ''; lessons = ''; }
-    const theirs = (Array.isArray(cfg.theirsIds) && cfg.theirsIds.includes(String(tree.postId))) || (!!tree.postAuthor && !!meName && String(tree.postAuthor).trim().toLowerCase() !== meName);
+    const pid = String(tree.postId); const mineIds = Array.isArray(cfg.mineIds) ? cfg.mineIds.map(String) : []; const theirsIds = Array.isArray(cfg.theirsIds) ? cfg.theirsIds.map(String) : [];
+    const theirs = tree.postAuthor ? String(tree.postAuthor).trim().toLowerCase() !== meName : (!mineIds.includes(pid) && (theirsIds.includes(pid) || tree.nodes.some((n) => !n.isReply && String(n.author || '').trim().toLowerCase() === meName)));
     const user = `${theirs ? `THE POST (by ${tree.postAuthor || 'someone else'} — not yours; you commented under it)` : 'YOUR POST (you wrote this)'}:\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
     try {
       const out = await llm.chat({ host: llmCfg.llmHost, model: llmCfg.llmModel, key: llmCfg.llmKey, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
@@ -458,6 +477,7 @@ async function discoverOnPage(page, log) {
   if (log) log.info(`[post-watch] notifications page: ${found.filter((f) => !f.theirs).length} post(s) of yours with activity, ${found.filter((f) => f.theirs).length} thread(s) of yours under other people's posts`);
   const urls = found.map((f) => `https://www.facebook.com/groups/${f.group}/posts/${f.postId}/`);
   urls.theirs = found.filter((f) => f.theirs).map((f) => f.postId);
+  urls.mine = found.filter((f) => !f.theirs).map((f) => f.postId);
   return urls;
 }
 
@@ -558,4 +578,4 @@ function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, cadenceOf, rememberVoice, probePage, postReply, postIdOf, extractInPage, VOICE };
+module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, cadenceOf, rememberVoice, probePage, postReply, postIdOf, extractInPage, cleanName, VOICE };

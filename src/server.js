@@ -1785,8 +1785,9 @@ async function postWatchTick(wf, owner, opts) {
       const found = await pw.discoverOnPage((await session()).page, log);
       const have = new Set((cfg.postUrls || []).map((u) => pw.postIdOf(u)));
       const add = found.filter((u) => !have.has(pw.postIdOf(u)));
-      const theirsIds = Array.from(new Set((cfg.theirsIds || []).concat(found.theirs || []).map(String)));
-      if (add.length || theirsIds.length !== (cfg.theirsIds || []).length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add), theirsIds }); if (add.length) log.info(`[post-watch] now watching ${add.length} new post(s)${(found.theirs || []).length ? ` (${found.theirs.length} under other people's posts)` : ''}`); }
+      const mineIds = Array.from(new Set((cfg.mineIds || []).concat(found.mine || []).map(String)));
+      const theirsIds = Array.from(new Set((cfg.theirsIds || []).concat(found.theirs || []).map(String))).filter((id) => !mineIds.includes(id));   // "your post" wins
+      if (add.length || theirsIds.length !== (cfg.theirsIds || []).length || mineIds.length !== (cfg.mineIds || []).length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add), theirsIds, mineIds }); if (add.length) log.info(`[post-watch] now watching ${add.length} new post(s)${(found.theirs || []).length ? ` (${found.theirs.length} under other people's posts)` : ''}`); }
     } catch (e) { log.error(`[post-watch] self-discovery: ${e.message}`); }
   }
   const all = pw.discover(wf.id, cfg, feed);

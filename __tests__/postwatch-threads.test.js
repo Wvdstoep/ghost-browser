@@ -4,7 +4,7 @@
  * owner's business there, and the items say whose post it is. Pure: in-memory feed, no browser.
  */
 import { describe, it, expect } from 'vitest';
-import { ingest } from '../src/postWatch.js';
+import { ingest, cleanName } from '../src/postWatch.js';
 
 function fakeFeed() {
   const items = {};
@@ -72,6 +72,28 @@ describe("threads the owner started on other people's posts", () => {
     expect(it_.fields.status).toBe('waiting on you'); expect(it_.fields.theirs).toBe(true); expect(it_.title).toBe('Henry Chien replied to you on their post');
     expect(it_.fields.postTitle).toBe('Day 9 of vibe coding a game');
     expect(item(feed, 'Someone', 'nice game')).toBeUndefined();   // not the owner's business on their post
+  });
+
+  it('a "your post" row wins over a "your comment" row: the owner\'s own post is never theirs', () => {
+    const feed = fakeFeed();
+    ingest('w', { postId: 'P', group: 'g', postText: 'my post', postAuthor: '', me: '', nodes: [N(0, 'Adam', 'nice'), N(1, 'Wesley Stoep', 'thanks', { root: 0, to: 'Adam' })] }, { meName: 'Wesley Stoep', theirsIds: ['P'], mineIds: ['P'] }, feed);
+    expect(item(feed, 'Adam', 'nice').fields.status).toBe('answered'); expect(item(feed, 'Adam', 'nice').fields.theirs).toBe(false);
+  });
+
+  it('with no author and no discovery, an owner who wrote a ROOT comment there is a guest; names lose their time suffix', () => {
+    expect(cleanName('Wesley Stoep 2 weken geleden')).toBe('Wesley Stoep'); expect(cleanName('Eric Sijbesma about an hour ago')).toBe('Eric Sijbesma'); expect(cleanName('Jarne Staal')).toBe('Jarne Staal'); expect(cleanName('Ilya Elbert 3 h')).toBe('Ilya Elbert');
+    const feed = fakeFeed();
+    // a stale item from a pass that took the post for the owner's: a stranger's root comment, waiting
+    feed.upsert('w', { url: 'https://fb/old', title: 'Sander commented on your post', fields: { postId: 'D', author: 'Sander Rombout', said: 'ik snap het', status: 'waiting on you' } });
+    ingest('w', { postId: 'D', group: 'g', postText: 'Trap niet in de verkoop praatjes', postAuthor: '', me: '', nodes: [
+      N(0, 'Wesley Stoep 2 weken geleden', 'goed punt'),
+      N(1, 'Eric Sijbesma 2 weken geleden', 'eens!', { root: 0, to: 'Wesley Stoep 2 weken geleden' }),
+      N(2, 'Sander Rombout', 'ik snap het'),
+    ] }, { meName: 'Wesley Stoep' }, feed);
+    expect(item(feed, 'Eric Sijbesma', 'eens!').fields.status).toBe('waiting on you'); expect(item(feed, 'Eric Sijbesma', 'eens!').fields.theirs).toBe(true);
+    expect(item(feed, 'Wesley Stoep', 'goed punt').fields.status).toBe('you');
+    expect(item(feed, 'Sander Rombout', 'ik snap het')).toBeUndefined();
+    const stale = feed.items['https://fb/old']; expect(stale.handled).toBe(true); expect(stale.fields.status).toBe('side conversation');
   });
 
   it('the owner\'s own post still works as before (root comments wait)', () => {
