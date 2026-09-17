@@ -37,7 +37,7 @@ function blank(platform, name, now) { return { name: norm(name), platform: slug(
  * produced ({node, branch, isMe, needsReply}). Only people the owner actually talks with are
  * remembered: the addressed ones, and anyone the owner replied to. Returns the names touched.
  */
-function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' } = {}) {
+function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '', theirs: theirsHint = null } = {}) {
   const touched = new Set();
   const postId = String((tree && tree.postId) || ''); const postTitle = norm(tree && tree.postText).slice(0, 90);
   const recs = new Map(); const get = (name) => { const k = slug(name); if (!recs.has(k)) recs.set(k, load(platform, name) || blank(platform, name, now)); return recs.get(k); };
@@ -46,8 +46,9 @@ function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' 
      exchange on their record, and the owner's root comment under it is "you → them". */
   const postAuthor = norm(tree && tree.postAuthor);
   const anyMe = (entries || []).find((e) => e && typeof e.isMe === 'function');
-  const theirs = !!postAuthor && !!anyMe && !anyMe.isMe({ author: postAuthor }) && (entries || []).some((e) => e.node && (typeof e.isMe === 'function' ? e.isMe(e.node) : e.isMe));
-  if (theirs && (tree.postText || '')) {
+  // the ingest knows whose post it is (page author, discovery rows, an owner root comment) and says so; alone, the author name decides
+  const theirs = theirsHint !== null ? !!theirsHint : (!!postAuthor && !!anyMe && !anyMe.isMe({ author: postAuthor }) && (entries || []).some((e) => e.node && (typeof e.isMe === 'function' ? e.isMe(e.node) : e.isMe)));
+  if (theirs && postAuthor && (tree.postText || '')) {
     const rec = get(postAuthor); const pid = 'post:' + postId;
     if (!seenIn(rec, pid)) rec.exchanges.push({ id: pid, t: now, who: 'them', kind: 'post', text: norm(tree.postText).slice(0, 400), postId, when: '' });
     rec.posts[postId] = { title: postTitle, lastAt: now, theirs: true }; rec.lastSeen = now; touched.add(rec.name);

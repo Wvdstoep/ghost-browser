@@ -299,7 +299,7 @@ function ingest(wid, tree, cfg, feed) {
   /* PEOPLE MEMORY (people.js): every branch lands on the records of the people the owner talks with;
      a person with a commercial signal is a lead, and the card says so. Never breaks a pass. */
   try {
-    people.remember('facebook', tree, out, { urlOf: (n) => deepLink(tree, n) });
+    people.remember('facebook', tree, out, { urlOf: (n) => deepLink(tree, n), theirs });
     for (const e of out) if (!e.isMe && people.isLead('facebook', e.node.author)) { const it = feed.list(wid).find((x) => x.key === e.key); if (it && !(it.fields || {}).lead) feed.mark(wid, e.key, { fields: Object.assign({}, it.fields, { lead: true }) }); }
   } catch (err) { /* memory is a bonus, never the pass */ }
   return out;
