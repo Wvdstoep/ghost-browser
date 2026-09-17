@@ -113,8 +113,9 @@ function registerOperatorTools(reg, ctx) {
   R('gb_walk_stop', 'STOP a walk you started (a wrong goal, a page that will not load). Its session stays; start another walk after.', obj({ jobId: { type: 'string' } }, ['jobId']), async ({ jobId }) => ctx.stopWalk ? ctx.stopWalk(jobId) : { error: 'not wired' });
   R('gb_walk_wait', 'WAIT for a walk to end (checks every 15s up to `seconds`, default 300, max 600) and return its report, proposals and last steps. One call, not a loop.', obj({ jobId: { type: 'string' }, seconds: { type: 'number' } }, ['jobId']), async ({ jobId, seconds }) => {
     const budget = Math.min(600, Math.max(15, Number(seconds) || 300)) * 1000; const t0 = now();
-    let d = ctx.jobDetail(jobId, 12); while (d && !d.error && (d.status === 'running' || d.status === 'idle') && now() - t0 < budget) { await sleep(15000); d = ctx.jobDetail(jobId, 12); }
-    return d && (d.status === 'running' || d.status === 'idle') ? { ...d, stillRunning: true, hint: 'still browsing — call gb_walk_wait again' } : d;
+    // 'idle' = the agent finished its loop and wrote its report (the session is kept for proposals): the walk is DONE
+    let d = ctx.jobDetail(jobId, 12); while (d && !d.error && d.status === 'running' && now() - t0 < budget) { await sleep(15000); d = ctx.jobDetail(jobId, 12); }
+    return d && d.status === 'running' ? { ...d, stillRunning: true, hint: 'still browsing — call gb_walk_wait again' } : d;
   }, { repeatable: true });
 
   // ── roles ──
