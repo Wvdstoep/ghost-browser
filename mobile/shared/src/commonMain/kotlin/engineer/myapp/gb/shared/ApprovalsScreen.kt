@@ -96,6 +96,9 @@ fun ApprovalsScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("${p.worth}", style = MaterialTheme.typography.titleLarge, color = if (p.worth >= 60) Brand else cs.onSurface)
                         Text("worth", fontSize = 9.sp, color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace)
+                        // the hand-off, GB-only: the agent drafts the next move from the whole history (a DM or a reply you approve)
+                        val ask = AssistantHooks.ask
+                        if (p.lead && ask != null) TextButton(onClick = { ask("Draft the next message to ${p.name} on ${p.platform.ifBlank { "facebook" }} — they showed buying interest. Use everything we know about them (gb_people) and our history; make it a helpful, specific offer to talk, in my voice, as a reply in our thread or a DM, whichever fits. Do not send — draft it for my approval.") }, contentPadding = PaddingValues(horizontal = 6.dp)) { Text("Draft offer", fontSize = 11.sp) }
                     }
                 }
             }

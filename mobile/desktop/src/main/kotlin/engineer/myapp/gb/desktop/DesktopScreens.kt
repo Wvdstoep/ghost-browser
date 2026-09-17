@@ -148,6 +148,7 @@ private const val RD_GOAL_D = "Open Facebook notifications and my recent posts. 
 fun loadApprovals(st: DesktopState) = bg {
     st.jobsLoading.value = true
     try { st.leads.value = AssistantJson.people(Cluster.authed("GET", "/v1/people?platform=facebook", null)) } catch (e: Exception) { /* the section stays hidden */ }
+    if (engineer.myapp.gb.shared.AssistantHooks.ask == null) engineer.myapp.gb.shared.AssistantHooks.ask = { t -> AssistantD.ask(st, t) }
     val r = Cluster.authed("GET", "/v1/agent/jobs", null)
     try {
         val arr = JSONObject(r).optJSONArray("jobs") ?: org.json.JSONArray()

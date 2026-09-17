@@ -1367,6 +1367,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 else vm.log("! could not save $fname")
             } catch (e: Exception) { vm.log("! save: ${e.message}") }
         }
+        // "draft the offer" on a lead row: open the chat and hand the agent the ask
+        if (engineer.myapp.gb.shared.AssistantHooks.ask == null) engineer.myapp.gb.shared.AssistantHooks.ask = { text -> runOnUiThread { assistantOpen(); assistantSend(text) } }
         // a song plays inline (MediaPlayer on a cached copy); a clip opens in the system player from its saved copy
         if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null) engineer.myapp.gb.shared.AssistantHooks.playMedia = { downloadUrl, name, mime ->
             val hooks = engineer.myapp.gb.shared.AssistantHooks
@@ -1886,6 +1888,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         shellUi.jobsLoading.value = true
         apiCall("GET", "/v1/agent/jobs", null, "approvals")
         apiCall("GET", "/v1/people?platform=facebook", null, "people")   // the people worth your words, same screen
+        if (engineer.myapp.gb.shared.AssistantHooks.ask == null) engineer.myapp.gb.shared.AssistantHooks.ask = { text -> runOnUiThread { assistantOpen(); assistantSend(text) } }
     }
     private fun startApprovalsPolling() {
         if (approvalsPolling) return
