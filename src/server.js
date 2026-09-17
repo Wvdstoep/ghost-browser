@@ -1814,8 +1814,10 @@ async function postWatchTick(wf, owner, opts) {
  */
 ops.install({ app, authed, workflows, pool, profiles, consoleOwner, log });
 const operatorRuns = new Map();
+const assistantWalks = new Set();   // every walk any assistant turn started (ids), so a stale one is ours to stop
 function operatorContext() {
   const owner = consoleOwner(); const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const myWalks = new Set();          // this turn's walks
   const c = { owner, maxConcurrent: 2 };
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   const sessionFor = async (want) => {
@@ -1866,16 +1868,26 @@ function operatorContext() {
     saveFlow: (flow) => { const r = workflows.save(flow, paletteNames()); return (r && r.workflow) || r; },
     runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
+    stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
+    /* When the turn ends, its walks end with it. */
+    stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
     /* A WALK for the assistant: the same browser agent a flow step runs, in the profile asked for,
        unattended (its acts become proposals at the gate — nothing outward without the owner). */
     startWalk: async ({ goal, profile, role, maxSteps, maxPages }) => {
       const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
       const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
       const s = await sessionFor(profiles.safeName(profile || cfg.browserProfile || 'facebook'));
-      if (s.job) { const held = jobs.get(s.job); if (held && ['running', 'idle'].includes(held.status)) return { error: `that profile is busy with job ${s.job} — wait for it (gb_walk_wait) or use another profile` }; }
+      if (s.job) {
+        const held = jobs.get(s.job);
+        if (held && ['running', 'idle'].includes(held.status)) {
+          if (assistantWalks.has(held.id)) { try { await jobs.stop(held); } catch (e) { /* already ending */ } log.info(`[assistant] stopped the earlier walk ${held.id} in ${s.profile} for a new one`); }
+          else return { error: `that profile is busy with job ${s.job} (not one of yours) — wait for it (gb_walk_wait) or use another profile` };
+        }
+      }
       const job = jobs.create({ owner, goal: g.slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
         maxSteps: Math.min(120, Math.max(0, Math.round(Number(maxSteps) || 40))), maxPages: Math.min(60, Math.max(0, Math.round(Number(maxPages) || 12))) });
       s.job = job.id; job.role = roles.canonical(role || 'general');
+      assistantWalks.add(job.id); myWalks.add(job.id);
       const switchProfile = async (name) => { const ss = await sessionFor(profiles.safeName(name)); ss.job = job.id; return ss; };
       agent.run({ job, session: s, settings: cfg, switchProfile, sink: null, convo: null, role: job.role, ownOrigin: null, unattended: true, log })
         .catch((e) => { try { jobs.finish(job, 'failed', e.message); } catch (e2) { /* already ended */ } });
@@ -1888,14 +1900,15 @@ function operatorContext() {
 function startOperatorJob(goal, cfg, restore = null, opts = {}) {
   const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
   const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
-  const reg = new Registry(); registerOperatorTools(reg, operatorContext());
+  const reg = new Registry(); const ctx = operatorContext(); registerOperatorTools(reg, ctx);
   const notes = () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; };
   const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
   const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
     systemPrompt: opts.systemPrompt || operatorPrompt(), orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
     startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null });
   operatorRuns.set(run.id, run);
-  run.done = run.run().catch((e) => { log.error(`[operator] ${run.id}: ${e.message}`); return run.view(); });
+  run.done = run.run().catch((e) => { log.error(`[operator] ${run.id}: ${e.message}`); return run.view(); })
+    .then(async (v) => { try { const n = await ctx.stopWalks(); if (n) log.info(`[operator] ${run.id}: stopped ${n} walk(s) with the turn`); } catch (e) { /* best effort */ } return v; });
   log.info(`[operator] ${restore ? 'resumed' : 'job'} ${run.id}: ${String(run.goal).slice(0, 120)}`);
   return run;
 }
