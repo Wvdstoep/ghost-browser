@@ -49,28 +49,36 @@ async function crawl(page, url, log) {
     if (log) log.info(`[post-watch] not on the post yet (${page.url().slice(0, 80)}) — retrying`);
     await page.waitForTimeout(4000);
   }
-  const clickMatching = async (re, limit) => {
-    let n = 0;
-    const handles = await page.$$('div[role="button"], span[role="button"], a[role="button"], [role="menuitem"]');
-    for (const h of handles) {
-      if (n >= limit) break;
+  const candidates = async (re) => {
+    const out = [];
+    for (const h of await page.$$('div[role="button"], span[role="button"], a[role="button"], [role="menuitem"]')) {
       let t = ''; try { t = (await h.innerText()).trim().replace(/\s+/g, ' '); } catch { continue; }
-      if (!re.test(t)) continue;
-      try { await h.scrollIntoViewIfNeeded({ timeout: 2000 }); await h.click({ timeout: 4000 }); n++; await page.waitForTimeout(700); } catch { /* stale or covered — next */ }
+      if (re.test(t)) out.push(h);
     }
-    return n;
+    return out;
+  };
+  const press = async (h) => {
+    try { await h.evaluate((el) => el.scrollIntoView({ block: 'center' })); await page.waitForTimeout(250); await h.click({ timeout: 3000 }); return true; }
+    catch { try { await h.dispatchEvent('click'); return true; } catch { return false; } }
   };
   // Show ALL comments (Facebook defaults to "most relevant", which hides some) — best effort.
-  try { if (await clickMatching(SORT_BTN, 1)) { await page.waitForTimeout(800); await clickMatching(SORT_ALL, 1); await page.waitForTimeout(1500); } } catch { /* optional */ }
-  // Reveal hidden replies / more comments / truncated text, round after round, until nothing is left.
-  let total = 0;
-  for (let round = 0; round < 14; round++) {
-    const n = await clickMatching(EXPAND, 12);
-    total += n;
-    if (!n || total > 80) break;
-    await page.waitForTimeout(1200);
+  try { const sb = await candidates(SORT_BTN); if (sb[0] && await press(sb[0])) { await page.waitForTimeout(900); const sa = await candidates(SORT_ALL); if (sa[0]) { await press(sa[0]); await page.waitForTimeout(1500); } } } catch { /* optional */ }
+  /* Reveal every hidden reply / more comments / truncated text. ONE click per round, then re-query:
+     Facebook re-renders the whole list after each expand, so handles from before the click are stale
+     and a stale-handle failure used to read as "nothing left" — the crawl quit after ~9 expands with
+     "1 antwoord bekijken" still closed under the owner's own replies. If a click does not shrink the
+     set (a control that stays), move to the next candidate; stop when none remain. */
+  let clicks = 0, lastCount = -1, skip = 0;
+  for (let round = 0; round < 60 && clicks < 120; round++) {
+    const cand = await candidates(EXPAND);
+    if (!cand.length) break;
+    if (cand.length === lastCount) skip++; else skip = 0;
+    if (skip >= cand.length) break;
+    lastCount = cand.length;
+    if (await press(cand[skip])) clicks++;
+    await page.waitForTimeout(1000);
   }
-  if (log) log.info(`[post-watch] expanded ${total} control(s) on ${url}`);
+  if (log) log.info(`[post-watch] expanded ${clicks} control(s) on ${url}`);
   const tree = await page.evaluate(extractInPage);
   tree.url = String(url); tree.crawledAt = Date.now();
   return tree;
