@@ -1852,6 +1852,8 @@ function operatorContext() {
     look: async (profile) => {
       const s = await sessionFor(profiles.safeName(profile || 'facebook')); const page = s.page;
       const url = page.url(); const title = await page.title().catch(() => '');
+      // a blank tab has nothing to show: no picture, and say so (a look before the page loaded)
+      if (!url || url === 'about:blank') return { url, title, controls: [], text: '', note: 'the tab is blank — nothing has been opened in this profile yet; a walk opens the page' };
       let controls = []; try { const a = await analyzePage(page); const els = Array.isArray(a) ? a : ((a && (a.elements || a.items)) || []); controls = els.slice(0, 60).map((e) => ({ i: e.index !== undefined ? e.index : e.i, text: String(e.text || e.label || e.ariaLabel || '').slice(0, 80), kind: e.tag || e.role || e.type })); } catch (e) { controls = [{ error: e.message }]; }
       let text = ''; try { text = await page.evaluate(() => (document.body && document.body.innerText || '').replace(/\s+\n/g, '\n').slice(0, 1500)); } catch (e) { /* none */ }
       let shot = null; try { const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true }); shot = require('path').join(dir, Date.now() + '.jpg'); await page.screenshot({ path: shot, type: 'jpeg', quality: 55 }); } catch (e) { shot = null; }
