@@ -34,11 +34,11 @@ const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v 
 /** screenshotUrl / downloadUrl of a tool result, whether it came back as an object or as JSON text. */
 function mediaOf(out) {
   let o = out && typeof out === 'object' ? out : null;
-  if (!o && typeof out === 'string' && /"(screenshotUrl|downloadUrl)"/.test(out)) {
+  if (!o && typeof out === 'string' && /"(screenshotUrl|downloadUrl|recordingId)"/.test(out)) {
     try { o = JSON.parse(out); } catch { const m = out.match(/"screenshotUrl"\s*:\s*"([^"]+)"/); const d = out.match(/"downloadUrl"\s*:\s*"([^"]+)"/); const n = out.match(/"name"\s*:\s*"([^"]*)"/); o = { screenshotUrl: m ? m[1] : '', downloadUrl: d ? d[1] : '', name: n ? n[1] : '' }; }
   }
   if (!o) return {};
-  return { image: o.screenshotUrl ? String(o.screenshotUrl) : '', download: o.downloadUrl ? String(o.downloadUrl) : '', fileName: String(o.name || ''), kind: String(o.kind || ''), mime: String(o.mime || '') };
+  return { image: o.screenshotUrl ? String(o.screenshotUrl) : '', download: o.downloadUrl ? String(o.downloadUrl) : '', fileName: String(o.name || ''), kind: String(o.kind || ''), mime: String(o.mime || ''), recording: o.recordingId ? String(o.recordingId) : '' };
 }
 const looksFailed = (out) => { const s = typeof out === 'string' ? out : JSON.stringify(out || {}); return /^\{"error"|refused|"error":|not found|failed:/i.test(String(s).slice(0, 200)); };
 
@@ -210,7 +210,7 @@ class OperatorRun {
             // a picture or a file the tool produced rides on the event — the tools hand back JSON text
             // (clipped for the model), so the fields are read from the text when it is not an object
             const media = mediaOf(out);
-            this._event('result', { name, text: clip(out, 600), ...(media.image ? { image: media.image } : {}), ...(media.download ? { download: media.download, fileName: media.fileName, fileKind: media.kind, fileMime: media.mime } : {}) });
+            this._event('result', { name, text: clip(out, 600), ...(media.image ? { image: media.image } : {}), ...(media.download ? { download: media.download, fileName: media.fileName, fileKind: media.kind, fileMime: media.mime } : {}), ...(media.recording ? { recording: media.recording } : {}) });
             if (this._failStreak >= 8) { this._pushTool(call, out); this._finishAs('blocked', `eight tool calls in a row failed — the environment is not answering as expected`); break; }
           }
           this._pushTool(call, out);

@@ -171,6 +171,21 @@ class Recorder {
     }
   }
 
+  /**
+   * Retention: finished recordings older than `days` go, then the oldest finished ones until what is
+   * kept fits `maxBytes`. Never a live one. Returns what went and why, for the nightly report.
+   */
+  prune({ days = 14, maxBytes = 30 * 1024 * 1024 * 1024, now = this.clock() } = {}) {
+    const done = this.list().filter((r) => !this.live.has(r.id) && ['done', 'partial', 'failed'].includes(r.state)).sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    const removed = []; let total = done.reduce((s, r) => s + (r.bytes || 0), 0);
+    for (const r of done) {
+      const old = now - (r.endedAt || r.startedAt || 0) > days * 86400000;
+      if (!old && total <= maxBytes) continue;
+      if (this.remove(r.id).removed) { total -= r.bytes || 0; removed.push({ id: r.id, bytes: r.bytes || 0, why: old ? `older than ${days} days` : 'over the size budget' }); }
+    }
+    return { removed, kept: done.length - removed.length, bytes: total };
+  }
+
   /** The mp4 for a finished (or partial) recording: built once by stream copy, then served with Range. */
   async mp4(id) {
     const dir = this.dirOf(id); const j = readJournal(dir); if (!j) throw new Error('no such recording');
