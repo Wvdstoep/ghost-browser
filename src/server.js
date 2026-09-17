@@ -1832,7 +1832,7 @@ function operatorContext() {
       let controls = []; try { const a = await analyzePage(page); const els = Array.isArray(a) ? a : ((a && (a.elements || a.items)) || []); controls = els.slice(0, 60).map((e) => ({ i: e.index !== undefined ? e.index : e.i, text: String(e.text || e.label || e.ariaLabel || '').slice(0, 80), kind: e.tag || e.role || e.type })); } catch (e) { controls = [{ error: e.message }]; }
       let text = ''; try { text = await page.evaluate(() => (document.body && document.body.innerText || '').replace(/\s+\n/g, '\n').slice(0, 1500)); } catch (e) { /* none */ }
       let shot = null; try { const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true }); shot = require('path').join(dir, Date.now() + '.png'); await page.screenshot({ path: shot, type: 'png' }); } catch (e) { shot = null; }
-      return { url, title, controls, text, screenshot: shot };
+      return { url, title, controls, text, screenshot: shot, screenshotUrl: shot ? '/v1/operator/shots/' + require('path').basename(shot) : null };
     },
     probe: async (id, url, expand) => {
       if (runningWatchers.size) return { error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')}) — wait for it` };
@@ -1857,26 +1857,68 @@ function operatorContext() {
     saveFlow: (flow) => { const r = workflows.save(flow, paletteNames()); return (r && r.workflow) || r; },
     runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
+    /* A WALK for the assistant: the same browser agent a flow step runs, in the profile asked for,
+       unattended (its acts become proposals at the gate — nothing outward without the owner). */
+    startWalk: async ({ goal, profile, role, maxSteps, maxPages }) => {
+      const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
+      if (runningWatchers.size) return { error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')}) — wait with gb_watcher_wait, then start the walk` };
+      const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
+      const s = await sessionFor(profiles.safeName(profile || cfg.browserProfile || 'facebook'));
+      if (s.job) { const held = jobs.get(s.job); if (held && ['running', 'idle'].includes(held.status)) return { error: `that profile is busy with job ${s.job} — wait for it (gb_walk_wait) or use another profile` }; }
+      const job = jobs.create({ owner, goal: g.slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
+        maxSteps: Math.min(120, Math.max(0, Math.round(Number(maxSteps) || 40))), maxPages: Math.min(60, Math.max(0, Math.round(Number(maxPages) || 12))) });
+      s.job = job.id; job.role = roles.canonical(role || 'general');
+      const switchProfile = async (name) => { const ss = await sessionFor(profiles.safeName(name)); ss.job = job.id; return ss; };
+      agent.run({ job, session: s, settings: cfg, switchProfile, sink: null, convo: null, role: job.role, ownOrigin: null, unattended: true, log })
+        .catch((e) => { try { jobs.finish(job, 'failed', e.message); } catch (e2) { /* already ended */ } });
+      log.info(`[assistant] walk ${job.id} in ${s.profile || 'default'}: ${g.slice(0, 100)}`);
+      return { jobId: job.id, profile: s.profile || null, status: 'running' };
+    },
   };
 }
 /** One job: fresh from a goal, or resumed from the journal a restart left behind (restore = the record). */
-function startOperatorJob(goal, cfg, restore = null) {
+function startOperatorJob(goal, cfg, restore = null, opts = {}) {
   const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
   const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
   const reg = new Registry(); registerOperatorTools(reg, operatorContext());
-  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg, systemPrompt: operatorPrompt(), orientation: () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; }, log });
+  const notes = () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; };
+  const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
+  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
+    systemPrompt: opts.systemPrompt || operatorPrompt(), orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
+    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null });
   operatorRuns.set(run.id, run);
-  run.run().catch((e) => log.error(`[operator] ${run.id}: ${e.message}`));
+  run.done = run.run().catch((e) => { log.error(`[operator] ${run.id}: ${e.message}`); return run.view(); });
   log.info(`[operator] ${restore ? 'resumed' : 'job'} ${run.id}: ${String(run.goal).slice(0, 120)}`);
   return run;
 }
+/* THE ASSISTANT — one chat, one agent (src/operator/assistant.js). A turn is an operator run with the
+   assistant's identity, the reply exit and a short budget; the chat history rides in the orientation. */
+const assistant = require('./operator/assistant').makeAssistant({
+  log,
+  startTurn: ({ goal, orientation, finishSpec, meta }) => {
+    const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
+    const { assistantPrompt } = require('./operator/assistantPrompt');
+    return startOperatorJob(goal, cfg, null, { systemPrompt: assistantPrompt(), orientation, finishSpec, meta, startIterations: 60, maxIterations: 200 });
+  },
+});
 /** Jobs the last process died on come back by themselves — the journal carries the task list and the
     last steps, the harness tells the model it is resuming. Bounded (see MAX_RESUMES in the harness). */
 function resumeOperatorJobs() {
   const { interruptedJobs } = require('./operator/harness');
   const cfg = settingsStore.read(); if (!cfg.llmModel) return 0;
   const jobs = interruptedJobs(); let n = 0;
-  for (const j of jobs) { if (operatorRuns.has(j.id)) continue; try { startOperatorJob(j.goal, cfg, j); n++; } catch (e) { log.error(`[operator] resume ${j.id} failed: ${e.message}`); } }
+  for (const j of jobs) {
+    if (operatorRuns.has(j.id)) continue;
+    try {
+      if (j.meta && j.meta.chatId) {
+        const { assistantPrompt } = require('./operator/assistantPrompt'); const { REPLY_SPEC } = require('./operator/assistant');
+        const chat = assistant.view(j.meta.chatId);
+        const run = startOperatorJob(j.goal, cfg, j, { systemPrompt: assistantPrompt(), finishSpec: REPLY_SPEC, meta: j.meta, startIterations: 60, maxIterations: 200, orientation: () => chat ? 'THE CONVERSATION SO FAR (oldest first):\n' + chat.turns.slice(-12).map((x) => `${x.role === 'user' ? 'Owner' : 'You'}: ${String(x.text || '').slice(0, 600)}`).join('\n') : '' });
+        assistant.attach(run);
+      } else startOperatorJob(j.goal, cfg, j);
+      n++;
+    } catch (e) { log.error(`[operator] resume ${j.id} failed: ${e.message}`); }
+  }
   return n;
 }
 app.post('/v1/operator/jobs', authed, (req, res) => {
@@ -1888,6 +1930,23 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
     const run = startOperatorJob(goal, cfg);
     res.json({ id: run.id, status: 'running' });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
+app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title)));
+app.get('/v1/assistant/chats/:id', authed, (req, res) => { const v = assistant.view(req.params.id); if (!v) return res.status(404).json({ error: 'no such chat' }); res.json(v); });
+app.delete('/v1/assistant/chats/:id', authed, (req, res) => res.json({ ok: assistant.remove(req.params.id) }));
+app.post('/v1/assistant/chats/:id/messages', authed, (req, res) => {
+  const cfg = settingsStore.read();
+  if (!cfg.llmModel) return res.status(400).json({ error: 'no AI model configured — set it under agent Settings first' });
+  try { const r = assistant.send(req.params.id, (req.body || {}).text); if (r.error) return res.status(400).json(r); res.json(r); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistant.stop(req.params.id)));
+/* Screenshots gb_look stored, for the app (png, by file name only). */
+app.get('/v1/operator/shots/:file', authed, (req, res) => {
+  const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!f.endsWith('.png')) return res.status(404).end();
+  const full = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots', f);
+  if (!require('fs').existsSync(full)) return res.status(404).end(); res.type('png').sendFile(full);
 });
 app.get('/v1/operator/jobs', authed, (req, res) => {
   const { listPersisted } = require('./operator/harness');
