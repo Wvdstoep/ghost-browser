@@ -1905,7 +1905,7 @@ function operatorContext() {
     /* FILES the browser captured (a page's Download button lands in the file store): list them, and put
        one in front of the owner — an image is copied into the shots dir so the chat inlines it. */
     /* the recorder (defined further down; called only at run time) */
-    recordStart: (a) => { try { const r = recorder.start({ url: a.url, profile: a.profile, until: a.until, maxMinutes: a.maxMinutes, quality: a.quality, title: a.title }); return { ok: true, recordingId: r.id, recording: r, note: 'the recording runs on by itself after this turn — answer the owner now; the app shows its card' }; } catch (e) { return { error: e.message }; } },
+    recordStart: (a) => { try { const r = recorder.start({ url: a.url, profile: a.profile, until: a.until, maxMinutes: a.maxMinutes, quality: a.quality, title: a.title }); return { ok: true, recordingId: r.id, recording: { id: r.id, state: r.state, until: r.until, maxMinutes: r.maxMinutes, quality: r.quality, title: r.title, url: r.url }, note: 'the recording runs on by itself after this turn — answer the owner now; the app shows its card' }; } catch (e) { return { error: e.message }; } },
     recordStatus: (id) => { const r = recorder.get(String(id || '')); return r ? { recordingId: r.id, ...r } : { error: 'no such recording' }; },
     recordStop: (id) => recorder.stop(String(id || '')),
     recordList: () => ({ recordings: recorder.list().slice(0, 20).map((r) => ({ id: r.id, state: r.state, title: r.title || r.pageTitle, url: r.url, seconds: r.seconds, bytes: r.bytes, startedAt: r.startedAt })), running: recorder.running(), freeGB: Math.round(require('./recorder/sidecar').freeBytes(recorder.root) / 1073741824) }),
