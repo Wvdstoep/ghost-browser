@@ -8,7 +8,8 @@ Status board (keep this table current; it is the hand-off between sessions):
 | 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | **done · v342** (2026-09-17) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
-| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | **done · v343 · app** (2026-09-17) — console panel, subtitles and the controller's consumer side left as follow-ups | — |
+| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | **done · v343 · app** (2026-09-17) — console panel, subtitles and the controller's consumer side left as follow-ups |
+| 5 | The platform spawns the recorder: gated by the tenant's plan and rented machines, not by a tool inside the tenant's namespace | planned (GB side pluggable; provisioner side to design) | — |
 
 Facts the design rests on (measured 2026-09-17):
 
@@ -109,6 +110,18 @@ Facts the design rests on (measured 2026-09-17):
 - From the owner's live test on the way: the playlist a player follows lists only the segments that are here (no 404 at the live edge); the mp4 is built from the files present (a cut recording plays as a clean partial; all three on the cluster strict-decode clean); recorder pods get 6 GiB / 4 CPU (1080p was OOM-killed at 3 GiB); the pod's stop poll is a light call.
 - The tenant namespace has a quota on REQUESTS (10 GiB memory, 4 CPU; 8.6 GiB and 2.3 CPU in use by the tenant's apps): a recorder pod that asked to reserve 2 GiB was never created and the Job sat there retrying. Now the pod reserves 1 GiB / 0.5 CPU and bursts to 6 GiB / 4 CPU (limits are not under the quota), and a Job that gets no pod within 25 s is taken back — the recording runs inside Ghost Browser instead and counts as demand. Proven on v344: a pod within the quota, 60 s with sound; the quota's usage back where it was after.
 - Left as follow-ups: a Recordings panel in the console, subtitles through the platform's speech service, per-recording CPU/memory telemetry, and the capacity controller actually consuming the demand signal (a platform-side change).
+
+## One at a time, with a queue (2026-09-17)
+
+Until the platform spawns recorders (Phase 5), one recording runs at a time (`MAX_RECORDINGS_TOTAL`, 1). A recording asked for while one runs is `queued`: it keeps its place, starts by itself the moment the running one ends (also after a restart), and can be taken out of the queue with Stop. The recordings list carries `queued` (ids in order) and each queued recording its `queuePos`; the app shows the queue under Downloads and on the card ("queued · #2"); the agent's `record_start` answers "queued, position n" and `record_list` lists the queue.
+
+## Phase 5 — The platform spawns the recorder
+
+**Why.** A recorder Job created by GB inside the tenant's namespace competes with the tenant's own apps for the namespace quota (10 GiB of reservations, 8.6 in use → one recorder pod at most, a second one refused), and the tenant's plan and rented machines are invisible to a tool. Spawning recorders is a platform capability: the platform knows the plan (recording minutes, parallel recordings, storage), the tenant's rented VMs and BYON nodes, and the capacity controller; a tool should ask, not decide.
+
+**Contract (GB side, pluggable).** `recorder/remote.js` gains a second implementation, chosen by `RECORDER_PLATFORM_URL`: `launch(rec)` → `POST {platform}/v1/tenants/{tenant}/recorders { recordingId, gbUrl, token, quality, maxMinutes }` → `{ jobRef, where: 'platform' | 'byon:<node>' }` or `409 { reason: 'plan' | 'capacity', retryAfterSec }`; `alive(rec)` → `GET …/recorders/{jobRef}`; `cancel(rec)` → `DELETE`. The recording protocol itself does not change: the recorder pod still takes the handoff from GB and pushes segments, playlist and journal back with the recording's token, so GB's storage, tickets, share links and the app stay as they are. When the platform says no (plan, capacity), GB queues the recording and shows why; when there is no platform (the open-source install), the in-namespace Job stays the default.
+
+**Provisioner side (to design, webnpm repo).** A recorder is a platform-managed Job in a platform namespace (its own quota, the GB image in `MODE=recorder`, a scratch disk, egress to the tenant's GB by its public host with the recording token), placed by the plan: free = 1 at a time / 720p / 30 min, paid tiers add parallel recordings, 1080p and hours; tenants with rented VMs or BYON nodes get their recorders placed on those nodes (node selector) with no platform cost; queued demand feeds the capacity controller (rent-a-node) exactly as the `demand` signal already does. Billing counts recording minutes per tenant. The tenant's GB never needs Kubernetes rights on the platform cluster.
 
 ## Out of scope, on purpose
 

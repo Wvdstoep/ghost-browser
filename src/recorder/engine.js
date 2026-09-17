@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const STATES = ['starting', 'recording', 'finishing', 'done', 'partial', 'failed'];
+const STATES = ['queued', 'starting', 'recording', 'finishing', 'done', 'partial', 'failed'];
 const RUNNING = ['starting', 'recording', 'finishing'];
 const QUALITIES = ['720p', '1080p', '1080p60'];
 const STALE_MS = 3 * 60 * 1000;   // a pod that has not reported for this long is taken as gone
@@ -96,6 +96,8 @@ class Recorder {
     this.root = root; this.deps = deps; this.log = log || { info() {}, warn() {}, debug() {} };
     this.maxConcurrent = maxConcurrent; this.tickMs = tickMs; this.clock = clock; this.launchGraceMs = launchGraceMs;
     this.maxRemote = Math.max(1, Number(process.env.MAX_REMOTE_RECORDINGS) || 3);
+    // how many recordings may run at once, pods of their own included — 1 until the platform spawns recorders
+    this.maxTotal = Math.max(1, Number(process.env.MAX_RECORDINGS_TOTAL) || 1);
     // the DEMAND signal for the capacity controller: how often recordings wanted a pod of their own and got none
     this.demand = { refusedRemote: 0, lastRefusedAt: 0 };
     this.live = new Map();   // id → { rec, ctx: { display, pulse, context, page, ff }, stopReq }
@@ -187,19 +189,40 @@ class Recorder {
   start(a = {}) {
     const url = String(a.url || '').trim(); if (!/^https?:\/\//.test(url)) throw new Error('url required');
     const caps = this.deps.capabilities(); if (!caps.ok) throw new Error(`cannot record here: ${caps.hint}`);
-    if (this.live.size >= this.maxConcurrent) throw new Error(`already recording ${this.live.size} — the limit is ${this.maxConcurrent}`);
     if (this.deps.freeBytes(this.root) < MIN_FREE_BYTES) throw new Error('less than 2 GiB free on the recordings volume — remove old recordings first');
     const until = UNTIL.includes(a.until) ? a.until : 'video-ends';
     const maxMinutes = Math.min(HARD_MAX_MIN, Math.max(1, Number(a.maxMinutes) || DEFAULT_MAX_MIN[until]));
     const rec = { id: a.id && /^[a-z0-9-]+$/i.test(a.id) ? a.id : newId(), url, profile: String(a.profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default', quality: QUALITIES.includes(a.quality) ? a.quality : '720p',
       until, maxMinutes, title: String(a.title || '').slice(0, 120), state: 'starting', startedAt: this.clock(), recordingAt: 0, endedAt: 0, seconds: 0, bytes: 0, segments: 0, error: null, reason: '', pageTitle: '', display: null, mode: 'local' };
-    // A POD OF ITS OWN when the cluster allows it (Phase 3): resources added, not borrowed, and a roll of
-    // this process cannot cut it. The pod reports back over HTTP with this recording's token. If the
-    // Job cannot be created the recording runs here, and the journal says which.
+    // ONE AT A TIME (maxTotal, 1 for now): a recording asked for while another runs waits in the queue and
+    // starts by itself when the running one ends — never a refusal, never two squeezed into this pod.
+    if (this.running().length + this.runningRemote().length >= this.maxTotal) {
+      rec.state = 'queued'; rec.wantMode = a.mode || ''; this._save(rec);
+      this.log.info(`[recorder] ${rec.id} queued behind ${[...this.running(), ...this.runningRemote()].join(', ')} (${this.queued().length} waiting)`);
+      return this.view(rec);
+    }
+    return this._launch(rec, a.mode);
+  }
+  /** The recordings waiting their turn, oldest first. */
+  queued() { return this.list().filter((r) => r.state === 'queued').sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)); }
+  /** A slot came free: the oldest queued recording starts. Called whenever a recording ends. */
+  _promote() {
+    if (this.running().length + this.runningRemote().length >= this.maxTotal) return null;
+    const next = this.queued()[0]; if (!next) return null;
+    const rec = readJournal(this.dirOf(next.id)); if (!rec || rec.state !== 'queued') return null;
+    rec.state = 'starting'; rec.queuedFor = Math.round((this.clock() - (rec.startedAt || this.clock())) / 1000); rec.startedAt = this.clock(); this._save(rec);
+    this.log.info(`[recorder] ${rec.id} starts from the queue (waited ${rec.queuedFor}s)`);
+    return this._launch(rec, rec.wantMode);
+  }
+
+  /** A POD OF ITS OWN when the cluster allows it (Phase 3): resources added, not borrowed, and a roll of
+      this process cannot cut it. The pod reports back over HTTP with this recording's token. If the
+      Job cannot be created the recording runs here, and the journal says which. */
+  _launch(rec, wantMode) {
     const remote = this.deps.remote;
     const remoteFull = remote && this.runningRemote().length >= this.maxRemote;
     if (remoteFull) { this.demand.refusedRemote++; this.demand.lastRefusedAt = this.clock(); this.log.warn(`[recorder] ${rec.id}: ${this.maxRemote} pod(s) of their own already recording — recording in this pod (demand ${this.demand.refusedRemote})`); }
-    if (remote && a.mode !== 'local' && !remoteFull && remote.available()) {
+    if (remote && wantMode !== 'local' && !remoteFull && remote.available()) {
       rec.mode = 'job'; rec.token = newToken(); rec.updatedAt = this.clock(); this._save(rec);
       const fallBack = (why) => { const cur = readJournal(this.dirOf(rec.id)); if (!cur || cur.mode !== 'job' || !RUNNING.includes(cur.state)) return; this.log.warn(`[recorder] ${rec.id}: no pod of its own (${why}) — recording in this pod instead`); this.demand.refusedRemote++; this.demand.lastRefusedAt = this.clock(); delete cur.token; this._set(cur, { mode: 'local', fallback: why }); this._runLocal(cur); };
       Promise.resolve().then(() => remote.launch(rec)).then((j) => {
@@ -218,6 +241,7 @@ class Recorder {
   stop(id, reason = 'stopped by the owner') {
     const l = this.live.get(id); if (l) { if (!l.stopReq) l.stopReq = reason; return { ok: true, id }; }
     const j = readJournal(this.dirOf(id));
+    if (j && j.state === 'queued') { this._set(j, { state: 'failed', reason: 'taken out of the queue', endedAt: this.clock() }); return { ok: true, id, queued: true }; }
     if (j && j.mode === 'job' && RUNNING.includes(j.state)) { if (!j.stopRequested) this._set(j, { stopRequested: reason }); if (this.deps.remote && this.deps.remote.stop) { try { this.deps.remote.stop(j); } catch { /* the pod polls for it anyway */ } } return { ok: true, id, remote: true }; }
     return { error: 'not recording' };
   }
@@ -236,7 +260,7 @@ class Recorder {
     if (p.state && !STATES.includes(p.state)) delete p.state;
     // the numbers come from what has ARRIVED here, not from the pod's scratch (it deletes what it pushed)
     this._set(j, { ...p, ...statsOf(this.dirOf(id)), updatedAt: this.clock() });
-    if (!RUNNING.includes(j.state)) closePlaylist(this.dirOf(id));
+    if (!RUNNING.includes(j.state)) { closePlaylist(this.dirOf(id)); try { this._promote(); } catch (e) { this.log.warn(`[recorder] promote: ${e.message}`); } }
     return this.view(j);
   }
 
@@ -252,6 +276,7 @@ class Recorder {
       this._set(j, { ...st, state: st.segments ? 'partial' : 'failed', endedAt: this.clock(), reason: alive ? 'the recorder pod went silent' : 'the recorder pod is gone' }); n++;
       this.log.warn(`[recorder] ${r.id}: ${j.reason} — closed as ${j.state}`);
     }
+    try { this._promote(); } catch (e) { this.log.warn(`[recorder] promote: ${e.message}`); }
     return n;
   }
 
@@ -309,6 +334,7 @@ class Recorder {
       if (ctx.display) { try { ctx.display.stop(); } catch { /* gone */ } }
       try { fs.rmSync(path.join(dir, 'profile'), { recursive: true, force: true }); } catch { /* best effort */ }
       this.live.delete(rec.id);
+      try { this._promote(); } catch (e) { this.log.warn(`[recorder] promote: ${e.message}`); }
     }
   }
 

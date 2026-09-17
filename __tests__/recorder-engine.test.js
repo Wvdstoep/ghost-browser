@@ -97,12 +97,21 @@ describe('the recording engine', () => {
     t += 61000; const e = await untilState(r2, w.id, ['done']); expect(e.reason).toBe('the page moved on to another video');
   });
 
-  it('refuses when the machine cannot record, when too many run, and with a bad url', () => {
+  it('refuses when the machine cannot record and with a bad url', () => {
     expect(() => mk(fakeDeps({ caps: false })).start({ url: 'https://x.com/v' })).toThrow(/cannot record here/);
     expect(() => mk(fakeDeps()).start({ url: 'ftp://x' })).toThrow(/url required/);
-    const f = fakeDeps(); const r = mk(f, { maxConcurrent: 1 }); r.start({ url: 'https://x.com/a', until: 'owner-stop' });
-    expect(() => r.start({ url: 'https://x.com/b' })).toThrow(/limit is 1/);
-    r.stop(r.running()[0]);
+  });
+
+  it('one at a time: a second ask waits in the queue, starts by itself when the first ends, and can be taken out', async () => {
+    const f = fakeDeps(); const r = mk(f);   // maxTotal defaults to 1
+    const a = r.start({ url: 'https://x.com/a', until: 'owner-stop' }); await untilState(r, a.id, ['recording']);
+    const b = r.start({ url: 'https://x.com/b', until: 'owner-stop' }); const c = r.start({ url: 'https://x.com/c', until: 'owner-stop' });
+    expect(b.state).toBe('queued'); expect(c.state).toBe('queued'); expect(r.queued().map((x) => x.id)).toEqual([b.id, c.id]); expect(r.running()).toEqual([a.id]);
+    expect(r.stop(c.id)).toEqual({ ok: true, id: c.id, queued: true }); expect(r.get(c.id)).toMatchObject({ state: 'failed', reason: 'taken out of the queue' }); expect(r.queued().map((x) => x.id)).toEqual([b.id]);
+    r.stop(a.id); await untilState(r, a.id, ['done']);
+    const bb = await untilState(r, b.id, ['recording']); expect(bb.state).toBe('recording'); expect(bb.queuedFor).toBeGreaterThanOrEqual(0); expect(r.running()).toEqual([b.id]); expect(r.queued()).toEqual([]);
+    expect(f.calls.ffmpeg).toBe(2);
+    r.stop(b.id); await untilState(r, b.id, ['done']);
   });
 
   it('after a restart a journal left recording becomes a playable partial; nothing written becomes failed', () => {
