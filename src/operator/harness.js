@@ -43,7 +43,7 @@ function mediaOf(out) {
 const looksFailed = (out) => { const s = typeof out === 'string' ? out : JSON.stringify(out || {}); return /^\{"error"|refused|"error":|not found|failed:/i.test(String(s).slice(0, 200)); };
 
 class OperatorRun {
-  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR, restore = null, finishSpec = null, meta = null }) {
+  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR, restore = null, finishSpec = null, meta = null, maxMs = 0 }) {
     if (!chat || !registry || !systemPrompt) throw new Error('OperatorRun needs chat, registry, systemPrompt');
     this.id = id || `op-${now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     this.goal = String(goal || '').trim();
@@ -59,7 +59,7 @@ class OperatorRun {
     this.status = 'queued'; this.iterations = 0; this.budget = startIterations;
     this.tasks = []; this.events = []; this.messages = []; this.report = null; this.finalLine = '';
     this.startedAt = now(); this.endedAt = 0; this.error = null;
-    this._pendingSay = []; this._stop = false; this._recentCalls = []; this._nudges = 0; this._failStreak = 0; this._repeatStreak = 0;
+    this._pendingSay = []; this._stop = false; this._onStop = []; this.maxMs = Number(maxMs) || 0; this._recentCalls = []; this._nudges = 0; this._failStreak = 0; this._repeatStreak = 0;
     this._restored = false;
     /* RESUME after a restart: a job that was running when the pod rolled continues from its journal —
        its id, goal, task list (with the notes), budget and the transcript tail — instead of being lost. */
@@ -99,20 +99,27 @@ class OperatorRun {
 
   /** The owner speaks into the run; it lands as the next user turn. */
   say(text) { const t = String(text || '').trim(); if (t) this._pendingSay.push(t); }
-  stop() { this._stop = true; }
+  /** STOP that bites: the flag ends the loop, the hooks end what the loop is waiting on (a walk), the
+      journal remembers it so a restart never resumes a turn the owner already stopped. */
+  stop() {
+    if (this._stop) return; this._stop = true; this._event('stop', {}); this._persist();
+    for (const f of this._onStop) { try { const p = f(); if (p && typeof p.catch === 'function') p.catch(() => {}); } catch (e) { /* best effort */ } }
+  }
+  onStop(fn) { if (typeof fn === 'function') this._onStop.push(fn); }
+  stopped() { return this._stop; }
 
   _event(kind, data) { this.events.push({ t: this.now(), kind, ...data }); if (this.events.length > 600) this.events.splice(0, this.events.length - 600); }
 
   _persist() {
     try {
       fs.mkdirSync(this.persistDir, { recursive: true });
-      const rec = { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
+      const rec = { id: this.id, goal: this.goal, status: this.status, stopRequested: this._stop, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
       const f = path.join(this.persistDir, this.id + '.json'); fs.writeFileSync(f + '.tmp', JSON.stringify(rec)); fs.renameSync(f + '.tmp', f);
     } catch { /* best effort */ }
   }
 
   view() {
-    return { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
+    return { id: this.id, goal: this.goal, status: this._stop && this.status === 'running' ? 'stopping' : this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
   }
 
   _orientationMessage() {
@@ -159,6 +166,7 @@ class OperatorRun {
     try {
       while (!this._stop && this.status === 'running') {
         if (this.iterations >= this.budget) { this._finishAs('blocked', `iteration budget spent (${this.iterations}) before the outcome was proven`); break; }
+        if (this.maxMs && this.now() - this.startedAt > this.maxMs) { this._finishAs('blocked', `ran out of time (${Math.round(this.maxMs / 60000)} min) before the outcome was proven`); break; }
         this.iterations++;
         if (this._pendingSay.length) { const t = this._pendingSay.splice(0).join('\n'); this.messages.push({ role: 'user', content: `The owner says: ${t}` }); this._event('say', { text: t }); }
         if (this.iterations % RE_ANCHOR_EVERY === 0) this.messages.push({ role: 'user', content: this._orientationMessage() });
@@ -235,6 +243,7 @@ function interruptedJobs(dir = JOB_DIR) {
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
       let r; try { r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
       if (r.status !== 'running') continue;
+      if (r.stopRequested) { r.status = 'stopped'; r.finalLine = 'stopped by the owner'; r.endedAt = Date.now(); try { fs.writeFileSync(path.join(dir, f), JSON.stringify(r)); } catch { /* best effort */ } continue; }
       if ((Number(r.resumes) || 0) >= MAX_RESUMES) {
         r.status = 'interrupted'; r.finalLine = `BLOCKED: interrupted by a restart ${MAX_RESUMES} times — not resumed again`; r.endedAt = Date.now();
         try { fs.writeFileSync(path.join(dir, f), JSON.stringify(r)); } catch { /* best effort */ }

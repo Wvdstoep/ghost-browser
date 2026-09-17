@@ -88,6 +88,9 @@ function briefOf(name, text) {
   return v && typeof v === 'object' ? '' : s.slice(0, 120);
 }
 
+/** A turn's wall clock: past this the turn ends as blocked instead of browsing for an hour. */
+const TURN_MAX_MS = 40 * 60 * 1000;
+
 function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) {
   if (typeof startTurn !== 'function') throw new Error('assistant needs startTurn');
   const L = log || { info() {}, warn() {}, error() {} };
@@ -146,7 +149,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
   function view(id) {
     const c = load(id); if (!c) return null;
     const run = live.get(id);
-    const liveView = run ? { jobId: run.id, status: run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
+    const liveView = run ? { jobId: run.id, status: run.stopped && run.stopped() && run.status === 'running' ? 'stopping' : run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
     const turns = c.turns.map((t) => ({ ...t, steps: (t.steps || []).map((s) => ({ ...s })) }));
     inlineImages(turns, liveView);
     return { id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
@@ -173,7 +176,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     c.turns.push({ role: 'user', text: t, t: now() });
     if (c.title === 'New chat' || !c.title) c.title = t.slice(0, 60);
     c.updatedAt = now(); save(c);
-    const run = startTurn({ goal: t, orientation: () => historyDigest(c), finishSpec: REPLY_SPEC, meta: { chatId: c.id } });
+    const run = startTurn({ goal: t, orientation: () => historyDigest(c), finishSpec: REPLY_SPEC, meta: { chatId: c.id }, maxMs: TURN_MAX_MS });
     hook(c, run);
     return { ok: true, jobId: run.id };
   }

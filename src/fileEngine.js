@@ -45,6 +45,31 @@ function nameFrom({ contentDisposition = '', url = '', mime = '' } = {}) {
 }
 
 /** One line the chat and the log show for a captured file. */
+/** What the bytes SAY they are (magic numbers), '' when no known header. A paywalled or captcha'd
+    "download" answers with a web page or an encrypted stream, and a player then dies on it. */
+function sniff(bytes) {
+  const b = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []); if (b.length < 4) return '';
+  const at = (o, str) => b.toString('latin1', o, o + str.length) === str;
+  if (at(0, '\x89PNG')) return 'image/png'; if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'; if (at(0, 'GIF8')) return 'image/gif';
+  if (at(0, 'RIFF') && at(8, 'WEBP')) return 'image/webp'; if (at(0, 'RIFF') && at(8, 'WAVE')) return 'audio/wav';
+  if (at(0, '%PDF')) return 'application/pdf'; if (at(0, 'PK\x03\x04')) return 'application/zip'; if (at(0, 'Rar!')) return 'application/x-rar'; if (b[0] === 0x1f && b[1] === 0x8b) return 'application/gzip';
+  if (at(4, 'ftyp')) return /^M4[AB]/.test(b.toString('latin1', 8, 12)) ? 'audio/mp4' : 'video/mp4';
+  if (at(0, 'ID3') || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return 'audio/mpeg'; if (at(0, 'OggS')) return 'audio/ogg'; if (at(0, 'fLaC')) return 'audio/flac';
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'video/webm';
+  const head = b.toString('utf8', 0, Math.min(b.length, 512));
+  const junk = head.replace(/[\t\n\r\x20-\x7e\u00a0-\uffff]/g, '').length;
+  if (junk > head.length * 0.05) return '';
+  if (/^\s*(<\?xml[^>]*>\s*)?<svg/i.test(head)) return 'image/svg+xml';
+  if (/^\s*<(!doctype|html|head|body|script)/i.test(head)) return 'text/html';
+  if (/^\s*[{[]/.test(head)) return 'application/json';
+  return 'text/plain';
+}
+/** Do the bytes match what the server CLAIMED? Same kind, or an mp4 container for any audio/video claim. */
+function looksLike(sniffed, claimed) {
+  if (!sniffed) return false; const a = kindOf(sniffed), c = kindOf(claimed);
+  if (a === c) return true; if (/mp4/.test(sniffed) && (c === 'audio' || c === 'video')) return true; return false;
+}
+
 function describe(f) { return `${f.name || 'file'} (${kindOf(f.mime)}, ${Math.round((f.size || (f.bytes && f.bytes.length) || 0) / 1024)} KB${f.source ? `, from ${f.source}` : ''})`; }
 
-module.exports = { kindOf, extFor, mimeFor, shouldCapture, nameFrom, describe, path };
+module.exports = { kindOf, extFor, mimeFor, shouldCapture, nameFrom, describe, sniff, looksLike, path };
