@@ -127,6 +127,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
         // The real browser lives in this FrameLayout, hosted inside the Compose shell via AndroidView.
         webHolder = android.widget.FrameLayout(this)
+        // a fold/unfold or rotation changes the holder's size: refit the page to the new width
+        webHolder.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) web?.let { fitNarrowScreen(it) } }
 
         // S6: the whole app UI — one Compose host. Settings/Agent/Device Hub are screens INSIDE the
         // shell (bottom nav stays visible); only the run sheet is a modal overlay of its own.
@@ -218,12 +220,29 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         (w.parent as? ViewGroup)?.removeView(w)
         webHolder.removeAllViews()
         webHolder.addView(w)
+        w.post { fitNarrowScreen(w) }
         web = w; activeTab = i
         lastUrl = h.url
         if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
         shellUi.url.value = if (h.url == HOME) "" else h.url
         shellUi.screen.value = "browser"
         updateTabCount()
+    }
+
+    /** NARROW SCREENS (the Fold's closed cover is ~317dp wide): mobile sites lay out for 360 CSS px and
+     *  spill off the edge, and their viewport meta forbids the zoom-out that would fit them. Below
+     *  360dp the page is laid out at 360 and the whole view scaled down to fit; touches follow the scale. */
+    private fun fitNarrowScreen(w: WebView) {
+        val holderW = webHolder.width; val holderH = webHolder.height; if (holderW <= 0 || holderH <= 0) return
+        val minPx = (360 * resources.displayMetrics.density).toInt()
+        if (holderW >= minPx) {
+            if (w.scaleX != 1f || w.layoutParams?.width != -1) { w.scaleX = 1f; w.scaleY = 1f; w.layoutParams = android.widget.FrameLayout.LayoutParams(-1, -1) }
+            return
+        }
+        val scale = holderW.toFloat() / minPx
+        w.pivotX = 0f; w.pivotY = 0f; w.scaleX = scale; w.scaleY = scale
+        val lp = android.widget.FrameLayout.LayoutParams(minPx, (holderH / scale).toInt())
+        if (w.layoutParams?.width != lp.width || w.layoutParams?.height != lp.height) w.layoutParams = lp
     }
 
     private fun newTab(url: String = HOME, activate: Boolean = true) {
@@ -329,6 +348,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (gbJs.isNotEmpty()) view?.evaluateJavascript(gbJs, null)
                 loadLatch?.countDown()
                 syncTabs()
+                try { syncLoginForTab(h, h.url) } catch (e: Exception) { /* never in the way of the page */ }
             }
         }
         w.webChromeClient = object : WebChromeClient() {
@@ -642,7 +662,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val p = arr.optJSONObject(i) ?: continue
             val key = p.optString("key")
             val label = p.optString("label", key).ifBlank { key }
-            val site = p.optString("site")
+            // a preset may name the site bare ("linkedin.com"): without a scheme Uri.parse has no host,
+            // the cookie lookup finds nothing, and the login never syncs — normalise it to a real address
+            val site = p.optString("site").trim().let { if (it.isBlank() || it.startsWith("http")) it else "https://${if (it.startsWith("www.")) it else "www.$it"}/" }
             if (key.isBlank() || site.isBlank()) continue
             val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
             // "signed in" ONLY if this phone's profile actually holds a session cookie for the site.
@@ -658,23 +680,44 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  the site's cookies go to POST /v1/profiles/<key>/cookies whenever they appear or change (hashed,
      *  so nothing is sent twice). No button — the cluster agent simply has what the phone has. */
     private val loginSyncHashes = HashMap<String, Int>()
+    private var platformsRequested = false
+    private fun apexOf(host: String): String { val parts = host.split("."); return if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host }
     private fun syncLoginsToCluster(list: List<engineer.myapp.gbmobile.ui.PlatformOpt>) {
         if (vm.clusterUrl.trim().isEmpty()) return
         for (p in list) {
             if (!p.signedIn) continue
             val cookieStr = try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.profile).cookieManager.getCookie(p.site) ?: "" else "" } catch (e: Exception) { "" }
-            if (cookieStr.isBlank()) continue
-            val h = cookieStr.hashCode(); if (loginSyncHashes[p.profile] == h) continue; loginSyncHashes[p.profile] = h
-            val host = try { Uri.parse(p.site).host } catch (e: Exception) { null } ?: continue
-            val parts = host.split("."); val apex = if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host
-            val arr = JSONArray(); val exp = System.currentTimeMillis() / 1000 + 30L * 86400
-            for (kv in cookieStr.split(";")) { val t = kv.trim(); val eq = t.indexOf('='); if (eq <= 0) continue
-                arr.put(JSONObject().put("name", t.substring(0, eq)).put("value", t.substring(eq + 1)).put("domain", ".$apex").put("path", "/").put("expires", exp).put("secure", true).put("httpOnly", false).put("sameSite", "Lax")) }
-            if (arr.length() == 0) continue
-            val cluster = p.profile.removePrefix("p_")
-            apiCall("POST", "/v1/profiles/$cluster/cookies", JSONObject().put("site", p.site).put("cookies", arr).toString(), "loginsync")
-            vm.log("↑ ${p.label}: login synced to the cluster (${arr.length()} cookies)")
+            pushLoginCookies(p, cookieStr)
         }
+    }
+    /** Every page that finishes loading, in ANY tab: when its host is one of the platforms, the tab's
+     *  cookies for it go to the cluster's matching profile — a LinkedIn signed into from the address bar
+     *  counts the same as one opened from the platform chip. Hashed per platform, so nothing goes twice. */
+    private fun syncLoginForTab(h: TabHandle, url: String) {
+        if (vm.clusterUrl.trim().isEmpty() || !url.startsWith("http")) return
+        val host = try { Uri.parse(url).host } catch (e: Exception) { null } ?: return
+        val plats = settingsUi.platforms.value ?: emptyList()
+        if (plats.isEmpty()) { if (!platformsRequested) { platformsRequested = true; loadPlatforms() }; return }
+        val apex = apexOf(host)
+        val p = plats.firstOrNull { pl -> apexOf((try { Uri.parse(pl.site).host } catch (e: Exception) { null }) ?: "") == apex } ?: return
+        val cookieStr = try {
+            if (h.profile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(h.profile).cookieManager.getCookie(url) ?: ""
+            else CookieManager.getInstance().getCookie(url) ?: ""
+        } catch (e: Exception) { "" }
+        pushLoginCookies(p, cookieStr)
+    }
+    private fun pushLoginCookies(p: engineer.myapp.gbmobile.ui.PlatformOpt, cookieStr: String) {
+        if (cookieStr.isBlank()) return
+        val hsh = cookieStr.hashCode(); if (loginSyncHashes[p.profile] == hsh) return; loginSyncHashes[p.profile] = hsh
+        val host = try { Uri.parse(p.site).host } catch (e: Exception) { null } ?: return
+        val apex = apexOf(host)
+        val arr = JSONArray(); val exp = System.currentTimeMillis() / 1000 + 30L * 86400
+        for (kv in cookieStr.split(";")) { val t = kv.trim(); val eq = t.indexOf('='); if (eq <= 0) continue
+            arr.put(JSONObject().put("name", t.substring(0, eq)).put("value", t.substring(eq + 1)).put("domain", ".$apex").put("path", "/").put("expires", exp).put("secure", true).put("httpOnly", false).put("sameSite", "Lax")) }
+        if (arr.length() == 0) return
+        val cluster = p.profile.removePrefix("p_")
+        apiCall("POST", "/v1/profiles/$cluster/cookies", JSONObject().put("site", p.site).put("cookies", arr).toString(), "loginsync")
+        vm.log("↑ ${p.label}: login synced to the cluster (${arr.length()} cookies)")
     }
 
     private fun profileHasSession(prof: String, site: String): Boolean {
