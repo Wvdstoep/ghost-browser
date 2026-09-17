@@ -3,6 +3,7 @@ package engineer.myapp.gb.shared
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,9 +94,14 @@ private fun WatcherForm(
     var profile by remember { mutableStateOf(edit?.profile?.ifBlank { null } ?: profiles.firstOrNull() ?: "facebook") }
     var automationId by remember { mutableStateOf("") }
     var interval by remember { mutableStateOf(edit?.intervalMin ?: 5) }
-    var followUpOn by remember { mutableStateOf((edit?.followUpFlowId ?: "").isNotBlank()) }
-    var followUpFlowId by remember { mutableStateOf(edit?.followUpFlowId ?: "") }
-    var followUpRepliesOnly by remember { mutableStateOf(edit?.followUpRepliesOnly ?: true) }
+    // Routing: each notification kind → its own flow. Older single-flow configs arrive as one route.
+    var routes by remember {
+        mutableStateOf(
+            edit?.followUps?.takeIf { it.isNotEmpty() }
+                ?: edit?.followUpFlowId?.takeIf { it.isNotBlank() }?.let { listOf(FollowUpRoute(if (edit.followUpRepliesOnly) listOf("reply", "comment", "mention") else emptyList(), it)) }
+                ?: emptyList()
+        )
+    }
 
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface).border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(14.dp)) {
         Text(if (edit == null) "New watcher" else "Edit watcher", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
@@ -140,39 +146,47 @@ private fun WatcherForm(
         Text("CHECK EVERY", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-            listOf(1, 5, 10).forEach { m ->
+            listOf(1, 5, 10, 15).forEach { m ->
                 val on = interval == m
                 Box(Modifier.weight(1f).background(if (on) Brand else Color.Transparent).clickable { interval = m }.padding(vertical = 11.dp), contentAlignment = Alignment.Center) {
                     Text("$m min", color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
                 }
             }
         }
-        // Follow-up: auto-run a flow on each new collected item (generic — any flow).
+        // Routing — the engine: each kind of notification this watcher collects goes to its own flow.
         Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("FOLLOW-UP", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
-                Text("Auto-run a flow on each new item (e.g. draft a reply)", fontSize = 11.sp, color = cs.onSurfaceVariant)
-            }
-            Switch(checked = followUpOn, onCheckedChange = { followUpOn = it }, colors = SwitchDefaults.colors(checkedThumbColor = BrandOn, checkedTrackColor = Brand))
-        }
-        if (followUpOn) {
+        Text("ROUTING — what happens to each kind of item", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+        Text("Pick the kinds, then the flow that runs on them. No kinds = every kind. First matching route wins.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+        routes.forEachIndexed { idx, r ->
             Spacer(Modifier.height(8.dp))
-            val fuLabel = automations.firstOrNull { it.id == followUpFlowId }?.name ?: "Pick a flow to run"
-            PickerField(fuLabel, automations.map { it.name }) { picked -> followUpFlowId = automations.firstOrNull { it.name == picked }?.id ?: "" }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { followUpRepliesOnly = !followUpRepliesOnly }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(if (followUpRepliesOnly) Brand else Color.Transparent).border(1.dp, if (followUpRepliesOnly) Brand else cs.outline, RoundedCornerShape(5.dp)), contentAlignment = Alignment.Center) {
-                    if (followUpRepliesOnly) Text("✓", color = BrandOn, fontSize = 12.sp)
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(cs.background).border(1.dp, cs.outline, RoundedCornerShape(10.dp)).padding(10.dp)) {
+                // kinds as toggle chips
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    FOLLOW_UP_KINDS.forEach { k ->
+                        val on = k in r.kinds
+                        Box(Modifier.padding(end = 6.dp).clip(RoundedCornerShape(50)).background(if (on) Brand else Color.Transparent).border(1.dp, if (on) Brand else cs.outline, RoundedCornerShape(50))
+                            .clickable { routes = routes.toMutableList().also { it[idx] = r.copy(kinds = if (on) r.kinds - k else r.kinds + k) } }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)) { Text(k, color = if (on) BrandOn else cs.onSurface, fontSize = 11.sp) }
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                Text("Only for replies & comments (not likes)", fontSize = 12.sp, color = cs.onSurface)
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) {
+                        val lbl = automations.firstOrNull { it.id == r.flowId }?.name ?: "Pick the flow to run"
+                        PickerField(lbl, automations.map { it.name }) { picked -> routes = routes.toMutableList().also { it[idx] = r.copy(flowId = automations.firstOrNull { a -> a.name == picked }?.id ?: "") } }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { routes = routes.filterIndexed { i, _ -> i != idx } }, shape = RoundedCornerShape(9.dp)) { Text("✕", color = cs.error) }
+                }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { routes = routes + FollowUpRoute(emptyList(), "") }, shape = RoundedCornerShape(9.dp)) { Text(if (routes.isEmpty()) "+ Add a route (e.g. replies → draft a reply)" else "+ Add another route", color = cs.onSurface) }
         Spacer(Modifier.height(14.dp))
         val valid = name.isNotBlank() && (if (mode == "role") role.isNotBlank() else automationId.isNotBlank())
         Row {
-            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval, if (followUpOn) followUpFlowId else "", followUpRepliesOnly) }, enabled = valid,
+            // Routes travel in the legacy followUpFlowId slot as JSON (starts with "[") — the platforms send them as `followUps`.
+            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval, routesToJson(routes).takeIf { it != "[]" } ?: "", false) }, enabled = valid,
                 modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text(if (edit == null) "Create watcher" else "Save changes", style = MaterialTheme.typography.labelLarge) }
             Spacer(Modifier.width(10.dp))
