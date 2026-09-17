@@ -1874,12 +1874,13 @@ function operatorContext() {
       else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
       return { runId, status: 'running' };
     },
-    setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, paletteNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
+    setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, wfRoleNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
     agentTools: () => agent.TOOLS.map((t) => t.function).filter(Boolean).map((f) => ({ name: f.name, description: String(f.description || '').slice(0, 200), takes: Object.keys((f.parameters && f.parameters.properties) || {}) })),
     listRoles: () => roles.list(),
     getRole: (name) => { const key = String(name || '').toLowerCase(); const canonical = roles.canonical(key); if (key !== 'general' && canonical === 'general') return null; const r = roles.get(key); return { name: canonical, builtin: !!roles.ROLES[canonical], site: r.site || null, group: r.group || null, label: r.label, description: r.description, tools: r.tools === undefined ? null : r.tools, prompt: r.prompt || '' }; },
     saveRole: (name, role) => userRoles.save({ ...(role || {}), id: name || null }, paletteNames()),
-    saveFlow: (flow) => { const r = workflows.save(flow, paletteNames()); return (r && r.workflow) || r; },
+    // the validator wants ROLE names (it used to get the TOOL palette here — every agent step "named a role that does not exist")
+    saveFlow: (flow) => { const r = workflows.save(flow, wfRoleNames()); return (r && r.workflow) || r; },
     runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
     people: (platform, name, leadsOnly) => { const people = require('./people'); if (name) { const r = people.load(platform || 'facebook', name); return r ? { ...r, profile: people.profileOf(platform || 'facebook', name) } : { error: 'no memory of that person yet' }; } return { people: people.list(platform || 'facebook', { leadsOnly: !!leadsOnly }).slice(0, 40), outcomes: people.outcomes() }; },
