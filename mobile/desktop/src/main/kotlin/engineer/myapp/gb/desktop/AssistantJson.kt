@@ -43,6 +43,14 @@ object AssistantJson {
             AiModelInfo(o.optString("llmModel"), o.optString("llmHost"), o.optBoolean("keySet"), o.optString("keyHint"), state)
         }
     } catch (e: Exception) { null }
+    /** GET /v1/people â†’ the people worth your words (people memory). */
+    fun people(json: String): List<PersonInfo> = try {
+        val a = JSONObject(json).optJSONArray("people") ?: JSONArray(); val out = ArrayList<PersonInfo>()
+        fun strs(x: JSONArray?): List<String> { val l = ArrayList<String>(); if (x != null) for (i in 0 until x.length()) x.optString(i).takeIf { it.isNotBlank() }?.let { l.add(it) }; return l }
+        for (i in 0 until a.length()) { val p = a.optJSONObject(i) ?: continue
+            out.add(PersonInfo(p.optString("name"), p.optString("platform"), p.optInt("worth"), p.optBoolean("lead"), p.optInt("repliedBack"), p.optInt("exchanges"), p.optInt("posts"), strs(p.optJSONArray("signals")), strs(p.optJSONArray("promises")), p.optLong("lastSeen"))) }
+        out.filter { it.lead || it.worth >= 20 }
+    } catch (e: Exception) { emptyList() }
     fun models(json: String): Pair<List<String>, String> = try {
         val o = JSONObject(json); val a = o.optJSONArray("models") ?: JSONArray(); val list = ArrayList<String>()
         for (i in 0 until a.length()) { val m = a.optString(i); if (m.isNotBlank()) list.add(m) }

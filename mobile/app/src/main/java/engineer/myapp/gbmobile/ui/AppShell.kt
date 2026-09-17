@@ -80,6 +80,7 @@ class ShellUi {
     // approvals — the gate: running watchers + their pending proposals (drafts awaiting yes/no)
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
+    val leads = mutableStateOf<List<engineer.myapp.gb.shared.PersonInfo>>(emptyList())   // people worth your words
     // watchers — scheduled background tasks (own UI, separate from the gate)
     val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
     val watchersLoading = mutableStateOf(false)
@@ -193,7 +194,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         onApprove = { j, p, t -> act.onApprove(j, p, t) }, onDeny = { j, p -> act.onDeny(j, p) },
                         onStop = { act.onStopJob(it) }, onSay = { j, t -> act.onSayJob(j, t) },
                         onOpenUrl = { act.onUrlGo(it) }, onRefresh = act.onRefreshApprovals,
-                        topInset = Modifier.statusBarsPaddingSafe(),
+                        topInset = Modifier.statusBarsPaddingSafe(), leads = shell.leads.value,
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(

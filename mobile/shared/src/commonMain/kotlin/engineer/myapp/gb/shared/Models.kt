@@ -38,6 +38,10 @@ data class AssistantLive(val jobId: String, val status: String, val iterations: 
 data class AssistantChatView(val id: String, val title: String, val turns: List<AssistantTurn>, val live: AssistantLive?)
 data class ChatSummary(val id: String, val title: String, val updatedAt: Long, val turns: Int, val running: Boolean)
 
+/** A person the watchers see you talk with (people memory): the leads view shows the ones worth your words. */
+data class PersonInfo(val name: String, val platform: String, val worth: Int, val lead: Boolean, val repliedBack: Int, val exchanges: Int, val posts: Int,
+                      val signals: List<String>, val promises: List<String>, val lastSeen: Long)
+
 /** The model the agent runs on (GB's own settings, never the key): what the AI sheet shows. */
 data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "")
 
@@ -95,6 +99,14 @@ data class FollowUpRoute(val kinds: List<String>, val flowId: String)
 
 /** The notification kinds a watcher can route on (what `collect` puts in fields.type). */
 val FOLLOW_UP_KINDS = listOf("comment", "reply", "mention", "tag", "share", "invite", "message", "reaction", "other")
+
+/** The routes that ship with Ghost Browser (roadmap Phase 2): a toggle each in the watcher editor. */
+data class DefaultRoute(val label: String, val kinds: List<String>, val flowId: String)
+val DEFAULT_ROUTES = listOf(
+    DefaultRoute("mention/tag → context reply", listOf("mention", "tag"), "reply-draft-context-aware"),
+    DefaultRoute("invite → vet & join", listOf("invite"), "invite-vet-join"),
+    DefaultRoute("share → thank-you", listOf("share"), "share-thank-you"),
+)
 
 /** Serialize routes as the JSON the cluster stores (`followUps`), without a JSON library in commonMain. */
 fun routesToJson(routes: List<FollowUpRoute>): String {
