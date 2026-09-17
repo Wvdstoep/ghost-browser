@@ -5,7 +5,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | Phase | Name | State | Proof |
 |---|---|---|---|
 | 0 | Foundations: sound, a display per recording, a volume of its own | **done · v336** (2026-09-17) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
-| 1 | The engine: any duration, nothing in memory, survives restarts | planned | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
+| 1 | The engine: any duration, nothing in memory, survives restarts | building (engine + page + routes; proof pending) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | planned | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | planned | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
 | 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | planned | — |
