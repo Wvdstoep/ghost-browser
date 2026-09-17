@@ -231,17 +231,29 @@ fun loadWatchers(st: DesktopState) = bg {
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
             val fcfg = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/config", null)) } catch (e: Exception) { JSONObject() }
             val fuFlow = fcfg.optString("followUpFlowId"); val fuReplies = (fcfg.optJSONArray("followUpKinds")?.length() ?: 0) > 0
-            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps, fuFlow, fuReplies))
+            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps, fuFlow, fuReplies,
+                followUps = routesOfD(fcfg.optJSONArray("followUps"))))
         }
         st.watchers.value = out
     } catch (e: Exception) {}
     st.watchersLoading.value = false
 }
 private const val DEFAULT_WATCH_GOAL_D = "Run your watch now: carry out this role's task and record what you find with collect (or save_lead). Propose any action that others would see for my approval — never act without it. If nothing needs doing, finish."
+/** Routing config: `followUpFlowId` is a JSON array of routes (starts with "[", the engine form) or a legacy single flow id. */
 fun putWatcherConfigD(wid: String, followUpFlowId: String, repliesOnly: Boolean) {
-    val kinds = if (repliesOnly) org.json.JSONArray().put("reply").put("comment").put("mention") else org.json.JSONArray()
-    Cluster.authed("PUT", "/v1/watchers/$wid/config", JSONObject().put("followUpFlowId", followUpFlowId).put("followUpKinds", kinds).toString())
+    val body = if (followUpFlowId.startsWith("[")) JSONObject().put("followUps", org.json.JSONArray(followUpFlowId)).put("followUpFlowId", "").put("followUpKinds", org.json.JSONArray())
+    else {
+        val kinds = if (repliesOnly) org.json.JSONArray().put("reply").put("comment").put("mention") else org.json.JSONArray()
+        JSONObject().put("followUpFlowId", followUpFlowId).put("followUpKinds", kinds).put("followUps", org.json.JSONArray())
+    }
+    Cluster.authed("PUT", "/v1/watchers/$wid/config", body.toString())
 }
+private fun routesOfD(arr: org.json.JSONArray?): List<engineer.myapp.gb.shared.FollowUpRoute> =
+    if (arr == null) emptyList() else (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        val ks = o.optJSONArray("kinds") ?: org.json.JSONArray()
+        engineer.myapp.gb.shared.FollowUpRoute((0 until ks.length()).map { ks.optString(it) }.filter { it.isNotBlank() }, o.optString("flowId"))
+    }
 fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) = bg {
     val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
         .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))

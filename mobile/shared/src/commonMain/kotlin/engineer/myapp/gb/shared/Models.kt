@@ -50,9 +50,24 @@ data class Watcher(
     val goal: String = "",         // the specific instruction (role mode), for edit pre-fill
     val mode: String = "role",     // "role" (role+goal) | "automation" (runs a saved flow)
     val stepCount: Int = 1,        // how many steps it runs (automation mode > 1)
-    val followUpFlowId: String = "",       // optional: auto-run this flow on new collected items
-    val followUpRepliesOnly: Boolean = true, // true = only reply/comment/mention items; false = all
+    val followUpFlowId: String = "",       // legacy single follow-up (kept for older configs)
+    val followUpRepliesOnly: Boolean = true, // legacy
+    val followUps: List<FollowUpRoute> = emptyList(), // the engine: each notification kind → its own flow
 )
+
+/** One routing rule of a watcher: items of these kinds run this flow. Empty kinds = any kind. */
+data class FollowUpRoute(val kinds: List<String>, val flowId: String)
+
+/** The notification kinds a watcher can route on (what `collect` puts in fields.type). */
+val FOLLOW_UP_KINDS = listOf("comment", "reply", "mention", "tag", "share", "invite", "message", "reaction", "other")
+
+/** Serialize routes as the JSON the cluster stores (`followUps`), without a JSON library in commonMain. */
+fun routesToJson(routes: List<FollowUpRoute>): String {
+    val q = { s: String -> "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" }
+    return routes.filter { it.flowId.isNotBlank() }.joinToString(",", "[", "]") { r ->
+        "{\"kinds\":" + r.kinds.joinToString(",", "[", "]") { q(it) } + ",\"flowId\":" + q(r.flowId) + "}"
+    }
+}
 
 /** One collected item in a watcher's results — schema-agnostic: whatever fields it has, plus an
  *  optional image and link. Rendered by the results view; a follow-up flow can run on it. */

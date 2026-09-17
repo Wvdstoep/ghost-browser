@@ -1305,11 +1305,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @Volatile private var pendingFollowUp: Pair<String, Boolean>? = null   // (flowId, repliesOnly) applied after create
     private val watcherCfg = java.util.Collections.synchronizedMap(HashMap<String, Pair<String, Boolean>>())
     @Volatile private var lastWorkflowsJson: String = ""
+    /** Routing config. `flowId` is either a JSON array of routes (starts with "[", the engine form) or a
+     *  single legacy flow id. Stored locally as the JSON string so the form can pre-fill on edit. */
     private fun putWatcherConfig(wid: String, flowId: String, repliesOnly: Boolean) {
-        val kinds = if (repliesOnly) JSONArray().put("reply").put("comment").put("mention") else JSONArray()
-        watcherCfg[wid] = flowId to repliesOnly
-        apiCall("PUT", "/v1/watchers/$wid/config", JSONObject().put("followUpFlowId", flowId).put("followUpKinds", kinds).toString(), "watcher_cfg")
+        val body = if (flowId.startsWith("[")) {
+            watcherCfg[wid] = flowId to false
+            JSONObject().put("followUps", JSONArray(flowId)).put("followUpFlowId", "").put("followUpKinds", JSONArray())
+        } else {
+            val kinds = if (repliesOnly) JSONArray().put("reply").put("comment").put("mention") else JSONArray()
+            watcherCfg[wid] = flowId to repliesOnly
+            JSONObject().put("followUpFlowId", flowId).put("followUpKinds", kinds).put("followUps", JSONArray())
+        }
+        apiCall("PUT", "/v1/watchers/$wid/config", body.toString(), "watcher_cfg")
     }
+    private fun routesOf(cfgJson: String): List<engineer.myapp.gb.shared.FollowUpRoute> = try {
+        val arr = JSONArray(cfgJson); (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val ks = o.optJSONArray("kinds") ?: JSONArray()
+            engineer.myapp.gb.shared.FollowUpRoute((0 until ks.length()).map { ks.optString(it) }.filter { it.isNotBlank() }, o.optString("flowId"))
+        }
+    } catch (e: Exception) { emptyList() }
     private fun saveWatcher(id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) {
         val trigger = JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Every $intervalMin min")
             .put("trigger", JSONObject().put("type", "schedule").put("every", "minute").put("n", intervalMin))
@@ -1389,7 +1404,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
                     lastRun = last, resultCount = 0, goal = agent?.optString("goal") ?: "",
                     mode = if (steps > 1) "automation" else "role", stepCount = steps,
-                    followUpFlowId = watcherCfg[id]?.first ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
+                    followUpFlowId = watcherCfg[id]?.first?.takeIf { !it.startsWith("[") } ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
+                    followUps = watcherCfg[id]?.first?.takeIf { it.startsWith("[") }?.let { routesOf(it) } ?: emptyList(),
                 ))
             }
             shellUi.watchers.value = out
@@ -1835,7 +1851,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (!tag.endsWith("_err")) try {
                 val o = JSONObject(data); val fid = o.optString("followUpFlowId")
                 val kinds = o.optJSONArray("followUpKinds") ?: JSONArray()
-                if (fid.isNotBlank()) watcherCfg[wid] = fid to (kinds.length() > 0)
+                val routes = o.optJSONArray("followUps")
+                if (routes != null && routes.length() > 0) watcherCfg[wid] = routes.toString() to false
+                else if (fid.isNotBlank()) watcherCfg[wid] = fid to (kinds.length() > 0)
                 else watcherCfg.remove(wid)
                 if (lastWorkflowsJson.isNotBlank()) parseWatchers(lastWorkflowsJson, false)
             } catch (e: Exception) {}
