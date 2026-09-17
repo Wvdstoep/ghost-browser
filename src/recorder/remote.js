@@ -24,7 +24,8 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
     async launch(rec) {
       const img = await imageOf();
       const spec = k8s.jobSpec({ id: rec.id, namespace: k8s.ns(), image: img.image, imagePullSecrets: img.imagePullSecrets, serviceAccount: '', gbUrl, token: rec.token,
-        cpu: process.env.RECORDER_CPU || '1', memory: process.env.RECORDER_MEMORY || '1536Mi', cpuLimit: process.env.RECORDER_CPU_LIMIT || '2', memoryLimit: process.env.RECORDER_MEMORY_LIMIT || '3Gi' });
+        // 1080p YouTube in software + a 1080p x264 encode: measured OOM at 3 GiB, so 6 GiB and 4 CPUs to burst into
+        cpu: process.env.RECORDER_CPU || '1500m', memory: process.env.RECORDER_MEMORY || '2Gi', cpuLimit: process.env.RECORDER_CPU_LIMIT || '4', memoryLimit: process.env.RECORDER_MEMORY_LIMIT || '6Gi' });
       await k8s.createJob(spec);
       return { jobName: spec.metadata.name };
     },

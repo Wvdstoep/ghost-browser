@@ -27,8 +27,11 @@ describe('recording sidecar', () => {
       process.env.RECORDINGS_DIR = path.join(base, 'elsewhere'); expect(recordingsRoot()).toBe(path.join(base, 'elsewhere'));
     } finally { if (saved.R) process.env.RECORDINGS_DIR = saved.R; else delete process.env.RECORDINGS_DIR; if (saved.P) process.env.PROFILE_DIR = saved.P; else delete process.env.PROFILE_DIR; }
   });
-  it('sizes come from a small ladder and default to 720p', () => {
-    expect(sizeOf('720p')).toEqual({ width: 1280, height: 720 }); expect(sizeOf('1080p')).toEqual({ width: 1920, height: 1080 }); expect(sizeOf('4k')).toEqual({ width: 1280, height: 720 });
+  it('the quality ladder: 720p30 by default, 1080p30, 1080p60 — frame rate and audio follow the rung', () => {
+    expect(sizeOf('720p')).toMatchObject({ width: 1280, height: 720, fps: 30, audioKbps: 160 }); expect(sizeOf('1080p')).toMatchObject({ width: 1920, height: 1080, fps: 30 });
+    expect(sizeOf('1080p60')).toMatchObject({ width: 1920, height: 1080, fps: 60, audioKbps: 192 }); expect(sizeOf('4k')).toMatchObject({ width: 1280, height: 720 });
+    const a = ffmpegArgs({ display: 101, size: sizeOf('1080p60'), out: '/tmp/x.mp4' });
+    expect(a[a.indexOf('-framerate') + 1]).toBe('60'); expect(a[a.indexOf('-g') + 1]).toBe('120'); expect(a[a.indexOf('-b:a') + 1]).toBe('192k');
   });
   it('the display is its own, sized to the recording, and never the pool\'s :99', () => {
     const a = xvfbArgs(101, sizeOf('720p'));

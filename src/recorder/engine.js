@@ -19,6 +19,7 @@ const { spawn } = require('child_process');
 
 const STATES = ['starting', 'recording', 'finishing', 'done', 'partial', 'failed'];
 const RUNNING = ['starting', 'recording', 'finishing'];
+const QUALITIES = ['720p', '1080p', '1080p60'];
 const STALE_MS = 3 * 60 * 1000;   // a pod that has not reported for this long is taken as gone
 const newToken = () => require('crypto').randomBytes(24).toString('hex');
 const UNTIL = ['video-ends', 'duration', 'owner-stop'];
@@ -42,14 +43,42 @@ function statsOf(dir) {
   return { segments, bytes, seconds: Math.round(seconds) };
 }
 
-/** A playlist ffmpeg never got to close (a restart, a kill) is closed by hand so players know it ended. */
-function closePlaylist(dir) {
-  const f = path.join(dir, 'index.m3u8');
-  try { const s = fs.readFileSync(f, 'utf8'); if (!/#EXT-X-ENDLIST/.test(s)) fs.appendFileSync(f, '\n#EXT-X-ENDLIST\n'); return true; } catch { return false; }
+/**
+ * The playlist with only the segments that are HERE: a pod pushes every finished segment but its
+ * playlist may already name the one still being written, and a player that follows the list into a
+ * missing file gets a 404 at the live edge. Pure on the text; the caller says what exists.
+ */
+function trimPlaylist(m3u8, exists) {
+  const lines = String(m3u8 || '').split('\n'); const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#EXTINF/.test(l)) { const seg = (lines[i + 1] || '').trim(); if (/^seg-\d+\.ts$/.test(seg) && !exists(seg)) { i++; continue; } out.push(l); continue; }
+    out.push(l);
+  }
+  return out.join('\n');
+}
+function servePlaylist(dir) {
+  const f = path.join(dir, 'index.m3u8'); let s; try { s = fs.readFileSync(f, 'utf8'); } catch { return null; }
+  return trimPlaylist(s, (seg) => { try { return fs.statSync(path.join(dir, seg)).size > 0; } catch { return false; } });
 }
 
-/** ffmpeg arguments that turn a finished playlist into one mp4 without re-encoding (Range-served). */
-function concatArgs(dir) { return ['-hide_banner', '-loglevel', 'error', '-y', '-i', path.join(dir, 'index.m3u8'), '-c', 'copy', '-movflags', '+faststart', path.join(dir, 'final.mp4')]; }
+/** A playlist ffmpeg never got to close (a restart, a kill) is closed by hand — trimmed to what is here — so players know it ended. */
+function closePlaylist(dir) {
+  const f = path.join(dir, 'index.m3u8');
+  try {
+    let s = fs.readFileSync(f, 'utf8'); if (/#EXT-X-ENDLIST/.test(s)) return true;
+    s = trimPlaylist(s, (seg) => { try { return fs.statSync(path.join(dir, seg)).size > 0; } catch { return false; } });
+    fs.writeFileSync(f, s.replace(/\s*$/, '') + '\n#EXT-X-ENDLIST\n'); return true;
+  } catch { return false; }
+}
+
+/** The segments present, in order, as ffmpeg's concat list — the mp4 is built from FILES, never from a playlist that may name a missing one. */
+function segmentList(dir) {
+  let names = []; try { names = fs.readdirSync(dir).filter((f) => /^seg-\d+\.ts$/.test(f) && fs.statSync(path.join(dir, f)).size > 0).sort(); } catch { names = []; }
+  return names.map((n) => `file '${path.join(dir, n).replace(/'/g, "'\\''")}'`).join('\n') + '\n';
+}
+/** ffmpeg arguments that turn the segments into one mp4 without re-encoding (Range-served): the concat demuxer over `list.txt`, ADTS audio re-framed for mp4. */
+function concatArgs(dir) { return ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', path.join(dir, 'list.txt'), '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', path.join(dir, 'final.mp4')]; }
 
 /** What identifies "the same video": YouTube's v parameter; elsewhere the address without its hash. */
 function videoKey(href) { try { const u = new URL(String(href || '')); if (/youtube\.com$/.test(u.hostname) || /youtu\.be$/.test(u.hostname)) return u.searchParams.get('v') || u.pathname; u.hash = ''; return u.toString(); } catch { return String(href || ''); } }
@@ -66,6 +95,9 @@ class Recorder {
   constructor({ root, deps, log, maxConcurrent = 2, tickMs = TICK_MS, clock = now }) {
     this.root = root; this.deps = deps; this.log = log || { info() {}, warn() {}, debug() {} };
     this.maxConcurrent = maxConcurrent; this.tickMs = tickMs; this.clock = clock;
+    this.maxRemote = Math.max(1, Number(process.env.MAX_REMOTE_RECORDINGS) || 3);
+    // the DEMAND signal for the capacity controller: how often recordings wanted a pod of their own and got none
+    this.demand = { refusedRemote: 0, lastRefusedAt: 0 };
     this.live = new Map();   // id → { rec, ctx: { display, pulse, context, page, ff }, stopReq }
     fs.mkdirSync(root, { recursive: true });
     // PLAYBACK TICKETS: a native player or a download cannot carry the owner's session reliably, so the
@@ -94,7 +126,41 @@ class Recorder {
   }
   get(id) { const j = readJournal(this.dirOf(id)); return j ? this.view(j) : null; }
   /** A recording in its own pod (mode "job") is live while its journal says so — its process is elsewhere. */
-  view(j) { const { token, ...pub } = j; const live = this.live.has(j.id) || (j.mode === 'job' && RUNNING.includes(j.state)); return { ...pub, live, playlist: `/v1/recordings/${j.id}/index.m3u8`, mp4: `/v1/recordings/${j.id}/mp4` }; }
+  view(j) {
+    const { token, ...pub } = j; const live = this.live.has(j.id) || (j.mode === 'job' && RUNNING.includes(j.state)); const dir = this.dirOf(j.id);
+    const has = (f) => { try { return fs.statSync(path.join(dir, f)).size > 0; } catch { return false; } };
+    let chapters = []; try { chapters = JSON.parse(fs.readFileSync(path.join(dir, 'chapters.json'), 'utf8')); } catch { chapters = []; }
+    return { ...pub, live, playlist: `/v1/recordings/${j.id}/index.m3u8`, mp4: `/v1/recordings/${j.id}/mp4`,
+      thumb: has('thumb.jpg') ? `/v1/recordings/${j.id}/thumb.jpg` : '', sprite: has('sprite.jpg') ? `/v1/recordings/${j.id}/sprite.jpg` : '', chapters };
+  }
+
+  /**
+   * After a recording ends: a thumbnail, a sprite strip (10 frames), and chapters from scene cuts —
+   * niced, one recording at a time, never blocking anything. Injectable (`deps.ffmpeg`) for the tests.
+   */
+  async postProcess(id) {
+    const dir = this.dirOf(id); const j = readJournal(dir); if (!j || RUNNING.includes(j.state) || !(j.segments > 0)) return null;
+    if (this._post) { this._postQueue = (this._postQueue || []).concat(id); return null; }
+    this._post = id;
+    const run = this.deps.ffmpeg || runFfmpeg; const src = path.join(dir, 'index.m3u8'); const secs = Math.max(1, j.seconds || 1);
+    try {
+      const at = Math.min(Math.max(2, Math.floor(secs * 0.1)), Math.max(1, secs - 1));
+      await run(['-ss', String(at), '-i', src, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '4', '-y', path.join(dir, 'thumb.jpg')]);
+      const every = Math.max(1, Math.floor(secs / 10));
+      await run(['-i', src, '-vf', `fps=1/${every},scale=320:-2,tile=5x2`, '-frames:v', '1', '-q:v', '5', '-y', path.join(dir, 'sprite.jpg')]);
+      // chapters: scene cuts on a 1 fps, 320 px proxy — cheap even for hours; at most 60, at least 20 s apart
+      const r = await run(['-i', src, '-vf', "fps=1,scale=320:-2,select='gt(scene,0.35)',showinfo", '-an', '-f', 'null', '-'], { capture: true });
+      const times = [...String(r.err || '').matchAll(/pts_time:\s*([\d.]+)/g)].map((m) => Number(m[1])).filter((t) => t > 5);
+      const chapters = []; for (const t of times) { if (chapters.length >= 60) break; if (!chapters.length || t - chapters[chapters.length - 1].t >= 20) chapters.push({ t: Math.round(t), label: `Chapter ${chapters.length + 1}` }); }
+      fs.writeFileSync(path.join(dir, 'chapters.json'), JSON.stringify(chapters));
+      this.log.info(`[recorder] ${id}: thumbnail, sprite and ${chapters.length} chapter(s)`);
+      return { chapters: chapters.length };
+    } catch (e) { this.log.warn(`[recorder] ${id} post-process: ${e.message}`); return null; }
+    finally { this._post = null; const next = (this._postQueue || []).shift(); if (next) this.postProcess(next).catch(() => {}); }
+  }
+
+  /** A share link: a long-lived ticket (default 7 days) on a public player page — the owner's own content only. */
+  share(id, days = 7) { const j = readJournal(this.dirOf(id)); if (!j) return null; const ttl = Math.min(30, Math.max(1, Number(days) || 7)) * 86400000; const tk = this.ticket(id, ttl); return { url: `/r/${id}?t=${tk.t}`, exp: tk.exp, days: ttl / 86400000 }; }
   /** Recordings this process holds (they die with it — the deploy gate waits for them). */
   running() { return [...this.live.values()].map((l) => l.rec.id); }
   /** Recordings in pods of their own (they survive a roll of this process). */
@@ -125,13 +191,15 @@ class Recorder {
     if (this.deps.freeBytes(this.root) < MIN_FREE_BYTES) throw new Error('less than 2 GiB free on the recordings volume — remove old recordings first');
     const until = UNTIL.includes(a.until) ? a.until : 'video-ends';
     const maxMinutes = Math.min(HARD_MAX_MIN, Math.max(1, Number(a.maxMinutes) || DEFAULT_MAX_MIN[until]));
-    const rec = { id: a.id && /^[a-z0-9-]+$/i.test(a.id) ? a.id : newId(), url, profile: String(a.profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default', quality: a.quality === '1080p' ? '1080p' : '720p',
+    const rec = { id: a.id && /^[a-z0-9-]+$/i.test(a.id) ? a.id : newId(), url, profile: String(a.profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default', quality: QUALITIES.includes(a.quality) ? a.quality : '720p',
       until, maxMinutes, title: String(a.title || '').slice(0, 120), state: 'starting', startedAt: this.clock(), recordingAt: 0, endedAt: 0, seconds: 0, bytes: 0, segments: 0, error: null, reason: '', pageTitle: '', display: null, mode: 'local' };
     // A POD OF ITS OWN when the cluster allows it (Phase 3): resources added, not borrowed, and a roll of
     // this process cannot cut it. The pod reports back over HTTP with this recording's token. If the
     // Job cannot be created the recording runs here, and the journal says which.
     const remote = this.deps.remote;
-    if (remote && a.mode !== 'local' && remote.available()) {
+    const remoteFull = remote && this.runningRemote().length >= this.maxRemote;
+    if (remoteFull) { this.demand.refusedRemote++; this.demand.lastRefusedAt = this.clock(); this.log.warn(`[recorder] ${rec.id}: ${this.maxRemote} pod(s) of their own already recording — recording in this pod (demand ${this.demand.refusedRemote})`); }
+    if (remote && a.mode !== 'local' && !remoteFull && remote.available()) {
       rec.mode = 'job'; rec.token = newToken(); rec.updatedAt = this.clock(); this._save(rec);
       Promise.resolve().then(() => remote.launch(rec)).then((j) => { const cur = readJournal(this.dirOf(rec.id)); if (cur && cur.mode === 'job') this._set(cur, { jobName: (j && j.jobName) || '' }); this.log.info(`[recorder] ${rec.id} runs as ${j && j.jobName} (a pod of its own)`); })
         .catch((e) => { this.log.warn(`[recorder] ${rec.id}: no pod of its own (${e.message}) — recording in this pod instead`); const cur = readJournal(this.dirOf(rec.id)); if (cur && RUNNING.includes(cur.state)) { delete cur.token; this._set(cur, { mode: 'local', fallback: e.message }); this._runLocal(cur); } });
@@ -225,6 +293,7 @@ class Recorder {
       const st = statsOf(dir);
       this._set(rec, { ...st, state: st.segments ? 'done' : 'failed', endedAt: this.clock(), error: st.segments ? null : `nothing was recorded (encoder ${r && r.code}${r && r.err ? ': ' + String(r.err).slice(-200) : ''})` });
       this.log.info(`[recorder] ${rec.id} ${rec.state}: ${reason} — ${st.seconds}s, ${Math.round(st.bytes / 1048576)} MB, ${st.segments} segments`);
+      if (st.segments) this.postProcess(rec.id).catch(() => {});
     } catch (e) {
       const st = statsOf(dir); closePlaylist(dir);
       this._set(rec, { ...st, state: st.segments ? 'partial' : 'failed', endedAt: this.clock(), error: e.message });
@@ -261,10 +330,22 @@ class Recorder {
     const out = path.join(dir, 'final.mp4');
     if (fs.existsSync(out) && fs.statSync(out).size > 0) return out;
     closePlaylist(dir);
+    const list = segmentList(dir); if (!list.trim()) throw new Error('no segments to build from');
+    fs.writeFileSync(path.join(dir, 'list.txt'), list);
     const r = await (this.deps.concat ? this.deps.concat(dir) : runConcat(dir));
     if (r.code !== 0 || !fs.existsSync(out)) throw new Error(`could not build the mp4 (${r.code}${r.err ? ': ' + String(r.err).slice(-200) : ''})`);
     return out;
   }
+}
+
+/** ffmpeg, niced, with its stderr when asked (showinfo prints there). Resolves { code, err }. */
+function runFfmpeg(args, { capture = false } = {}) {
+  return new Promise((resolve) => {
+    let err = ''; let p;
+    try { p = spawn('nice', ['-n', '10', 'ffmpeg', '-hide_banner', '-loglevel', capture ? 'info' : 'error', ...args], { stdio: ['ignore', 'ignore', 'pipe'] }); } catch (e) { return resolve({ code: -1, err: e.message }); }
+    p.stderr.on('data', (d) => { err += d; if (err.length > 400000) err = err.slice(-400000); });
+    p.on('error', (e) => resolve({ code: -1, err: e.message })); p.on('close', (code) => resolve({ code, err }));
+  });
 }
 
 function runConcat(dir) {
@@ -275,4 +356,4 @@ function runConcat(dir) {
   });
 }
 
-module.exports = { Recorder, statsOf, closePlaylist, concatArgs, videoKey, STATES, RUNNING, STALE_MS, UNTIL, MIN_FREE_BYTES, DEFAULT_MAX_MIN, HARD_MAX_MIN };
+module.exports = { Recorder, statsOf, closePlaylist, trimPlaylist, servePlaylist, segmentList, concatArgs, videoKey, STATES, RUNNING, QUALITIES, STALE_MS, UNTIL, MIN_FREE_BYTES, DEFAULT_MAX_MIN, HARD_MAX_MIN };

@@ -2121,9 +2121,26 @@ app.put('/v1/recordings/:id/segments/:name', recPod, express.raw({ type: '*/*', 
   const name = String(req.params.name || ''); if (!/^(seg-\d+\.ts|index\.m3u8)$/.test(name)) return res.status(400).json({ error: 'not a segment' });
   try { const dir = recorder.dirOf(req.params.id); require('fs').mkdirSync(dir, { recursive: true }); require('fs').writeFileSync(require('path').join(dir, name), req.body || Buffer.alloc(0)); res.json({ ok: true, bytes: (req.body || []).length }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/v1/recordings/:id/journal', recPod, (req, res) => { const v = recorder.remoteUpdate(req.params.id, req.body || {}); if (!v) return res.status(404).json({ error: 'no such recording' }); res.json({ ok: true, state: v.state, stop: recorder.handoff(req.params.id).stop }); });
+app.get('/v1/recordings/:id/control', recPod, (req, res) => { const h = recorder.handoff(req.params.id); if (!h) return res.status(404).json({ error: 'no such recording' }); res.json({ stop: h.stop }); });
+app.get('/v1/recordings/:id/thumb.jpg', recMedia, (req, res) => { const f = require('path').join(recorder.dirOf(req.params.id), 'thumb.jpg'); if (!require('fs').existsSync(f)) return res.status(404).end(); res.set('Cache-Control', 'public, max-age=3600').type('jpeg').sendFile(f); });
+app.get('/v1/recordings/:id/sprite.jpg', recMedia, (req, res) => { const f = require('path').join(recorder.dirOf(req.params.id), 'sprite.jpg'); if (!require('fs').existsSync(f)) return res.status(404).end(); res.set('Cache-Control', 'public, max-age=3600').type('jpeg').sendFile(f); });
+/* A SHARE LINK: a long-lived ticket on a public player page — private by default, the owner's own content only. */
+app.post('/v1/recordings/:id/share', authed, (req, res) => { const sh = recorder.share(req.params.id, (req.body || {}).days); if (!sh) return res.status(404).json({ error: 'no such recording' }); res.json(sh); });
+app.get('/r/:id', (req, res) => {
+  const id = String(req.params.id || '').replace(/[^a-z0-9_-]/gi, ''); const t = String(req.query.t || '');
+  if (!recorder.checkTicket(id, t)) return res.status(404).type('html').send('<!doctype html><title>Not here</title><p style="font:15px system-ui;padding:40px">This link has expired or never existed.</p>');
+  const r = recorder.get(id); if (!r) return res.status(404).end();
+  const name = String(r.title || r.pageTitle || 'Recording').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  const src = `/v1/recordings/${id}/mp4?t=${encodeURIComponent(t)}`; const poster = r.thumb ? `${r.thumb}?t=${encodeURIComponent(t)}` : '';
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${name}</title>
+<style>body{margin:0;background:#0b0b0c;color:#eee;font:15px system-ui,sans-serif}main{max-width:1100px;margin:0 auto;padding:16px}video{width:100%;background:#000;border-radius:10px}h1{font-size:18px;font-weight:600;margin:12px 0 4px}p{color:#9a9a9a;margin:0 0 12px}</style></head>
+<body><main><video controls playsinline preload="metadata" ${poster ? `poster="${poster}"` : ''} src="${src}"></video><h1>${name}</h1><p>${Math.round((r.seconds || 0) / 60)} min · shared from Ghost Browser · this link expires</p></main></body></html>`);
+});
+/* The desktop installer and the app, served by GB itself (the installer is past GitHub's file limit): /recordings/.dist */
+app.get('/dist/:file', (req, res) => { const f = String(req.params.file || '').replace(/[^A-Za-z0-9._-]/g, ''); const p = require('path').join(recorder.root, '.dist', f); if (!f || !require('fs').existsSync(p)) return res.status(404).end(); res.set('Content-Disposition', `attachment; filename="${f}"`).sendFile(p); });
+app.put('/v1/recordings/:id/journal', recPod, (req, res) => { const v = recorder.remoteUpdate(req.params.id, req.body || {}); if (!v) return res.status(404).json({ error: 'no such recording' }); if (!v.live && v.segments > 0 && !v.thumb) recorder.postProcess(v.id).catch(() => {}); res.json({ ok: true, state: v.state, stop: recorder.handoff(req.params.id).stop }); });
 
-app.get('/v1/recordings', authed, (req, res) => res.json({ recordings: recorder.list(), running: recorder.running(), root: recorder.root, freeBytes: require('./recorder/sidecar').freeBytes(recorder.root) }));
+app.get('/v1/recordings', authed, (req, res) => res.json({ recordings: recorder.list(), running: recorder.running(), runningRemote: recorder.runningRemote(), demand: recorder.demand, maxRemote: recorder.maxRemote, root: recorder.root, freeBytes: require('./recorder/sidecar').freeBytes(recorder.root) }));
 app.post('/v1/recordings', authed, (req, res) => { try { res.json({ ok: true, recording: recorder.start(req.body || {}) }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get('/v1/recordings/capabilities', authed, (req, res) => res.json(require('./recorder/sidecar').capabilities()));
 app.get('/v1/recordings/:id', authed, (req, res) => { const r = recorder.get(req.params.id); if (!r) return res.status(404).json({ error: 'no such recording' }); res.json(r); });
@@ -2133,9 +2150,11 @@ app.delete('/v1/recordings/:id', authed, (req, res) => { const r = recorder.remo
 app.get('/v1/recordings/:id/index.m3u8', recMedia, (req, res) => {
   const f = require('path').join(recorder.dirOf(req.params.id), 'index.m3u8'); if (!require('fs').existsSync(f)) return res.status(404).end();
   res.set('Cache-Control', 'no-store').type('application/vnd.apple.mpegurl');
-  // a ticketed playlist carries the ticket on every segment line, so the player's segment fetches pass too
-  if (req.query.t) { let m3u8 = ''; try { m3u8 = require('fs').readFileSync(f, 'utf8'); } catch { return res.status(404).end(); } return res.send(m3u8.replace(/^(seg-\d+\.ts)$/gm, `$1?t=${encodeURIComponent(String(req.query.t))}`)); }
-  res.sendFile(f);
+  // only the segments that are HERE (a pod's playlist may name the one it is still writing) — and a
+  // ticketed playlist carries the ticket on every segment line, so the player's segment fetches pass too
+  let m3u8 = require('./recorder/engine').servePlaylist(recorder.dirOf(req.params.id)); if (m3u8 == null) return res.status(404).end();
+  if (req.query.t) m3u8 = m3u8.replace(/^(seg-\d+\.ts)$/gm, `$1?t=${encodeURIComponent(String(req.query.t))}`);
+  res.send(m3u8);
 });
 app.get('/v1/recordings/:id/:seg', recMedia, (req, res, next) => {
   const seg = String(req.params.seg || ''); if (!/^seg-\d+\.ts$/.test(seg)) return next();

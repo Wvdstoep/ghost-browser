@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Recorder, statsOf, closePlaylist, concatArgs, videoKey, MIN_FREE_BYTES } from '../src/recorder/engine.js';
+import { Recorder, statsOf, closePlaylist, trimPlaylist, servePlaylist, segmentList, concatArgs, videoKey, MIN_FREE_BYTES } from '../src/recorder/engine.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rec-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -136,7 +136,13 @@ describe('the recording engine', () => {
     fs.writeFileSync(path.join(d, 'index.m3u8'), '#EXTM3U\n#EXTINF:10.000,\nseg-00001.ts\n#EXTINF:4.500,\nseg-00002.ts\n'); fs.writeFileSync(path.join(d, 'seg-00001.ts'), Buffer.alloc(30)); fs.writeFileSync(path.join(d, 'seg-00002.ts'), Buffer.alloc(12));
     expect(statsOf(d)).toEqual({ segments: 2, bytes: 42, seconds: 15 });
     expect(closePlaylist(d)).toBe(true); closePlaylist(d); expect(fs.readFileSync(path.join(d, 'index.m3u8'), 'utf8').match(/ENDLIST/g).length).toBe(1);
-    const a = concatArgs('/r/x'); expect(a).toContain('copy'); expect(a[a.length - 1]).toBe('/r/x/final.mp4'); expect(a).toContain('/r/x/index.m3u8');
+    const a = concatArgs('/r/x'); expect(a).toContain('copy'); expect(a[a.length - 1]).toBe('/r/x/final.mp4'); expect(a).toContain('/r/x/list.txt'); expect(a).toContain('aac_adtstoasc');
+    // the mp4 is built from the FILES that are here; a playlist naming a missing segment is trimmed for players and at close
+    fs.writeFileSync(path.join(d, 'index.m3u8'), '#EXTM3U\n#EXTINF:10.000,\nseg-00001.ts\n#EXTINF:4.500,\nseg-00002.ts\n#EXTINF:10.000,\nseg-00003.ts\n');
+    expect(segmentList(d)).toBe(`file '${path.join(d, 'seg-00001.ts')}'\nfile '${path.join(d, 'seg-00002.ts')}'\n`);
+    expect(servePlaylist(d)).not.toMatch(/seg-00003/); expect(servePlaylist(d)).toMatch(/seg-00002/); expect(servePlaylist(d).match(/#EXTINF/g).length).toBe(2);
+    expect(trimPlaylist('#EXTM3U\n#EXTINF:10.000,\nseg-00007.ts\n', () => false)).toBe('#EXTM3U\n');
+    closePlaylist(d); const closed = fs.readFileSync(path.join(d, 'index.m3u8'), 'utf8'); expect(closed).not.toMatch(/seg-00003/); expect(closed).toMatch(/ENDLIST/); expect(closed.match(/ENDLIST/g).length).toBe(1);
     expect(videoKey('https://www.youtube.com/watch?v=abc&t=5s')).toBe('abc'); expect(videoKey('https://www.youtube.com/watch?v=abc')).toBe(videoKey('https://www.youtube.com/watch?v=abc&list=x'));
     expect(videoKey('https://site.com/v#t=1')).toBe('https://site.com/v'); expect(videoKey('https://site.com/v')).not.toBe(videoKey('https://site.com/w'));
   });
