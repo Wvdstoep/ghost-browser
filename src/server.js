@@ -1879,13 +1879,16 @@ function operatorContext() {
     fileShow: (id) => {
       const f = fileAssets.get(String(id || '')); if (!f) return { error: 'no such file' };
       const out = { fileId: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, downloadUrl: `/v1/files/${f.id}/raw?download=1` };
-      if (f.kind === 'image') {
+      // anything that IS an image shows — a captured download (kind image) or a page screenshot the
+      // walk took (kind screenshot); both are image/* and both are what the owner asked to see
+      if (/^image\//.test(String(f.mime || '')) || f.kind === 'image' || f.kind === 'screenshot') {
         try {
           const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true });
           const ext = /png/.test(f.mime) ? 'png' : /webp/.test(f.mime) ? 'webp' : 'jpg'; const name = `file-${f.id}.${ext}`;
           require('fs').writeFileSync(require('path').join(dir, name), f.bytes); out.screenshotUrl = '/v1/operator/shots/' + name; out.shown = true;
         } catch (e) { out.error = 'could not show the image: ' + e.message; }
       }
+      if (!out.shown && !out.error) out.error = `not an image I can show (${f.kind}, ${f.mime}) — the owner can download it: ${out.downloadUrl}`;
       return out;
     },
     stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
