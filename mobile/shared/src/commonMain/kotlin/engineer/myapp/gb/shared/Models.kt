@@ -16,7 +16,9 @@ data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: S
  */
 data class AssistantStep(val name: String, val label: String, val args: String, val text: String,
                          val image: String = "",      // a picture the tool took (server path), if any
-                         val imageData: String = "")  // …inlined as a data: url for the last few (the app decodes it)
+                         val imageData: String = "",  // …inlined as a data: url for the last few (the app decodes it)
+                         val download: String = "",   // a captured file behind this step (server download url)
+                         val fileName: String = "")
 data class AssistantCard(val kind: String, val title: String, val watcherId: String = "", val url: String = "")   // results | approvals | url
 data class AssistantTurn(
     val role: String,                 // user | assistant

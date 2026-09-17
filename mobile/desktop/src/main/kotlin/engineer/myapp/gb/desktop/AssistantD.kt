@@ -18,6 +18,16 @@ object AssistantD {
 
     fun open(st: DesktopState) {
         st.assistant.connected.value = Cluster.connected
+        // a picture in the chat saves into ~/Downloads with one tap
+        if (AssistantHooks.saveImage == null) AssistantHooks.saveImage = { data, name ->
+            try {
+                val mime = data.substringAfter("data:", "image/jpeg").substringBefore(";"); val ext = when { mime.contains("png") -> "png"; mime.contains("webp") -> "webp"; else -> "jpg" }
+                val bytes = java.util.Base64.getDecoder().decode(data.substringAfter("base64,", ""))
+                val fname = (if (name.contains('.')) name else "$name.$ext").replace(Regex("[^A-Za-z0-9._-]"), "_")
+                val dir = java.io.File(System.getProperty("user.home"), "Downloads").also { it.mkdirs() }
+                java.io.File(dir, fname).writeBytes(bytes); st.activity.value = "saved ${dir.resolve(fname)}"
+            } catch (e: Exception) { st.activity.value = "save failed: ${e.message}" }
+        }
         if (st.assistant.decodeImage == null) st.assistant.decodeImage = { data ->
             try { val bytes = java.util.Base64.getDecoder().decode(data.substringAfter("base64,", "")); org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap() } catch (e: Throwable) { null }
         }

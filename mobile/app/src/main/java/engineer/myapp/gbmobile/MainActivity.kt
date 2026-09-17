@@ -1315,6 +1315,19 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun assistantOpen() {
         shellUi.switcherOpen.value = false; shellUi.screen.value = "agent"
         ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        // a picture in the chat (a generated image, a frame) saves to the phone's Downloads with one tap
+        if (engineer.myapp.gb.shared.AssistantHooks.saveImage == null) engineer.myapp.gb.shared.AssistantHooks.saveImage = saveImageHook@{ data, name ->
+            try {
+                val mime = data.substringAfter("data:", "image/jpeg").substringBefore(";"); val ext = when { mime.contains("png") -> "png"; mime.contains("webp") -> "webp"; else -> "jpg" }
+                val bytes = android.util.Base64.decode(data.substringAfter("base64,", ""), android.util.Base64.DEFAULT)
+                val fname = (if (name.contains('.')) name else "$name.$ext").replace(Regex("[^A-Za-z0-9._-]"), "_")
+                if (android.os.Build.VERSION.SDK_INT < 29) { val f = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fname); f.writeBytes(bytes); vm.log("● saved ${f.absolutePath}"); return@saveImageHook }
+                val values = android.content.ContentValues().apply { put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname); put(android.provider.MediaStore.Downloads.MIME_TYPE, mime); put(android.provider.MediaStore.Downloads.IS_PENDING, 1) }
+                val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) { contentResolver.openOutputStream(uri)?.use { it.write(bytes) }; values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0); contentResolver.update(uri, values, null, null); vm.log("● saved $fname to Downloads"); runOnUiThread { android.widget.Toast.makeText(this, "Saved $fname to Downloads", android.widget.Toast.LENGTH_SHORT).show() } }
+                else vm.log("! could not save $fname")
+            } catch (e: Exception) { vm.log("! save: ${e.message}") }
+        }
         // pictures the agent took arrive as data: urls; decode them here (the shared screen has no bitmap codec)
         if (ASSIST.decodeImage == null) ASSIST.decodeImage = { data ->
             try { val b64 = data.substringAfter("base64,", ""); val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() } catch (e: Exception) { null }
