@@ -144,11 +144,21 @@ function cloneCookies(profileDir, base, into) {
   return n;
 }
 
+/** Chrome preferences for a recording's throw-away profile: no translate bubble, no permission prompts, nothing that draws over the video. */
+function profilePrefs() {
+  return { translate: { enabled: false }, translate_blocked_languages: [], profile: { default_content_setting_values: { notifications: 2, geolocation: 2, media_stream_camera: 2, media_stream_mic: 2 }, password_manager_enabled: false },
+    credentials_enable_service: false, autofill: { profile_enabled: false, credit_card_enabled: false }, browser: { has_seen_welcome_page: true }, distribution: { skip_first_run_ui: true } };
+}
+function writePrefs(profileDir) {
+  try { fs.mkdirSync(path.join(profileDir, 'Default'), { recursive: true }); fs.writeFileSync(path.join(profileDir, 'Default', 'Preferences'), JSON.stringify(profilePrefs())); return true; } catch { return false; }
+}
+
 /**
  * Chromium on the recording's display and sink, from the throw-away profile. `cfg` is the source
  * profile's settings (locale, timezone, exit) so the recording looks like the owner's browser.
  */
 async function launchBrowser({ profileDir, display, pulseServer, size, cfg = {}, log }) {
+  writePrefs(profileDir);
   const { stealthChromium, CHROME_ARGS } = require('../pool');
   const profiles = require('../profiles');
   let proxy = {};
@@ -183,4 +193,4 @@ function startFfmpeg(opts, pulseServer, log) {
   return { proc, done, stop };
 }
 
-module.exports = { SIZES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, capabilities, freeBytes, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };
+module.exports = { SIZES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, capabilities, freeBytes, profilePrefs, writePrefs, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };

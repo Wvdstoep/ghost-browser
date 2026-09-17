@@ -2087,7 +2087,7 @@ const recorder = (() => {
   const sc = require('./recorder/sidecar'); const pg = require('./recorder/page'); const { Recorder } = require('./recorder/engine');
   const liveContextFor = (profile) => { try { const o = consoleOwner(); const s = pool.listFor(o).find((x) => x.profile === profile); const sess = s && pool.get(s.sessionId); return sess && sess.context ? sess.context : null; } catch { return null; } };
   const deps = { capabilities: sc.capabilities, freeBytes: sc.freeBytes, sizeOf: sc.sizeOf, startDisplay: sc.startDisplay, startPulse: sc.startPulse, launchBrowser: sc.launchBrowser, startFfmpeg: sc.startFfmpeg,
-    cookiesFor: (profile) => pg.cookiesFor(profile, { liveContextFor, profileDir: process.env.PROFILE_DIR || '/profiles', log }), preparePage: pg.preparePage, videoState: pg.videoState,
+    cookiesFor: (profile) => pg.cookiesFor(profile, { liveContextFor, profileDir: process.env.PROFILE_DIR || '/profiles', log }), preparePage: pg.preparePage, videoState: pg.videoState, platformCookies: pg.platformCookies,
     profileConfig: (p) => { try { return profiles.read(p) || {}; } catch { return {}; } } };
   return new Recorder({ root: sc.recordingsRoot(), deps, log, maxConcurrent: Math.max(1, Number(process.env.MAX_RECORDINGS) || 2) });
 })();

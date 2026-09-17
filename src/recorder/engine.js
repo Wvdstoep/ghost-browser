@@ -123,7 +123,9 @@ class Recorder {
       ctx.display = await d.startDisplay(size, this.log); this._set(rec, { display: ctx.display.n });
       ctx.pulse = await d.startPulse(rec.id, this.log);
       ctx.context = await d.launchBrowser({ profileDir: clone, display: ctx.display.n, pulseServer: ctx.pulse.server, size, cfg: d.profileConfig ? d.profileConfig(rec.profile) : {}, log: this.log });
-      if (cookies.length) { try { await ctx.context.addCookies(cookies); } catch (e) { this.log.warn(`[recorder] ${rec.id} addCookies: ${e.message}`); } }
+      const extra = d.platformCookies ? d.platformCookies(rec.url, cookies) : [];   // a consent wall answered before it appears
+      const all = [...cookies, ...extra];
+      if (all.length) { try { await ctx.context.addCookies(all); } catch (e) { this.log.warn(`[recorder] ${rec.id} addCookies: ${e.message}`); } }
       ctx.page = ctx.context.pages()[0] || await ctx.context.newPage();
       await ctx.page.goto(rec.url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch((e) => this.log.warn(`[recorder] ${rec.id} goto: ${e.message}`));
       const prep = await d.preparePage(ctx.page, this.log).catch((e) => ({ error: e.message }));

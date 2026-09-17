@@ -7,9 +7,14 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sizeOf, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, capabilities, recordingsRoot, DISPLAY_LOW, SINK } from '../src/recorder/sidecar.js';
+import { sizeOf, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, capabilities, recordingsRoot, profilePrefs, writePrefs, DISPLAY_LOW, SINK } from '../src/recorder/sidecar.js';
 
 describe('recording sidecar', () => {
+  it('the throw-away profile starts with nothing that draws over the video: no translate bubble, no permission prompts', () => {
+    const p = profilePrefs(); expect(p.translate.enabled).toBe(false); expect(p.profile.default_content_setting_values.notifications).toBe(2);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prof-')); expect(writePrefs(dir)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'Default', 'Preferences'), 'utf8')).translate.enabled).toBe(false);
+  });
   it('says what this machine can do, and where recordings go on a laptop (beside the profiles folder)', () => {
     const c = capabilities();
     expect(c.tools).toHaveProperty('Xvfb'); expect(c.tools).toHaveProperty('pulseaudio'); expect(c.tools).toHaveProperty('ffmpeg');
