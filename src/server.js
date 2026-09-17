@@ -1941,7 +1941,29 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
 });
 app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
 app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title)));
-app.get('/v1/assistant/chats/:id', authed, (req, res) => { const v = assistant.view(req.params.id); if (!v) return res.status(404).json({ error: 'no such chat' }); res.json(v); });
+/* THE BACKDROP: while a turn runs, the chat view carries a small frame of the browser the agent works
+   in (the profile its last walk/look named, else the login browser), so the app can show the live
+   browser behind the chat. Cached per profile for 2.5 s; jpeg, ~40–80 KB. Never fails the view. */
+const backdropCache = new Map();
+async function backdropOf(profile) {
+  const owner = consoleOwner(); const want = profiles.safeName(profile || settingsStore.read().browserProfile || 'facebook');
+  const hit = backdropCache.get(want); if (hit && Date.now() - hit.t < 2500) return hit.data;
+  try {
+    const s0 = pool.listFor(owner).find((x) => x.profile === want); const s = s0 && pool.get(s0.sessionId);
+    if (!s || !s.page || (s.page.isClosed && s.page.isClosed())) return null;
+    const buf = await Promise.race([s.page.screenshot({ type: 'jpeg', quality: 35 }), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);
+    const data = 'data:image/jpeg;base64,' + buf.toString('base64'); backdropCache.set(want, { t: Date.now(), data }); return data;
+  } catch (e) { return null; }
+}
+app.get('/v1/assistant/chats/:id', authed, async (req, res) => {
+  const v = assistant.view(req.params.id); if (!v) return res.status(404).json({ error: 'no such chat' });
+  if (v.live && req.query.backdrop !== '0') {
+    const last = [...v.live.steps].reverse().find((st) => /"profile"\s*:\s*"/.test(String(st.args || '')));
+    const prof = last ? (String(last.args).match(/"profile"\s*:\s*"([^"]+)"/) || [])[1] : '';
+    v.live.backdrop = await backdropOf(prof); v.live.backdropProfile = prof || (settingsStore.read().browserProfile || 'facebook');
+  }
+  res.json(v);
+});
 app.delete('/v1/assistant/chats/:id', authed, (req, res) => res.json({ ok: assistant.remove(req.params.id) }));
 app.post('/v1/assistant/chats/:id/messages', authed, (req, res) => {
   const cfg = settingsStore.read();
