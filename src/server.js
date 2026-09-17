@@ -1746,6 +1746,23 @@ async function postWatchTick(wf, owner) {
     } catch (e) { log.error(`[post-watch] ${url}: ${e.message}`); }
   }
 }
+// Ground truth for one thread, as the watcher's OWN session sees it (same owner, same login): every
+// comment article on that comment's page. For checking "it says waiting but I answered" without guessing.
+app.post('/v1/watchers/:id/probe', authed, async (req, res) => {
+  const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const url = String((req.body || {}).url || '').trim();
+  if (!/^https?:\/\//.test(url)) return res.status(400).json({ error: 'url required' });
+  if (runningWatchers.size) return res.status(409).json({ error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')})` });
+  const owner = consoleOwner() || req.client.owner; const cfg = feed.getConfig(req.params.id) || {};
+  const want = profiles.safeName(cfg.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  runningWatchers.add(req.params.id);
+  try {
+    let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
+    if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+    res.json(await pw.probePage(s.page, url));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { runningWatchers.delete(req.params.id); }
+});
 // The posts a post-watcher follows: list / add one / remove one.
 app.get('/v1/watchers/:id/posts', authed, (req, res) => { try { const c = require('./watcherFeed').getConfig(req.params.id); res.json({ postUrls: c.postUrls || [], mode: c.mode || '', lastCrawl: c.lastCrawl || {} }); } catch (e) { res.json({ postUrls: [] }); } });
 app.post('/v1/watchers/:id/posts', authed, (req, res) => {
