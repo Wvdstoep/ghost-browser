@@ -29,6 +29,11 @@ RUN set -eux;     arch="$(dpkg --print-architecture)";     case "$arch" in amd64
 # that goes straight into an edit. apt here, not a static binary — ffmpeg pulls a web of codecs.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
+# PulseAudio — so a page can be HEARD. Nothing runs at start: a screen recording starts its own
+# private sound server with one null sink (recorder/sidecar.js), points its own Chromium at it,
+# and ffmpeg records that sink's monitor. The pool's browsers stay silent and untouched.
+RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
