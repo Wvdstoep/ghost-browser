@@ -49,6 +49,23 @@ async function crawl(page, url, log) {
     if (log) log.info(`[post-watch] not on the post yet (${page.url().slice(0, 80)}) — retrying`);
     await page.waitForTimeout(4000);
   }
+  const { candidates, press } = helpers(page);
+  // Show ALL comments (Facebook defaults to "most relevant", which hides some) — best effort.
+  try { const sb = await candidates(SORT_BTN); if (sb[0] && await press(sb[0])) { await page.waitForTimeout(900); const sa = await candidates(SORT_ALL); if (sa[0]) { await press(sa[0]); await page.waitForTimeout(1500); } } } catch { /* optional */ }
+  /* Reveal every hidden reply / more comments / truncated text. ONE click per round, then re-query:
+     Facebook re-renders the whole list after each expand, so handles from before the click are stale
+     and a stale-handle failure used to read as "nothing left" — the crawl quit after ~9 expands with
+     "1 antwoord bekijken" still closed under the owner's own replies. If a click does not shrink the
+     set (a control that stays), move to the next candidate; stop when none remain. */
+  const ex = await expandAll(page, candidates, press);
+  if (log) log.info(`[post-watch] expanded ${ex.clicks} control(s) on ${url}${ex.remaining.length ? ` — still closed: ${ex.remaining.slice(0, 6).join(' / ')}` : ''}`);
+  const tree = await page.evaluate(extractInPage);
+  tree.url = String(url); tree.crawledAt = Date.now(); tree.expand = ex;
+  return tree;
+}
+
+/** Button finding + a real click with a fallback, shared by the crawl and the probe. */
+function helpers(page) {
   const candidates = async (re) => {
     const out = [];
     for (const h of await page.$$('div[role="button"], span[role="button"], a[role="button"], [role="menuitem"]')) {
@@ -61,27 +78,27 @@ async function crawl(page, url, log) {
     try { await h.evaluate((el) => el.scrollIntoView({ block: 'center' })); await page.waitForTimeout(250); await h.click({ timeout: 3000 }); return true; }
     catch { try { await h.dispatchEvent('click'); return true; } catch { return false; } }
   };
-  // Show ALL comments (Facebook defaults to "most relevant", which hides some) — best effort.
-  try { const sb = await candidates(SORT_BTN); if (sb[0] && await press(sb[0])) { await page.waitForTimeout(900); const sa = await candidates(SORT_ALL); if (sa[0]) { await press(sa[0]); await page.waitForTimeout(1500); } } } catch { /* optional */ }
-  /* Reveal every hidden reply / more comments / truncated text. ONE click per round, then re-query:
-     Facebook re-renders the whole list after each expand, so handles from before the click are stale
-     and a stale-handle failure used to read as "nothing left" — the crawl quit after ~9 expands with
-     "1 antwoord bekijken" still closed under the owner's own replies. If a click does not shrink the
-     set (a control that stays), move to the next candidate; stop when none remain. */
-  let clicks = 0, lastCount = -1, skip = 0;
+  return { candidates, press };
+}
+
+/** The expansion loop, with a record of what it did — the probe reports it. */
+async function expandAll(page, candidates, press) {
+  let clicks = 0, lastCount = -1, skip = 0; const clicked = [];
   for (let round = 0; round < 60 && clicks < 120; round++) {
     const cand = await candidates(EXPAND);
     if (!cand.length) break;
     if (cand.length === lastCount) skip++; else skip = 0;
     if (skip >= cand.length) break;
     lastCount = cand.length;
-    if (await press(cand[skip])) clicks++;
+    let t = ''; try { t = (await cand[skip].innerText()).trim().replace(/\s+/g, ' '); } catch { /* gone */ }
+    let vis = false; try { vis = await cand[skip].evaluate((el) => el.getClientRects().length > 0); } catch { /* gone */ }
+    const ok = await press(cand[skip]);
+    if (ok) clicks++;
+    clicked.push(`${ok ? '+' : 'x'}${vis ? '' : '(hidden)'} ${t} [${cand.length}]`);
     await page.waitForTimeout(1000);
   }
-  if (log) log.info(`[post-watch] expanded ${clicks} control(s) on ${url}`);
-  const tree = await page.evaluate(extractInPage);
-  tree.url = String(url); tree.crawledAt = Date.now();
-  return tree;
+  let remaining = []; try { remaining = []; for (const h of await candidates(EXPAND)) { try { remaining.push((await h.innerText()).trim().replace(/\s+/g, ' ')); } catch { /* gone */ } } } catch { /* none */ }
+  return { clicks, clicked, remaining };
 }
 
 /* Runs INSIDE the page. Read-only. Facebook labels comment articles "Comment by X" / "Opmerking van X"
@@ -289,18 +306,22 @@ async function discoverOnPage(page, log) {
 
 /** Ground truth for one comment link: every comment article Facebook renders there, as the watcher's
  *  own session sees it (label, visible, first words), plus the reveal controls still closed. */
-async function probePage(page, url) {
+async function probePage(page, url, opts) {
   const { settle } = require('./inspector');
   await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
   try { await settle(page); } catch { /* still rendering */ }
   await page.waitForTimeout(4000);
-  return page.evaluate(() => {
+  let expand = null;
+  if (opts && opts.expand) { const { candidates, press } = helpers(page); expand = await expandAll(page, candidates, press); }
+  const dump = await page.evaluate(() => {
     const q = (s, r) => Array.from((r || document).querySelectorAll(s));
     const arts = q('[role="article"]').filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || ''));
     return { url: location.href, count: arts.length,
       items: arts.slice(0, 80).map((a) => ({ label: (a.getAttribute('aria-label') || '').slice(0, 110), vis: a.getClientRects().length > 0, text: (a.innerText || '').replace(/\s+/g, ' ').slice(0, 90) })),
       expanders: q('[role="button"]').map((b) => (b.innerText || '').trim()).filter((t) => /antwoord|repl|opmerking|comment/i.test(t)).slice(0, 25) };
   });
+  dump.expand = expand;
+  return dump;
 }
 
 function postIdOf(url) {
