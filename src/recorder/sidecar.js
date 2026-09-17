@@ -21,11 +21,32 @@ const SINK = 'rec';
 
 function sizeOf(quality) { return SIZES[String(quality || '720p')] || SIZES['720p']; }
 
-/** Where recordings live: the recordings volume, or a temp dir when the pod has none (a probe still works). */
+/**
+ * Where recordings live. On the cluster: the recordings volume at /recordings. On a laptop (the
+ * open-source install runs on a desk, not a cluster): RECORDINGS_DIR, else a `recordings` folder next
+ * to the profiles folder, so the data sits beside the rest of GB's state. A temp dir is the last resort.
+ */
 function recordingsRoot() {
-  const want = process.env.RECORDINGS_DIR || '/recordings';
-  try { fs.mkdirSync(want, { recursive: true }); fs.accessSync(want, fs.constants.W_OK); return want; } catch { /* no volume */ }
+  const writable = (p) => { try { fs.mkdirSync(p, { recursive: true }); fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
+  if (process.env.RECORDINGS_DIR && writable(process.env.RECORDINGS_DIR)) return process.env.RECORDINGS_DIR;
+  if (fs.existsSync('/recordings') && writable('/recordings')) return '/recordings';
+  const beside = path.resolve(process.env.PROFILE_DIR || '/profiles', '..', 'recordings'); if (writable(beside)) return beside;
   const alt = path.join(os.tmpdir(), 'recordings'); fs.mkdirSync(alt, { recursive: true }); return alt;
+}
+
+/**
+ * What this machine can do. The sidecar needs three Linux tools; the docker image ships all of them,
+ * a bare install on Linux gets them with one apt line, and macOS/Windows run the image. Told plainly
+ * to the owner instead of failing halfway through a start.
+ */
+function capabilities() {
+  const has = (bin) => { for (const d of String(process.env.PATH || '').split(path.delimiter)) { try { fs.accessSync(path.join(d, bin), fs.constants.X_OK); return true; } catch { /* next */ } } return false; };
+  const tools = { Xvfb: has('Xvfb'), pulseaudio: has('pulseaudio'), ffmpeg: has('ffmpeg') };
+  const missing = Object.keys(tools).filter((k) => !tools[k]);
+  const linux = process.platform === 'linux';
+  return { ok: linux && !missing.length, platform: process.platform, tools, missing, root: recordingsRoot(),
+    hint: !linux ? 'screen recording runs inside the Ghost Browser docker image on this platform (docker run … wvdstoep/ghost-browser)'
+      : missing.length ? `install ${missing.join(', ')} (Debian/Ubuntu: sudo apt install xvfb pulseaudio pulseaudio-utils ffmpeg) or run the docker image` : '' };
 }
 
 /** Bytes free on the recordings volume (0 when unknown). */
@@ -162,4 +183,4 @@ function startFfmpeg(opts, pulseServer, log) {
   return { proc, done, stop };
 }
 
-module.exports = { SIZES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, freeBytes, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };
+module.exports = { SIZES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, capabilities, freeBytes, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };
