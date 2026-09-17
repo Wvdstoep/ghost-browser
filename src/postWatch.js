@@ -239,7 +239,9 @@ function ingest(wid, tree, cfg, feed) {
   /* SOMEONE ELSE'S POST. The owner commented under a post of another person's; that person (or anyone)
      replied. Only the branches the owner is in are the owner's business here: a root comment by
      somebody else is their conversation with the post's author, never the owner's to answer. */
-  const theirs = !!tree.postAuthor && !!me && !same(tree.postAuthor, me);
+  // the page does not always yield the post's author; the discovery knew ("replied to your comment"), and the config remembers
+  const theirs = (Array.isArray(cfg.theirsIds) && cfg.theirsIds.includes(String(tree.postId))) || (!!tree.postAuthor && !!me && !same(tree.postAuthor, me));
+  const whose = tree.postAuthor && !same(tree.postAuthor, me) ? `${tree.postAuthor}'s` : 'their';
   for (const [rootId, list] of Object.entries(branches)) {
     const rootAuthor = (byId[rootId] || list[0] || {}).author || '';
     if (theirs && !list.some(isMe)) continue;
@@ -263,12 +265,12 @@ function ingest(wid, tree, cfg, feed) {
       const answered = repliedTo || reacted;
       const status = mine ? 'you' : (!addressed ? 'side conversation' : (repliedTo ? 'answered' : (reacted ? 'you reacted' : 'waiting on you')));
       const target = n.replyTo || (parent ? parent.author : '');
-      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}${theirs ? ` on ${tree.postAuthor}'s post` : ''}` : (theirs ? `${n.author} commented on ${tree.postAuthor}'s post` : `${n.author} commented on your post`));
+      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}${theirs ? ` on ${whose} post` : ''}` : (theirs ? `${n.author} commented on ${whose} post` : `${n.author} commented on your post`));
       // WHY it is (or is not) the owner's, in the words a card can show; and the branch as a transcript
       // the owner would otherwise open Facebook to read.
       const why = mine ? 'your reply' : !addressed ? `${n.author} and ${target || 'someone'} talking to each other` : !n.isReply ? 'commented on your post' : same(n.replyTo, me) ? 'replied to you' : mentionsMe(n) ? 'mentions you' : 'continued after your answer';
       const thread = list.map((m) => `${isMe(m) ? 'YOU' : m.author}: ${String(m.text || '').replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
-      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, why, postId: tree.postId, postTitle: (theirs ? `${tree.postAuthor}: ` : '') + String(tree.postText || '').replace(/\s+/g, ' ').slice(0, 90), postAuthor: tree.postAuthor || '', theirs, commentId: n.id, rootId, replyTo: target, thread };
+      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, why, postId: tree.postId, postTitle: (theirs && tree.postAuthor ? `${tree.postAuthor}: ` : '') + String(tree.postText || '').replace(/\s+/g, ' ').slice(0, 90), postAuthor: tree.postAuthor || '', theirs, commentId: n.id, rootId, replyTo: target, thread };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
       if (mine || answered || !addressed) patch.handled = true;    // nothing for the owner to do here, and it stays gone
@@ -350,8 +352,8 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
       + 'Output ONLY the reply text - no quotes, no preamble.';
     // what is known about this person from other posts, and what the owner tends to change in drafts
     let memory = ''; let lessons = ''; try { memory = people.profileOf('facebook', e.node.author, { exceptPostId: tree.postId }); lessons = people.editLessons(); } catch (err) { memory = ''; lessons = ''; }
-    const theirs = !!tree.postAuthor && !!meName && String(tree.postAuthor).trim().toLowerCase() !== meName;
-    const user = `${theirs ? `THE POST (by ${tree.postAuthor} — not yours; you commented under it)` : 'YOUR POST (you wrote this)'}:\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
+    const theirs = (Array.isArray(cfg.theirsIds) && cfg.theirsIds.includes(String(tree.postId))) || (!!tree.postAuthor && !!meName && String(tree.postAuthor).trim().toLowerCase() !== meName);
+    const user = `${theirs ? `THE POST (by ${tree.postAuthor || 'someone else'} — not yours; you commented under it)` : 'YOUR POST (you wrote this)'}:\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
     try {
       const out = await llm.chat({ host: llmCfg.llmHost, model: llmCfg.llmModel, key: llmCfg.llmKey, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
       const text = humanize((out && out.content) || '');

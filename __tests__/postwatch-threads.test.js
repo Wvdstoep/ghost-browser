@@ -61,6 +61,19 @@ describe("threads the owner started on other people's posts", () => {
     expect(item(feed, 'Wesley Stoep', 'super clean stack').handled).toBe(true);
   });
 
+  it('when the page gives no post author, the discovery\'s list of "their" posts still marks the thread as theirs', () => {
+    const feed = fakeFeed();
+    ingest('w', { postId: 'R', group: 'g', postText: 'Day 9 of vibe coding a game', postAuthor: '', me: '', nodes: [
+      N(0, 'Wesley Stoep', 'Looks good, is there a reason for 2d'),
+      N(1, 'Henry Chien', 'save cost lol', { root: 0, to: 'Wesley Stoep' }),
+      N(2, 'Someone', 'nice game'),
+    ] }, { meName: 'Wesley Stoep', theirsIds: ['R'] }, feed);
+    const it_ = item(feed, 'Henry Chien', 'save cost lol');
+    expect(it_.fields.status).toBe('waiting on you'); expect(it_.fields.theirs).toBe(true); expect(it_.title).toBe('Henry Chien replied to you on their post');
+    expect(it_.fields.postTitle).toBe('Day 9 of vibe coding a game');
+    expect(item(feed, 'Someone', 'nice game')).toBeUndefined();   // not the owner's business on their post
+  });
+
   it('the owner\'s own post still works as before (root comments wait)', () => {
     const feed = fakeFeed();
     ingest('w', { postId: 'P', group: 'g', postText: 'my post', postAuthor: 'Wesley Stoep', me: '', nodes: [N(0, 'Adam', 'nice')] }, cfg, feed);
