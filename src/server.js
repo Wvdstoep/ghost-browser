@@ -51,6 +51,7 @@ const log = {
   // 14 call sites and no method: the first error path to run took the whole server down.
   error: (m) => console.error(`[ghost] ERROR ${m}`),
 };
+const ops = require('./ops'); ops.tapLog(log);
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -1794,6 +1795,98 @@ async function postWatchTick(wf, owner, opts) {
   health.endedAt = Date.now();
   feed.setConfig(wf.id, { lastPass: health });
 }
+/*
+ * ── THE GB OPERATOR ──────────────────────────────────────────────────────────────────────────────
+ * An engineer for this browser, self-contained: src/operator/{harness,registry,tools,prompt}.js. A job
+ * is a goal in plain words; the harness runs the operator's tools (closures over THIS server's
+ * internals — no other service) until the outcome is proven or blocked, journaled under
+ * /profiles/operator/jobs. The app's Agent chat and the console are its surfaces.
+ */
+ops.install({ app, authed, workflows, pool, profiles, consoleOwner, log });
+const operatorRuns = new Map();
+function operatorContext() {
+  const owner = consoleOwner(); const feed = require('./watcherFeed'); const pw = require('./postWatch');
+  const c = { owner, maxConcurrent: 2 };
+  const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  const sessionFor = async (want) => {
+    let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
+    let dead = false; try { dead = !s || !s.page || (s.page.isClosed && s.page.isClosed()); } catch (e) { dead = true; }
+    if (dead) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+    return s;
+  };
+  const healthOf = (id) => {
+    const cfg = feed.getConfig(id) || {}; const wf = workflows.read(id); const lp = cfg.lastPass || null; const running = runningWatchers.has(id);
+    const sinceMin = lp && lp.endedAt ? Math.round((Date.now() - lp.endedAt) / 60000) : null;
+    return { id, active: !!(wf && wf.active), running, lastPass: lp, sinceMinutes: sinceMin, stale: !!(wf && wf.active && !running && (sinceMin === null || sinceMin > 45)), mode: cfg.mode || '' };
+  };
+  const pickJob = (v) => ({ id: v.id, status: v.status, role: v.role, workflowId: v.workflowId, runId: v.runId, steps: Array.isArray(v.steps) ? v.steps.length : 0, proposals: (v.proposals || []).length, error: v.error || null });
+  return {
+    ops, workflows, feed, runningWatchers, postIdOf: pw.postIdOf, health: healthOf,
+    jobsSummary: () => { const live = [...jobs.jobs.values()].map((j) => pickJob(jobs.view(j))); let hist = []; try { hist = (jobs.loadHistory(owner) || []).slice(0, 15).map(pickJob); } catch (e) { hist = []; } return { jobs: live, history: hist }; },
+    jobDetail: (id, last) => { const j = jobs.get(id); if (!j) return { error: 'no such job (it may have ended and been pruned — read its run instead)' }; const v = jobs.view(j); return { id: v.id, status: v.status, role: v.role, workflowId: v.workflowId, runId: v.runId, error: v.error || null, report: v.report ? String(v.report).slice(0, 1500) : null, proposals: (v.proposals || []).map((p) => ({ pid: p.pid, state: p.state, kind: p.kind, text: String(p.text || '').slice(0, 300), url: p.url })), steps: (v.steps || []).slice(-(last || 40)).map((s) => ({ kind: s.kind, text: String(s.text || '').slice(0, 300), ...(s.url ? { url: s.url } : {}) })) }; },
+    sessions: () => pool.listFor(owner),
+    look: async (profile) => {
+      const s = await sessionFor(profiles.safeName(profile || 'facebook')); const page = s.page;
+      const url = page.url(); const title = await page.title().catch(() => '');
+      let controls = []; try { const a = await analyzePage(page); const els = Array.isArray(a) ? a : ((a && (a.elements || a.items)) || []); controls = els.slice(0, 60).map((e) => ({ i: e.index !== undefined ? e.index : e.i, text: String(e.text || e.label || e.ariaLabel || '').slice(0, 80), kind: e.tag || e.role || e.type })); } catch (e) { controls = [{ error: e.message }]; }
+      let text = ''; try { text = await page.evaluate(() => (document.body && document.body.innerText || '').replace(/\s+\n/g, '\n').slice(0, 1500)); } catch (e) { /* none */ }
+      let shot = null; try { const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true }); shot = require('path').join(dir, Date.now() + '.png'); await page.screenshot({ path: shot, type: 'png' }); } catch (e) { shot = null; }
+      return { url, title, controls, text, screenshot: shot };
+    },
+    probe: async (id, url, expand) => {
+      if (runningWatchers.size) return { error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')}) — wait for it` };
+      runningWatchers.add('probe:' + id);
+      try { const s = await sessionFor(profiles.safeName((feed.getConfig(id) || {}).profile || 'facebook')); return await pw.probePage(s.page, url, { expand: !!expand }); }
+      finally { runningWatchers.delete('probe:' + id); }
+    },
+    runWatcher: (id) => {
+      const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' };
+      if (runningWatchers.size) return { status: 'busy', note: `another pass holds the browser (${[...runningWatchers].join(', ')}) — wait with gb_watcher_wait, then run again` };
+      runningWatchers.add(wf.id);
+      const runId = `${wf.id}-${Date.now()}`;
+      if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+      else workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then(() => triggerFollowUps(wf, owner)).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+      return { runId, status: 'running' };
+    },
+    setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, paletteNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
+    agentTools: () => agent.TOOLS.map((t) => t.function).filter(Boolean).map((f) => ({ name: f.name, description: String(f.description || '').slice(0, 200), takes: Object.keys((f.parameters && f.parameters.properties) || {}) })),
+    listRoles: () => roles.list(),
+    getRole: (name) => { const key = String(name || '').toLowerCase(); const canonical = roles.canonical(key); if (key !== 'general' && canonical === 'general') return null; const r = roles.get(key); return { name: canonical, builtin: !!roles.ROLES[canonical], site: r.site || null, group: r.group || null, label: r.label, description: r.description, tools: r.tools === undefined ? null : r.tools, prompt: r.prompt || '' }; },
+    saveRole: (name, role) => userRoles.save({ ...(role || {}), id: name || null }, paletteNames()),
+    saveFlow: (flow) => { const r = workflows.save(flow, paletteNames()); return (r && r.workflow) || r; },
+    runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
+    platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
+  };
+}
+app.post('/v1/operator/jobs', authed, (req, res) => {
+  const goal = String((req.body || {}).goal || '').trim();
+  if (!goal) return res.status(400).json({ error: 'goal required — what should the operator do, in plain words' });
+  const cfg = settingsStore.read();
+  if (!cfg.llmModel) return res.status(400).json({ error: 'no AI model configured — set it under agent Settings first' });
+  try {
+    const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
+    const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
+    const reg = new Registry(); registerOperatorTools(reg, operatorContext());
+    const run = new OperatorRun({ goal, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg, systemPrompt: operatorPrompt(), orientation: () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; }, log });
+    operatorRuns.set(run.id, run);
+    run.run().catch((e) => log.error(`[operator] ${run.id}: ${e.message}`));
+    log.info(`[operator] job ${run.id}: ${goal.slice(0, 120)}`);
+    res.json({ id: run.id, status: 'running' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/v1/operator/jobs', authed, (req, res) => {
+  const { listPersisted } = require('./operator/harness');
+  const live = [...operatorRuns.values()].map((r) => r.view()); const ids = new Set(live.map((r) => r.id));
+  const past = listPersisted().filter((r) => !ids.has(r.id)).slice(0, 30).map((r) => ({ ...r, events: (r.events || []).slice(-20) }));
+  res.json({ jobs: [...live, ...past] });
+});
+app.get('/v1/operator/jobs/:id', authed, (req, res) => {
+  const r = operatorRuns.get(req.params.id); if (r) return res.json(r.view());
+  const { listPersisted } = require('./operator/harness'); const p = listPersisted().find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'no such operator job' }); res.json(p);
+});
+app.post('/v1/operator/jobs/:id/say', authed, (req, res) => { const r = operatorRuns.get(req.params.id); if (!r) return res.status(404).json({ error: 'not running' }); r.say(String((req.body || {}).text || '')); res.json({ ok: true }); });
+app.post('/v1/operator/jobs/:id/stop', authed, (req, res) => { const r = operatorRuns.get(req.params.id); if (!r) return res.status(404).json({ error: 'not running' }); r.stop(); res.json({ ok: true }); });
 // Which watcher passes hold the browser right now. NOT owner-scoped on purpose: the deploy gate asks
 // with the master's key and sessions are per owner, so it rolled the pod straight through a crawl.
 app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers] }));
