@@ -7,8 +7,23 @@
 const path = require('path');
 
 /** Consent walls in the languages the owner's exits speak; accept first (a recording wants the real page), reject as the fallback. */
-const CONSENT_ACCEPT = /^(accept all|accept|i agree|agree|allow all|got it|ok|zaakceptuj wszystko|zgadzam się|alles accepteren|accepteren|akkoord|alle akzeptieren|akzeptieren|accepter tout|tout accepter|aceptar todo|accetta tutto|aceitar tudo)$/i;
-const CONSENT_REJECT = /^(reject all|decline|odrzuć wszystko|alles afwijzen|alle ablehnen|tout refuser|rechazar todo|rifiuta tutto)$/i;
+const CONSENT_ACCEPT = /^(accept all|accept|i agree|agree|allow all|got it|ok|zaakceptuj wszystko|zgadzam się|alles accepteren|accepteren|akkoord|alle akzeptieren|akzeptieren|accepter tout|tout accepter|aceptar todo|accetta tutto|aceitar tudo|hyväksy kaikki|godkänn alla|acceptér alle|accepter alle|godta alle|přijmout vše|elfogad mindent|acceptă tot|принять все)$/i;
+const CONSENT_REJECT = /^(reject all|decline|odrzuć wszystko|alles afwijzen|alle ablehnen|tout refuser|rechazar todo|rifiuta tutto|hylkää kaikki|avvisa alla|afvis alle|avvis alle|odmítnout vše|elutasít mindent|respinge tot|отклонить все)$/i;
+
+/**
+ * Cookies that answer a platform's consent wall BEFORE the page loads, in any language: YouTube and
+ * Google honour SOCS=CAI as "consent given" (the same token yt-dlp sets). Only added when the
+ * profile has none — a real choice the owner made is never overwritten.
+ */
+function platformCookies(url, existing = []) {
+  let host = ''; try { host = new URL(url).hostname; } catch { return []; }
+  const has = (name, domain) => existing.some((c) => c.name === name && String(c.domain || '').replace(/^\./, '') === domain);
+  const out = [];
+  if (/(^|\.)youtube\.com$/.test(host) || /(^|\.)google\.[a-z.]+$/.test(host)) {
+    for (const domain of ['youtube.com', 'google.com']) if (!has('SOCS', domain)) out.push({ name: 'SOCS', value: 'CAI', domain: '.' + domain, path: '/', secure: true, sameSite: 'None', expires: Math.floor(Date.now() / 1000) + 365 * 86400 });
+  }
+  return out;
+}
 
 /**
  * The profile's cookies as Playwright sees them: from the pool's live session when it holds the
@@ -29,14 +44,26 @@ async function cookiesFor(profile, { liveContextFor, profileDir, log } = {}) {
 }
 function strip(cookies) { return cookies.map((c) => { const { sameParty, priority, sourceScheme, sourcePort, partitionKey, ...rest } = c; return rest; }); }
 
-async function clickConsent(page, log) {
-  for (const rx of [CONSENT_ACCEPT, CONSENT_REJECT]) {
-    for (const frame of [page, ...page.frames()]) {
-      try {
-        const btn = frame.getByRole('button', { name: rx }).first();
-        if (await btn.isVisible({ timeout: 800 }).catch(() => false)) { await btn.click({ timeout: 3000 }); log && log.info && log.info('[recorder] consent wall dismissed'); await page.waitForTimeout(1500); return true; }
-      } catch { /* next frame */ }
+/**
+ * A consent wall renders a moment AFTER the page (YouTube's a second or two later, client-side), so
+ * this looks for up to `waitMs`, in the page and its frames, accept first then reject. Buttons carry
+ * their text as content or as an aria-label; getByRole reads both.
+ */
+async function clickConsent(page, log, waitMs = 10000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < waitMs) {
+    for (const rx of [CONSENT_ACCEPT, CONSENT_REJECT]) {
+      for (const frame of [page, ...page.frames()]) {
+        try {
+          const btn = frame.getByRole('button', { name: rx }).first();
+          if (await btn.count() && await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+            await btn.click({ timeout: 5000 }); log && log.info && log.info(`[recorder] consent wall dismissed (${(await btn.textContent().catch(() => '')) || 'aria'}`.trim() + ')');
+            await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {}); await page.waitForTimeout(2000); return true;
+          }
+        } catch { /* next frame */ }
+      }
     }
+    await page.waitForTimeout(700);
   }
   return false;
 }
@@ -45,7 +72,10 @@ async function clickConsent(page, log) {
 async function preparePage(page, log) {
   const out = { consent: false, playing: false, fullscreen: false, muted: null };
   try { out.consent = await clickConsent(page, log); } catch { /* fine */ }
-  try { await page.waitForSelector('video', { timeout: 15000 }); } catch { out.error = 'no video element on the page'; return out; }
+  // attached, not visible: a player's <video> is often hidden or covered until it starts
+  try { await page.waitForSelector('video', { state: 'attached', timeout: 15000 }); } catch { out.error = 'no video element on the page'; return out; }
+  // a wall that came up late, after the video element was there
+  if (!out.consent) { try { out.consent = await clickConsent(page, log, 3000); } catch { /* fine */ } }
   // a user gesture, then play + unmute + full screen from inside it (browsers demand one for both)
   try {
     await page.evaluate(() => {
@@ -56,6 +86,9 @@ async function preparePage(page, log) {
     await page.waitForTimeout(1500);
   } catch (e) { log && log.warn && log.warn(`[recorder] gesture: ${e.message}`); }
   let st = await videoState(page).catch(() => null);
+  if (st && st.paused) {   // a big play button (YouTube's, most players') beats a click on the video, which can pause it
+    try { const big = page.locator('.ytp-large-play-button, button[aria-label*="Play" i], button[title*="Play" i]').first(); if (await big.count() && await big.isVisible({ timeout: 500 }).catch(() => false)) { await big.click({ timeout: 3000 }); await page.waitForTimeout(1200); st = await videoState(page).catch(() => null); } } catch { /* next */ }
+  }
   if (st && st.paused) {   // some players want a real click on the video itself
     try { await page.click('video', { timeout: 3000, force: true }); await page.waitForTimeout(1200); st = await videoState(page).catch(() => null); } catch { /* still paused */ }
     if (st && st.paused) { try { await page.keyboard.press('k'); await page.waitForTimeout(1200); st = await videoState(page).catch(() => null); } catch { /* YouTube's shortcut, harmless elsewhere */ } }
@@ -76,4 +109,4 @@ async function videoState(page) {
   });
 }
 
-module.exports = { cookiesFor, preparePage, videoState, clickConsent, CONSENT_ACCEPT, CONSENT_REJECT };
+module.exports = { cookiesFor, platformCookies, preparePage, videoState, clickConsent, CONSENT_ACCEPT, CONSENT_REJECT };
