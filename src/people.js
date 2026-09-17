@@ -62,7 +62,7 @@ function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' 
         rec.exchanges.push({ id: n.id, t: now, who: 'you', text: norm(n.text).slice(0, 400), postId, when: n.when || '' });
         if (PROMISE.test(n.text || '')) { const p = norm(n.text).slice(0, 200); if (!rec.promises.some((x) => x.text === p)) rec.promises.push({ text: p, t: now, postId }); }
       }
-      rec.posts[postId] = { title: postTitle, lastAt: now }; rec.lastSeen = now; touched.add(rec.name);
+      rec.posts[postId] = { ...(rec.posts[postId] || {}), title: postTitle, lastAt: now }; rec.lastSeen = now; touched.add(rec.name);
       continue;
     }
     // them: only when they were talking to the owner (root comment, reply to the owner, mention)
@@ -79,7 +79,7 @@ function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' 
       if (txt && ASK.test(txt)) { const a = txt.slice(0, 200); if (!rec.asks.some((x) => x.text === a)) rec.asks.push({ text: a, t: now, postId }); }
       if (txt && COMMERCIAL.test(txt)) { const sgl = txt.slice(0, 200); if (!rec.signals.some((x) => x.text === sgl)) rec.signals.push({ text: sgl, t: now, postId, url: urlOf(n) || '' }); }
     }
-    rec.posts[postId] = { title: postTitle, lastAt: now }; rec.lastSeen = now; touched.add(rec.name);
+    rec.posts[postId] = { ...(rec.posts[postId] || {}), title: postTitle, lastAt: now }; rec.lastSeen = now; touched.add(rec.name);
   }
   for (const rec of recs.values()) {
     rec.exchanges.sort((a, b) => a.t - b.t || String(a.when).localeCompare(String(b.when)));
