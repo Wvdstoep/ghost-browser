@@ -45,6 +45,8 @@ class AssistantUi {
     val error = mutableStateOf("")            // last transport error, shown once under the timeline
     val connected = mutableStateOf(false)     // a cluster is configured and answering
     val model = mutableStateOf("")            // the model the agent runs on (for the header)
+    /** Platform decoder for a step's inlined picture (data: url → bitmap); null = cannot show pictures. */
+    var decodeImage: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null
 }
 
 class AssistantActions(
@@ -89,9 +91,9 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         else if (chat == null || chat.turns.isEmpty()) EmptyState(act.onSend)
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
-                        if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl)
+                        if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
                     }
-                    if (live != null) item(key = "live") { LiveCard(live, act.onStop) }
+                    if (live != null) item(key = "live") { LiveCard(live, act.onStop, decode = ui.decodeImage) }
                     if (ui.error.value.isNotBlank()) item(key = "err") { ErrorRow(ui.error.value) }
                     item { Spacer(Modifier.height(6.dp)) }
                 }
@@ -150,7 +152,7 @@ private fun UserTurn(t: AssistantTurn) {
 }
 
 @Composable
-private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () -> Unit, onCard: (AssistantCard) -> Unit, onOpenUrl: (String) -> Unit) {
+private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () -> Unit, onCard: (AssistantCard) -> Unit, onOpenUrl: (String) -> Unit, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null) {
     val cs = MaterialTheme.colorScheme
     val stripe = when (t.status) { "blocked" -> Color(0xFFE0A100); "error", "stopped" -> Color(0xFFE5484D); else -> Color.Transparent }
     var details by remember { mutableStateOf(false) }
@@ -184,7 +186,7 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
                     Spacer(Modifier.width(4.dp))
                     Text("${t.steps.size} step${if (t.steps.size == 1) "" else "s"} · ${t.steps.take(3).joinToString(", ") { it.label.lowercase() }}${if (t.steps.size > 3) "…" else ""}", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (expanded) StepTimeline(t.steps, done = true)
+                if (expanded) StepTimeline(t.steps, done = true, decode = decode)
             }
         }
     }
@@ -202,16 +204,15 @@ private fun CardChip(c: AssistantCard, onClick: () -> Unit) {
         leadingIcon = { Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)) }, border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Brand.copy(alpha = 0.5f)))
 }
 
-/** A row that wraps — without pulling the experimental FlowRow into every build. */
+/** Chips that wrap onto the next line instead of squeezing each other (a chunked Row shrank the third chip to one character per line). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FlowRowCompat(items: List<@Composable () -> Unit>) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        items.chunked(2).forEach { row -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { row.forEach { it() } } }
-    }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { items.forEach { it() } }
 }
 
 @Composable
-private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boolean = false) {
+private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boolean = false, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.padding(start = 8.dp, top = 6.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         steps.forEachIndexed { i, s ->
@@ -225,7 +226,13 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                     Text(s.label, color = cs.onSurface, fontSize = 13.sp)
                     val sub = s.args.takeIf { it.isNotBlank() && it != "{}" }?.let { humanArgs(it) } ?: ""
                     if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (s.text.isNotBlank() && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // the server sends a human line per result; raw JSON (older turns) stays hidden
+                    if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[") && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // the picture the tool took — what the agent was looking at
+                    if (s.imageData.isNotBlank() && decode != null) {
+                        val bmp = remember(s.imageData) { try { decode(s.imageData) } catch (e: Throwable) { null } }
+                        if (bmp != null) androidx.compose.foundation.Image(bmp, contentDescription = "what the agent saw", modifier = Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(max = 260.dp).clip(RoundedCornerShape(10.dp)), contentScale = androidx.compose.ui.layout.ContentScale.FillWidth, alignment = Alignment.TopCenter)
+                    }
                 }
             }
         }
@@ -238,7 +245,7 @@ private fun humanArgs(json: String): String = Regex("\"([^\"]+)\"\\s*:\\s*(\"([^
 
 /* ── live turn ─────────────────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun LiveCard(live: AssistantLive, onStop: () -> Unit) {
+private fun LiveCard(live: AssistantLive, onStop: () -> Unit, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null) {
     val cs = MaterialTheme.colorScheme
     var now by remember { mutableStateOf(0L) }
     LaunchedEffect(live.jobId) { while (true) { now = currentTimeMillisCompat(); delay(1000) } }
@@ -261,7 +268,7 @@ private fun LiveCard(live: AssistantLive, onStop: () -> Unit) {
                         }
                     }
                 }
-                if (live.steps.isNotEmpty()) StepTimeline(live.steps.takeLast(4), done = false, current = true)
+                if (live.steps.isNotEmpty()) StepTimeline(live.steps.takeLast(4), done = false, current = true, decode = decode)
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("You can keep typing — it reads while it works.", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.weight(1f))

@@ -1,5 +1,6 @@
 package engineer.myapp.gb.desktop
 
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import engineer.myapp.gb.shared.*
 import org.json.JSONObject
 import kotlin.concurrent.thread
@@ -17,6 +18,9 @@ object AssistantD {
 
     fun open(st: DesktopState) {
         st.assistant.connected.value = Cluster.connected
+        if (st.assistant.decodeImage == null) st.assistant.decodeImage = { data ->
+            try { val bytes = java.util.Base64.getDecoder().decode(data.substringAfter("base64,", "")); org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap() } catch (e: Throwable) { null }
+        }
         if (!Cluster.connected) return
         bg {
             loadModel(st)
