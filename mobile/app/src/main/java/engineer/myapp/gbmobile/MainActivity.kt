@@ -674,6 +674,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         settingsUi.platforms.value = out
         shellUi.platforms.value = out   // also feed the omnibox shortcuts
+        vm.log("● signed in on this phone: " + (out.filter { it.signedIn }.map { it.label }.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "none"))
         syncLoginsToCluster(out)        // a login on this phone is a login on the cluster — by itself
         for (t in tabs) try { syncLoginForTab(t, t.url) } catch (e: Exception) { /* every open tab, once the platform list is here */ }
     }
@@ -711,6 +712,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (h.profile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(h.profile).cookieManager.getCookie(url) ?: ""
             else CookieManager.getInstance().getCookie(url) ?: ""
         } catch (e: Exception) { "" }
+        if (cookieStr.isBlank()) { if (loginSyncHashes[p.profile] != 0) { loginSyncHashes[p.profile] = 0; vm.log("· ${p.label}: no cookies yet in this tab's profile (${h.profile}) — sign in here and they sync by themselves") }; return }
         pushLoginCookies(p, cookieStr)
     }
     private fun pushLoginCookies(p: engineer.myapp.gbmobile.ui.PlatformOpt, cookieStr: String) {
