@@ -47,7 +47,55 @@ object Agent {
             "Be concise. Never invent tool results. CURRENT TAB: ${url.ifBlank { "(home)" }}\nTools:\n" + tools
     }
 
+    /** THE OPERATOR on the cluster: "/op <goal>" starts an engineer-grade job inside Ghost Browser (reads
+     *  what the browser did, changes the smallest wrong thing, runs and proves it); its steps stream into
+     *  this chat as tool chips and the final DONE/BLOCKED line lands as the reply. "/say <text>" speaks
+     *  into the running job. */
+    @Volatile private var operatorJobId: String = ""
+    private fun runOperatorJob(st: DesktopState, goal: String) {
+        if (goal.isBlank()) { push(st, "assistant", "Tell the operator what to do: /op make a post watcher for my LinkedIn posts — or /op why does the notifications watcher draft nothing?"); return }
+        if (st.agentBusy.value) { push(st, "assistant", "A job is still running here. Use /say to talk into it, or wait."); return }
+        push(st, "user", "/op $goal"); st.agentBusy.value = true
+        thread(isDaemon = true) {
+            try {
+                val started = try { JSONObject(Cluster.authed("POST", "/v1/operator/jobs", JSONObject().put("goal", goal).toString())) } catch (e: Exception) { JSONObject().put("error", e.message ?: "no answer") }
+                val jid = started.optString("id")
+                if (jid.isBlank()) { push(st, "assistant", "⚠ the operator could not start: ${started.optString("error").ifBlank { "no answer from the cluster" }}"); return@thread }
+                operatorJobId = jid; var lastT = 0L; var status = "running"; var idle = 0
+                push(st, "assistant", "operator job $jid started — reading the machine…")
+                while (status == "running" || status == "queued") {
+                    Thread.sleep(6000)
+                    val v = try { JSONObject(Cluster.authed("GET", "/v1/operator/jobs/$jid", null)) } catch (e: Exception) { if (++idle > 5) break else continue }
+                    idle = 0; status = v.optString("status", "running")
+                    val ev = v.optJSONArray("events") ?: org.json.JSONArray()
+                    for (i in 0 until ev.length()) {
+                        val e = ev.optJSONObject(i) ?: continue
+                        val t = e.optLong("t", 0L); if (t <= lastT) continue; lastT = t
+                        when (e.optString("kind")) {
+                            "tool" -> pushTool(st, e.optString("name"), JSONObject().put("tool", e.optString("name")).put("args", e.opt("args") ?: "").toString())
+                            "result" -> pushTool(st, e.optString("name"), e.optString("text"))
+                            "thought" -> push(st, "assistant", e.optString("text"))
+                        }
+                    }
+                }
+                val v = try { JSONObject(Cluster.authed("GET", "/v1/operator/jobs/$jid", null)) } catch (e: Exception) { JSONObject() }
+                val rep = v.optJSONObject("report")
+                val evidence = rep?.opt("evidence")?.let { if (it is JSONObject) it.toString(2) else it.toString() } ?: ""
+                push(st, "assistant", v.optString("finalLine").ifBlank { "the job ended: ${v.optString("status")}" } + (if (evidence.isNotBlank()) "\n\nEvidence: " + evidence.take(1200) else "") + (rep?.optString("lesson")?.takeIf { it.isNotBlank() }?.let { "\n\nLesson kept: $it" } ?: ""))
+            } finally { operatorJobId = ""; st.agentBusy.value = false }
+        }
+    }
+    private fun sayToOperator(st: DesktopState, text: String) {
+        val jid = operatorJobId
+        if (jid.isBlank()) { push(st, "assistant", "No operator job is running. Start one with /op <goal>."); return }
+        push(st, "user", "/say $text")
+        thread(isDaemon = true) { try { Cluster.authed("POST", "/v1/operator/jobs/$jid/say", JSONObject().put("text", text).toString()) } catch (e: Exception) { push(st, "assistant", "⚠ could not reach the job: ${e.message}") } }
+    }
+
     fun send(st: DesktopState, main: CefBrowser?, text: String) {
+        val t = text.trim()
+        if (t.startsWith("/op ") || t == "/op") { runOperatorJob(st, t.removePrefix("/op").trim()); return }
+        if (t.startsWith("/say ")) { sayToOperator(st, t.removePrefix("/say").trim()); return }
         if (st.agentBusy.value) return
         // Cloud (default) uses the cluster's LLM via the control channel — no key needed. A custom
         // self-hosted endpoint+key overrides.
