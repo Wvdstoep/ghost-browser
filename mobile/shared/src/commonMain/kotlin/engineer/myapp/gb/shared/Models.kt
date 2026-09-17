@@ -30,7 +30,9 @@ data class AssistantTurn(
     val iterations: Int = 0,
 )
 data class AssistantTask(val title: String, val done: Boolean, val note: String)
-data class AssistantLive(val jobId: String, val status: String, val iterations: Int, val tasks: List<AssistantTask>, val steps: List<AssistantStep>, val startedAt: Long)
+data class AssistantLive(val jobId: String, val status: String, val iterations: Int, val tasks: List<AssistantTask>, val steps: List<AssistantStep>, val startedAt: Long,
+                         val backdrop: String = "",          // a live frame of the browser the agent works in (data: url), while the turn runs
+                         val backdropProfile: String = "")
 data class AssistantChatView(val id: String, val title: String, val turns: List<AssistantTurn>, val live: AssistantLive?)
 data class ChatSummary(val id: String, val title: String, val updatedAt: Long, val turns: Int, val running: Boolean)
 

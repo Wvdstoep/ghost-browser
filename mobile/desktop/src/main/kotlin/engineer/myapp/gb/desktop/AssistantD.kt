@@ -32,12 +32,19 @@ object AssistantD {
         }
     }
     private fun refreshChats(st: DesktopState) { st.assistant.chats.value = AssistantJson.chats(Cluster.authed("GET", "/v1/assistant/chats", null)) }
+    /** The live frame of the browser the agent works in, decoded off the UI thread, onto the backdrop. */
+    private fun frame(st: DesktopState, v: AssistantChatView?) {
+        val d = v?.live?.backdrop?.takeIf { it.isNotBlank() } ?: return
+        val bmp = try { st.assistant.decodeImage?.invoke(d) } catch (e: Throwable) { null } ?: return
+        st.assistant.backdrop.value = bmp; st.assistant.backdropProfile.value = v.live?.backdropProfile ?: ""
+    }
     private fun load(st: DesktopState, id: String) {
         val raw = Cluster.authed("GET", "/v1/assistant/chats/$id", null)
         val v = AssistantJson.chat(raw)
         if (v == null) { st.assistant.error.value = "Could not reach your Ghost Browser (${raw.take(80)})"; st.agentBusy.value = false; return }
+        frame(st, v)
         chatId = v.id; st.assistant.chat.value = v; st.assistant.error.value = ""; st.agentBusy.value = v.live != null
-        if (v.live != null && !polling) { polling = true; bg { try { while (true) { Thread.sleep(2500); val cur = AssistantJson.chat(Cluster.authed("GET", "/v1/assistant/chats/$chatId", null)) ?: break; st.assistant.chat.value = cur; st.agentBusy.value = cur.live != null; if (cur.live == null) break } } finally { polling = false } } }
+        if (v.live != null && !polling) { polling = true; bg { try { while (true) { Thread.sleep(2500); val cur = AssistantJson.chat(Cluster.authed("GET", "/v1/assistant/chats/$chatId", null)) ?: break; frame(st, cur); st.assistant.chat.value = cur; st.agentBusy.value = cur.live != null; if (cur.live == null) break } } finally { polling = false } } }
     }
     private fun newChat(st: DesktopState) {
         val v = AssistantJson.chat(Cluster.authed("POST", "/v1/assistant/chats", "{}"))

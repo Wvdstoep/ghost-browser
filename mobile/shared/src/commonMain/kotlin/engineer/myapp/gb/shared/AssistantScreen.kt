@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -47,6 +48,10 @@ class AssistantUi {
     val model = mutableStateOf("")            // the model the agent runs on (for the header)
     /** Platform decoder for a step's inlined picture (data: url → bitmap); null = cannot show pictures. */
     var decodeImage: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null
+    /** THE BACKDROP: the browser the agent works in, live behind the chat while a turn runs; the last
+     *  frame stays (darker) when it is done. Decoded by the platform on every poll. */
+    val backdrop = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+    val backdropProfile = mutableStateOf("")
 }
 
 class AssistantActions(
@@ -81,8 +86,17 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     val turnCount = chat?.turns?.size ?: 0
     LaunchedEffect(turnCount, live?.steps?.size, live == null) { if (turnCount > 0) listState.animateScrollToItem(turnCount + 2) }
 
-    Box(modifier.fillMaxSize()) {
-        Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
+    val backdrop = ui.backdrop.value
+    Box(modifier.fillMaxSize().background(cs.background)) {
+        // THE LIVE BROWSER BEHIND THE CHAT: the frame the agent is looking at, softened and darkened so
+        // the timeline stays readable; brighter while a turn runs, resting when it is done.
+        if (backdrop != null) {
+            val scrim by animateColorAsState(if (live != null) Color.Black.copy(alpha = 0.60f) else Color.Black.copy(alpha = 0.80f), label = "scrim")
+            androidx.compose.foundation.Image(backdrop, contentDescription = null, modifier = Modifier.fillMaxSize().blur(3.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop, alignment = Alignment.TopCenter)
+            Box(Modifier.fillMaxSize().background(scrim))
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Brush.verticalGradient(0f to cs.background.copy(alpha = 0.85f), 0.18f to Color.Transparent, 0.82f to Color.Transparent, 1f to cs.background.copy(alpha = 0.9f))))
+        }
+        Surface(color = if (backdrop != null) Color.Transparent else cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().then(topInset)) {
                 Header(chat, live, ui, onHistory = { act.onRefreshChats(); history = true }, onNew = act.onNew, onSettings = act.onSettings, onClose = act.onClose)
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -108,13 +122,13 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
 @Composable
 private fun Header(chat: AssistantChatView?, live: AssistantLive?, ui: AssistantUi, onHistory: () -> Unit, onNew: () -> Unit, onSettings: () -> Unit, onClose: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().background(cs.surface).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().background(cs.surface.copy(alpha = 0.88f)).padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(chat?.title?.ifBlank { "Agent" } ?: "Agent", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (live != null) { PulseDot(Brand); Spacer(Modifier.width(6.dp)) }
                 val sub = when {
-                    live != null -> live.steps.lastOrNull()?.label ?: "Thinking…"
+                    live != null -> (live.steps.lastOrNull()?.label ?: "Thinking…") + (ui.backdropProfile.value.takeIf { it.isNotBlank() }?.let { " · in $it" } ?: "")
                     ui.model.value.isNotBlank() -> "on Ghost Browser · ${ui.model.value}"
                     ui.connected.value -> "on Ghost Browser"
                     else -> "not connected"
@@ -337,7 +351,7 @@ private fun Composer(working: Boolean, connected: Boolean, onSend: (String) -> U
     val cs = MaterialTheme.colorScheme
     var text by remember { mutableStateOf("") }
     val border by animateColorAsState(if (working) Brand.copy(alpha = 0.6f) else cs.outline.copy(alpha = 0.5f), label = "b")
-    Row(Modifier.fillMaxWidth().background(cs.surface).padding(10.dp), verticalAlignment = Alignment.Bottom) {
+    Row(Modifier.fillMaxWidth().background(cs.surface.copy(alpha = 0.88f)).padding(10.dp), verticalAlignment = Alignment.Bottom) {
         Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, border), modifier = Modifier.weight(1f)) {
             BasicTextField(text, { text = it }, textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp), cursorBrush = SolidColor(Brand), maxLines = 5,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),

@@ -27,7 +27,7 @@ object AssistantJson {
             val live = lv?.let { l ->
                 val tasks = ArrayList<AssistantTask>(); val tk = l.optJSONArray("tasks") ?: JSONArray()
                 for (i in 0 until tk.length()) { val x = tk.optJSONObject(i) ?: continue; tasks.add(AssistantTask(x.optString("title"), x.optBoolean("done"), x.optString("note"))) }
-                AssistantLive(l.optString("jobId"), l.optString("status"), l.optInt("iterations"), tasks, steps(l.optJSONArray("steps")), l.optLong("startedAt"))
+                AssistantLive(l.optString("jobId"), l.optString("status"), l.optInt("iterations"), tasks, steps(l.optJSONArray("steps")), l.optLong("startedAt"), l.optString("backdrop"), l.optString("backdropProfile"))
             }
             AssistantChatView(o.optString("id"), o.optString("title"), turns, live)
         }
