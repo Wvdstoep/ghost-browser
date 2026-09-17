@@ -1315,6 +1315,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun assistantOpen() {
         shellUi.switcherOpen.value = false; shellUi.screen.value = "agent"
         ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        // pictures the agent took arrive as data: urls; decode them here (the shared screen has no bitmap codec)
+        if (ASSIST.decodeImage == null) ASSIST.decodeImage = { data ->
+            try { val b64 = data.substringAfter("base64,", ""); val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() } catch (e: Exception) { null }
+        }
         if (!ASSIST.connected.value) return
         agentExec.execute {
             aiModelLoad()

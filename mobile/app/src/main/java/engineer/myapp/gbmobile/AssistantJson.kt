@@ -8,7 +8,7 @@ import org.json.JSONObject
 object AssistantJson {
     private fun steps(a: JSONArray?): List<AssistantStep> {
         val out = ArrayList<AssistantStep>(); if (a == null) return out
-        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"))) }
+        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"))) }
         return out
     }
     private fun cards(a: JSONArray?): List<AssistantCard> {

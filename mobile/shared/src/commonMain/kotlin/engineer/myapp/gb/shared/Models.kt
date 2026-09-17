@@ -14,7 +14,9 @@ data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: S
  * client: it sends the owner's words, polls the chat while a turn runs, and renders what comes back.
  * These are the shapes of GET /v1/assistant/chats/:id.
  */
-data class AssistantStep(val name: String, val label: String, val args: String, val text: String)
+data class AssistantStep(val name: String, val label: String, val args: String, val text: String,
+                         val image: String = "",      // a picture the tool took (server path), if any
+                         val imageData: String = "")  // …inlined as a data: url for the last few (the app decodes it)
 data class AssistantCard(val kind: String, val title: String, val watcherId: String = "", val url: String = "")   // results | approvals | url
 data class AssistantTurn(
     val role: String,                 // user | assistant
