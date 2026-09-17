@@ -269,6 +269,41 @@ function ingest(wid, tree, cfg, feed) {
   return out;
 }
 
+/**
+ * SELF-CHECK BEFORE DRAFTING. Every item the crawl calls "waiting on you" is re-read from its own deep
+ * link (the exact link the card carries) before a word is drafted. If that page shows a later reply of
+ * the owner's to this person, or the owner's reaction, the crawl was wrong and the deep link wins:
+ * the item is marked answered and the correction is logged. The crawl can be fooled by rendering; the
+ * page the person is actually on cannot. Returns what it checked and corrected, for the pass health.
+ */
+async function verifyWaiting(getPage, tree, entries, cfg, feed, wid, log, touch) {
+  const me = String(cfg.meName || tree.me || tree.postAuthor || '').trim().toLowerCase();
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const out = { checked: 0, corrected: 0, errors: 0 };
+  for (const e of entries.filter((x) => x.needsReply)) {
+    const it = feed.list(wid).find((x) => x.key === e.key);
+    if (!it || it.handled || it.draft || it.draftChecked) continue;
+    out.checked++;
+    try {
+      const sub = await openAndRead(await getPage(), it.url, null, false, touch);
+      const branch = sub.nodes.filter((n) => n.id === e.rootId || n.cid === e.rootId).sort((a, b) => a.i - b.i);
+      const idx = branch.findIndex((n) => n.id === e.node.id);
+      const self = idx >= 0 ? branch[idx] : null;
+      const repliedTo = idx >= 0 && branch.some((n, j) => j > idx && same(n.author, me) && (same(n.replyTo, e.node.author) || (!n.replyTo && !e.node.isReply)));
+      const reacted = !!(self && self.reactedByMe) && cfg.reactionCounts !== false;
+      if (repliedTo || reacted) {
+        out.corrected++;
+        e.needsReply = false;
+        feed.mark(wid, e.key, { handled: true, fields: Object.assign({}, it.fields, { status: repliedTo ? 'answered' : 'you reacted', verified: 'deep link' }) });
+        if (log) log.warn(`[post-watch] verify: ${e.node.author} was already ${repliedTo ? 'answered' : 'reacted to'} — the crawl missed it, the deep link wins`);
+        // fold the missed messages into the tree so the next pass starts right
+        for (const n of branch) if (!tree.nodes.some((m) => m.id === n.id)) { n.i = e.node.i + (n.i + 1) / 100000; tree.nodes.push(n); }
+      } else feed.mark(wid, e.key, { fields: Object.assign({}, it.fields, { verified: 'deep link' }) });
+    } catch (err) { out.errors++; if (log) log.error(`[post-watch] verify ${e.node.author}: ${err.message}`); }
+  }
+  return out;
+}
+
 /** Draft ONE dedicated reply per person waiting on the owner, with the post and the whole branch as
  *  context. Text-only: no browser, so every thread gets its draft in one pass. */
 async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
@@ -368,4 +403,4 @@ function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, draftAll, discover, discoverOnPage, probePage, postIdOf, VOICE };
+module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, probePage, postIdOf, extractInPage, VOICE };

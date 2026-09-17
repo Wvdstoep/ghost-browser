@@ -1744,17 +1744,36 @@ async function postWatchTick(wf, owner) {
   // oldest-crawled first, so a busy pass still gets round to every post over time
   const last = cfg.lastCrawl || {};
   const order = urls.slice().sort((a, b) => (last[a] || 0) - (last[b] || 0)).slice(0, Number(cfg.maxPostsPerPass) || 6);
+  /* PASS HEALTH: what this pass read, verified, corrected, drafted and hit — kept on the watcher so the
+     app can show it and a silent failure has nowhere to hide. */
+  const health = { startedAt: Date.now(), endedAt: 0, posts: 0, messages: 0, waiting: 0, drafts: 0, verified: 0, corrected: 0, errors: [] };
   for (const url of order) {
     try {
       const tree = await pw.crawl(getPage, url, log, touch);
-      pw.store(tree);
       const entries = pw.ingest(wf.id, tree, cfg, feed);
+      const v = await pw.verifyWaiting(getPage, tree, entries, cfg, feed, wf.id, log, touch);
+      pw.store(tree);
       const made = await pw.draftAll(wf.id, tree, entries, cfg, llmCfg, feed, log);
-      log.info(`[post-watch] ${url}: ${tree.nodes.length} message(s), ${entries.filter((e) => e.needsReply).length} waiting on you, ${made} new draft(s)`);
+      const waiting = entries.filter((e) => e.needsReply).length;
+      health.posts++; health.messages += tree.nodes.length; health.waiting += waiting; health.drafts += made; health.verified += v.checked; health.corrected += v.corrected;
+      if (v.errors) health.errors.push(`${v.errors} verify error(s) on ${url}`);
+      log.info(`[post-watch] ${url}: ${tree.nodes.length} message(s), ${waiting} waiting on you (${v.checked} verified, ${v.corrected} corrected), ${made} new draft(s)`);
       feed.setConfig(wf.id, { lastCrawl: Object.assign({}, feed.getConfig(wf.id).lastCrawl || {}, { [url]: Date.now() }) });
-    } catch (e) { log.error(`[post-watch] ${url}: ${e.message}`); }
+    } catch (e) { health.errors.push(`${url}: ${e.message}`); log.error(`[post-watch] ${url}: ${e.message}`); }
   }
+  health.endedAt = Date.now();
+  feed.setConfig(wf.id, { lastPass: health });
 }
+// A watcher's health: its last pass, whether one is running now, and whether it has gone quiet.
+app.get('/v1/watchers/:id/health', authed, (req, res) => {
+  try {
+    const feed = require('./watcherFeed'); const c = feed.getConfig(req.params.id) || {}; const wf = workflows.read(req.params.id);
+    const lp = c.lastPass || null; const running = runningWatchers.has(req.params.id);
+    const sinceMin = lp && lp.endedAt ? Math.round((Date.now() - lp.endedAt) / 60000) : null;
+    const stale = !!(wf && wf.active && !running && (sinceMin === null || sinceMin > 45));
+    res.json({ active: !!(wf && wf.active), running, lastPass: lp, sinceMinutes: sinceMin, stale, mode: c.mode || '' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // Ground truth for one thread, as the watcher's OWN session sees it (same owner, same login): every
 // comment article on that comment's page. For checking "it says waiting but I answered" without guessing.
 app.post('/v1/watchers/:id/probe', authed, async (req, res) => {
