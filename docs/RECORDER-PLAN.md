@@ -4,7 +4,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 
 | Phase | Name | State | Proof |
 |---|---|---|---|
-| 0 | Foundations: sound, a display per recording, a volume of its own | building (sidecar + probe + pulseaudio in the image; PVC `ghost-browser-recordings`) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
+| 0 | Foundations: sound, a display per recording, a volume of its own | **done · v336** (2026-09-17) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
 | 1 | The engine: any duration, nothing in memory, survives restarts | planned | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | planned | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | planned | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
@@ -35,6 +35,11 @@ Facts the design rests on (measured 2026-09-17):
 - **A volume of its own.** New PVC `ghost-browser-recordings` (Longhorn, 50 GiB to start, expandable) mounted at `/recordings`. `src/recorder.js` refuses to start below 2 GiB free and ends a running recording cleanly at that line.
 - **Deploy.** Chart/deployment change in gitops for the PVC + mount; image rebuild by the auto-deploy.
 - **Proof.** A 60 s recording of a public video (a Creative-Commons clip) has picture and sound; `/v1/watchers/busy` and the pool's session list are unchanged during it; a Facebook watcher pass runs at the same time and its items land as usual.
+
+## Phase 0 — proof (2026-09-17, v336)
+
+- Probe of a plain video page, 15 s, profile `google`: mp4 with `video` + `audio` streams, mean −36.7 dB / max −17.4 dB (real sound), display :100, while `facebook-notifications-watcher` ran a pass at the same time — busy list and session list unchanged before/after.
+- Probe of a YouTube page: picture yes, sound **no** (−91 dB): the page sat on YouTube's cookie-consent wall, not signed in. Two Phase 1 inputs: (1) cookies must come from Playwright (`context.cookies()` of the live session, or the source profile opened briefly when the pool does not hold it) — the file copy of the Cookies DB did not carry the login; (2) a page-preparation step: dismiss consent walls (accept/reject buttons in any language), press play, unmute, full-screen the video.
 
 ## Phase 1 — The engine
 
