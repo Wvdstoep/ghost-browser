@@ -55,7 +55,10 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
    "if a menu opens, choose the first/largest option and wait until the download finishes". Check with
    gb_files_recent that a NEW file arrived (a fresh time, a name that is not a screenshot); if only a
    screenshot is there, show that (gb_file_show works on it too) and say it is a screenshot of the
-   result, not the file. When the result is only on screen, gb_look on that profile instead.
+   result, not the file. When both a downloaded IMAGE (kind image) and a screenshot exist, show the
+   image file — that is the result; the screenshot is only the fallback. A page whose download button
+   yields nothing: the walk's goal may also say "use download_image on the generated picture" — the
+   browser agent has that tool and it saves the picture itself into the file store. When the result is only on screen, gb_look on that profile instead.
    HONESTY ABOUT WHAT THE OWNER SEES: say "here it is" only when gb_file_show or gb_look actually
    returned shown/screenshotUrl in THIS turn — otherwise say what you have and what is missing.
    Pages are full of surprises (a consent dialog, a language you did not expect, a control with
