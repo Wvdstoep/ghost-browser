@@ -52,9 +52,10 @@ data class FileInfo(val id: String, val name: String, val kind: String, val mime
 data class RecordingInfo(val id: String, val url: String, val title: String, val pageTitle: String, val state: String,   // starting | recording | finishing | done | partial | failed
                          val until: String, val maxMinutes: Int, val seconds: Int, val bytes: Long, val segments: Int, val startedAt: Long, val endedAt: Long,
                          val reason: String, val error: String, val live: Boolean, val playlist: String, val mp4: String,
-                         val thumb: String = "", val chapters: Int = 0, val mode: String = "") {
+                         val thumb: String = "", val chapters: Int = 0, val mode: String = "", val queuePos: Int = 0) {
     val name: String get() = title.ifBlank { pageTitle.ifBlank { url } }
     val running: Boolean get() = live || state == "starting" || state == "recording" || state == "finishing"
+    val queued: Boolean get() = state == "queued"
     val playable: Boolean get() = state == "recording" || state == "done" || state == "partial"
 }
 

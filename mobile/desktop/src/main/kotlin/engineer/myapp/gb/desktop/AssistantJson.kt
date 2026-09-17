@@ -21,14 +21,15 @@ object AssistantJson {
         fun s(k: String): String = if (o.isNull(k)) "" else o.optString(k)   // a JSON null must read as "", not the word "null"
         return RecordingInfo(s("id"), s("url"), s("title"), s("pageTitle"), s("state"), s("until"), o.optInt("maxMinutes"),
             o.optInt("seconds"), o.optLong("bytes"), o.optInt("segments"), o.optLong("startedAt"), o.optLong("endedAt"), s("reason"), s("error"), o.optBoolean("live"), s("playlist"), s("mp4"),
-            s("thumb"), o.optJSONArray("chapters")?.length() ?: 0, s("mode"))
+            s("thumb"), o.optJSONArray("chapters")?.length() ?: 0, s("mode"), o.optInt("queuePos"))
     }
     fun recording(json: String): RecordingInfo? = try { val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else recording(o) } catch (e: Exception) { null }
     /** GET /v1/recordings → every recording, live ones first, then newest first; plus the free bytes on the recordings volume. */
     fun recordings(json: String): Pair<List<RecordingInfo>, Long> = try {
         val o = JSONObject(json); val a = o.optJSONArray("recordings") ?: JSONArray(); val out = ArrayList<RecordingInfo>()
         for (i in 0 until a.length()) { val r = a.optJSONObject(i) ?: continue; out.add(recording(r)) }
-        out.sortedWith(compareByDescending<RecordingInfo> { it.running }.thenByDescending { it.startedAt }) to o.optLong("freeBytes")
+        // running first, then the queue in its order, then the rest newest first
+        out.sortedWith(compareByDescending<RecordingInfo> { it.running }.thenByDescending { it.queued }.thenBy { if (it.queued) it.queuePos else 0 }.thenByDescending { if (it.queued) 0L else it.startedAt }) to o.optLong("freeBytes")
     } catch (e: Exception) { emptyList<RecordingInfo>() to 0L }
     fun chat(json: String): AssistantChatView? = try {
         val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else {

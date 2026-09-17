@@ -64,6 +64,7 @@ fun RecordingCard(id: String, modifier: Modifier = Modifier, onDelete: ((id: Str
                     if (running) { PulseDot(Brand, 6); Spacer(Modifier.width(5.dp)) }
                     val line = when {
                         rec == null -> "loading…"
+                        rec.queued -> "queued · #${rec.queuePos} · starts when the current recording ends"
                         rec.state == "starting" -> "starting the browser…"
                         rec.state == "recording" -> "recording · ${recordingClock(rec.seconds)} · ${recordingSize(rec.bytes)}"
                         rec.state == "finishing" -> "finishing · ${recordingClock(rec.seconds)}"
@@ -73,7 +74,7 @@ fun RecordingCard(id: String, modifier: Modifier = Modifier, onDelete: ((id: Str
                     Text(line, color = if (running) Brand else if (rec?.state == "failed") cs.error else cs.onSurfaceVariant, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
-            if (rec != null && running && RecordingHooks.stop != null) IconButton(onClick = { RecordingHooks.stop?.invoke(rec.id) }) { Icon(Icons.Default.Stop, "Stop", tint = cs.error) }
+            if (rec != null && (running || rec.queued) && RecordingHooks.stop != null) IconButton(onClick = { RecordingHooks.stop?.invoke(rec.id) }) { Icon(if (rec.queued) Icons.Default.Close else Icons.Default.Stop, if (rec.queued) "Take out of the queue" else "Stop", tint = cs.error) }
             if (rec != null && !running && rec.playable && RecordingHooks.share != null) IconButton(onClick = { RecordingHooks.share?.invoke(rec) }) { Icon(Icons.Default.Share, "Share link", tint = cs.onSurfaceVariant) }
             if (rec != null && !running && rec.playable && RecordingHooks.save != null) {
                 var saved by remember(rec.id) { mutableStateOf(false) }

@@ -68,7 +68,17 @@ fun DownloadsScreen(ui: DownloadsUi, act: DownloadsActions, modifier: Modifier =
                         if (ui.recordingsFreeBytes.value > 0) Text(if (freeGb < 2) "$freeGb GB free — recordings will refuse to start" else if (freeGb < 5) "$freeGb GB free — getting full" else "$freeGb GB free", color = if (freeGb < 5) cs.error else cs.onSurfaceVariant, fontSize = 11.sp, fontWeight = if (freeGb < 5) FontWeight.SemiBold else FontWeight.Normal)
                     }
                 }
-                items(ui.recordings.value, key = { "rec-" + it.id }) { r -> RecordingCard(r.id, onDelete = act.onDeleteRecording) }
+                // the ones running, then the queue in its order ("Up next"), then the finished ones
+                val runningNow = ui.recordings.value.filter { it.running }; val upNext = ui.recordings.value.filter { it.queued }; val rest = ui.recordings.value.filter { !it.running && !it.queued }
+                items(runningNow, key = { "rec-" + it.id }) { r -> RecordingCard(r.id, onDelete = act.onDeleteRecording) }
+                if (upNext.isNotEmpty()) item(key = "queue-head") {
+                    Row(Modifier.padding(top = 8.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Schedule, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp))
+                        Text("Up next — one recording at a time, these start in this order", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                    }
+                }
+                items(upNext, key = { "rec-" + it.id }) { r -> RecordingCard(r.id, onDelete = act.onDeleteRecording) }
+                items(rest, key = { "rec-" + it.id }) { r -> RecordingCard(r.id, onDelete = act.onDeleteRecording) }
                 if (ui.files.value.isNotEmpty()) item(key = "files-head") {
                     Row(Modifier.padding(top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Download, null, tint = Brand, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
