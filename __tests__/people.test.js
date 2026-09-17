@@ -64,8 +64,20 @@ describe('people memory', () => {
     expect(people.load('facebook', 'Ilya Elbert').outcomes).toMatchObject({ drafted: 3, asIs: 1, edited: 1, rewritten: 1, repliedBack: 1 });
   });
 
+  it("on someone else's post, their post and the owner's root comment land on their record", () => {
+    const b = [node('e0', me, 'super clean stack'), node('e1', 'Marta', 'thanks! which db?', { replyTo: me })];
+    const entries = b.map((n) => ({ node: n, branch: b, isMe, needsReply: !isMe(n) }));
+    people.remember('facebook', { postId: 'p9', postText: 'my auth stack is entra + supabase', postAuthor: 'Marta', nodes: b }, entries, { now: 9000 });
+    const r = people.load('facebook', 'Marta');
+    expect(r.exchanges.map((x) => [x.who, x.kind || '', x.text.slice(0, 12)])).toEqual([['them', 'post', 'my auth stac'], ['you', '', 'super clean '], ['them', '', 'thanks! whic']]);
+    expect(r.posts.p9.theirs).toBe(true);
+    expect(people.profileOf('facebook', 'Marta')).toMatch(/Marta POSTED: my auth stack/);
+    expect(people.profileOf('facebook', 'Marta')).toMatch(/YOU: super clean stack/);
+    expect(r.outcomes.repliedBack).toBe(1);   // she answered the owner's comment
+  });
+
   it('lists people newest first and leads only on request', () => {
-    const all = people.list('facebook'); expect(all.map((p) => p.name)).toEqual(['Peter', 'Ilya Elbert']);
+    const all = people.list('facebook'); expect(all.map((p) => p.name)).toEqual(['Marta', 'Peter', 'Ilya Elbert']);
     const leads = people.list('facebook', { leadsOnly: true }); expect(leads.map((p) => p.name)).toEqual(['Ilya Elbert']); expect(leads[0].signals[0]).toMatch(/cost/);
   });
 });

@@ -1785,7 +1785,7 @@ async function postWatchTick(wf, owner, opts) {
       const found = await pw.discoverOnPage((await session()).page, log);
       const have = new Set((cfg.postUrls || []).map((u) => pw.postIdOf(u)));
       const add = found.filter((u) => !have.has(pw.postIdOf(u)));
-      if (add.length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add) }); log.info(`[post-watch] now watching ${add.length} new post(s)`); }
+      if (add.length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add) }); log.info(`[post-watch] now watching ${add.length} new post(s)${(found.theirs || []).length ? ` (${found.theirs.length} under other people's posts)` : ''}`); }
     } catch (e) { log.error(`[post-watch] self-discovery: ${e.message}`); }
   }
   const all = pw.discover(wf.id, cfg, feed);
