@@ -97,6 +97,24 @@ describe('assistant', () => {
     expect(a.attach({ meta: { chatId: 'nope' } })).toBe(false);
   });
 
+  it('carries a picture a tool took onto its step and inlines it for the app', async () => {
+    const shots = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots');
+    let file = null; try { fs.mkdirSync(shots, { recursive: true }); file = path.join(shots, 'test-' + Date.now() + '.jpg'); fs.writeFileSync(file, Buffer.from([0xff, 0xd8, 0xff, 0xd9])); } catch { file = null; }
+    const a = makeAssistant({ dir: tmp(), startTurn: ({ goal, orientation, finishSpec, meta }) => {
+      const reg = new Registry();
+      reg.register('gb_look', 'look', { type: 'object', properties: {} }, async () => ({ url: 'https://x', title: 'Page', controls: [], text: '', screenshotUrl: file ? '/v1/operator/shots/' + path.basename(file) : null }));
+      let i = 0; const chat = async () => (i++ === 0 ? call('gb_look', {}) : call('reply', { text: 'looked' }));
+      const run = new OperatorRun({ goal, chat, registry: reg, systemPrompt: 'sys', orientation, finishSpec, meta, persistDir: tmp(), startIterations: 10 });
+      run.done = run.run(); return run;
+    } });
+    const c = a.create('Look'); a.send(c.id, 'look at it');
+    while (a.live.has(c.id)) await tick();
+    const step = a.view(c.id).turns[1].steps[0];
+    expect(step.label).toBe('Looking at the page'); expect(step.text).toBe('Page');
+    if (file) { expect(step.image).toMatch(/\/v1\/operator\/shots\/test-/); expect(step.imageData).toMatch(/^data:image\/jpeg;base64,/); fs.unlinkSync(file); }
+    else expect(step.image).toBeUndefined();   // no writable shots dir on this host: the step still lands
+  });
+
   it('labels steps for people and ships a prompt that carries the ladder and the operator method', () => {
     expect(labelOf('gb_watcher_run')).toBe('Running the watcher'); expect(labelOf('gb_zzz_thing')).toBe('zzz thing');
     const p = assistantPrompt();

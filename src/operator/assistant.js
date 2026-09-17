@@ -121,16 +121,31 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i]; if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
-      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t });
+      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}) });
     }
     return out.slice(-60);
+  }
+
+  /** The pictures the tools took, inlined for the app (it has no byte channel of its own): the last few
+      only, base64, so a chat view stays small. */
+  const MAX_INLINE_IMAGES = 3;
+  function inlineImages(turns, liveView) {
+    const steps = [...turns.flatMap((t) => t.steps || []), ...((liveView && liveView.steps) || [])].filter((s) => s.image);
+    for (const s of steps.slice(-MAX_INLINE_IMAGES)) {
+      try {
+        const f = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots', path.basename(String(s.image)));
+        const b = fs.readFileSync(f); s.imageData = (f.endsWith('.jpg') ? 'data:image/jpeg;base64,' : 'data:image/png;base64,') + b.toString('base64');
+      } catch { /* the picture is gone; the step stays */ }
+    }
   }
 
   function view(id) {
     const c = load(id); if (!c) return null;
     const run = live.get(id);
     const liveView = run ? { jobId: run.id, status: run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
-    return { id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns: c.turns, live: liveView };
+    const turns = c.turns.map((t) => ({ ...t, steps: (t.steps || []).map((s) => ({ ...s })) }));
+    inlineImages(turns, liveView);
+    return { id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
   }
 
   /** The turn's end: the answer becomes the assistant's turn in the chat. */

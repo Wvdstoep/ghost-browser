@@ -1831,7 +1831,7 @@ function operatorContext() {
       const url = page.url(); const title = await page.title().catch(() => '');
       let controls = []; try { const a = await analyzePage(page); const els = Array.isArray(a) ? a : ((a && (a.elements || a.items)) || []); controls = els.slice(0, 60).map((e) => ({ i: e.index !== undefined ? e.index : e.i, text: String(e.text || e.label || e.ariaLabel || '').slice(0, 80), kind: e.tag || e.role || e.type })); } catch (e) { controls = [{ error: e.message }]; }
       let text = ''; try { text = await page.evaluate(() => (document.body && document.body.innerText || '').replace(/\s+\n/g, '\n').slice(0, 1500)); } catch (e) { /* none */ }
-      let shot = null; try { const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true }); shot = require('path').join(dir, Date.now() + '.png'); await page.screenshot({ path: shot, type: 'png' }); } catch (e) { shot = null; }
+      let shot = null; try { const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true }); shot = require('path').join(dir, Date.now() + '.jpg'); await page.screenshot({ path: shot, type: 'jpeg', quality: 55 }); } catch (e) { shot = null; }
       return { url, title, controls, text, screenshot: shot, screenshotUrl: shot ? '/v1/operator/shots/' + require('path').basename(shot) : null };
     },
     probe: async (id, url, expand) => {
@@ -1944,9 +1944,9 @@ app.post('/v1/assistant/chats/:id/messages', authed, (req, res) => {
 app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistant.stop(req.params.id)));
 /* Screenshots gb_look stored, for the app (png, by file name only). */
 app.get('/v1/operator/shots/:file', authed, (req, res) => {
-  const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!f.endsWith('.png')) return res.status(404).end();
+  const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!/\.(png|jpg)$/.test(f)) return res.status(404).end();
   const full = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots', f);
-  if (!require('fs').existsSync(full)) return res.status(404).end(); res.type('png').sendFile(full);
+  if (!require('fs').existsSync(full)) return res.status(404).end(); res.type(f.endsWith('.jpg') ? 'jpeg' : 'png').sendFile(full);
 });
 app.get('/v1/operator/jobs', authed, (req, res) => {
   const { listPersisted } = require('./operator/harness');
