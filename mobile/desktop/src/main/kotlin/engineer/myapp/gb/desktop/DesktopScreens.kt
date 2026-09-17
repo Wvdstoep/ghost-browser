@@ -231,8 +231,9 @@ fun loadWatchers(st: DesktopState) = bg {
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
             val fcfg = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/config", null)) } catch (e: Exception) { JSONObject() }
             val fuFlow = fcfg.optString("followUpFlowId"); val fuReplies = (fcfg.optJSONArray("followUpKinds")?.length() ?: 0) > 0
+            val h = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/health", null)) } catch (e: Exception) { JSONObject() }
             out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps, fuFlow, fuReplies,
-                followUps = routesOfD(fcfg.optJSONArray("followUps"))))
+                followUps = routesOfD(fcfg.optJSONArray("followUps")), health = healthLineD(h), stale = h.optBoolean("stale"), running = h.optBoolean("running")))
         }
         st.watchers.value = out
     } catch (e: Exception) {}
@@ -248,6 +249,17 @@ fun putWatcherConfigD(wid: String, followUpFlowId: String, repliesOnly: Boolean)
     }
     Cluster.authed("PUT", "/v1/watchers/$wid/config", body.toString())
 }
+/** The last pass in one line, from GET /v1/watchers/:id/health. */
+private fun healthLineD(o: JSONObject): String = try {
+    val lp = o.optJSONObject("lastPass"); val since = o.opt("sinceMinutes")
+    if (lp == null) (if (o.optBoolean("running")) "first pass running…" else "no pass yet") else buildString {
+        append(when { o.optBoolean("running") -> "running · "; since is Int -> "$since min ago · "; else -> "" })
+        append("${lp.optInt("messages")} messages · ${lp.optInt("waiting")} waiting")
+        if (lp.optInt("verified") > 0) append(" · ${lp.optInt("verified")} verified, ${lp.optInt("corrected")} corrected")
+        if (lp.optInt("drafts") > 0) append(" · ${lp.optInt("drafts")} new drafts")
+        val errs = lp.optJSONArray("errors"); if (errs != null && errs.length() > 0) append(" · ${errs.length()} error(s): ${errs.optString(0).take(60)}")
+    }
+} catch (e: Exception) { "" }
 private fun routesOfD(arr: org.json.JSONArray?): List<engineer.myapp.gb.shared.FollowUpRoute> =
     if (arr == null) emptyList() else (0 until arr.length()).mapNotNull { i ->
         val o = arr.optJSONObject(i) ?: return@mapNotNull null

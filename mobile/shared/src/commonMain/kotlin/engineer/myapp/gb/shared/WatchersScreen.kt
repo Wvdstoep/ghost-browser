@@ -225,13 +225,23 @@ private fun WatcherCard(w: Watcher, onToggle: (String, Boolean) -> Unit, onOpenR
         }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.clip(RoundedCornerShape(50)).background(if (w.active) BrandSoft else cs.surfaceVariant).padding(horizontal = 9.dp, vertical = 3.dp)) {
-                Text(if (w.active) "watching" else "paused", color = if (w.active) Brand else cs.onSurfaceVariant, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            // Pass state as form: running / watching / paused / QUIET (active but no pass for too long).
+            val chip = when { w.running -> "running"; w.stale -> "quiet — no pass"; w.active -> "watching"; else -> "paused" }
+            val chipBg = when { w.stale -> cs.errorContainer; w.active || w.running -> BrandSoft; else -> cs.surfaceVariant }
+            val chipFg = when { w.stale -> cs.error; w.active || w.running -> Brand; else -> cs.onSurfaceVariant }
+            Box(Modifier.clip(RoundedCornerShape(50)).background(chipBg).padding(horizontal = 9.dp, vertical = 3.dp)) {
+                Text(chip, color = chipFg, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
             }
             Spacer(Modifier.width(8.dp))
             Text(w.lastRun, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             TextButton(onClick = onEdit) { Text("Edit", color = cs.onSurfaceVariant) }
             TextButton(onClick = { onOpenResults(w.id) }) { Text(if (w.resultCount > 0) "Results (${w.resultCount})" else "Results", color = Brand) }
+        }
+        // The last pass in one line — what it read, verified, corrected, drafted, and any error. A
+        // watcher that says nothing here has done nothing, and that is visible.
+        if (w.health.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(w.health, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = if (w.stale || w.health.contains("error")) cs.error else cs.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }

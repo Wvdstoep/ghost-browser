@@ -1304,6 +1304,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  mode = a schedule trigger + a COPY of the chosen automation's steps (the original is untouched). */
     @Volatile private var pendingFollowUp: Pair<String, Boolean>? = null   // (flowId, repliesOnly) applied after create
     private val watcherCfg = java.util.Collections.synchronizedMap(HashMap<String, Pair<String, Boolean>>())
+    /** Per-watcher pass health (GET /v1/watchers/:id/health), folded into one line for the card. */
+    private data class WatcherHealth(val line: String, val stale: Boolean, val running: Boolean)
+    private val watcherHealth = java.util.Collections.synchronizedMap(HashMap<String, WatcherHealth>())
+    private fun healthOf(json: String): WatcherHealth = try {
+        val o = JSONObject(json); val lp = o.optJSONObject("lastPass"); val since = o.opt("sinceMinutes")
+        val line = if (lp == null) (if (o.optBoolean("running")) "first pass running…" else "no pass yet") else buildString {
+            append(when { o.optBoolean("running") -> "running · "; since is Int -> "$since min ago · "; else -> "" })
+            append("${lp.optInt("messages")} messages · ${lp.optInt("waiting")} waiting")
+            if (lp.optInt("verified") > 0) append(" · ${lp.optInt("verified")} verified, ${lp.optInt("corrected")} corrected")
+            if (lp.optInt("drafts") > 0) append(" · ${lp.optInt("drafts")} new drafts")
+            val errs = lp.optJSONArray("errors"); if (errs != null && errs.length() > 0) append(" · ${errs.length()} error(s): ${errs.optString(0).take(60)}")
+        }
+        WatcherHealth(line, o.optBoolean("stale"), o.optBoolean("running"))
+    } catch (e: Exception) { WatcherHealth("", false, false) }
     @Volatile private var lastWorkflowsJson: String = ""
     /** Routing config. `flowId` is either a JSON array of routes (starts with "[", the engine form) or a
      *  single legacy flow id. Stored locally as the JSON string so the form can pre-fill on edit. */
@@ -1406,10 +1420,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     mode = if (steps > 1) "automation" else "role", stepCount = steps,
                     followUpFlowId = watcherCfg[id]?.first?.takeIf { !it.startsWith("[") } ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
                     followUps = watcherCfg[id]?.first?.takeIf { it.startsWith("[") }?.let { routesOf(it) } ?: emptyList(),
+                    health = watcherHealth[id]?.line ?: "", stale = watcherHealth[id]?.stale ?: false, running = watcherHealth[id]?.running ?: false,
                 ))
             }
             shellUi.watchers.value = out
-            if (fetchCfg) out.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}") }
+            if (fetchCfg) out.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}"); apiCall("GET", "/v1/watchers/${it.id}/health", null, "whealth_${it.id}") }
         } catch (e: Exception) { vm.log("! watchers parse: ${data.take(120)}") }
         shellUi.watchersLoading.value = false
     }
@@ -1843,6 +1858,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val id = tag.removePrefix("agentapi:").removeSuffix("_err")
             agentApiResults[id] = if (err) "{\"error\":${JSONObject.quote(data)}}" else data
             agentApiWaiters.remove(id)?.countDown()
+            return
+        }
+        // Per-watcher pass health (tag "whealth_<workflowId>") — one line on the card, red when quiet/errored.
+        if (tag.startsWith("whealth_")) {
+            val wid = tag.removePrefix("whealth_").removeSuffix("_err")
+            if (!tag.endsWith("_err")) { watcherHealth[wid] = healthOf(data); if (lastWorkflowsJson.isNotBlank()) parseWatchers(lastWorkflowsJson, false) }
             return
         }
         // Per-watcher follow-up config responses (tag "wcfg_<workflowId>").
