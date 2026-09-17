@@ -1915,7 +1915,14 @@ function operatorContext() {
         const held = jobs.get(s.job);
         if (held && ['running', 'idle'].includes(held.status)) {
           if (assistantWalks.has(held.id)) { try { await jobs.stop(held); } catch (e) { /* already ending */ } log.info(`[assistant] stopped the earlier walk ${held.id} in ${s.profile} for a new one`); }
-          else return { error: `that profile is busy with job ${s.job} (not one of yours) — wait for it (gb_walk_wait) or use another profile` };
+          else {
+            // a watcher's step or another walk holds the profile: those are short — wait for it here (up to 2 min)
+            // instead of refusing, so the model never has to retry the same walk in a loop
+            const t0 = Date.now(); let cur = held;
+            while (cur && ['running', 'idle'].includes(cur.status) && Date.now() - t0 < 120000) { await new Promise((r) => setTimeout(r, 5000)); cur = jobs.get(held.id); }
+            if (cur && ['running', 'idle'].includes(cur.status)) return { error: `that profile is still busy with job ${held.id} (${held.role || 'a step'}) after 2 minutes — gb_walk_wait on it, then call gb_walk again with the same goal` };
+            log.info(`[assistant] waited ${Math.round((Date.now() - t0) / 1000)}s for ${held.id} to free ${s.profile}`);
+          }
         }
       }
       const job = jobs.create({ owner, goal: g.slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
