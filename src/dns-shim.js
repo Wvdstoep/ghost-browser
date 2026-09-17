@@ -46,7 +46,7 @@ function start({ shimPort, tsHttpPort, log } = {}) {
     });
   });
   srv.on('error', (e) => { if (log && log.warn) log.warn('[dns-shim] ' + e.message); });
-  srv.listen(shimPort, '127.0.0.1', () => { if (log && log.info) log.info('[dns-shim] local-DNS proxy on ' + shimPort + ' -> ts-http ' + tsHttpPort); });
+  srv.listen(shimPort, process.env.SHIM_BIND || '0.0.0.0', () => { if (log && log.info) log.info('[dns-shim] local-DNS proxy on ' + shimPort + ' -> ts-http ' + tsHttpPort); });
   return srv;
 }
 module.exports = { start };

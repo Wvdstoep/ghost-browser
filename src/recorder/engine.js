@@ -159,10 +159,11 @@ class Recorder {
   /** The pod's journal, merged into ours: only its own fields, never ours (mode, token, url). Terminal states close the playlist. */
   remoteUpdate(id, patch = {}) {
     const j = readJournal(this.dirOf(id)); if (!j || j.mode !== 'job') return null;
-    const allowed = ['state', 'seconds', 'bytes', 'segments', 'pageTitle', 'prepared', 'reason', 'error', 'recordingAt', 'endedAt', 'display'];
+    const allowed = ['state', 'pageTitle', 'prepared', 'reason', 'error', 'recordingAt', 'endedAt', 'display'];
     const p = {}; for (const k of allowed) if (patch[k] !== undefined) p[k] = patch[k];
     if (p.state && !STATES.includes(p.state)) delete p.state;
-    this._set(j, { ...p, updatedAt: this.clock() });
+    // the numbers come from what has ARRIVED here, not from the pod's scratch (it deletes what it pushed)
+    this._set(j, { ...p, ...statsOf(this.dirOf(id)), updatedAt: this.clock() });
     if (!RUNNING.includes(j.state)) closePlaylist(this.dirOf(id));
     return this.view(j);
   }
