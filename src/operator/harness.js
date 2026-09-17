@@ -34,10 +34,15 @@ const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v 
 const looksFailed = (out) => { const s = typeof out === 'string' ? out : JSON.stringify(out || {}); return /^\{"error"|refused|"error":|not found|failed:/i.test(String(s).slice(0, 200)); };
 
 class OperatorRun {
-  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR, restore = null }) {
+  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR, restore = null, finishSpec = null, meta = null }) {
     if (!chat || !registry || !systemPrompt) throw new Error('OperatorRun needs chat, registry, systemPrompt');
     this.id = id || `op-${now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     this.goal = String(goal || '').trim();
+    /* The way out is configurable: the operator ends with finish({status,summary,report}); the assistant
+       ends a turn with reply({text,…}). finishSpec = {name, description, schema, map(args) → {status, summary, report}}. */
+    this.finishSpec = finishSpec || null; this.finishName = (finishSpec && finishSpec.name) || 'finish';
+    /* meta rides in the journal untouched — the assistant keeps its chat id here so a resumed turn finds its chat. */
+    this.meta = meta && typeof meta === 'object' ? meta : ((restore && restore.meta) || null);
     this.chat = chat; this.llm = llm || {}; this.registry = registry; this.systemPrompt = systemPrompt;
     this.orientation = typeof orientation === 'function' ? orientation : () => '';
     this.log = log || { info() {}, warn() {}, error() {} }; this.now = now;
@@ -71,12 +76,16 @@ class OperatorRun {
       if (note) t.note = String(note).slice(0, 500);
       return { ok: true, task: t, budgetLeft: this.budget - this.iterations };
     });
-    if (!reg.has('finish')) reg.register('finish', 'END the job. status "done" only when the evidence proves the outcome; "blocked" when code, the owner or the platform stands in the way. The summary is one line the owner reads first; the report is the record.', { type: 'object', properties: { status: { type: 'string', enum: ['done', 'blocked'] }, summary: { type: 'string' }, report: { type: 'object', description: '{request, changed:[…], runs:[…], evidence, notProven?, needsCode?, lesson}' } }, required: ['status', 'summary'] }, async ({ status, summary, report }) => {
+    const end = ({ status, summary, report }) => {
       this.report = report && typeof report === 'object' ? report : { summary };
       this.finalLine = `${status === 'done' ? 'DONE' : 'BLOCKED'}: ${String(summary || '').slice(0, 600)}`;
       this.status = status === 'done' ? 'done' : 'blocked';
       return { ok: true, ended: true };
-    });
+    };
+    if (this.finishSpec) {
+      const fs_ = this.finishSpec;
+      if (!reg.has(fs_.name)) reg.register(fs_.name, fs_.description, fs_.schema, async (args) => end(fs_.map(args || {})));
+    } else if (!reg.has('finish')) reg.register('finish', 'END the job. status "done" only when the evidence proves the outcome; "blocked" when code, the owner or the platform stands in the way. The summary is one line the owner reads first; the report is the record.', { type: 'object', properties: { status: { type: 'string', enum: ['done', 'blocked'] }, summary: { type: 'string' }, report: { type: 'object', description: '{request, changed:[…], runs:[…], evidence, notProven?, needsCode?, lesson}' } }, required: ['status', 'summary'] }, async (args) => end(args || {}));
   }
 
   /** The owner speaks into the run; it lands as the next user turn. */
@@ -88,20 +97,20 @@ class OperatorRun {
   _persist() {
     try {
       fs.mkdirSync(this.persistDir, { recursive: true });
-      const rec = { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
+      const rec = { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
       const f = path.join(this.persistDir, this.id + '.json'); fs.writeFileSync(f + '.tmp', JSON.stringify(rec)); fs.renameSync(f + '.tmp', f);
     } catch { /* best effort */ }
   }
 
   view() {
-    return { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
+    return { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, meta: this.meta || null, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
   }
 
   _orientationMessage() {
     const open = this.tasks.filter((t) => !t.done).map((t) => `- [ ] ${t.i}. ${t.title}${t.note ? ' — ' + t.note : ''}`);
     const done = this.tasks.filter((t) => t.done).map((t) => `- [x] ${t.i}. ${t.title}${t.note ? ' — ' + t.note : ''}`);
     let o = ''; try { o = String(this.orientation() || ''); } catch { o = ''; }
-    return `[Orientation]\nGOAL: ${this.goal}\n${o ? '\n' + o + '\n' : ''}\nTASKS:\n${[...open, ...done].join('\n') || '(none yet — save_task_list first)'}\nBudget: ${Math.max(0, this.budget - this.iterations)} iterations left. End with finish({status, summary, report}).`;
+    return `[Orientation]\nGOAL: ${this.goal}\n${o ? '\n' + o + '\n' : ''}\nTASKS:\n${[...open, ...done].join('\n') || '(none yet)'}\nBudget: ${Math.max(0, this.budget - this.iterations)} iterations left. End with ${this.finishName}(…).`;
   }
 
   _prune() {
@@ -154,10 +163,12 @@ class OperatorRun {
         // the assistant turn, with its calls, in the provider's own shape
         this.messages.push({ role: 'assistant', content, ...(reply.raw && reply.raw.message && reply.raw.message.tool_calls ? { tool_calls: reply.raw.message.tool_calls } : {}) });
         if (!calls.length) {
+          // a chat turn: prose with no tool IS the answer (the assistant's exit), no nudging
+          if (this.finishSpec && this.finishSpec.proseIsReply && content.trim()) { this.report = { answer: content.trim() }; this.finalLine = `DONE: ${content.trim().slice(0, 600)}`; this.status = 'done'; this._persist(); break; }
           // no tool: either it finished in prose (not allowed — finish is a tool) or it is thinking out loud
           if (/^\s*(DONE|BLOCKED):/m.test(content) && ++this._nudges >= 1) { const m = content.match(/^\s*(DONE|BLOCKED):\s*(.+)$/m); this._finishAs(m[1] === 'DONE' ? 'done' : 'blocked', m[2].slice(0, 600)); break; }
           if (++this._nudges > 3) { this._finishAs('blocked', 'the model stopped using tools without finishing — no proven outcome'); break; }
-          this.messages.push({ role: 'user', content: 'Use a tool now (read, change, run, verify), or end the job with finish({status, summary, report}). Prose alone does nothing.' });
+          this.messages.push({ role: 'user', content: `Use a tool now (read, change, run, verify), or end with ${this.finishName}(…). Prose alone does nothing.` });
           this._persist(); continue;
         }
         this._nudges = 0;
