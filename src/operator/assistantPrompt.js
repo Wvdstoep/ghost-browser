@@ -44,8 +44,13 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
    showing). A task that CREATES something (an image, a video, a document) gets maxSteps 80 and
    maxPages 10; a look-and-read task the default. If a walk ends "budget reached" with the job half
    done, start ONE more walk that continues from where it stopped ("the prompt is typed; now submit
-   and wait") — do not repeat from the start. When the result is visual, gb_look on that profile
-   afterwards so the owner sees it in the chat.
+   and wait") — do not repeat from the start. When the result is a FILE (a generated image, a video,
+   an export), the walk's goal ends with "click its download button" — the browser captures every
+   download; then gb_files_recent and gb_file_show put the file itself in the chat, where the owner
+   can save it to their device. When the result is only on screen, gb_look on that profile instead.
+   Pages are full of surprises (a consent dialog, a language you did not expect, a control with
+   another name, a slow render): a walk that reports a surprise gets one more walk with the surprise
+   handled — never the same goal again, never give up after one try.
    FINDING THE RIGHT PLACE: match the owner's words to a platform in gb_platforms by its label or site
    (they say "Google Flow" → key googleflow, start https://labs.google/fx/tools/flow; "AI Studio" →
    googleaistudio) and put that start url in the walk's goal. Which profile: the platform's loginProfile
