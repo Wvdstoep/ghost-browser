@@ -52,7 +52,7 @@ describe('assistant', () => {
     const t = v.turns[1];
     expect(t.text).toMatch(/Ilya/); expect(t.status).toBe('done'); expect(t.details).toBe('feed: 1 waiting');
     expect(t.cards[0]).toMatchObject({ kind: 'results', watcherId: 'facebook-post-watcher' });
-    expect(t.steps.map((s) => s.name)).toEqual(['gb_watcher_feed']); expect(t.steps[0].label).toBe('Reading watcher results'); expect(t.steps[0].text).toMatch(/Ilya/);
+    expect(t.steps.map((s) => s.name)).toEqual(['gb_watcher_feed']); expect(t.steps[0].label).toBe('Reading watcher results'); expect(t.steps[0].text).toBe('1 item · 1 waiting on you');   // a human line, never JSON
     // the model was told the goal and NOT asked for a task list first
     expect(seen[0][1].content).toMatch(/GOAL: do I have replies/); expect(seen[0][1].content).not.toMatch(/save_task_list first/);
     expect(a.list()[0]).toMatchObject({ id: c.id, turns: 2, running: false });
