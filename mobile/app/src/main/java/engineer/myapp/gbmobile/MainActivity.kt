@@ -1334,6 +1334,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     @Volatile private var assistantChatId: String = ""
     private val assistantPollH by lazy { android.os.Handler(mainLooper) }
+    private var mediaPlayer: android.media.MediaPlayer? = null
+    /** A data: url into the phone's Downloads (MediaStore on Android 10+); returns the item's uri so a player can open it. */
+    private fun saveToDownloads(data: String, name: String): android.net.Uri? = try {
+        val mime = data.substringAfter("data:", "application/octet-stream").substringBefore(";")
+        val ext = when { mime.contains("png") -> "png"; mime.contains("webp") -> "webp"; mime.contains("jpeg") -> "jpg"; mime.contains("mp4") -> "mp4"; mime.contains("webm") -> "webm"; mime.contains("mpeg") -> "mp3"; mime.contains("wav") -> "wav"; mime.contains("pdf") -> "pdf"; else -> "bin" }
+        val bytes = android.util.Base64.decode(data.substringAfter("base64,", ""), android.util.Base64.DEFAULT)
+        val fname = (if (name.contains('.')) name else "$name.$ext").replace(Regex("[^A-Za-z0-9._-]"), "_")
+        if (android.os.Build.VERSION.SDK_INT < 29) { val f = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fname); f.writeBytes(bytes); vm.log("● saved ${f.absolutePath}"); android.net.Uri.fromFile(f) }
+        else {
+            val values = android.content.ContentValues().apply { put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname); put(android.provider.MediaStore.Downloads.MIME_TYPE, mime); put(android.provider.MediaStore.Downloads.IS_PENDING, 1) }
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            if (uri != null) { contentResolver.openOutputStream(uri)?.use { it.write(bytes) }; values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0); contentResolver.update(uri, values, null, null); vm.log("● saved $fname to Downloads"); runOnUiThread { android.widget.Toast.makeText(this, "Saved $fname to Downloads", android.widget.Toast.LENGTH_SHORT).show() } }
+            uri
+        }
+    } catch (e: Exception) { vm.log("! save $name: ${e.message}"); null }
     private val ASSIST = shellUi.assistant
 
     private fun assistantOpen() {
@@ -1351,6 +1366,32 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (uri != null) { contentResolver.openOutputStream(uri)?.use { it.write(bytes) }; values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0); contentResolver.update(uri, values, null, null); vm.log("● saved $fname to Downloads"); runOnUiThread { android.widget.Toast.makeText(this, "Saved $fname to Downloads", android.widget.Toast.LENGTH_SHORT).show() } }
                 else vm.log("! could not save $fname")
             } catch (e: Exception) { vm.log("! save: ${e.message}") }
+        }
+        // a song plays inline (MediaPlayer on a cached copy); a clip opens in the system player from its saved copy
+        if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null) engineer.myapp.gb.shared.AssistantHooks.playMedia = { downloadUrl, name, mime ->
+            val hooks = engineer.myapp.gb.shared.AssistantHooks
+            if (hooks.playing.value == downloadUrl) { try { mediaPlayer?.stop(); mediaPlayer?.release() } catch (e: Exception) {}; mediaPlayer = null; hooks.playing.value = null }
+            else {
+                val id = Regex("/v1/files/([^/]+)/").find(downloadUrl)?.groupValues?.get(1)
+                if (id == null) vm.log("! play: no file id") else agentExec.execute {
+                    try {
+                        val o = JSONObject(apiAwait("GET", "/v1/files/$id/b64", null)); if (o.has("error")) { vm.log("! play: ${o.optString("error")}"); return@execute }
+                        val data = o.optString("data"); val m = o.optString("mime", mime); val fname = name.ifBlank { o.optString("name") }
+                        val bytes = android.util.Base64.decode(data.substringAfter("base64,", ""), android.util.Base64.DEFAULT)
+                        if (m.startsWith("audio/")) {
+                            val f = java.io.File(cacheDir, "play-" + fname.replace(Regex("[^A-Za-z0-9._-]"), "_")); f.writeBytes(bytes)
+                            runOnUiThread {
+                                try { mediaPlayer?.stop(); mediaPlayer?.release() } catch (e: Exception) {}
+                                val mp = android.media.MediaPlayer(); mediaPlayer = mp
+                                mp.setDataSource(f.absolutePath); mp.setOnCompletionListener { hooks.playing.value = null }; mp.prepare(); mp.start(); hooks.playing.value = downloadUrl
+                            }
+                        } else {
+                            val uri = saveToDownloads(data, fname)
+                            if (uri != null) runOnUiThread { try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, m).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { vm.log("! no player for $m: ${e.message}") } }
+                        }
+                    } catch (e: Exception) { vm.log("! play $name: ${e.message}") }
+                }
+            }
         }
         // any captured FILE (a video, a PDF, an export): fetched as base64 from Ghost Browser, then saved like a picture
         if (engineer.myapp.gb.shared.AssistantHooks.saveFile == null) engineer.myapp.gb.shared.AssistantHooks.saveFile = { downloadUrl, name ->
