@@ -651,6 +651,30 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         settingsUi.platforms.value = out
         shellUi.platforms.value = out   // also feed the omnibox shortcuts
+        syncLoginsToCluster(out)        // a login on this phone is a login on the cluster — by itself
+    }
+
+    /** LOGIN SYNC. Every platform signed in on this phone signs the cluster's matching profile in too:
+     *  the site's cookies go to POST /v1/profiles/<key>/cookies whenever they appear or change (hashed,
+     *  so nothing is sent twice). No button — the cluster agent simply has what the phone has. */
+    private val loginSyncHashes = HashMap<String, Int>()
+    private fun syncLoginsToCluster(list: List<engineer.myapp.gbmobile.ui.PlatformOpt>) {
+        if (vm.clusterUrl.trim().isEmpty()) return
+        for (p in list) {
+            if (!p.signedIn) continue
+            val cookieStr = try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.profile).cookieManager.getCookie(p.site) ?: "" else "" } catch (e: Exception) { "" }
+            if (cookieStr.isBlank()) continue
+            val h = cookieStr.hashCode(); if (loginSyncHashes[p.profile] == h) continue; loginSyncHashes[p.profile] = h
+            val host = try { Uri.parse(p.site).host } catch (e: Exception) { null } ?: continue
+            val parts = host.split("."); val apex = if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host
+            val arr = JSONArray(); val exp = System.currentTimeMillis() / 1000 + 30L * 86400
+            for (kv in cookieStr.split(";")) { val t = kv.trim(); val eq = t.indexOf('='); if (eq <= 0) continue
+                arr.put(JSONObject().put("name", t.substring(0, eq)).put("value", t.substring(eq + 1)).put("domain", ".$apex").put("path", "/").put("expires", exp).put("secure", true).put("httpOnly", false).put("sameSite", "Lax")) }
+            if (arr.length() == 0) continue
+            val cluster = p.profile.removePrefix("p_")
+            apiCall("POST", "/v1/profiles/$cluster/cookies", JSONObject().put("site", p.site).put("cookies", arr).toString(), "loginsync")
+            vm.log("↑ ${p.label}: login synced to the cluster (${arr.length()} cookies)")
+        }
     }
 
     private fun profileHasSession(prof: String, site: String): Boolean {
@@ -1327,6 +1351,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (uri != null) { contentResolver.openOutputStream(uri)?.use { it.write(bytes) }; values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0); contentResolver.update(uri, values, null, null); vm.log("● saved $fname to Downloads"); runOnUiThread { android.widget.Toast.makeText(this, "Saved $fname to Downloads", android.widget.Toast.LENGTH_SHORT).show() } }
                 else vm.log("! could not save $fname")
             } catch (e: Exception) { vm.log("! save: ${e.message}") }
+        }
+        // any captured FILE (a video, a PDF, an export): fetched as base64 from Ghost Browser, then saved like a picture
+        if (engineer.myapp.gb.shared.AssistantHooks.saveFile == null) engineer.myapp.gb.shared.AssistantHooks.saveFile = { downloadUrl, name ->
+            val id = Regex("/v1/files/([^/]+)/").find(downloadUrl)?.groupValues?.get(1)
+            if (id == null) vm.log("! save: no file id in $downloadUrl") else agentExec.execute {
+                try {
+                    val o = JSONObject(apiAwait("GET", "/v1/files/$id/b64", null))
+                    if (o.has("error")) vm.log("! save ${name}: ${o.optString("error")}")
+                    else engineer.myapp.gb.shared.AssistantHooks.saveImage?.invoke(o.optString("data"), name.ifBlank { o.optString("name") })
+                } catch (e: Exception) { vm.log("! save $name: ${e.message}") }
+            }
         }
         // pictures the agent took arrive as data: urls; decode them here (the shared screen has no bitmap codec)
         if (ASSIST.decodeImage == null) ASSIST.decodeImage = { data ->
@@ -2268,6 +2303,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "approvals_err" -> { shellUi.jobsLoading.value = false; vm.log("! approvals: ${data.take(120)}") }
             "people" -> shellUi.leads.value = AssistantJson.people(data)
             "people_err" -> {}
+            "loginsync" -> try { val o = JSONObject(data); if (o.has("error")) vm.log("! login sync: ${o.optString("error")}") else vm.log("● cluster profile ${o.optString("profile")} has the login${if (o.optBoolean("applied")) " (applied to its open browser)" else " (applied at its next launch)"}") } catch (e: Exception) { vm.log("! login sync: ${data.take(100)}") }
+            "loginsync_err" -> vm.log("! login sync: ${data.take(120)}")
             "watch_session" -> try {
                 val sid = JSONObject(data).optString("sessionId")
                 if (sid.isBlank()) { vm.log("! could not open the facebook session"); }
