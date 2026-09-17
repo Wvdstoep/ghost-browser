@@ -111,6 +111,8 @@ private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (Stri
         Text(item.title.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
         // Why this is yours (or not), and the whole branch on demand — what you'd open Facebook to read.
         if (item.why.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text(item.why, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = Brand) }
+        // a person who showed buying interest somewhere in their history with you — the front door of the channel
+        if (item.lead) { Spacer(Modifier.height(4.dp)); Box(Modifier.clip(RoundedCornerShape(50)).background(Brand.copy(alpha = 0.14f)).border(1.dp, Brand.copy(alpha = 0.5f), RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp)) { Text("LEAD · showed buying interest", color = Brand, fontSize = 9.sp, fontFamily = FontFamily.Monospace) } }
         var showThread by remember(item.feedKey) { mutableStateOf(false) }
         Row {
             if (item.url.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text("Open ↗", color = Brand, fontSize = 13.sp, modifier = Modifier.clickable { onOpenUrl(item.url) }) }

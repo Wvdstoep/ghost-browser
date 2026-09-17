@@ -1760,6 +1760,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      if(it.url) html+='<a class="link" href="javascript:void(0)" onclick="GbArtifact.openUrl(\''+esc(it.url).replace(/'/g,"\\'")+'\')">Open ↗</a>';
      if(it.thread) html+='<a class="link" style="margin-left:14px" href="javascript:void(0)" onclick="toggleThread('+i+')">Show thread</a>';
      if(it.why) html+='<div class="why">'+esc(it.why)+'</div>';
+     if(it.lead) html+='<span class="chip" style="background:#0B5FFF22;color:#3b7bff;border:1px solid #0B5FFF66">lead · showed buying interest</span>';
      html+='</div></div>';
      if(it.thread) html+=threadHtml(it.thread,i);
      var fh=fieldsHtml(it.fields); if(fh) html+='<div class="fields">'+fh+'</div>';
@@ -2302,7 +2303,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         .put("draft", it.optString("draft")).put("jobId", it.optString("draftJobId")).put("pid", it.optString("draftPid"))
                         .put("draftState", it.optString("draftState")).put("posted", it.optString("posted"))
                         .put("postId", it.optJSONObject("fields")?.optString("postId") ?: "").put("postTitle", it.optJSONObject("fields")?.optString("postTitle") ?: "")
-                        .put("why", it.optJSONObject("fields")?.optString("why") ?: "").put("thread", it.optJSONObject("fields")?.optString("thread") ?: ""))
+                        .put("why", it.optJSONObject("fields")?.optString("why") ?: "").put("thread", it.optJSONObject("fields")?.optString("thread") ?: "")
+                        .put("lead", it.optJSONObject("fields")?.optBoolean("lead") == true))
                 }
                 showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", items, shellUi.flows.value))
             } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }

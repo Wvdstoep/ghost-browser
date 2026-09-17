@@ -120,4 +120,5 @@ data class ResultItem(
     val postTitle: String = "",    // first words of that post
     val why: String = "",          // why this is (or is not) yours: "replied to you", "mentions you", …
     val thread: String = "",       // the branch as a transcript ("YOU: …\nJoe: …"), what you'd open Facebook to read
+    val lead: Boolean = false,     // this person showed buying interest somewhere (people memory) — a lead
 )
