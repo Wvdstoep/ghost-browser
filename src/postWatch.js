@@ -401,8 +401,71 @@ async function probePage(page, url, opts) {
   return dump;
 }
 
+/**
+ * THE POSTER, AS CODE. Posting an approved reply is not a judgement call, it is four deterministic
+ * steps — so it is no longer an agent walk (the agent burned a 50-step budget wandering Facebook's
+ * comment redirects and typed a reply it could not confirm). Here: open the comment's own deep link,
+ * find THAT comment by its id, press its Reply, type the exact words, submit, and prove the reply is on
+ * the page with the owner's name on it. Never types twice. `dryRun` does everything except typing.
+ */
+async function postReply(page, url, text, opts) {
+  const o = opts || {}; const meName = String(o.meName || '').trim().toLowerCase();
+  const alive = () => { try { if (o.touch) o.touch(); } catch { /* best effort */ } };
+  let u; try { u = new URL(url); } catch { return { posted: false, detail: 'bad url' }; }
+  const rid = u.searchParams.get('reply_comment_id'); const cid = u.searchParams.get('comment_id');
+  const targetId = rid || cid; if (!targetId) return { posted: false, detail: 'no comment id in the link' };
+  const { dismissConsent, settle } = require('./inspector');
+  await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
+  try { await dismissConsent(page); } catch { /* none */ }
+  try { await settle(page); } catch { /* rendering */ }
+  await page.waitForTimeout(3000); alive();
+  const { candidates, press } = helpers(page);
+  // the target may sit behind a collapsed "N antwoorden bekijken" — reveal what is on this page
+  await expandAll(page, candidates, press, alive);
+  // the article that carries this exact id in its timestamp link, visible copy only
+  const findTarget = () => page.evaluateHandle((id) => {
+    const arts = Array.from(document.querySelectorAll('[role="article"]')).filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || '') && a.getClientRects().length > 0 && !a.closest('[aria-hidden="true"]'));
+    return arts.find((a) => Array.from(a.querySelectorAll('a[href*="comment_id="]')).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('reply_comment_id=' + id) || (!h.includes('reply_comment_id=') && h.includes('comment_id=' + id)); })) || null;
+  }, targetId);
+  const target = await findTarget();
+  const el = target.asElement();
+  if (!el) return { posted: false, detail: `comment ${targetId} not found on its own page` };
+  const already = await el.evaluate((a, me) => {
+    // a later reply by the owner TO this author already present? (re-check before posting)
+    const label = a.getAttribute('aria-label') || '';
+    const author = label.replace(/^(comment|opmerking|reply|antwoord)\s+(by|van|from|door)\s+/i, '').split(/\s+op\s+|\s+on\s+/i)[0].replace(/\s+(?:ongeveer\s+|about\s+)?(?:een|one|an?|\d+)\s+\S+\s+(?:geleden|ago).*$/i, '').trim().toLowerCase();
+    const all = Array.from(document.querySelectorAll('[role="article"]')).filter((x) => x.getClientRects().length > 0);
+    const idx = all.indexOf(a);
+    return all.slice(idx + 1).some((x) => { const l = (x.getAttribute('aria-label') || '').toLowerCase(); return me && l.includes(me) && l.includes(author); });
+  }, meName).catch(() => false);
+  if (already) return { posted: false, alreadyAnswered: true, detail: 'already answered on the page' };
+  // its Reply control
+  const replyBtn = await el.evaluateHandle((a) => Array.from(a.querySelectorAll('[role="button"]')).find((b) => /^(beantwoorden|reply|antwoorden)$/i.test((b.innerText || '').trim())) || null);
+  const rb = replyBtn.asElement();
+  if (!rb) return { posted: false, detail: 'no Reply control under that comment' };
+  if (o.dryRun) return { posted: false, dryRun: true, detail: `found comment ${targetId} and its Reply control; would type ${text.length} chars` };
+  await rb.evaluate((b) => b.scrollIntoView({ block: 'center' })); await page.waitForTimeout(300);
+  try { await rb.click({ timeout: 4000 }); } catch { await rb.dispatchEvent('click'); }
+  // the composer that opened: the focused textbox
+  let box = null;
+  for (let i = 0; i < 10 && !box; i++) { await page.waitForTimeout(400); box = await page.evaluateHandle(() => { const a = document.activeElement; return a && a.getAttribute('contenteditable') === 'true' ? a : null; }).then((h) => h.asElement()); }
+  if (!box) return { posted: false, detail: 'reply box did not open' };
+  await page.keyboard.type(text, { delay: 12 }); alive();
+  await page.waitForTimeout(600);
+  const seen = async () => page.evaluate((args) => {
+    const [me, probe] = args;
+    return Array.from(document.querySelectorAll('[role="article"]')).some((x) => { const l = (x.getAttribute('aria-label') || '').toLowerCase(); return x.getClientRects().length > 0 && l.includes(me) && (x.innerText || '').replace(/\s+/g, ' ').includes(probe); });
+  }, [meName, text.replace(/\s+/g, ' ').slice(0, 40)]);
+  await page.keyboard.press('Enter');
+  for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page with your name' }; }
+  // Enter did not submit: the composer's own submit control
+  const submit = await page.evaluateHandle(() => Array.from(document.querySelectorAll('[role="button"],button')).find((b) => { const l = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase(); return b.getClientRects().length > 0 && /(opmerking plaatsen|plaatsen|^post$|post comment|reageren|verzenden|send)/.test(l.trim()); }) || null).then((h) => h.asElement());
+  if (submit) { try { await submit.click({ timeout: 4000 }); } catch { await submit.dispatchEvent('click'); } for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page after pressing Post' }; } }
+  return { posted: false, typed: true, detail: 'typed but could not confirm it on the page — not retried (never twice)' };
+}
+
 function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, probePage, postIdOf, extractInPage, VOICE };
+module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, probePage, postReply, postIdOf, extractInPage, VOICE };
