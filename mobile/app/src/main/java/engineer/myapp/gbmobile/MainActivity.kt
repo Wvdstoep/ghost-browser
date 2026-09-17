@@ -1387,18 +1387,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         val o = JSONObject(apiAwait("GET", "/v1/files/$id/b64", null)); if (o.has("error")) { vm.log("! play: ${o.optString("error")}"); return@execute }
                         val data = o.optString("data"); val m = o.optString("mime", mime); val fname = name.ifBlank { o.optString("name") }
                         val bytes = android.util.Base64.decode(data.substringAfter("base64,", ""), android.util.Base64.DEFAULT)
-                        if (m.startsWith("audio/")) {
+                        if (m.startsWith("audio/") || fname.lowercase().endsWith(".m4a") || fname.lowercase().endsWith(".mp3")) {
                             val f = java.io.File(cacheDir, "play-" + fname.replace(Regex("[^A-Za-z0-9._-]"), "_")); f.writeBytes(bytes)
                             runOnUiThread {
-                                try { mediaPlayer?.stop(); mediaPlayer?.release() } catch (e: Exception) {}
-                                val mp = android.media.MediaPlayer(); mediaPlayer = mp
-                                mp.setDataSource(f.absolutePath); mp.setOnCompletionListener { hooks.playing.value = null }; mp.prepare(); mp.start(); hooks.playing.value = downloadUrl
+                                // never let the player take the app down: prepare async, every error caught, system player as the fallback
+                                try {
+                                    try { mediaPlayer?.stop(); mediaPlayer?.release() } catch (e: Exception) {}
+                                    val mp = android.media.MediaPlayer(); mediaPlayer = mp
+                                    mp.setAudioAttributes(android.media.AudioAttributes.Builder().setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).setUsage(android.media.AudioAttributes.USAGE_MEDIA).build())
+                                    mp.setDataSource(f.absolutePath)
+                                    mp.setOnPreparedListener { p -> try { p.start(); hooks.playing.value = downloadUrl } catch (e: Exception) { vm.log("! play start: ${e.message}") } }
+                                    mp.setOnCompletionListener { hooks.playing.value = null }
+                                    mp.setOnErrorListener { _, what, extra -> vm.log("! player error $what/$extra — opening in the system player"); hooks.playing.value = null; agentExec.execute { try { val uri = saveToDownloads(data, fname); if (uri != null) runOnUiThread { try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, m).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { vm.log("! no player: ${e.message}") } } } catch (e: Exception) {} }; true }
+                                    mp.prepareAsync()
+                                } catch (e: Throwable) { vm.log("! play $fname: ${e.message}"); hooks.playing.value = null; android.widget.Toast.makeText(this, "Could not play ${fname}: ${e.message}", android.widget.Toast.LENGTH_SHORT).show() }
                             }
                         } else {
                             val uri = saveToDownloads(data, fname)
                             if (uri != null) runOnUiThread { try { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, m).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)) } catch (e: Exception) { vm.log("! no player for $m: ${e.message}") } }
                         }
-                    } catch (e: Exception) { vm.log("! play $name: ${e.message}") }
+                    } catch (e: Throwable) { vm.log("! play $name: ${e.javaClass.simpleName} ${e.message}"); runOnUiThread { try { android.widget.Toast.makeText(this, "Could not play $name", android.widget.Toast.LENGTH_SHORT).show() } catch (t: Throwable) {} } }
                 }
             }
         }

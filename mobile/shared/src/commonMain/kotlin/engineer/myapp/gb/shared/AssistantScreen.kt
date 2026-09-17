@@ -346,8 +346,9 @@ private fun LiveCard(live: AssistantLive, onStop: () -> Unit, decode: ((String) 
         Box(Modifier.padding(top = 6.dp, end = 10.dp).size(22.dp).clip(CircleShape).background(Brand.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) { PulseDot(Brand, 8) }
         Surface(color = cs.surface, contentColor = cs.onSurface, shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), border = BorderStroke(1.dp, Brand.copy(alpha = 0.45f)), modifier = Modifier.weight(1f)) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                val stopping = live.status == "stopping"
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(live.steps.lastOrNull()?.label ?: "Thinking it through…", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(if (stopping) "Stopping…" else live.steps.lastOrNull()?.label ?: "Thinking it through…", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Text(if (secs >= 60) "${secs / 60}m ${secs % 60}s" else "${secs}s", color = cs.onSurfaceVariant, fontSize = 11.sp)
                 }
                 if (live.tasks.isNotEmpty()) {
@@ -363,8 +364,8 @@ private fun LiveCard(live: AssistantLive, onStop: () -> Unit, decode: ((String) 
                 if (live.steps.isNotEmpty()) StepTimeline(live.steps.takeLast(4), done = false, current = true, decode = decode)
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("You can keep typing — it reads while it works.", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                    TextButton(onClick = onStop, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Default.Stop, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("Stop", fontSize = 12.sp) }
+                    Text(if (stopping) "Wrapping up — the browser stops within a few seconds." else "You can keep typing — it reads while it works.", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onStop, enabled = !stopping, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Default.Stop, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(if (stopping) "Stopping" else "Stop", fontSize = 12.sp) }
                 }
             }
         }
