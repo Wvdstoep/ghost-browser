@@ -1964,7 +1964,9 @@ function startOperatorJob(goal, cfg, restore = null, opts = {}) {
   const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
   const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
     systemPrompt: opts.systemPrompt || operatorPrompt(), orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
-    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null });
+    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null, maxMs: opts.maxMs || 0 });
+  ctx.stopped = () => run.stopped();                       // a waiting tool sees the owner's stop
+  run.onStop(() => ctx.stopWalks());                        // and the walk it waited on ends at once
   operatorRuns.set(run.id, run);
   run.done = run.run().catch((e) => { log.error(`[operator] ${run.id}: ${e.message}`); return run.view(); })
     .then(async (v) => { try { const n = await ctx.stopWalks(); if (n) log.info(`[operator] ${run.id}: stopped ${n} walk(s) with the turn`); } catch (e) { /* best effort */ } return v; });
@@ -1975,10 +1977,10 @@ function startOperatorJob(goal, cfg, restore = null, opts = {}) {
    assistant's identity, the reply exit and a short budget; the chat history rides in the orientation. */
 const assistant = require('./operator/assistant').makeAssistant({
   log,
-  startTurn: ({ goal, orientation, finishSpec, meta }) => {
+  startTurn: ({ goal, orientation, finishSpec, meta, maxMs }) => {
     const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
     const { assistantPrompt } = require('./operator/assistantPrompt');
-    return startOperatorJob(goal, cfg, null, { systemPrompt: assistantPrompt(), orientation, finishSpec, meta, startIterations: 60, maxIterations: 200 });
+    return startOperatorJob(goal, cfg, null, { systemPrompt: assistantPrompt(), orientation, finishSpec, meta, maxMs, startIterations: 60, maxIterations: 200 });
   },
 });
 /** Jobs the last process died on come back by themselves — the journal carries the task list and the

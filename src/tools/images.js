@@ -324,6 +324,13 @@ module.exports = {
     }
     if (!bytes || !bytes.length) { ctx.observe(`Could not fetch the file at ${url} — it may need a click on the page (a download button), which the browser captures by itself.`); return; }
     mime = String(mime || fileEngine.mimeFor(url)).split(';')[0].trim() || 'application/octet-stream';
+    /* A gated download (paywall, captcha, DRM) answers with a web page or an encrypted stream under the
+       file's own content-type; stored as a song it crashes the owner's player. Refuse it here. */
+    const claimedKind = fileEngine.kindOf(mime), seen = fileEngine.sniff(bytes);
+    if (['image', 'video', 'audio', 'document', 'archive'].includes(claimedKind) && !fileEngine.looksLike(seen, mime)) {
+      ctx.observe(`Not a real ${claimedKind}: ${url} answered with ${Math.round(bytes.length / 1024)} KB of ${seen || 'bytes without any file header'} while claiming ${mime}. That download is gated (a paywall, a captcha or an encrypted stream) — use the page's own download button (the browser captures what it saves), pick a format the plan allows, or tell the owner it is locked. Nothing was stored.`);
+      return;
+    }
     const name = a.name ? fileEngine.nameFrom({ contentDisposition: `filename="${a.name}"`, mime }) : fileEngine.nameFrom({ contentDisposition: cd, url, mime });
     let source = ''; try { source = new URL(url).hostname; } catch { source = ''; }
     const id = fileAssets.put({ kind: fileEngine.kindOf(mime), mime, name, bytes, source: `link:${source}` });
