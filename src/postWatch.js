@@ -279,8 +279,24 @@ async function discoverOnPage(page, log) {
   return found.map((f) => `https://www.facebook.com/groups/${f.group}/posts/${f.postId}/`);
 }
 
+/** Ground truth for one comment link: every comment article Facebook renders there, as the watcher's
+ *  own session sees it (label, visible, first words), plus the reveal controls still closed. */
+async function probePage(page, url) {
+  const { settle } = require('./inspector');
+  await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
+  try { await settle(page); } catch { /* still rendering */ }
+  await page.waitForTimeout(4000);
+  return page.evaluate(() => {
+    const q = (s, r) => Array.from((r || document).querySelectorAll(s));
+    const arts = q('[role="article"]').filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || ''));
+    return { url: location.href, count: arts.length,
+      items: arts.slice(0, 80).map((a) => ({ label: (a.getAttribute('aria-label') || '').slice(0, 110), vis: a.getClientRects().length > 0, text: (a.innerText || '').replace(/\s+/g, ' ').slice(0, 90) })),
+      expanders: q('[role="button"]').map((b) => (b.innerText || '').trim()).filter((t) => /antwoord|repl|opmerking|comment/i.test(t)).slice(0, 25) };
+  });
+}
+
 function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, draftAll, discover, discoverOnPage, postIdOf, VOICE };
+module.exports = { crawl, store, ingest, draftAll, discover, discoverOnPage, probePage, postIdOf, VOICE };
