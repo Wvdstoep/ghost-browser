@@ -1873,6 +1873,21 @@ function operatorContext() {
     runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
     people: (platform, name, leadsOnly) => { const people = require('./people'); if (name) { const r = people.load(platform || 'facebook', name); return r ? { ...r, profile: people.profileOf(platform || 'facebook', name) } : { error: 'no memory of that person yet' }; } return { people: people.list(platform || 'facebook', { leadsOnly: !!leadsOnly }).slice(0, 40), outcomes: people.outcomes() }; },
+    /* FILES the browser captured (a page's Download button lands in the file store): list them, and put
+       one in front of the owner — an image is copied into the shots dir so the chat inlines it. */
+    filesRecent: (kind, limit) => fileAssets.list().filter((f) => !kind || f.kind === kind).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, Math.min(30, Number(limit) || 10)).map((f) => ({ id: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, at: f.at, width: f.width || 0, height: f.height || 0, downloadUrl: `/v1/files/${f.id}/raw?download=1` })),
+    fileShow: (id) => {
+      const f = fileAssets.get(String(id || '')); if (!f) return { error: 'no such file' };
+      const out = { fileId: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, downloadUrl: `/v1/files/${f.id}/raw?download=1` };
+      if (f.kind === 'image') {
+        try {
+          const dir = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots'); require('fs').mkdirSync(dir, { recursive: true });
+          const ext = /png/.test(f.mime) ? 'png' : /webp/.test(f.mime) ? 'webp' : 'jpg'; const name = `file-${f.id}.${ext}`;
+          require('fs').writeFileSync(require('path').join(dir, name), f.bytes); out.screenshotUrl = '/v1/operator/shots/' + name; out.shown = true;
+        } catch (e) { out.error = 'could not show the image: ' + e.message; }
+      }
+      return out;
+    },
     stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
     /* When the turn ends, its walks end with it. */
     stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
@@ -1996,9 +2011,9 @@ app.post('/v1/assistant/chats/:id/messages', authed, (req, res) => {
 app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistant.stop(req.params.id)));
 /* Screenshots gb_look stored, for the app (png, by file name only). */
 app.get('/v1/operator/shots/:file', authed, (req, res) => {
-  const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!/\.(png|jpg)$/.test(f)) return res.status(404).end();
+  const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!/\.(png|jpg|webp)$/.test(f)) return res.status(404).end();
   const full = require('path').join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots', f);
-  if (!require('fs').existsSync(full)) return res.status(404).end(); res.type(f.endsWith('.jpg') ? 'jpeg' : 'png').sendFile(full);
+  if (!require('fs').existsSync(full)) return res.status(404).end(); res.type(f.endsWith('.jpg') ? 'jpeg' : f.endsWith('.webp') ? 'webp' : 'png').sendFile(full);
 });
 app.get('/v1/operator/jobs', authed, (req, res) => {
   const { listPersisted } = require('./operator/harness');

@@ -40,7 +40,7 @@ const STEP_LABELS = {
   gb_watchers: 'Checking watchers', gb_watcher_health: 'Checking watcher health', gb_watcher_feed: 'Reading watcher results', gb_watcher_config: 'Updating watcher settings', gb_watcher_posts: 'Updating watched posts', gb_watcher_run: 'Running the watcher', gb_watcher_wait: 'Waiting for the pass', gb_watcher_toggle: 'Switching the watcher', gb_watcher_probe: 'Reading the thread',
   gb_tools: 'Checking the tool palette', gb_roles: 'Checking roles', gb_role_get: 'Reading a role', gb_role_save: 'Creating a role', gb_role_update: 'Updating a role',
   gb_flows: 'Checking automations', gb_flow_get: 'Reading an automation', gb_flow_save: 'Saving an automation', gb_flow_run: 'Running an automation', gb_flow_wait: 'Waiting for the run', gb_flow_runs: 'Checking runs', gb_flow_run_status: 'Checking the run', gb_platforms: 'Checking platforms',
-  gb_walk: 'Browsing for you', gb_walk_wait: 'Browsing…', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
+  gb_walk: 'Browsing for you', gb_walk_wait: 'Browsing…', gb_walk_stop: 'Stopping the walk', gb_files_recent: 'Checking captured files', gb_file_show: 'Showing the file', gb_people: 'Checking people', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
 };
 const labelOf = (name) => STEP_LABELS[name] || String(name || '').replace(/^gb_/, '').replace(/_/g, ' ');
 /* The exit and the plan bookkeeping are not "steps" the owner needs to see (the task list shows live). */
@@ -79,6 +79,8 @@ function briefOf(name, text) {
       case 'gb_flow_save': case 'gb_role_save': case 'gb_role_update': case 'gb_watcher_config': case 'gb_watcher_toggle': case 'gb_watcher_posts': return v && v.id ? `saved ${v.id}` : 'saved';
       case 'gb_flow_run': return v && v.runId ? 'run started' : '';
       case 'gb_flow_wait': return v ? `${v.status || 'done'}${v.verified ? ' · verified' : ''}` : '';
+      case 'gb_files_recent': return Array.isArray(v) ? `${v.length} file${v.length === 1 ? '' : 's'}${v[0] ? ` · newest ${v[0].name}` : ''}` : '';
+      case 'gb_file_show': return v && v.shown ? `showing ${v.name}` : v && v.name ? `${v.name} (${v.kind})` : '';
       case 'gb_memory_write': return 'noted';
       case 'gb_guide': case 'gb_memory_read': return 'read';
     }
@@ -121,7 +123,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i]; if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
-      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}) });
+      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '' } : {}) });
     }
     return out.slice(-60);
   }
@@ -134,7 +136,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     for (const s of steps.slice(-MAX_INLINE_IMAGES)) {
       try {
         const f = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'shots', path.basename(String(s.image)));
-        const b = fs.readFileSync(f); s.imageData = (f.endsWith('.jpg') ? 'data:image/jpeg;base64,' : 'data:image/png;base64,') + b.toString('base64');
+        const b = fs.readFileSync(f); s.imageData = (f.endsWith('.jpg') ? 'data:image/jpeg;base64,' : f.endsWith('.webp') ? 'data:image/webp;base64,' : 'data:image/png;base64,') + b.toString('base64');
       } catch { /* the picture is gone; the step stays */ }
     }
   }

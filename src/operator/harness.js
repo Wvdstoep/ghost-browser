@@ -190,7 +190,7 @@ class OperatorRun {
             out = await this.registry.execute(name, args);
             if (looksFailed(out)) this._failStreak++; else this._failStreak = 0;
             // a picture the tool took rides on the event so a chat can show it (the text is clipped)
-            this._event('result', { name, text: clip(out, 600), ...(out && typeof out === 'object' && out.screenshotUrl ? { image: String(out.screenshotUrl) } : {}) });
+            this._event('result', { name, text: clip(out, 600), ...(out && typeof out === 'object' && out.screenshotUrl ? { image: String(out.screenshotUrl) } : {}), ...(out && typeof out === 'object' && out.downloadUrl ? { download: String(out.downloadUrl), fileName: String(out.name || '') } : {}) });
             if (this._failStreak >= 8) { this._pushTool(call, out); this._finishAs('blocked', `eight tool calls in a row failed — the environment is not answering as expected`); break; }
           }
           this._pushTool(call, out);
