@@ -24,8 +24,10 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
     async launch(rec) {
       const img = await imageOf();
       const spec = k8s.jobSpec({ id: rec.id, namespace: k8s.ns(), image: img.image, imagePullSecrets: img.imagePullSecrets, serviceAccount: '', gbUrl, token: rec.token,
-        // 1080p YouTube in software + a 1080p x264 encode: measured OOM at 3 GiB, so 6 GiB and 4 CPUs to burst into
-        cpu: process.env.RECORDER_CPU || '1500m', memory: process.env.RECORDER_MEMORY || '2Gi', cpuLimit: process.env.RECORDER_CPU_LIMIT || '4', memoryLimit: process.env.RECORDER_MEMORY_LIMIT || '6Gi' });
+        // 1080p YouTube in software + a 1080p x264 encode: measured OOM at 3 GiB, so 6 GiB and 4 CPUs to burst into.
+        // The REQUEST stays small: a tenant namespace has a quota on requests (10 GiB here, 8.6 in use), and a
+        // request the quota cannot hold means no pod at all — the limit is what the recording actually gets.
+        cpu: process.env.RECORDER_CPU || '500m', memory: process.env.RECORDER_MEMORY || '1Gi', cpuLimit: process.env.RECORDER_CPU_LIMIT || '4', memoryLimit: process.env.RECORDER_MEMORY_LIMIT || '6Gi' });
       await k8s.createJob(spec);
       return { jobName: spec.metadata.name };
     },
@@ -36,6 +38,10 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
     },
     /** The pod polls the handoff for the stop flag; nothing to push here. Deleting the Job would lose the last segments. */
     stop() { return true; },
+    /** Did the Job get a pod at all? A namespace quota can refuse the pod while the Job sits there retrying. */
+    async podExists(rec) { try { return (await k8s.listPods(`gb/recording=${rec.id}`)).length > 0; } catch { return true; } },
+    /** Take a Job back that never got a pod (the recording restarts in this pod instead). */
+    async cancel(rec) { const name = rec.jobName || k8s.jobSpec({ id: rec.id, namespace: 'x', image: 'x', gbUrl: '', token: '' }).metadata.name; try { await k8s.deleteJob(name); } catch { /* gone already */ } return true; },
     /** A recorder Job with no journal behind it (deleted while it ran) is removed; called by reconcile's neighbour on boot. */
     async sweep(knownIds) {
       let n = 0;

@@ -63,6 +63,19 @@ describe('a recording as a pod of its own', () => {
     r.stop(v.id); await sleep(80);
   });
 
+  it('a Job the cluster accepted but never gave a pod (a quota) is taken back and the recording runs here', async () => {
+    const cancelled = []; const remote = { available: () => true, launch: async () => ({ jobName: 'j-q' }), alive: async () => true, stop: () => true, podExists: async () => false, cancel: async (rec) => { cancelled.push(rec.id); return true; } };
+    const r = new Recorder({ root: tmp(), deps: { ...baseDeps(), remote }, log: quiet, tickMs: 20, launchGraceMs: 30 });
+    const v = r.start({ url: 'https://x/v', until: 'owner-stop' }); expect(v.mode).toBe('job');
+    await sleep(120);
+    const j = r.get(v.id); expect(cancelled).toEqual([v.id]); expect(j.mode).toBe('local'); expect(j.fallback).toMatch(/no pod/); expect(r.running()).toEqual([v.id]); expect(r.demand.refusedRemote).toBe(1);
+    r.stop(v.id); await sleep(80);
+    // a Job that DID get a pod is left alone
+    const ok = { ...remote, podExists: async () => true, cancel: async () => { throw new Error('must not cancel'); } };
+    const r2 = new Recorder({ root: tmp(), deps: { ...baseDeps(), remote: ok }, log: quiet, launchGraceMs: 20 });
+    const w = r2.start({ url: 'https://x/w' }); await sleep(80); expect(r2.get(w.id).mode).toBe('job'); expect(r2.runningRemote()).toEqual([w.id]);
+  });
+
   it('a pod that is gone, or silent too long, leaves a playable partial; a live one is left alone', async () => {
     let t = 1000; let alive = true;
     const remote = { available: () => true, launch: async () => ({ jobName: 'j' }), alive: async () => alive, stop: () => true };

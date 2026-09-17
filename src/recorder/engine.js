@@ -92,9 +92,9 @@ class Recorder {
    * @param {object} o.deps           { startDisplay, startPulse, launchBrowser, startFfmpeg, cookiesFor, preparePage, videoState, freeBytes, capabilities, sizeOf, concat }
    * @param {number} [o.maxConcurrent]
    */
-  constructor({ root, deps, log, maxConcurrent = 2, tickMs = TICK_MS, clock = now }) {
+  constructor({ root, deps, log, maxConcurrent = 2, tickMs = TICK_MS, clock = now, launchGraceMs = 25000 }) {
     this.root = root; this.deps = deps; this.log = log || { info() {}, warn() {}, debug() {} };
-    this.maxConcurrent = maxConcurrent; this.tickMs = tickMs; this.clock = clock;
+    this.maxConcurrent = maxConcurrent; this.tickMs = tickMs; this.clock = clock; this.launchGraceMs = launchGraceMs;
     this.maxRemote = Math.max(1, Number(process.env.MAX_REMOTE_RECORDINGS) || 3);
     // the DEMAND signal for the capacity controller: how often recordings wanted a pod of their own and got none
     this.demand = { refusedRemote: 0, lastRefusedAt: 0 };
@@ -201,8 +201,12 @@ class Recorder {
     if (remoteFull) { this.demand.refusedRemote++; this.demand.lastRefusedAt = this.clock(); this.log.warn(`[recorder] ${rec.id}: ${this.maxRemote} pod(s) of their own already recording — recording in this pod (demand ${this.demand.refusedRemote})`); }
     if (remote && a.mode !== 'local' && !remoteFull && remote.available()) {
       rec.mode = 'job'; rec.token = newToken(); rec.updatedAt = this.clock(); this._save(rec);
-      Promise.resolve().then(() => remote.launch(rec)).then((j) => { const cur = readJournal(this.dirOf(rec.id)); if (cur && cur.mode === 'job') this._set(cur, { jobName: (j && j.jobName) || '' }); this.log.info(`[recorder] ${rec.id} runs as ${j && j.jobName} (a pod of its own)`); })
-        .catch((e) => { this.log.warn(`[recorder] ${rec.id}: no pod of its own (${e.message}) — recording in this pod instead`); const cur = readJournal(this.dirOf(rec.id)); if (cur && RUNNING.includes(cur.state)) { delete cur.token; this._set(cur, { mode: 'local', fallback: e.message }); this._runLocal(cur); } });
+      const fallBack = (why) => { const cur = readJournal(this.dirOf(rec.id)); if (!cur || cur.mode !== 'job' || !RUNNING.includes(cur.state)) return; this.log.warn(`[recorder] ${rec.id}: no pod of its own (${why}) — recording in this pod instead`); this.demand.refusedRemote++; this.demand.lastRefusedAt = this.clock(); delete cur.token; this._set(cur, { mode: 'local', fallback: why }); this._runLocal(cur); };
+      Promise.resolve().then(() => remote.launch(rec)).then((j) => {
+        const cur = readJournal(this.dirOf(rec.id)); if (cur && cur.mode === 'job') this._set(cur, { jobName: (j && j.jobName) || '' }); this.log.info(`[recorder] ${rec.id} runs as ${j && j.jobName} (a pod of its own)`);
+        // a Job the cluster accepted but cannot give a pod (a namespace quota, no room): take it back and record here
+        if (remote.podExists) setTimeout(async () => { const cur2 = readJournal(this.dirOf(rec.id)); if (!cur2 || cur2.mode !== 'job' || cur2.state !== 'starting' || cur2.recordingAt) return; let has = true; try { has = await remote.podExists(cur2); } catch { has = true; } if (!has) { try { await remote.cancel(cur2); } catch { /* best effort */ } fallBack('the cluster gave the Job no pod (a quota, or no room)'); } }, this.launchGraceMs).unref?.();
+      }).catch((e) => fallBack(e.message));
       return this.view(rec);
     }
     this._save(rec);
