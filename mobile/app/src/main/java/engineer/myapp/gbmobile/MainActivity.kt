@@ -595,6 +595,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  session that registered this device — so cluster reads never depend on the active browsing
      *  profile. Falls back to the dedicated apiWeb when the control channel isn't connected. */
     private fun apiCall(method: String, path: String, body: String?, tag: String) {
+        // WebViews may only be touched on the main thread. The results artifact's JS bridge (approve,
+        // deny, run a flow) calls in from the WebView's bridge thread — and when the control channel was
+        // not ready the fallback below touched the API WebView directly and threw ("Java exception was
+        // raised during method invocation"). Hop to the main thread once, here, for every caller.
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { runOnUiThread { apiCall(method, path, body, tag) }; return }
         val js = "window.__gbApi(" + JSONObject.quote(method) + "," + JSONObject.quote(path) + "," +
             (if (body == null) "null" else JSONObject.quote(body)) + "," + JSONObject.quote(tag) + ")"
         if (ctrlWeb != null && ctrlApiReady) {
