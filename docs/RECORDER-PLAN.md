@@ -6,7 +6,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 |---|---|---|---|
 | 0 | Foundations: sound, a display per recording, a volume of its own | **done · v336** (2026-09-17) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
 | 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
-| 2 | The agent and the app: ask, watch, stream, download | building (server half in; app half next) | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
+| 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | planned | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
 | 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | planned | — |
 
@@ -66,6 +66,14 @@ Facts the design rests on (measured 2026-09-17):
 - **App.** A `RecordingCard` in the answer and a Recordings section in Settings → Downloads: state ("recording · 12:33 · 340 MB", "done · 1:02:10 · 1.9 GB", "partial"), Play (streams the HLS playlist: Android `MediaPlayer`/Media3 plays m3u8 natively; desktop via the system player or an embedded view), Download (the mp4 endpoint, streamed to Downloads with progress — never through the 40 MB base64 path), Stop, Delete. Polling every 5 s while one is recording.
 - **Nightly.** Retention: keep 14 days or 30 GiB, oldest `done` first, never a running one; the nightly report lists what it removed.
 - **E2E.** From the chat: "go to the newest MrBeast video, record it in full screen with sound and save it so I can watch it later". Passes when: the walk finds the video, the card appears within a minute, Play streams while it records, the recording ends when the video ends, the mp4 downloads and plays on the phone.
+
+## Phase 2 — proof (2026-09-17, v339/v340 + app)
+
+- From the chat, one ask: "Go to YouTube and record the Blender Foundation video Big Buck Bunny 60fps 4K with sound for 2 minutes so I can watch it later." The agent walked the Google profile to the video (2 steps), called `record_start` (it chose 1080p on its own), and answered after 120 s with the recording card — while the recording ran on. The recording ended by its length: 120 s, 12 segments, 1080p, mean −24.4 dB / max −0.4 dB, 28 MB mp4.
+- App (built, pushed as `mobile/dist/app-debug.apk`): the recording card in the chat (live numbers every 5 s, Play → a full-screen player streaming the playlist while it records and the seekable mp4 after, with the cluster session's cookie; Stop; Save streams the mp4 into Downloads, any size, never through memory), a Recordings section under Settings → Downloads with free space and Delete. Desktop: plays and saves through its own tabs (the tabs hold the session).
+- Retention: nightly at 03:00 UTC, 14 days / 30 GB (`RECORDINGS_KEEP_DAYS`, `RECORDINGS_KEEP_GB`), never a live one, listed in the log.
+- Known: the desktop installer grew past GitHub's 100 MB file limit (100.02 MB) — the repo keeps the previous installer; a release channel (GitHub Releases) is the fix, noted for Phase 4.
+- `record_start` answers with a slim recording (the full view blew past the step's result clip and the step showed no brief).
 
 ## Phase 3 — Elastic: the recorder as its own pod
 
