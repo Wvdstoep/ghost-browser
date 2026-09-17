@@ -9,6 +9,32 @@ data class TabInfo(val index: Int, val title: String, val host: String, val prof
 data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String,
                     val profile: String = "", val role: String = "", val goals: List<String> = emptyList(),
                     val runs: Int = 0, val lastStatus: String = "", val verified: Boolean = false)
+/**
+ * THE ASSISTANT — one chat, one agent, living inside Ghost Browser on the cluster. The app is a thin
+ * client: it sends the owner's words, polls the chat while a turn runs, and renders what comes back.
+ * These are the shapes of GET /v1/assistant/chats/:id.
+ */
+data class AssistantStep(val name: String, val label: String, val args: String, val text: String)
+data class AssistantCard(val kind: String, val title: String, val watcherId: String = "", val url: String = "")   // results | approvals | url
+data class AssistantTurn(
+    val role: String,                 // user | assistant
+    val text: String,
+    val t: Long,
+    val status: String = "",          // assistant: done | blocked | stopped | error
+    val details: String = "",         // evidence / what it did, behind a fold
+    val cards: List<AssistantCard> = emptyList(),
+    val steps: List<AssistantStep> = emptyList(),
+    val spoken: Boolean = false,      // a user message spoken INTO a running turn
+    val iterations: Int = 0,
+)
+data class AssistantTask(val title: String, val done: Boolean, val note: String)
+data class AssistantLive(val jobId: String, val status: String, val iterations: Int, val tasks: List<AssistantTask>, val steps: List<AssistantStep>, val startedAt: Long)
+data class AssistantChatView(val id: String, val title: String, val turns: List<AssistantTurn>, val live: AssistantLive?)
+data class ChatSummary(val id: String, val title: String, val updatedAt: Long, val turns: Int, val running: Boolean)
+
+/** The model the agent runs on (GB's own settings, never the key): what the AI sheet shows. */
+data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "")
+
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
 data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)

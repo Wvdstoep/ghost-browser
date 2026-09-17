@@ -130,11 +130,10 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             )
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
-            "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
-                title = "Agent", messages = state.agentMsgs.value, busy = state.agentBusy.value,
-                onSend = { Agent.send(state, Tabs.activeBrowser(), it) }, onNew = { state.agentMsgs.value = emptyList() },
-                onSettings = { state.aiModal.value = true }, onClose = { screen = "browser" },
-            )
+            "agent" -> {
+                LaunchedEffect(Unit) { AssistantD.open(state) }
+                engineer.myapp.gb.shared.AssistantScreen(state.assistant, AssistantD.actions(state, openUrl = openUrl, openApprovals = { screen = "approvals" }, openSettings = { state.aiModal.value = true }, close = { screen = "browser" }, connect = { screen = "settings" }))
+            }
             else -> JcefBrowserView(Tabs.activeBrowser(), error, Modifier.fillMaxSize())
         }
     }
@@ -148,7 +147,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         pendingApprovals = state.jobs.value.sumOf { it.proposals.size },
         onReview = { state.runVisible.value = false; screen = "approvals" },
     )
-    if (state.aiModal.value) AiModalD(state) { state.aiModal.value = false }
+    if (state.aiModal.value) engineer.myapp.gb.shared.AiModelSheet(state.aiModel, AssistantD.modelActions(state), connected = Cluster.connected, onConnect = { state.aiModal.value = false; screen = "settings" }, onClose = { state.aiModal.value = false })
     if (state.artifactVisible.value) engineer.myapp.gb.shared.ResultsScreen(
         watcherName = state.artifactName.value, items = state.artifactItems.value, flows = state.flows.value,
         loading = state.artifactLoading.value,

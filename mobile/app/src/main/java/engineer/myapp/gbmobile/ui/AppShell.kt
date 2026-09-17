@@ -63,10 +63,12 @@ class ShellUi {
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
-    // agent chat
-    val agentTitle = mutableStateOf("Agent")
+    // the assistant — one chat, one agent on the cluster (state shapes live in :shared)
+    val assistant = engineer.myapp.gb.shared.AssistantUi()
+    val aiModel = engineer.myapp.gb.shared.AiModelUi()
+    val agentBusy = mutableStateOf(false)   // a turn is running (PiP + status)
+    val agentTitle = mutableStateOf("Agent")                       // legacy on-device chat (kept for the local flow runner's journal)
     val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
-    val agentBusy = mutableStateOf(false)
     val pipThumb = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)   // live snapshot of the tab the agent is driving
     val clusterOn = mutableStateOf(false)
     // device hub (native, local render)
@@ -99,8 +101,8 @@ class ShellActions(
     val onOpenSettings: () -> Unit,
     val onOpenAgent: () -> Unit,
     val onCloseAgent: () -> Unit,
-    val onNewAgentChat: () -> Unit,
-    val onSendAgent: (String) -> Unit,
+    val assistant: engineer.myapp.gb.shared.AssistantActions,
+    val aiModel: engineer.myapp.gb.shared.AiModelActions,
     val onLoadFlows: () -> Unit,
     val onRunFlow: (String, String) -> Unit,
     val onCreateFlow: (String, String) -> Unit,
@@ -185,11 +187,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                             )
                         }
                     }
-                    "agent" -> engineer.myapp.gb.shared.AgentChatScreen(
-                        title = shell.agentTitle.value, messages = shell.agentMsgs.value, busy = shell.agentBusy.value,
-                        onSend = { act.onSendAgent(it) }, onNew = act.onNewAgentChat, onSettings = act.onOpenAiSettings, onClose = act.onCloseAgent,
-                        pip = shell.pipThumb.value, onExpandPip = { act.onNav("browser") }, topInset = Modifier.statusBarsPaddingSafe(),
-                    )
+                    "agent" -> engineer.myapp.gb.shared.AssistantScreen(shell.assistant, act.assistant, topInset = Modifier.statusBarsPaddingSafe())
                     "approvals" -> engineer.myapp.gb.shared.ApprovalsScreen(
                         jobs = shell.jobs.value, loading = shell.jobsLoading.value,
                         onApprove = { j, p, t -> act.onApprove(j, p, t) }, onDeny = { j, p -> act.onDeny(j, p) },
@@ -215,7 +213,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
         if (shell.switcherOpen.value) TabGrid(shell, act)
         if (shell.menuOpen.value) OverflowMenu(shell, act)
         if (shell.urlFocused.value) Omnibox(shell, act)
-        if (shell.aiSettingsOpen.value) AiSettingsDialog(settingsUi, settingsAct, act.onCloseAiSettings)
+        if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
     }
 }
 

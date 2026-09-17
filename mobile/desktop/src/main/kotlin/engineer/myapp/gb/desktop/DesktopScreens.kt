@@ -37,7 +37,10 @@ class DesktopState {
     val activity = mutableStateOf("")
     val nodeStatus = mutableStateOf("node: connecting…")
     val dark = mutableStateOf(true)
-    // agent
+    // the assistant — one chat, one agent on the cluster (shapes in :shared)
+    val assistant = engineer.myapp.gb.shared.AssistantUi()
+    val aiModel = engineer.myapp.gb.shared.AiModelUi()
+    // legacy on-device agent state (kept while AgentD's local tools are retired)
     val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
     val agentBusy = mutableStateOf(false)
     val endpoint = mutableStateOf("")
