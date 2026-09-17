@@ -158,6 +158,8 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         onOpenUrl = { u -> Tabs.go(u); state.artifactVisible.value = false; screen = "browser" },
         onClose = { state.artifactVisible.value = false },
         modifier = Modifier.fillMaxSize().background(cs.background),
+        onWatchPost = { url -> watchPostD(state, url) },
+        onMutePost = { pid -> mutePostD(state, pid) },
     )
     }
 }
