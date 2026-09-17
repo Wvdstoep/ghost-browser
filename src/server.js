@@ -2062,7 +2062,7 @@ app.post('/v1/watchers/:id/probe', authed, async (req, res) => {
   finally { runningWatchers.delete(req.params.id); }
 });
 // The posts a post-watcher follows: list / add one / remove one.
-app.get('/v1/watchers/:id/posts', authed, (req, res) => { try { const c = require('./watcherFeed').getConfig(req.params.id); res.json({ postUrls: c.postUrls || [], mode: c.mode || '', lastCrawl: c.lastCrawl || {} }); } catch (e) { res.json({ postUrls: [] }); } });
+app.get('/v1/watchers/:id/posts', authed, (req, res) => { try { const c = require('./watcherFeed').getConfig(req.params.id); let cadence = []; try { cadence = require('./postWatch').cadenceOf(c, c.postUrls || []); } catch (e) { cadence = []; } res.json({ postUrls: c.postUrls || [], mode: c.mode || '', lastCrawl: c.lastCrawl || {}, cadence }); } catch (e) { res.json({ postUrls: [] }); } });
 app.post('/v1/watchers/:id/posts', authed, (req, res) => {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   const url = String((req.body || {}).url || '').trim(); const pid = pw.postIdOf(url);
@@ -2196,7 +2196,21 @@ async function scheduleTick() {
       .finally(() => runningWatchers.delete(wf.id));
   }
 }
-const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); reconcileDrafts().catch(() => {}); }, 60000);
+const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); reconcileDrafts().catch(() => {}); nightlyTick(); }, 60000);
+/* THE NIGHTLY SELF-CHECK (src/nightly.js): once a night the assistant gets a turn of its own — health,
+   runs, errors, leads and promises — fixes the small things, reports in a chat named "Nightly check". */
+function nightlyTick() {
+  try {
+    const nightly = require('./nightly');
+    if (!nightly.due()) return;
+    const cfg = settingsStore.read(); if (!cfg.llmModel) return;
+    if (assistant.list().some((c) => c.running)) return;   // never on top of the owner's own turn; tomorrow then
+    const day = nightly.markRun();
+    const chat = assistant.create(`Nightly check ${day}`);
+    const r = assistant.send(chat.id, nightly.GOAL);
+    log.info(`[nightly] self-check started for ${day}: chat ${chat.id} job ${r.jobId || '?'}`);
+  } catch (e) { log.error(`[nightly] ${e.message}`); }
+}
 setTimeout(() => reconcileDrafts().catch(() => {}), 20000);
 if (_schedTimer.unref) _schedTimer.unref();
 

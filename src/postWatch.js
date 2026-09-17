@@ -378,6 +378,22 @@ function dueUrls(cfg, urls, now) {
     return t - lc >= base * 60000 * jitter;
   });
 }
+/** ADAPTIVE CADENCE, AS DATA: per post — when it was last read, how fresh its newest message is, the
+ *  interval that follows from it (15 min active / hourly quiet / daily dead, ±20 % jitter) and when
+ *  the next read is due. What dueUrls decides, made visible for the health line, the app and the agent. */
+function cadenceOf(cfg, urls, now) {
+  const last = (cfg && cfg.lastCrawl) || {}; const t = now || Date.now();
+  return (urls || []).map((u) => {
+    const lc = last[u] || 0;
+    let newestDays = null; try { const tr = JSON.parse(fs.readFileSync(path.join(DIR, String(postIdOf(u)) + '.json'), 'utf8')); for (const n of tr.nodes || []) { const d = ageDaysOf(n); if (newestDays === null || d < newestDays) newestDays = d; } } catch { newestDays = null; }
+    const nd = newestDays === null ? 0 : newestDays;
+    const base = nd < 0.25 ? 15 : nd < 3 ? 60 : 24 * 60;
+    const jitter = lc ? 1 + ((Math.sin(lc / 7919) + 1) / 2 - 0.5) * 0.4 : 1;
+    const intervalMin = Math.round(base * jitter);
+    const dueAt = lc ? lc + intervalMin * 60000 : t;
+    return { url: u, postId: postIdOf(u), lastCrawl: lc || null, newestDays: newestDays === null ? null : Number(nd.toFixed(2)), pace: base === 15 ? 'active' : base === 60 ? 'quiet' : 'dormant', intervalMin, dueInMin: Math.max(0, Math.round((dueAt - t) / 60000)), due: t >= dueAt };
+  });
+}
 function ageDaysOf(n) {
   const w = String(n.when || '').toLowerCase();
   const m = w.match(/(\d+)\s*(mnd|maand|month|mo|min|uur|hour|hr|dag|day|week|wk|jaar|year|yr|u|h|m|d|w|j|y)\b/);
@@ -528,4 +544,4 @@ function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, rememberVoice, probePage, postReply, postIdOf, extractInPage, VOICE };
+module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, cadenceOf, rememberVoice, probePage, postReply, postIdOf, extractInPage, VOICE };
