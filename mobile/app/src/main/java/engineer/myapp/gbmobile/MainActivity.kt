@@ -1478,6 +1478,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         } }
         if (RH.stop == null) RH.stop = { id -> stopRecording(id) }
         if (RH.save == null) RH.save = { rec -> saveRecordingToDevice(rec) }
+        // a share link: a public player page that expires in 7 days, on the clipboard and in the share sheet
+        if (RH.share == null) RH.share = { rec -> agentExec.execute {
+            try {
+                val sh = JSONObject(apiAwait("POST", "/v1/recordings/${rec.id}/share", "{\"days\":7}"))
+                if (sh.has("error")) { vm.log("! share: ${sh.optString("error")}"); return@execute }
+                val link = vm.clusterUrl.trim().trimEnd('/') + sh.optString("url")
+                runOnUiThread {
+                    try { (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Recording link", link)) } catch (e: Exception) {}
+                    try { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, rec.name).putExtra(Intent.EXTRA_TEXT, link), "Share the recording (link expires in ${sh.optInt("days", 7)} days)")) } catch (e: Exception) { android.widget.Toast.makeText(this, "Link copied — expires in ${sh.optInt("days", 7)} days", android.widget.Toast.LENGTH_LONG).show() }
+                }
+            } catch (e: Exception) { vm.log("! share: ${e.message}") }
+        } }
         if (RH.refresh == null) RH.refresh = { id -> apiCall("GET", "/v1/recordings/$id", null, "recording") }
         // any captured FILE (a video, a PDF, an export): fetched as base64 from Ghost Browser, then saved like a picture
         if (engineer.myapp.gb.shared.AssistantHooks.saveFile == null) engineer.myapp.gb.shared.AssistantHooks.saveFile = { downloadUrl, name ->

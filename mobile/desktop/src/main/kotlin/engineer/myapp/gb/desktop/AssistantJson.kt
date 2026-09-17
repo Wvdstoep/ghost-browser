@@ -18,7 +18,8 @@ object AssistantJson {
     }
     /** One recording (GET /v1/recordings/:id, or an item of the list). */
     fun recording(o: JSONObject): RecordingInfo = RecordingInfo(o.optString("id"), o.optString("url"), o.optString("title"), o.optString("pageTitle"), o.optString("state"), o.optString("until"), o.optInt("maxMinutes"),
-        o.optInt("seconds"), o.optLong("bytes"), o.optInt("segments"), o.optLong("startedAt"), o.optLong("endedAt"), o.optString("reason"), o.optString("error"), o.optBoolean("live"), o.optString("playlist"), o.optString("mp4"))
+        o.optInt("seconds"), o.optLong("bytes"), o.optInt("segments"), o.optLong("startedAt"), o.optLong("endedAt"), o.optString("reason"), o.optString("error"), o.optBoolean("live"), o.optString("playlist"), o.optString("mp4"),
+        o.optString("thumb"), o.optJSONArray("chapters")?.length() ?: 0, o.optString("mode"))
     fun recording(json: String): RecordingInfo? = try { val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else recording(o) } catch (e: Exception) { null }
     /** GET /v1/recordings → every recording, live ones first, then newest first; plus the free bytes on the recordings volume. */
     fun recordings(json: String): Pair<List<RecordingInfo>, Long> = try {
