@@ -41,7 +41,10 @@ async function main() {
   if (!GB || !ID || !TOKEN) throw new Error('GB_URL, RECORDING_ID and RECORDING_TOKEN are required');
   const sc = require('./sidecar'); const pg = require('./page'); const { Recorder } = require('./engine');
   const caps = sc.capabilities(); if (!caps.ok) throw new Error(`cannot record here: ${caps.hint}`);
-  const h = await api('GET', `/v1/recordings/${ID}/handoff`);
+  // GB may be mid-roll when this pod starts (that is the point of a pod of its own): ask for the handoff for up to 5 minutes
+  let h = null;
+  for (let i = 0; i < 30 && !h; i++) { try { h = await api('GET', `/v1/recordings/${ID}/handoff`); } catch (e) { log.warn(`[recorder-pod] handoff (${i + 1}/30): ${e.message}`); await new Promise((res) => setTimeout(res, 10000)); } }
+  if (!h) throw new Error('no handoff from Ghost Browser in 5 minutes');
   log.info(`[recorder-pod] ${ID}: ${h.url} (${h.quality}, until ${h.until}, ≤${h.maxMinutes} min, ${(h.cookies || []).length} cookies)`);
   const root = sc.recordingsRoot();
   const deps = { capabilities: sc.capabilities, freeBytes: sc.freeBytes, sizeOf: sc.sizeOf, startDisplay: sc.startDisplay, startPulse: sc.startPulse, launchBrowser: sc.launchBrowser, startFfmpeg: sc.startFfmpeg,

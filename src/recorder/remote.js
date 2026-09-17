@@ -8,7 +8,10 @@
  */
 const k8s = require('./k8s');
 
-function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-browser:3000', image = process.env.RECORDER_IMAGE || '', enabled = String(process.env.RECORDER_JOBS || 'on') !== 'off' } = {}) {
+/* The pod reaches GB through the HEADLESS twin of the service (ghost-browser-pods): its name resolves straight
+   to the pod IP — the cluster-IP translation refused pod-to-pod traffic on the live node — and re-resolves to
+   the new pod after a roll, which is what lets a recording outlive one. */
+function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-browser-pods:3000', image = process.env.RECORDER_IMAGE || '', enabled = String(process.env.RECORDER_JOBS || 'on') !== 'off' } = {}) {
   let imageInfo = null;
   async function imageOf() {
     if (image) return { image, imagePullSecrets: [], serviceAccount: '' };
