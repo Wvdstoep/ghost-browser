@@ -1093,8 +1093,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun sendAgentMessage(input: String) {
-        if (agentBusy) return
         val text = input.trim(); if (text.isEmpty()) return
+        // THE OPERATOR on the cluster: "/op <goal>" starts an engineer-grade job inside Ghost Browser that
+        // reads what the browser did, changes the smallest wrong thing, runs and proves it; its steps
+        // stream into this chat. "/say <text>" speaks into the running job.
+        if (text.startsWith("/op ") || text == "/op") { runOperatorJob(text.removePrefix("/op").trim()); return }
+        if (text.startsWith("/say ")) { sayToOperator(text.removePrefix("/say").trim()); return }
+        if (agentBusy) return
         val brain = buildBrain()
         if (brain == null) {
             if (agentChat == null) newAgentChat()
@@ -1134,6 +1139,60 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (toolCalls >= 12) agentPushMsg("assistant", "(stopped — too many steps in one turn; ask me to continue)")
             } finally { runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
         }
+    }
+
+    /** The cluster operator, from the chat: start a job with a goal, stream its steps as chips, land the
+     *  final DONE/BLOCKED line as the reply. Follow-ups while it runs go in with /say. */
+    @Volatile private var operatorJobId: String = ""
+    private fun runOperatorJob(goal: String) {
+        if (agentChat == null) newAgentChat()
+        if (goal.isBlank()) { agentPushMsg("assistant", "Tell the operator what to do: /op make a post watcher for my LinkedIn posts — or /op why does the notifications watcher draft nothing?"); return }
+        if (vm.clusterUrl.trim().isEmpty()) { agentPushMsg("assistant", "The operator runs on your cluster — connect first (Settings ▸ Account & sync)."); return }
+        if (agentBusy) { agentPushMsg("assistant", "A job is still running here. Use /say to talk into it, or wait for it to finish."); return }
+        agentPushMsg("user", "/op $goal", null)
+        agentBusy = true; runOnUiThread { shellUi.agentBusy.value = true }
+        agentExec.execute {
+            try {
+                val started = try { JSONObject(apiAwait("POST", "/v1/operator/jobs", JSONObject().put("goal", goal).toString())) } catch (e: Exception) { JSONObject() }
+                val jid = started.optString("id")
+                if (jid.isBlank()) { agentPushMsg("assistant", "⚠ the operator could not start: ${started.optString("error").ifBlank { "no answer from the cluster" }}"); return@execute }
+                operatorJobId = jid; lastOperatorEventT = 0L
+                agentPushMsg("assistant", "operator job $jid started — reading the machine…")
+                var seen = 0; var status = "running"; var idle = 0
+                while (status == "running" || status == "queued") {
+                    Thread.sleep(6000)
+                    val v = try { JSONObject(apiAwait("GET", "/v1/operator/jobs/$jid", null)) } catch (e: Exception) { if (++idle > 5) break else continue }
+                    idle = 0; status = v.optString("status", "running")
+                    val ev = v.optJSONArray("events") ?: JSONArray()
+                    // the job keeps the last 120 events; render the ones we have not shown yet
+                    val total = v.optInt("iterations", 0)
+                    for (i in 0 until ev.length()) {
+                        val e = ev.optJSONObject(i) ?: continue
+                        val t = e.optLong("t", 0L); if (t <= lastOperatorEventT) continue
+                        lastOperatorEventT = t
+                        when (e.optString("kind")) {
+                            "tool" -> agentPushMsg("assistant", JSONObject().put("tool", e.optString("name")).put("args", e.opt("args") ?: "").toString(), null)
+                            "result" -> agentPushMsg("tool", e.optString("text"), e.optString("name"))
+                            "thought" -> agentPushMsg("assistant", e.optString("text"))
+                            "say" -> {}
+                        }
+                    }
+                    seen = ev.length()
+                }
+                val v = try { JSONObject(apiAwait("GET", "/v1/operator/jobs/$jid", null)) } catch (e: Exception) { JSONObject() }
+                val fin = v.optString("finalLine").ifBlank { "the job ended: ${v.optString("status")}" }
+                val rep = v.optJSONObject("report")
+                val evidence = rep?.opt("evidence")?.let { if (it is JSONObject) it.toString(2) else it.toString() } ?: ""
+                agentPushMsg("assistant", fin + (if (evidence.isNotBlank()) "\n\nEvidence: " + evidence.take(1200) else "") + (rep?.optString("lesson")?.takeIf { it.isNotBlank() }?.let { "\n\nLesson kept: $it" } ?: ""))
+            } finally { operatorJobId = ""; runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
+        }
+    }
+    @Volatile private var lastOperatorEventT: Long = 0L
+    private fun sayToOperator(text: String) {
+        val jid = operatorJobId
+        if (jid.isBlank()) { agentPushMsg("assistant", "No operator job is running. Start one with /op <goal>."); return }
+        agentPushMsg("user", "/say $text", null)
+        agentExec.execute { try { apiAwait("POST", "/v1/operator/jobs/$jid/say", JSONObject().put("text", text).toString()) } catch (e: Exception) { agentPushMsg("assistant", "⚠ could not reach the job: ${e.message}") } }
     }
 
     private fun buildAgentTranscript(): String {
