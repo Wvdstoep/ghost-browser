@@ -2094,8 +2094,32 @@ const recorder = (() => {
   const deps = { capabilities: sc.capabilities, freeBytes: sc.freeBytes, sizeOf: sc.sizeOf, startDisplay: sc.startDisplay, startPulse: sc.startPulse, launchBrowser: sc.launchBrowser, startFfmpeg: sc.startFfmpeg,
     cookiesFor: (profile) => pg.cookiesFor(profile, { liveContextFor, profileDir: process.env.PROFILE_DIR || '/profiles', log }), preparePage: pg.preparePage, videoState: pg.videoState, platformCookies: pg.platformCookies,
     profileConfig: (p) => { try { return profiles.read(p) || {}; } catch { return {}; } } };
-  return new Recorder({ root: sc.recordingsRoot(), deps, log, maxConcurrent: Math.max(1, Number(process.env.MAX_RECORDINGS) || 2) });
+  deps.remote = require('./recorder/remote').makeRemote({ log });
+  const rec = new Recorder({ root: sc.recordingsRoot(), deps, log, maxConcurrent: Math.max(1, Number(process.env.MAX_RECORDINGS) || 2) });
+  // pods of their own: a pod gone or silent leaves a playable partial; checked every minute
+  setInterval(() => rec.reconcile().catch((e) => log.warn(`[recorder] reconcile: ${e.message}`)), 60000).unref();
+  return rec;
 })();
+/* Media may be fetched with the owner's session OR a short-lived ticket in the URL (?t=): a native player or a
+   download cannot carry the session reliably. The ticket is per recording and expires; it is never a key. */
+const recMedia = (req, res, next) => (req.query.t && recorder.checkTicket(req.params.id, String(req.query.t))) ? next() : authed(req, res, next);
+app.post('/v1/recordings/:id/ticket', authed, (req, res) => { if (!recorder.get(req.params.id)) return res.status(404).json({ error: 'no such recording' }); const tk = recorder.ticket(req.params.id); res.json({ ...tk, playlist: `/v1/recordings/${req.params.id}/index.m3u8?t=${tk.t}`, mp4: `/v1/recordings/${req.params.id}/mp4?t=${tk.t}` }); });
+/* A RECORDER POD talks to GB with the recording's own token: the handoff (the ask, the owner's cookies, the
+   profile's identity, the stop flag), the segments and the playlist as they come, its journal. */
+const recPod = (req, res, next) => { const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''); const want = recorder.tokenOf(req.params.id); if (!tok || !want || tok.length !== want.length || !require('crypto').timingSafeEqual(Buffer.from(tok), Buffer.from(want))) return res.status(401).json({ error: 'not this recording\'s token' }); next(); };
+app.get('/v1/recordings/:id/handoff', recPod, async (req, res) => {
+  const h = recorder.handoff(req.params.id); if (!h) return res.status(404).json({ error: 'no such recording' });
+  try { const pg = require('./recorder/page'); const cookies = await pg.cookiesFor(h.profile, { liveContextFor: (p) => { try { const o = consoleOwner(); const x = pool.listFor(o).find((y) => y.profile === p); const sess = x && pool.get(x.sessionId); return sess && sess.context ? sess.context : null; } catch { return null; } }, profileDir: process.env.PROFILE_DIR || '/profiles', log });
+    let cfg = {}; try { cfg = profiles.read(h.profile) || {}; } catch { cfg = {}; }
+    res.json({ ...h, cookies, cfg: { locale: cfg.locale, timezone: cfg.timezone, userAgent: cfg.userAgent, proxy: cfg.proxy } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/v1/recordings/:id/segments/:name', recPod, express.raw({ type: '*/*', limit: '400mb' }), (req, res) => {
+  const name = String(req.params.name || ''); if (!/^(seg-\d+\.ts|index\.m3u8)$/.test(name)) return res.status(400).json({ error: 'not a segment' });
+  try { const dir = recorder.dirOf(req.params.id); require('fs').mkdirSync(dir, { recursive: true }); require('fs').writeFileSync(require('path').join(dir, name), req.body || Buffer.alloc(0)); res.json({ ok: true, bytes: (req.body || []).length }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/v1/recordings/:id/journal', recPod, (req, res) => { const v = recorder.remoteUpdate(req.params.id, req.body || {}); if (!v) return res.status(404).json({ error: 'no such recording' }); res.json({ ok: true, state: v.state, stop: recorder.handoff(req.params.id).stop }); });
+
 app.get('/v1/recordings', authed, (req, res) => res.json({ recordings: recorder.list(), running: recorder.running(), root: recorder.root, freeBytes: require('./recorder/sidecar').freeBytes(recorder.root) }));
 app.post('/v1/recordings', authed, (req, res) => { try { res.json({ ok: true, recording: recorder.start(req.body || {}) }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get('/v1/recordings/capabilities', authed, (req, res) => res.json(require('./recorder/sidecar').capabilities()));
@@ -2103,17 +2127,20 @@ app.get('/v1/recordings/:id', authed, (req, res) => { const r = recorder.get(req
 app.post('/v1/recordings/:id/stop', authed, (req, res) => res.json(recorder.stop(req.params.id)));
 app.delete('/v1/recordings/:id', authed, (req, res) => { const r = recorder.remove(req.params.id); res.status(r.error ? 409 : 200).json(r); });
 /* The stream: the playlist and its segments, straight from disk — live while recording (no ENDLIST yet), whole after. */
-app.get('/v1/recordings/:id/index.m3u8', authed, (req, res) => {
+app.get('/v1/recordings/:id/index.m3u8', recMedia, (req, res) => {
   const f = require('path').join(recorder.dirOf(req.params.id), 'index.m3u8'); if (!require('fs').existsSync(f)) return res.status(404).end();
-  res.set('Cache-Control', 'no-store').type('application/vnd.apple.mpegurl').sendFile(f);
+  res.set('Cache-Control', 'no-store').type('application/vnd.apple.mpegurl');
+  // a ticketed playlist carries the ticket on every segment line, so the player's segment fetches pass too
+  if (req.query.t) { let m3u8 = ''; try { m3u8 = require('fs').readFileSync(f, 'utf8'); } catch { return res.status(404).end(); } return res.send(m3u8.replace(/^(seg-\d+\.ts)$/gm, `$1?t=${encodeURIComponent(String(req.query.t))}`)); }
+  res.sendFile(f);
 });
-app.get('/v1/recordings/:id/:seg', authed, (req, res, next) => {
+app.get('/v1/recordings/:id/:seg', recMedia, (req, res, next) => {
   const seg = String(req.params.seg || ''); if (!/^seg-\d+\.ts$/.test(seg)) return next();
   const f = require('path').join(recorder.dirOf(req.params.id), seg); if (!require('fs').existsSync(f)) return res.status(404).end();
   res.set('Cache-Control', 'public, max-age=86400').type('video/mp2t').sendFile(f);
 });
 /* The file: one mp4 built by stream copy the first time, then served with Range so a player can seek and a download can resume. */
-app.get('/v1/recordings/:id/mp4', authed, async (req, res) => {
+app.get('/v1/recordings/:id/mp4', recMedia, async (req, res) => {
   try {
     const f = await recorder.mp4(req.params.id); const r = recorder.get(req.params.id);
     const name = ((r && (r.title || r.pageTitle)) || req.params.id).replace(/[^\w .-]+/g, '_').slice(0, 80) + '.mp4';
@@ -2155,7 +2182,7 @@ app.post('/v1/operator/jobs/:id/say', authed, (req, res) => { const r = operator
 app.post('/v1/operator/jobs/:id/stop', authed, (req, res) => { const r = operatorRuns.get(req.params.id); if (!r) return res.status(404).json({ error: 'not running' }); r.stop(); res.json({ ok: true }); });
 // Which watcher passes hold the browser right now. NOT owner-scoped on purpose: the deploy gate asks
 // with the master's key and sessions are per owner, so it rolled the pod straight through a crawl.
-app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers], recording: (typeof recorder !== 'undefined' && recorder) ? recorder.running() : [] }));
+app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers], recording: (typeof recorder !== 'undefined' && recorder) ? recorder.running() : [], recordingRemote: (typeof recorder !== 'undefined' && recorder) ? recorder.runningRemote() : [] }));
 // A watcher's health: its last pass, whether one is running now, and whether it has gone quiet.
 app.get('/v1/watchers/:id/health', authed, (req, res) => {
   try {
@@ -2950,6 +2977,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       if (n) log.info(`[workflow] found ${n} interrupted run(s) to resume`);
     } catch (e) { log.error(`[workflow] recovery failed: ${(e && e.message) || e}`); }
     try { const n = recorder.adopt(); if (n) log.info(`[recorder] closed ${n} recording(s) a restart left open (playable partials)`); } catch (e) { log.warn(`[recorder] adopt: ${e.message}`); }
+    recorder.reconcile().then((n) => { if (n) log.info(`[recorder] closed ${n} recording(s) whose pod is gone`); }).catch(() => {});
+    if (recorder.deps.remote && recorder.deps.remote.available()) recorder.deps.remote.sweep(new Set(recorder.list().map((r) => r.id))).catch(() => {});
     try { const n = resumeOperatorJobs(); if (n) log.info(`[operator] resumed ${n} interrupted job(s)`); }
     catch (e) { log.error(`[operator] recovery failed: ${(e && e.message) || e}`); }
   }, 5000);
