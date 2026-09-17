@@ -2057,7 +2057,9 @@ app.get('/v1/assistant/chats/:id', authed, async (req, res) => {
   const v = assistant.view(req.params.id); if (!v) return res.status(404).json({ error: 'no such chat' });
   if (v.live && req.query.backdrop !== '0') {
     const last = [...v.live.steps].reverse().find((st) => /"profile"\s*:\s*"/.test(String(st.args || '')));
-    const prof = last ? (String(last.args).match(/"profile"\s*:\s*"([^"]+)"/) || [])[1] : '';
+    let prof = last ? (String(last.args).match(/"profile"\s*:\s*"([^"]+)"/) || [])[1] : '';
+    // no profile named by a step yet: the browser the owner's newest session is in (a walk just opened it)
+    if (!prof) { try { const mine = pool.listFor(consoleOwner()).slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); if (mine[0] && mine[0].profile) prof = mine[0].profile; } catch (e) { prof = ''; } }
     v.live.backdrop = await backdropOf(prof); v.live.backdropProfile = prof || (settingsStore.read().browserProfile || 'facebook');
   }
   res.json(v);
