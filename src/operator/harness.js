@@ -31,6 +31,15 @@ const MAX_CONTEXT_CHARS = 140000;
 const RE_ANCHOR_EVERY = 20;
 
 const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars trimmed — ask for less, or a narrower filter)` : (s || ''); };
+/** screenshotUrl / downloadUrl of a tool result, whether it came back as an object or as JSON text. */
+function mediaOf(out) {
+  let o = out && typeof out === 'object' ? out : null;
+  if (!o && typeof out === 'string' && /"(screenshotUrl|downloadUrl)"/.test(out)) {
+    try { o = JSON.parse(out); } catch { const m = out.match(/"screenshotUrl"\s*:\s*"([^"]+)"/); const d = out.match(/"downloadUrl"\s*:\s*"([^"]+)"/); const n = out.match(/"name"\s*:\s*"([^"]*)"/); o = { screenshotUrl: m ? m[1] : '', downloadUrl: d ? d[1] : '', name: n ? n[1] : '' }; }
+  }
+  if (!o) return {};
+  return { image: o.screenshotUrl ? String(o.screenshotUrl) : '', download: o.downloadUrl ? String(o.downloadUrl) : '', fileName: String(o.name || '') };
+}
 const looksFailed = (out) => { const s = typeof out === 'string' ? out : JSON.stringify(out || {}); return /^\{"error"|refused|"error":|not found|failed:/i.test(String(s).slice(0, 200)); };
 
 class OperatorRun {
@@ -190,7 +199,10 @@ class OperatorRun {
             out = await this.registry.execute(name, args);
             if (looksFailed(out)) this._failStreak++; else this._failStreak = 0;
             // a picture the tool took rides on the event so a chat can show it (the text is clipped)
-            this._event('result', { name, text: clip(out, 600), ...(out && typeof out === 'object' && out.screenshotUrl ? { image: String(out.screenshotUrl) } : {}), ...(out && typeof out === 'object' && out.downloadUrl ? { download: String(out.downloadUrl), fileName: String(out.name || '') } : {}) });
+            // a picture or a file the tool produced rides on the event — the tools hand back JSON text
+            // (clipped for the model), so the fields are read from the text when it is not an object
+            const media = mediaOf(out);
+            this._event('result', { name, text: clip(out, 600), ...(media.image ? { image: media.image } : {}), ...(media.download ? { download: media.download, fileName: media.fileName } : {}) });
             if (this._failStreak >= 8) { this._pushTool(call, out); this._finishAs('blocked', `eight tool calls in a row failed — the environment is not answering as expected`); break; }
           }
           this._pushTool(call, out);
