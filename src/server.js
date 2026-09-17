@@ -1605,7 +1605,12 @@ app.get('/v1/workflow-runs/:id', authed, (req, res) => {
 });
 // A watcher's deduped, accumulating result feed (only-new, urgency-ranked, handled-aware).
 app.get('/v1/watchers/:id/feed', authed, (req, res) => {
-  try { const wf = require('./watcherFeed'); res.json({ items: wf.list(req.params.id).map((it) => ({ ...it, draftState: wf.stateOf(it) })), counts: wf.counts(req.params.id) }); }
+  try {
+    const wf = require('./watcherFeed'); const c = wf.getConfig(req.params.id) || {};
+    const hideAfter = Number(c.hideAfterDays) || 14;   // older than this is history, not a to-do
+    const items = wf.list(req.params.id).filter((it) => it.handled || wf.ageDays(it) <= hideAfter).map((it) => ({ ...it, draftState: wf.stateOf(it) }));
+    res.json({ items, counts: wf.counts(req.params.id) });
+  }
   catch (e) { res.json({ items: [], counts: { total: 0, unhandled: 0 } }); }
 });
 app.post('/v1/watchers/:id/feed/handled', authed, (req, res) => {
@@ -1768,18 +1773,23 @@ async function triggerFollowUps(wf, owner) {
   try {
     if (!wf || !wf.id || !owner) return;
     const feed = require('./watcherFeed');
-    const cfg = feed.getConfig(wf.id);
-    if (!cfg || !cfg.followUpFlowId) return;
-    const flow = workflows.read(cfg.followUpFlowId);
-    if (!flow) return;
-    const kinds = Array.isArray(cfg.followUpKinds) ? cfg.followUpKinds.map((k) => String(k).toLowerCase()) : [];
+    const cfg = feed.getConfig(wf.id) || {};
+    /* THE ENGINE: each notification KIND goes to its own flow - mentions to one, invites to another,
+       replies to a third. config.followUps = [{ kinds:[...], flowId }] in order; empty kinds = any.
+       The old single followUpFlowId + followUpKinds still works as one route. */
+    const routes = (Array.isArray(cfg.followUps) && cfg.followUps.length ? cfg.followUps : (cfg.followUpFlowId ? [{ kinds: cfg.followUpKinds || [], flowId: cfg.followUpFlowId }] : []))
+      .map((r) => ({ kinds: (Array.isArray(r.kinds) ? r.kinds : []).map((k) => String(k).toLowerCase()).filter(Boolean), flow: r && r.flowId ? workflows.read(r.flowId) : null }))
+      .filter((r) => r.flow);
+    if (!routes.length) return;
     const kindOf = (it) => String((it.fields && (it.fields.type || it.fields.action)) || it.kind || '').toLowerCase();
-    const items = feed.list(wf.id).filter((it) => !it.followedUp && !it.handled && it.url && (!kinds.length || kinds.includes(kindOf(it))));
+    const routeFor = (it) => routes.find((r) => !r.kinds.length || r.kinds.includes(kindOf(it)));
+    const items = feed.list(wf.id).filter((it) => !it.followedUp && !it.handled && it.url && routeFor(it));
     // A thread older than the watcher's horizon (default 7 days) nobody expects an answer on any
     // more — mark it seen without the drive, so a pass spends its budget on what matters today.
     const maxAge = Number(cfg.maxAgeDays) || 7; const fresh = [];
     for (const it of items) { if (feed.ageDays(it) > maxAge) feed.mark(wf.id, it.key, { draftChecked: true, tooOld: true }); else fresh.push(it); }
     for (const it of fresh.slice(0, 6)) {
+      const flow = routeFor(it).flow;
       const rid = `${flow.id}-${Date.now()}`;
       feed.mark(wf.id, it.key, { followedUp: true, draftRunId: rid, followedUpAt: Date.now() });
       const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
