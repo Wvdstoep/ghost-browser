@@ -112,7 +112,13 @@ function extractInPage() {
     if (text.startsWith(author + '\n')) text = text.slice(author.length + 1);          // the name line
     if (replyTo && text.startsWith(replyTo + ' ')) text = text.slice(replyTo.length + 1); // the @mention prefix
     const when = link ? (link.innerText || '').trim() : '';
-    return { i, id: rid || cid, cid, rid, isReply, author, replyTo, text: text.trim().slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
+    // Did the owner already react to this one? The Like control reads "Verwijder Leuk" / "Remove Like"
+    // (or is aria-pressed) once it is yours - the owner's usual way of acknowledging without words.
+    const reactedByMe = q('[role="button"]', a).filter((b) => !inner.some((x) => x.contains(b))).some((b) => {
+      const l = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
+      return (/verwijder|remove|unlike|ongedaan/.test(l) && /leuk|like|reactie|reaction/.test(l)) || (b.getAttribute('aria-pressed') === 'true' && /leuk|like/.test(l));
+    });
+    return { i, id: rid || cid, cid, rid, isReply, author, replyTo, reactedByMe, text: text.trim().slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
   });
   for (const n of nodes) { n.parentId = n.rid ? n.cid : (n.parentIdx >= 0 ? nodes[n.parentIdx].id : null); delete n.parentIdx; }
   // one node per id, whichever copy carries the words
@@ -180,10 +186,13 @@ function ingest(wid, tree, cfg, feed) {
       const addressed = !mine && (!n.isReply || toMe);
       // A person is answered only when a LATER reply of the owner's in this branch is TO THEM (the
       // label says who each reply answers). Replying to Dennis does not answer Peter.
-      const answered = addressed && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
-      const status = mine ? 'you' : (!addressed ? 'side conversation' : (answered ? 'answered' : 'waiting on you'));
+      const repliedTo = addressed && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
+      // A like from the owner is an acknowledgement too - that is how most comments get handled.
+      const reacted = addressed && !!n.reactedByMe && cfg.reactionCounts !== false;
+      const answered = repliedTo || reacted;
+      const status = mine ? 'you' : (!addressed ? 'side conversation' : (repliedTo ? 'answered' : (reacted ? 'you reacted' : 'waiting on you')));
       const target = n.replyTo || (parent ? parent.author : '');
-      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${mentionsMe(n) || same(target, me) ? 'you' : (target || 'a comment')}` : `${n.author} commented on your post`);
+      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}` : `${n.author} commented on your post`);
       const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, postId: tree.postId, commentId: n.id, rootId, replyTo: target };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
