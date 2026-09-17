@@ -1721,7 +1721,15 @@ async function postWatchTick(wf, owner) {
   const llmCfg = settingsStore.read();
   const want = profiles.safeName(cfg.profile || 'facebook');
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
-  const session = async () => { let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId); if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); } return s; };
+  const session = async () => {
+    let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
+    let dead = false; try { dead = !s || !s.page || (s.page.isClosed && s.page.isClosed()); } catch (e) { dead = true; }
+    if (dead) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+    return s;
+  };
+  // A crawl drives the page directly; without this the pool reads it as idle and reaps the browser mid-pass.
+  const touch = () => { try { const s = pool.listFor(owner).find((x) => x.profile === want); const live = s && pool.get(s.sessionId); if (live) live.lastUsed = Date.now(); } catch (e) { /* best effort */ } };
+  const getPage = async () => (await session()).page;
   // Stand alone: read the owner's notifications page for posts with activity, no other watcher needed.
   if (cfg.selfDiscover !== false) {
     try {
@@ -1738,8 +1746,7 @@ async function postWatchTick(wf, owner) {
   const order = urls.slice().sort((a, b) => (last[a] || 0) - (last[b] || 0)).slice(0, Number(cfg.maxPostsPerPass) || 6);
   for (const url of order) {
     try {
-      const s = await session();
-      const tree = await pw.crawl(s.page, url, log);
+      const tree = await pw.crawl(getPage, url, log, touch);
       pw.store(tree);
       const entries = pw.ingest(wf.id, tree, cfg, feed);
       const made = await pw.draftAll(wf.id, tree, entries, cfg, llmCfg, feed, log);
