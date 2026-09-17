@@ -102,7 +102,8 @@ describe('assistant', () => {
     let file = null; try { fs.mkdirSync(shots, { recursive: true }); file = path.join(shots, 'test-' + Date.now() + '.jpg'); fs.writeFileSync(file, Buffer.from([0xff, 0xd8, 0xff, 0xd9])); } catch { file = null; }
     const a = makeAssistant({ dir: tmp(), startTurn: ({ goal, orientation, finishSpec, meta }) => {
       const reg = new Registry();
-      reg.register('gb_look', 'look', { type: 'object', properties: {} }, async () => ({ url: 'https://x', title: 'Page', controls: [], text: '', screenshotUrl: file ? '/v1/operator/shots/' + path.basename(file) : null }));
+      // the real tools hand back JSON TEXT (clipped for the model), never an object — the picture must still be found
+      reg.register('gb_look', 'look', { type: 'object', properties: {} }, async () => JSON.stringify({ url: 'https://x', title: 'Page', controls: [], text: '', screenshotUrl: file ? '/v1/operator/shots/' + path.basename(file) : null }));
       let i = 0; const chat = async () => (i++ === 0 ? call('gb_look', {}) : call('reply', { text: 'looked' }));
       const run = new OperatorRun({ goal, chat, registry: reg, systemPrompt: 'sys', orientation, finishSpec, meta, persistDir: tmp(), startIterations: 10 });
       run.done = run.run(); return run;
