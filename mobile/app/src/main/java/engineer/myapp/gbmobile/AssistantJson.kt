@@ -8,14 +8,24 @@ import org.json.JSONObject
 object AssistantJson {
     private fun steps(a: JSONArray?): List<AssistantStep> {
         val out = ArrayList<AssistantStep>(); if (a == null) return out
-        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"), s.optString("download"), s.optString("fileName"), s.optString("fileKind"), s.optString("fileMime"))) }
+        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"), s.optString("download"), s.optString("fileName"), s.optString("fileKind"), s.optString("fileMime"), s.optString("recording"))) }
         return out
     }
     private fun cards(a: JSONArray?): List<AssistantCard> {
         val out = ArrayList<AssistantCard>(); if (a == null) return out
-        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(AssistantCard(c.optString("kind"), c.optString("title"), c.optString("watcherId"), c.optString("url"))) }
+        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(AssistantCard(c.optString("kind"), c.optString("title"), c.optString("watcherId"), c.optString("url"), c.optString("id"))) }
         return out
     }
+    /** One recording (GET /v1/recordings/:id, or an item of the list). */
+    fun recording(o: JSONObject): RecordingInfo = RecordingInfo(o.optString("id"), o.optString("url"), o.optString("title"), o.optString("pageTitle"), o.optString("state"), o.optString("until"), o.optInt("maxMinutes"),
+        o.optInt("seconds"), o.optLong("bytes"), o.optInt("segments"), o.optLong("startedAt"), o.optLong("endedAt"), o.optString("reason"), o.optString("error"), o.optBoolean("live"), o.optString("playlist"), o.optString("mp4"))
+    fun recording(json: String): RecordingInfo? = try { val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else recording(o) } catch (e: Exception) { null }
+    /** GET /v1/recordings → every recording, live ones first, then newest first; plus the free bytes on the recordings volume. */
+    fun recordings(json: String): Pair<List<RecordingInfo>, Long> = try {
+        val o = JSONObject(json); val a = o.optJSONArray("recordings") ?: JSONArray(); val out = ArrayList<RecordingInfo>()
+        for (i in 0 until a.length()) { val r = a.optJSONObject(i) ?: continue; out.add(recording(r)) }
+        out.sortedWith(compareByDescending<RecordingInfo> { it.running }.thenByDescending { it.startedAt }) to o.optLong("freeBytes")
+    } catch (e: Exception) { emptyList<RecordingInfo>() to 0L }
     fun chat(json: String): AssistantChatView? = try {
         val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else {
             val turns = ArrayList<AssistantTurn>(); val ta = o.optJSONArray("turns") ?: JSONArray()

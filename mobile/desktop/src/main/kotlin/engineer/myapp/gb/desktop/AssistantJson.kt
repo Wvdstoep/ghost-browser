@@ -1,21 +1,31 @@
-﻿package engineer.myapp.gb.desktop
+package engineer.myapp.gb.desktop
 
 import engineer.myapp.gb.shared.*
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** GET /v1/assistant/chats/:id â†’ the shared view; GET /v1/assistant/chats â†’ summaries. (org.json; the shared module has no JSON.) */
+/** GET /v1/assistant/chats/:id → the shared view; GET /v1/assistant/chats → summaries. (org.json; the shared module has no JSON.) */
 object AssistantJson {
     private fun steps(a: JSONArray?): List<AssistantStep> {
         val out = ArrayList<AssistantStep>(); if (a == null) return out
-        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"), s.optString("download"), s.optString("fileName"), s.optString("fileKind"), s.optString("fileMime"))) }
+        for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"), s.optString("download"), s.optString("fileName"), s.optString("fileKind"), s.optString("fileMime"), s.optString("recording"))) }
         return out
     }
     private fun cards(a: JSONArray?): List<AssistantCard> {
         val out = ArrayList<AssistantCard>(); if (a == null) return out
-        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(AssistantCard(c.optString("kind"), c.optString("title"), c.optString("watcherId"), c.optString("url"))) }
+        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(AssistantCard(c.optString("kind"), c.optString("title"), c.optString("watcherId"), c.optString("url"), c.optString("id"))) }
         return out
     }
+    /** One recording (GET /v1/recordings/:id, or an item of the list). */
+    fun recording(o: JSONObject): RecordingInfo = RecordingInfo(o.optString("id"), o.optString("url"), o.optString("title"), o.optString("pageTitle"), o.optString("state"), o.optString("until"), o.optInt("maxMinutes"),
+        o.optInt("seconds"), o.optLong("bytes"), o.optInt("segments"), o.optLong("startedAt"), o.optLong("endedAt"), o.optString("reason"), o.optString("error"), o.optBoolean("live"), o.optString("playlist"), o.optString("mp4"))
+    fun recording(json: String): RecordingInfo? = try { val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else recording(o) } catch (e: Exception) { null }
+    /** GET /v1/recordings → every recording, live ones first, then newest first; plus the free bytes on the recordings volume. */
+    fun recordings(json: String): Pair<List<RecordingInfo>, Long> = try {
+        val o = JSONObject(json); val a = o.optJSONArray("recordings") ?: JSONArray(); val out = ArrayList<RecordingInfo>()
+        for (i in 0 until a.length()) { val r = a.optJSONObject(i) ?: continue; out.add(recording(r)) }
+        out.sortedWith(compareByDescending<RecordingInfo> { it.running }.thenByDescending { it.startedAt }) to o.optLong("freeBytes")
+    } catch (e: Exception) { emptyList<RecordingInfo>() to 0L }
     fun chat(json: String): AssistantChatView? = try {
         val o = JSONObject(json); if (o.has("error") && !o.has("id")) null else {
             val turns = ArrayList<AssistantTurn>(); val ta = o.optJSONArray("turns") ?: JSONArray()
@@ -43,7 +53,7 @@ object AssistantJson {
             AiModelInfo(o.optString("llmModel"), o.optString("llmHost"), o.optBoolean("keySet"), o.optString("keyHint"), state)
         }
     } catch (e: Exception) { null }
-    /** GET /v1/files â†’ what the cluster browser captured (newest first). */
+    /** GET /v1/files → what the cluster browser captured (newest first). */
     fun files(json: String): List<FileInfo> = try {
         val a = JSONObject(json).optJSONArray("files") ?: JSONArray(); val out = ArrayList<FileInfo>()
         fun millis(v: Any?): Long = when (v) { is Number -> v.toLong(); is String -> try { java.time.Instant.parse(v).toEpochMilli() } catch (e: Exception) { v.toLongOrNull() ?: 0L }; else -> 0L }
@@ -51,7 +61,7 @@ object AssistantJson {
             out.add(FileInfo(f.optString("id"), f.optString("name").ifBlank { f.optString("id") }, f.optString("kind"), f.optString("mime"), f.optLong("size"), millis(f.opt("at")), f.optString("source"))) }
         out.sortedByDescending { it.at }
     } catch (e: Exception) { emptyList() }
-    /** GET /v1/people â†’ the people worth your words (people memory). */
+    /** GET /v1/people → the people worth your words (people memory). */
     fun people(json: String): List<PersonInfo> = try {
         val a = JSONObject(json).optJSONArray("people") ?: JSONArray(); val out = ArrayList<PersonInfo>()
         fun strs(x: JSONArray?): List<String> { val l = ArrayList<String>(); if (x != null) for (i in 0 until x.length()) x.optString(i).takeIf { it.isNotBlank() }?.let { l.add(it) }; return l }
@@ -62,6 +72,6 @@ object AssistantJson {
     fun models(json: String): Pair<List<String>, String> = try {
         val o = JSONObject(json); val a = o.optJSONArray("models") ?: JSONArray(); val list = ArrayList<String>()
         for (i in 0 until a.length()) { val m = a.optString(i); if (m.isNotBlank()) list.add(m) }
-        list to (if (list.isEmpty()) "no models â€” ${o.optString("reason", "check the host")}" else if (o.optBoolean("fetched", true)) "${list.size} models on ${o.optString("host")}" else "${list.size} known models (host not reachable: ${o.optString("reason")})")
+        list to (if (list.isEmpty()) "no models — ${o.optString("reason", "check the host")}" else if (o.optBoolean("fetched", true)) "${list.size} models on ${o.optString("host")}" else "${list.size} known models (host not reachable: ${o.optString("reason")})")
     } catch (e: Exception) { emptyList<String>() to "could not read the model list" }
 }

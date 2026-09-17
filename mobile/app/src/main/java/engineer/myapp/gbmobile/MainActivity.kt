@@ -71,6 +71,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var agentThread: Thread? = null
     @Volatile private var agentStop: Boolean = false
     private var ctrlWeb: WebView? = null                 // hidden WebView on the GB origin = the control channel
+    private var ctrlProfile: String = "default"          // the WebView profile the control channel (and its cluster session cookie) lives in
+    @Volatile private var recordingsPolledAt = 0L        // last time the recordings list was refreshed for the chat's cards
     @Volatile private var ctrlApiReady = false           // control channel's __gbApi is live (registered)
     private var apiWeb: WebView? = null                  // hidden WebView on the GB origin = same-origin authed API channel
     @Volatile private var apiReady = false
@@ -1462,6 +1464,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             }
         }
+        // RECORDINGS: the card's hands — stream (the player activity with the session cookie), stop, save (streamed mp4), refresh
+        val RH = engineer.myapp.gb.shared.RecordingHooks
+        if (RH.play == null) RH.play = { rec ->
+            try {
+                val path = if (rec.running) rec.playlist.ifBlank { "/v1/recordings/${rec.id}/index.m3u8" } else rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" }
+                val url = vm.clusterUrl.trim().trimEnd('/') + path
+                startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", url).putExtra("cookie", clusterCookie()).putExtra("title", rec.name))
+            } catch (e: Exception) { vm.log("! play recording: ${e.message}") }
+        }
+        if (RH.stop == null) RH.stop = { id -> stopRecording(id) }
+        if (RH.save == null) RH.save = { rec -> saveRecordingToDevice(rec) }
+        if (RH.refresh == null) RH.refresh = { id -> apiCall("GET", "/v1/recordings/$id", null, "recording") }
         // any captured FILE (a video, a PDF, an export): fetched as base64 from Ghost Browser, then saved like a picture
         if (engineer.myapp.gb.shared.AssistantHooks.saveFile == null) engineer.myapp.gb.shared.AssistantHooks.saveFile = { downloadUrl, name ->
             val id = Regex("/v1/files/([^/]+)/").find(downloadUrl)?.groupValues?.get(1)
@@ -1505,6 +1519,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             shellUi.agentBusy.value = v.live != null
             assistantPollH.removeCallbacksAndMessages(null)
             if (v.live != null) assistantPollH.postDelayed({ if (shellUi.screen.value == "agent" || true) agentExec.execute { assistantLoad(v.id) } }, 2500)
+            // a recording somewhere in this chat: keep its card's numbers fresh (every ~5 s while one runs, once otherwise)
+            val recIds = (v.turns.flatMap { t -> t.steps.map { it.recording } + t.cards.filter { it.kind == "recording" }.map { it.id } } + (v.live?.steps?.map { it.recording } ?: emptyList())).filter { it.isNotBlank() }.toSet()
+            if (recIds.isNotEmpty()) {
+                val known = engineer.myapp.gb.shared.RecordingHooks.recordings.value
+                val anyRunning = recIds.any { known[it]?.running != false }
+                if (anyRunning && System.currentTimeMillis() - recordingsPolledAt > 4500) { recordingsPolledAt = System.currentTimeMillis(); apiCall("GET", "/v1/recordings", null, "recordings") }
+                if (v.live == null && anyRunning) assistantPollH.postDelayed({ agentExec.execute { assistantLoad(v.id) } }, 5000)   // a turn that ended still refreshes while its recording runs
+            }
         }
     }
     private fun assistantNew() {
@@ -1637,6 +1659,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onOpenWatcherResults = { id -> openWatcherResults(id) },
         onLoadFiles = { loadFiles() },
         onDeleteFile = { id -> deleteCapturedFile(id) },
+        onDeleteRecording = { id -> deleteRecording(id) },
     )
 
     /* ── Downloads: the files the cluster browser captured (GET /v1/files), like any browser's list ── */
@@ -1645,8 +1668,35 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         shellUi.downloads.loading.value = true
         if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null || engineer.myapp.gb.shared.AssistantHooks.saveFile == null) assistantHooksInstall()
         apiCall("GET", "/v1/files", null, "files")
+        apiCall("GET", "/v1/recordings", null, "recordings")
     }
     private fun deleteCapturedFile(id: String) { apiCall("DELETE", "/v1/files/$id", null, "filedel"); loadFiles() }   // not `deleteFile`: Context has one
+    private fun deleteRecording(id: String) { apiCall("DELETE", "/v1/recordings/$id", null, "recdel") }
+    private fun stopRecording(id: String) { apiCall("POST", "/v1/recordings/$id/stop", "{}", "recstop") }
+    /** The cluster session's cookie (the control channel's profile holds it): what a native player or download sends along. */
+    private fun clusterCookie(): String = try {
+        val u = vm.clusterUrl.trim()
+        val cm = if (ctrlProfile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(ctrlProfile).cookieManager else CookieManager.getInstance()
+        cm.getCookie(u) ?: CookieManager.getInstance().getCookie(u) ?: ""
+    } catch (e: Exception) { "" }
+    /** A recording's mp4, streamed straight into the phone's Downloads (any size — never through memory or base64). */
+    private fun saveRecordingToDevice(rec: engineer.myapp.gb.shared.RecordingInfo) = agentExec.execute {
+        val fname = (rec.name.take(60).replace(Regex("[^A-Za-z0-9._ -]"), "_").trim().ifBlank { rec.id }) + ".mp4"
+        try {
+            val conn = java.net.URL(vm.clusterUrl.trim().trimEnd('/') + rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" }).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 30000; conn.readTimeout = 600000; clusterCookie().takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("Cookie", it) }
+            if (conn.responseCode !in 200..299) { vm.log("! save ${fname}: HTTP ${conn.responseCode}"); return@execute }
+            val total = conn.contentLengthLong
+            runOnUiThread { android.widget.Toast.makeText(this, "Saving $fname…", android.widget.Toast.LENGTH_SHORT).show() }
+            val values = android.content.ContentValues().apply { put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fname); put(android.provider.MediaStore.Downloads.MIME_TYPE, "video/mp4"); put(android.provider.MediaStore.Downloads.IS_PENDING, 1) }
+            val uri = if (android.os.Build.VERSION.SDK_INT >= 29) contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) else android.net.Uri.fromFile(java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), fname))
+            if (uri == null) { vm.log("! could not create $fname"); return@execute }
+            var done = 0L; var lastLog = 0L
+            conn.inputStream.use { input -> contentResolver.openOutputStream(uri)?.use { out -> val buf = ByteArray(256 * 1024); while (true) { val n = input.read(buf); if (n < 0) break; out.write(buf, 0, n); done += n; if (done - lastLog > 50L * 1048576) { lastLog = done; vm.log("↓ $fname ${done / 1048576} MB${if (total > 0) " of ${total / 1048576}" else ""}") } } } }
+            if (android.os.Build.VERSION.SDK_INT >= 29) { values.clear(); values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0); contentResolver.update(uri, values, null, null) }
+            vm.log("● saved $fname (${done / 1048576} MB) to Downloads"); runOnUiThread { android.widget.Toast.makeText(this, "Saved $fname to Downloads", android.widget.Toast.LENGTH_SHORT).show() }
+        } catch (e: Throwable) { vm.log("! save $fname: ${e.javaClass.simpleName} ${e.message}"); runOnUiThread { try { android.widget.Toast.makeText(this, "Could not save $fname", android.widget.Toast.LENGTH_SHORT).show() } catch (t: Throwable) {} } }
+    }
 
     /* ── Watchers: scheduled background tasks = active workflows with a schedule trigger ──────────── */
     private val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
@@ -2432,6 +2482,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "files_err" -> { shellUi.downloads.loading.value = false; vm.log("! downloads: ${data.take(120)}") }
             "filedel" -> loadFiles()
             "filedel_err" -> vm.log("! delete: ${data.take(120)}")
+            // recordings: the list feeds Downloads AND the cards in the chat (one map by id)
+            "recordings" -> { val (list, free) = AssistantJson.recordings(data); shellUi.downloads.recordings.value = list; shellUi.downloads.recordingsFreeBytes.value = free
+                engineer.myapp.gb.shared.RecordingHooks.recordings.value = engineer.myapp.gb.shared.RecordingHooks.recordings.value + list.associateBy { it.id } }
+            "recordings_err" -> vm.log("! recordings: ${data.take(120)}")
+            "recording" -> AssistantJson.recording(data)?.let { r -> engineer.myapp.gb.shared.RecordingHooks.recordings.value = engineer.myapp.gb.shared.RecordingHooks.recordings.value + (r.id to r) }
+            "recording_err" -> {}
+            "recstop" -> { vm.log("■ recording stopping"); apiCall("GET", "/v1/recordings", null, "recordings") }
+            "recstop_err" -> vm.log("! stop recording: ${data.take(120)}")
+            "recdel" -> apiCall("GET", "/v1/recordings", null, "recordings")
+            "recdel_err" -> vm.log("! delete recording: ${data.take(120)}")
             "loginsync" -> try { val o = JSONObject(data); if (o.has("error")) vm.log("! login sync: ${o.optString("error")}") else vm.log("● cluster profile ${o.optString("profile")} has the login${if (o.optBoolean("applied")) " (applied to its open browser)" else " (applied at its next launch)"}") } catch (e: Exception) { vm.log("! login sync: ${data.take(100)}") }
             "loginsync_err" -> vm.log("! login sync: ${data.take(120)}")
             "watch_session" -> try {
@@ -2578,6 +2638,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         stopControlWeb()
         val w = WebView(this)
         val prof = vm.currentProfile.value ?: "default"
+        ctrlProfile = prof
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}
         }

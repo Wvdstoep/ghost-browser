@@ -208,9 +208,13 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
                         // THE RESULT ITSELF — the picture, the song, the file — belongs in the answer, not under a fold
                         val results = t.steps.filter { it.imageData.isNotBlank() || it.download.isNotBlank() }
                         if (results.isNotEmpty()) { Spacer(Modifier.height(8.dp)); results.forEach { s -> StepMedia(s, decode, inAnswer = true) } }
-                        if (t.cards.isNotEmpty()) {
+                        // a recording the turn started: its own card (live, then playable, then downloadable), once per recording
+                        val recIds = (t.cards.filter { it.kind == "recording" }.map { it.id } + t.steps.map { it.recording }).filter { it.isNotBlank() }.distinct()
+                        recIds.forEach { id -> Spacer(Modifier.height(8.dp)); RecordingCard(id) }
+                        val chips = t.cards.filter { it.kind != "recording" }
+                        if (chips.isNotEmpty()) {
                             Spacer(Modifier.height(10.dp))
-                            FlowRowCompat(t.cards.map { c -> { CardChip(c) { onCard(c) } } })
+                            FlowRowCompat(chips.map { c -> { CardChip(c) { onCard(c) } } })
                         }
                         if (t.details.isNotBlank()) {
                             Spacer(Modifier.height(8.dp))
@@ -272,7 +276,7 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                     if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     // the server sends a human line per result; raw JSON (older turns) stays hidden
                     if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[") && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (showMedia) StepMedia(s, decode)
+                    if (showMedia) StepMedia(s, decode, showRecording = !done)
                 }
             }
         }
@@ -281,9 +285,11 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
 
 /** The media a step produced — a picture (with Save), or a file card (play/open + Save). Shown in the answer for done turns, in the timeline while live. */
 @Composable
-private fun StepMedia(s: AssistantStep, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)?, inAnswer: Boolean = false) {
+private fun StepMedia(s: AssistantStep, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)?, inAnswer: Boolean = false, showRecording: Boolean = true) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
+                    // a recording this step started: its live card, right where it began (a finished turn shows it in the answer instead)
+                    if (s.recording.isNotBlank() && !inAnswer && showRecording) RecordingCard(s.recording, Modifier.padding(top = 6.dp))
                     // a captured FILE that is not a picture (a video, a PDF, an export): a card with Save
                     if (s.download.isNotBlank() && s.imageData.isBlank()) {
                         val saveF = AssistantHooks.saveFile

@@ -20,8 +20,9 @@ data class AssistantStep(val name: String, val label: String, val args: String, 
                          val download: String = "",   // a captured file behind this step (server download url)
                          val fileName: String = "",
                          val fileKind: String = "",   // image | video | audio | document | archive | file
-                         val fileMime: String = "")
-data class AssistantCard(val kind: String, val title: String, val watcherId: String = "", val url: String = "")   // results | approvals | url
+                         val fileMime: String = "",
+                         val recording: String = "")   // a recording this step started (its id) — the chat shows the recording's card
+data class AssistantCard(val kind: String, val title: String, val watcherId: String = "", val url: String = "", val id: String = "")   // results | approvals | url | choice | recording
 data class AssistantTurn(
     val role: String,                 // user | assistant
     val text: String,
@@ -46,6 +47,15 @@ data class PersonInfo(val name: String, val platform: String, val worth: Int, va
 
 /** A file the cluster browser captured (GET /v1/files): what the Downloads screen lists. */
 data class FileInfo(val id: String, val name: String, val kind: String, val mime: String, val size: Long, val at: Long, val source: String)
+
+/** A screen recording with sound (GET /v1/recordings): live while it records, then playable, then downloadable. */
+data class RecordingInfo(val id: String, val url: String, val title: String, val pageTitle: String, val state: String,   // starting | recording | finishing | done | partial | failed
+                         val until: String, val maxMinutes: Int, val seconds: Int, val bytes: Long, val segments: Int, val startedAt: Long, val endedAt: Long,
+                         val reason: String, val error: String, val live: Boolean, val playlist: String, val mp4: String) {
+    val name: String get() = title.ifBlank { pageTitle.ifBlank { url } }
+    val running: Boolean get() = live || state == "starting" || state == "recording" || state == "finishing"
+    val playable: Boolean get() = state == "recording" || state == "done" || state == "partial"
+}
 
 /** The model the agent runs on (GB's own settings, never the key): what the AI sheet shows. */
 data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "")

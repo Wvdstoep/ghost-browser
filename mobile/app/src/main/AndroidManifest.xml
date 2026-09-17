@@ -25,6 +25,13 @@
             </intent-filter>
         </activity>
 
+        <!-- the recording player: a full-screen video view for a recording's stream or mp4, with the cluster session's cookie -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout" />
+
         <service
             android:name=".GbService"
             android:exported="false"
