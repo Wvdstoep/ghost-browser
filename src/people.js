@@ -61,6 +61,10 @@ function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' 
     const rec = get(n.author);
     if (!seenIn(rec, n.id)) {
       rec.exchanges.push({ id: n.id, t: now, who: 'them', text: norm(n.text).slice(0, 400), postId, when: n.when || '', url: urlOf(n) || '' });
+      // they came BACK after an answer of the owner's in this branch: the conversation is alive — that is the
+      // outcome a reply is for, and what the "worth your words" score is made of
+      const idx = (e.branch || []).indexOf(n); const answeredBefore = idx > 0 && (e.branch || []).slice(0, idx).some((m) => isMe(m));
+      if (answeredBefore) { rec.outcomes = rec.outcomes || { drafted: 0, asIs: 0, edited: 0, rewritten: 0 }; rec.outcomes.repliedBack = (rec.outcomes.repliedBack || 0) + 1; }
       const txt = norm(n.text);
       if (txt && ASK.test(txt)) { const a = txt.slice(0, 200); if (!rec.asks.some((x) => x.text === a)) rec.asks.push({ text: a, t: now, postId }); }
       if (txt && COMMERCIAL.test(txt)) { const sgl = txt.slice(0, 200); if (!rec.signals.some((x) => x.text === sgl)) rec.signals.push({ text: sgl, t: now, postId, url: urlOf(n) || '' }); }
@@ -117,14 +121,23 @@ function editLessons() {
 }
 function outcomes() { const o = loadOutcomes(); const rate = o.drafted ? Math.round((o.asIs / o.drafted) * 100) : null; return { ...o, asIsRate: rate }; }
 
+/** "WORTH YOUR WORDS", 0–100: buying interest weighs most, a person who comes back after your answer next,
+ *  then how much has been asked and exchanged. The queue can sort by it; the drafter can skip the dead ends. */
+function worthOf(rec) {
+  if (!rec) return 0;
+  const o = rec.outcomes || {}; const back = Number(o.repliedBack) || 0;
+  const score = (rec.signals && rec.signals.length ? 45 : 0) + Math.min(3, back) * 12 + Math.min(4, (rec.asks || []).length) * 4 + Math.min(6, (rec.exchanges || []).length) * 1.5;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 /* ── lists ── */
 function list(platform, { leadsOnly = false } = {}) {
   const dir = path.join(DIR, slug(platform)); let files = []; try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   return files.map((f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } }).filter(Boolean)
     .filter((r) => !leadsOnly || (r.signals && r.signals.length))
-    .map((r) => ({ name: r.name, platform: r.platform, exchanges: r.exchanges.length, posts: Object.keys(r.posts).length, lastSeen: r.lastSeen, lead: !!(r.signals && r.signals.length), signals: (r.signals || []).slice(-2).map((s) => s.text), promises: (r.promises || []).slice(-2).map((p) => p.text), outcomes: r.outcomes }))
+    .map((r) => ({ name: r.name, platform: r.platform, exchanges: r.exchanges.length, posts: Object.keys(r.posts).length, lastSeen: r.lastSeen, lead: !!(r.signals && r.signals.length), worth: worthOf(r), repliedBack: (r.outcomes && r.outcomes.repliedBack) || 0, signals: (r.signals || []).slice(-2).map((s) => s.text), promises: (r.promises || []).slice(-2).map((p) => p.text), outcomes: r.outcomes }))
     .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
 }
 function isLead(platform, name) { const r = load(platform, name); return !!(r && r.signals && r.signals.length); }
 
-module.exports = { remember, profileOf, recordOutcome, editLessons, outcomes, list, load, isLead, slug, DIR, COMMERCIAL, PROMISE };
+module.exports = { remember, profileOf, recordOutcome, editLessons, outcomes, list, load, isLead, worthOf, slug, DIR, COMMERCIAL, PROMISE };

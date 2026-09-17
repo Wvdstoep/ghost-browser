@@ -30,6 +30,9 @@ describe('people memory', () => {
     expect(r.asks[0].text).toMatch(/Which stack/);
     expect(r.signals[0].text).toMatch(/what does it cost/); expect(r.signals[0].postId).toBe('p2');
     expect(people.isLead('facebook', 'Ilya Elbert')).toBe(true);
+    // c3 came after the owner's c2 in the same branch: he came back — the outcome a reply is for
+    expect(r.outcomes.repliedBack).toBe(1);
+    expect(people.worthOf(r)).toBeGreaterThanOrEqual(60); expect(people.worthOf(null)).toBe(0);
     // a second pass over the same branch adds nothing twice
     people.remember('facebook', { postId: 'p1', postText: 'Vibe coding post', nodes: b1 }, entriesOf(b1), { now: 3000 });
     expect(people.load('facebook', 'Ilya Elbert').exchanges.length).toBe(4);
@@ -58,7 +61,7 @@ describe('people memory', () => {
     expect(people.recordOutcome('facebook', 'Ilya Elbert', { draft: 'Great question! Absolutely, I would be happy to elaborate on that.', posted: 'ha yeah entra is a pain' }).kind).toBe('rewritten');
     const o = people.outcomes(); expect(o).toMatchObject({ drafted: 3, asIs: 1, edited: 1, rewritten: 1, asIsRate: 33 });
     expect(people.editLessons()).toMatch(/drafted: "Great question!/); expect(people.editLessons()).toMatch(/posted:  "ha yeah entra/);
-    expect(people.load('facebook', 'Ilya Elbert').outcomes).toEqual({ drafted: 3, asIs: 1, edited: 1, rewritten: 1 });
+    expect(people.load('facebook', 'Ilya Elbert').outcomes).toMatchObject({ drafted: 3, asIs: 1, edited: 1, rewritten: 1, repliedBack: 1 });
   });
 
   it('lists people newest first and leads only on request', () => {
