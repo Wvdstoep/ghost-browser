@@ -35,14 +35,18 @@ const SORT_ALL = /^(?:alle opmerkingen|all comments|alle reacties)$/i;
  * control at all — while the same comments' deep links showed the owner's reply at once. So the post
  * page only gives the list of root comments; each branch is read from its comment link, complete.
  */
-async function crawl(page, url, log) {
-  const tree = await openAndRead(page, url, log, true);
+async function crawl(getPage, url, log, touch) {
+  /* The pool reaps a session it thinks is idle, and a crawl that drives the page directly never
+     looked busy to it - halfway through the branches the browser was simply gone ("Target page,
+     context or browser has been closed"). So: touch the session on every step, and take the page
+     afresh for every branch (getPage re-acquires the profile if it was closed). */
+  const tree = await openAndRead(await getPage(), url, log, true, touch);
   const byId = new Map(); tree.nodes.forEach((n) => byId.set(n.id, n));
   const roots = tree.nodes.filter((n) => !n.isReply).slice(0, 40);
   for (const root of roots) {
     const link = `https://www.facebook.com/groups/${tree.group || 'x'}/posts/${tree.postId}/?comment_id=${root.id}`;
     try {
-      const sub = await openAndRead(page, link, null, false);
+      const sub = await openAndRead(await getPage(), link, null, false, touch);
       for (const n of sub.nodes) {
         if (n.id !== root.id && n.cid !== root.id) continue;          // only this branch
         n.i = root.i + (n.isReply ? (n.i + 1) / 10000 : 0);             // stays right after its root, in order
@@ -58,9 +62,11 @@ async function crawl(page, url, log) {
 
 /** One page: land on it (proving the post is there), optionally sort to all comments, reveal what is
  *  hidden, read the comment articles. */
-async function openAndRead(page, url, log, sortAll) {
+async function openAndRead(page, url, log, sortAll, touch) {
   const { dismissConsent, settle } = require('./inspector');
   const pid = postIdOf(url);
+  const alive = () => { try { if (touch) touch(); } catch { /* best effort */ } };
+  alive();
   // Land on the post and PROVE it before reading: another walk on this profile can navigate the
   // session away mid-crawl, and a crawl of the wrong page reads "0 messages", which is worse than
   // an error. If the post's comments are not on screen, try once more from the top.
@@ -85,7 +91,7 @@ async function openAndRead(page, url, log, sortAll) {
      and a stale-handle failure used to read as "nothing left" — the crawl quit after ~9 expands with
      "1 antwoord bekijken" still closed under the owner's own replies. If a click does not shrink the
      set (a control that stays), move to the next candidate; stop when none remain. */
-  const ex = await expandAll(page, candidates, press);
+  const ex = await expandAll(page, candidates, press, alive);
   if (log) log.info(`[post-watch] expanded ${ex.clicks} control(s) on ${url}${ex.remaining.length ? ` — still closed: ${ex.remaining.slice(0, 6).join(' / ')}` : ''}`);
   const tree = await page.evaluate(extractInPage);
   tree.url = String(url); tree.crawledAt = Date.now(); tree.expand = ex;
@@ -110,9 +116,10 @@ function helpers(page) {
 }
 
 /** The expansion loop, with a record of what it did — the probe reports it. */
-async function expandAll(page, candidates, press) {
+async function expandAll(page, candidates, press, touch) {
   let clicks = 0, lastCount = -1, skip = 0; const clicked = [];
   for (let round = 0; round < 60 && clicks < 120; round++) {
+    try { if (touch) touch(); } catch { /* best effort */ }
     const cand = await candidates(EXPAND);
     if (!cand.length) break;
     if (cand.length === lastCount) skip++; else skip = 0;
