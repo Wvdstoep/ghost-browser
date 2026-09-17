@@ -1554,7 +1554,7 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   if (runningWatchers.size) return res.json({ runId: null, status: 'busy', note: `another watcher pass holds the browser (${[...runningWatchers].join(', ')}) — it starts as soon as that finishes` });
   runningWatchers.add(wf.id);
   if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'posts') {
-    postWatchTick(wf, consoleOwner() || req.client.owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+    postWatchTick(wf, consoleOwner() || req.client.owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
     return res.json({ runId, status: 'running', mode: 'posts' });
   }
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
@@ -1741,7 +1741,7 @@ const runningWatchers = new Set();
  * comment tree into the feed with every branch's standing, and drafts one dedicated reply per person
  * waiting on the owner - a text call with the post and the whole branch as context. See postWatch.js.
  */
-async function postWatchTick(wf, owner) {
+async function postWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   let cfg = feed.getConfig(wf.id);
   const llmCfg = settingsStore.read();
@@ -1765,8 +1765,12 @@ async function postWatchTick(wf, owner) {
       if (add.length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add) }); log.info(`[post-watch] now watching ${add.length} new post(s)`); }
     } catch (e) { log.error(`[post-watch] self-discovery: ${e.message}`); }
   }
-  const urls = pw.discover(wf.id, cfg, feed);
-  if (!urls.length) { log.info(`[post-watch] "${wf.name}": no posts to watch yet`); return; }
+  const all = pw.discover(wf.id, cfg, feed);
+  if (!all.length) { log.info(`[post-watch] "${wf.name}": no posts to watch yet`); return; }
+  // adaptive cadence: a scheduled pass reads only the posts that are due (active every pass, quiet
+  // hourly, dead daily, with jitter); a hand-started run reads them all
+  const urls = (opts && opts.force) ? all : pw.dueUrls(cfg, all);
+  if (!urls.length) { log.info(`[post-watch] "${wf.name}": ${all.length} post(s) watched, none due yet`); return; }
   // oldest-crawled first, so a busy pass still gets round to every post over time
   const last = cfg.lastCrawl || {};
   const order = urls.slice().sort((a, b) => (last[a] || 0) - (last[b] || 0)).slice(0, Number(cfg.maxPostsPerPass) || 6);

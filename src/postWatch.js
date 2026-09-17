@@ -258,7 +258,11 @@ function ingest(wid, tree, cfg, feed) {
       const status = mine ? 'you' : (!addressed ? 'side conversation' : (repliedTo ? 'answered' : (reacted ? 'you reacted' : 'waiting on you')));
       const target = n.replyTo || (parent ? parent.author : '');
       const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}` : `${n.author} commented on your post`);
-      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, postId: tree.postId, commentId: n.id, rootId, replyTo: target };
+      // WHY it is (or is not) the owner's, in the words a card can show; and the branch as a transcript
+      // the owner would otherwise open Facebook to read.
+      const why = mine ? 'your reply' : !addressed ? `${n.author} and ${target || 'someone'} talking to each other` : !n.isReply ? 'commented on your post' : same(n.replyTo, me) ? 'replied to you' : mentionsMe(n) ? 'mentions you' : 'continued after your answer';
+      const thread = list.map((m) => `${isMe(m) ? 'YOU' : m.author}: ${String(m.text || '').replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
+      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, why, postId: tree.postId, postTitle: String(tree.postText || '').replace(/\s+/g, ' ').slice(0, 90), commentId: n.id, rootId, replyTo: target, thread };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
       if (mine || answered || !addressed) patch.handled = true;    // nothing for the owner to do here, and it stays gone
@@ -317,10 +321,18 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
     if (!String(e.node.text || '').trim()) { feed.mark(wid, e.key, { draftChecked: true, noText: true, handled: true }); return false; }
     return true;
   }).sort((a, b) => b.node.i - a.node.i).slice(0, cap);
+  /* THE OWNER'S OWN REPLIES AS THE VOICE SAMPLE. The crawl already holds them; five recent ones, in
+     the owner's words, beat any description of a voice. Remembered across posts (voice.json), so a
+     new post's first draft already sounds right. */
+  const meName = String(cfg.meName || tree.me || tree.postAuthor || '').trim().toLowerCase();
+  const own = tree.nodes.filter((n) => String(n.author || '').trim().toLowerCase() === meName && n.text && n.text.length >= 40 && n.text.length <= 600).sort((a, b) => b.i - a.i).map((n) => n.text.trim());
+  const voice = rememberVoice(own);
+  const examples = voice.slice(0, 5).map((t) => `- ${t.replace(/\s+/g, ' ')}`).join('\n');
   let made = 0;
   for (const e of todo) {
     const transcript = e.branch.map((n) => `${e.isMe(n) ? 'YOU' : n.author}${n.replyTo ? ' (to ' + (e.isMe({ author: n.replyTo }) ? 'you' : n.replyTo) + ')' : ''}: ${n.text}`).join('\n');
     const sys = `You draft replies for the owner of a Facebook post, written AS the owner in first person. ${VOICE} `
+      + (examples ? `\n\nHOW THE OWNER ACTUALLY WRITES - recent replies in their own words; match this voice, rhythm and length, not a generic tone:\n${examples}\n\n` : '')
       + 'Write in the language of the POST and the thread (an English post gets English replies even when someone answers with one word). Use ONLY what the post and '
       + 'the thread say: never invent facts, projects, problems or a persona for the owner; if you lack context, keep it short and about their message. '
       + 'Output ONLY the reply text - no quotes, no preamble.';
@@ -333,6 +345,37 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
     } catch (err) { if (log) log.error(`[post-watch] draft for ${e.node.author}: ${err.message}`); }
   }
   return made;
+}
+
+/** The owner's voice, kept across posts: newest first, deduped, capped. Returns the current list. */
+function rememberVoice(newOnes) {
+  const fp = path.join(DIR, 'voice.json');
+  let cur = []; try { cur = JSON.parse(fs.readFileSync(fp, 'utf8')); } catch { cur = []; }
+  const seen = new Set(cur.map((t) => t.slice(0, 80)));
+  const add = (newOnes || []).filter((t) => t && !seen.has(t.slice(0, 80)));
+  if (add.length) { cur = add.concat(cur).slice(0, 30); try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(fp, JSON.stringify(cur)); } catch { /* best effort */ } }
+  return cur;
+}
+
+/** ADAPTIVE CADENCE. A post with fresh activity is read every pass; a quiet one hourly; a dead one
+ *  daily - with jitter, so the pattern is neither wasteful nor a metronome. Due = lastCrawl + interval. */
+function dueUrls(cfg, urls, now) {
+  const last = cfg.lastCrawl || {}; const t = now || Date.now();
+  return urls.filter((u) => {
+    const lc = last[u] || 0; if (!lc) return true;
+    let newestDays = 99; try { const tr = JSON.parse(fs.readFileSync(path.join(DIR, String(postIdOf(u)) + '.json'), 'utf8')); for (const n of tr.nodes || []) { const d = ageDaysOf(n); if (d < newestDays) newestDays = d; } } catch { /* unknown → treat as active */ newestDays = 0; }
+    const base = newestDays < 0.25 ? 15 : newestDays < 3 ? 60 : 24 * 60;   // minutes
+    const jitter = 1 + ((Math.sin(lc / 7919) + 1) / 2 - 0.5) * 0.4;         // deterministic ±20%
+    return t - lc >= base * 60000 * jitter;
+  });
+}
+function ageDaysOf(n) {
+  const w = String(n.when || '').toLowerCase();
+  const m = w.match(/(\d+)\s*(mnd|maand|month|mo|min|uur|hour|hr|dag|day|week|wk|jaar|year|yr|u|h|m|d|w|j|y)\b/);
+  if (!m) return /seconde|second|zojuist|just now|een paar/.test(w) ? 0 : 99;
+  const k = Number(m[1]); const u = m[2];
+  if (/^(mnd|maand|month|mo)$/.test(u)) return k * 30; if (/^(min|m)$/.test(u)) return k / 1440; if (/^(uur|hour|hr|u|h)$/.test(u)) return k / 24;
+  if (/^(dag|day|d)$/.test(u)) return k; if (/^(week|wk|w)$/.test(u)) return k * 7; return k * 365;
 }
 
 /** Posts to watch = the configured list plus any post of the owner's that another watcher's feed
@@ -476,4 +519,4 @@ function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, probePage, postReply, postIdOf, extractInPage, VOICE };
+module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, rememberVoice, probePage, postReply, postIdOf, extractInPage, VOICE };
