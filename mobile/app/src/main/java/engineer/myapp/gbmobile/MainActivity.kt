@@ -1466,13 +1466,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         // RECORDINGS: the card's hands — stream (the player activity with the session cookie), stop, save (streamed mp4), refresh
         val RH = engineer.myapp.gb.shared.RecordingHooks
-        if (RH.play == null) RH.play = { rec ->
+        // a native player or a download cannot carry the session reliably: the media URL gets a short-lived ticket instead
+        if (RH.play == null) RH.play = { rec -> agentExec.execute {
             try {
-                val path = if (rec.running) rec.playlist.ifBlank { "/v1/recordings/${rec.id}/index.m3u8" } else rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" }
+                val tk = JSONObject(apiAwait("POST", "/v1/recordings/${rec.id}/ticket", "{}"))
+                if (tk.has("error")) { vm.log("! play: ${tk.optString("error")}"); return@execute }
+                val path = if (rec.running) tk.optString("playlist") else tk.optString("mp4")
                 val url = vm.clusterUrl.trim().trimEnd('/') + path
-                startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", url).putExtra("cookie", clusterCookie()).putExtra("title", rec.name))
+                runOnUiThread { try { startActivity(Intent(this, PlayerActivity::class.java).putExtra("url", url).putExtra("cookie", clusterCookie()).putExtra("title", rec.name)) } catch (e: Exception) { vm.log("! play recording: ${e.message}") } }
             } catch (e: Exception) { vm.log("! play recording: ${e.message}") }
-        }
+        } }
         if (RH.stop == null) RH.stop = { id -> stopRecording(id) }
         if (RH.save == null) RH.save = { rec -> saveRecordingToDevice(rec) }
         if (RH.refresh == null) RH.refresh = { id -> apiCall("GET", "/v1/recordings/$id", null, "recording") }
@@ -1683,7 +1686,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun saveRecordingToDevice(rec: engineer.myapp.gb.shared.RecordingInfo) = agentExec.execute {
         val fname = (rec.name.take(60).replace(Regex("[^A-Za-z0-9._ -]"), "_").trim().ifBlank { rec.id }) + ".mp4"
         try {
-            val conn = java.net.URL(vm.clusterUrl.trim().trimEnd('/') + rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" }).openConnection() as java.net.HttpURLConnection
+            val tk = JSONObject(apiAwait("POST", "/v1/recordings/${rec.id}/ticket", "{}")); if (tk.has("error")) { vm.log("! save ${fname}: ${tk.optString("error")}"); return@execute }
+            val conn = java.net.URL(vm.clusterUrl.trim().trimEnd('/') + tk.optString("mp4").ifBlank { "/v1/recordings/${rec.id}/mp4" }).openConnection() as java.net.HttpURLConnection
             conn.connectTimeout = 30000; conn.readTimeout = 600000; clusterCookie().takeIf { it.isNotBlank() }?.let { conn.setRequestProperty("Cookie", it) }
             if (conn.responseCode !in 200..299) { vm.log("! save ${fname}: HTTP ${conn.responseCode}"); return@execute }
             val total = conn.contentLengthLong
