@@ -80,10 +80,10 @@ function briefOf(name, text) {
       case 'gb_flow_run': return v && v.runId ? 'run started' : '';
       case 'gb_flow_wait': return v ? `${v.status || 'done'}${v.verified ? ' · verified' : ''}` : '';
       case 'gb_files_recent': return Array.isArray(v) ? `${v.length} file${v.length === 1 ? '' : 's'}${v[0] ? ` · newest ${v[0].name}` : ''}` : '';
-      case 'record_start': return v && v.recording ? `recording started (until ${v.recording.until}${v.recording.until === 'duration' ? ', ' + v.recording.maxMinutes + ' min' : ''})` : v && v.error ? v.error : '';
+      case 'record_start': return v && v.recording ? (v.recording.state === 'queued' ? 'queued — starts when the current recording ends' : `recording started (until ${v.recording.until}${v.recording.until === 'duration' ? ', ' + v.recording.maxMinutes + ' min' : ''})`) : v && v.error ? v.error : '';
       case 'record_status': return v && v.state ? `${v.state} · ${v.seconds || 0}s · ${Math.round((v.bytes || 0) / 1048576)} MB${v.reason ? ' · ' + v.reason : ''}` : '';
       case 'record_stop': return v && v.ok ? 'stopping' : v && v.error ? v.error : '';
-      case 'record_list': return v && Array.isArray(v.recordings) ? `${v.recordings.length} recording(s), ${v.freeGB} GB free` : '';
+      case 'record_list': return v && Array.isArray(v.recordings) ? `${v.recordings.length} recording(s)${v.queue && v.queue.length ? ', ' + v.queue.length + ' in the queue' : ''}, ${v.freeGB} GB free` : '';
       case 'gb_file_show': return v && v.shown ? `showing ${v.name}` : v && v.name ? `${v.name} (${v.kind})` : '';
       case 'gb_memory_write': return 'noted';
       case 'gb_guide': case 'gb_memory_read': return 'read';
