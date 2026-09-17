@@ -77,6 +77,7 @@ function upsert(wid, item) {
     existing.seenCount = (existing.seenCount || 1) + 1;
     // the same thread seen again as something more urgent (a mention that became a reply) ranks up
     existing.urgency = Math.max(existing.urgency || 1, URGENCY[typeOf(item)] || 1);
+    if (!existing.kind) existing.kind = item.kind || typeOf(item) || '';
     // keep a fresher draft if one arrived and the owner has not acted yet
     if (!existing.handled && item.draft && !existing.draft) existing.draft = item.draft;
     persist(wid, data);
@@ -84,7 +85,7 @@ function upsert(wid, item) {
   }
   const entry = {
     key: k, title: item.title || '', fields: item.fields || {}, url: item.url || '',
-    image: item.image || '', kind: item.kind || '', draft: item.draft || '',
+    image: item.image || '', kind: item.kind || typeOf(item) || '', draft: item.draft || '',
     urgency: URGENCY[typeOf(item)] || 1, firstSeen: now, lastSeen: now, seenCount: 1, handled: false,
   };
   data.items[k] = entry;
