@@ -8,7 +8,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | **done · v342** (2026-09-17) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
-| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | building | — |
+| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | **done · v343 · app** (2026-09-17) — console panel, subtitles and the controller's consumer side left as follow-ups | — |
 
 Facts the design rests on (measured 2026-09-17):
 
@@ -97,6 +97,17 @@ Facts the design rests on (measured 2026-09-17):
 - Quality ladder (720p30 default, 1080p30, 1080p60), audio bitrate, a thumbnail and a sprite strip per recording, chapters from scene cuts, optional subtitles through the platform's whisper service.
 - Share link with expiry that streams through GB (private by default, owner's own content only for anything that leaves the account).
 - A Recordings panel in the console; per-recording telemetry (CPU, memory, disk, dropped frames); a disk-space alert in the app.
+
+## Phase 4 — proof (2026-09-17, v343 + app)
+
+- Quality ladder: 720p30 (default), 1080p30, 1080p60 — frame rate, GOP and audio bitrate follow the rung; the agent's tool names all three with when to use which.
+- After every recording: a thumbnail (10 % in), a 5×2 sprite strip, chapters from scene cuts on a 1 fps proxy (cheap for hours; ≥ 20 s apart, ≤ 60). Live: 2, 9 and 5 chapters on the three recordings on the cluster; thumbnails served by ticket.
+- Share links: `POST /v1/recordings/:id/share {days}` → `/r/<id>?t=…`, a public player page (noindex) on a long-lived ticket; a wrong ticket gets 404. The app's card has a Share button (clipboard + share sheet); the desktop copies the link.
+- GB serves its own builds: `/dist/GhostBrowser-Setup-1.0.25.exe` and `/dist/app-debug.apk` from the recordings volume — the release channel for a 100 MB installer GitHub refuses. Both answered 200 through the public host.
+- A cap on pods of their own (`MAX_REMOTE_RECORDINGS`, 3) with a demand signal (`demand.refusedRemote`, `lastRefusedAt`) on the recordings list for the capacity controller to read.
+- The app: chapter count on the card, a disk warning under Downloads (red under 5 GB, "will refuse to start" under 2 GB).
+- From the owner's live test on the way: the playlist a player follows lists only the segments that are here (no 404 at the live edge); the mp4 is built from the files present (a cut recording plays as a clean partial; all three on the cluster strict-decode clean); recorder pods get 6 GiB / 4 CPU (1080p was OOM-killed at 3 GiB); the pod's stop poll is a light call.
+- Left as follow-ups: a Recordings panel in the console, subtitles through the platform's speech service, per-recording CPU/memory telemetry, and the capacity controller actually consuming the demand signal (a platform-side change).
 
 ## Out of scope, on purpose
 
