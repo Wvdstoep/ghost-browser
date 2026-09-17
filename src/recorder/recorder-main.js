@@ -66,7 +66,7 @@ async function main() {
   while (true) {
     await new Promise((res) => setTimeout(res, 5000));
     let j; try { j = await push(false); } catch (e) { log.warn(`[recorder-pod] push: ${e.message}`); j = r.get(ID); }
-    try { const c = await api('GET', `/v1/recordings/${ID}/handoff`); if (c.stop && r.running().includes(ID)) { log.info(`[recorder-pod] stop asked: ${c.stop}`); r.stop(ID, String(c.stop)); } } catch { /* GB may be rolling; keep recording */ }
+    try { const c = await api('GET', `/v1/recordings/${ID}/control`); if (c.stop && r.running().includes(ID)) { log.info(`[recorder-pod] stop asked: ${c.stop}`); r.stop(ID, String(c.stop)); } } catch { /* GB may be rolling; keep recording */ }
     if (j && !['starting', 'recording', 'finishing'].includes(j.state)) break;
   }
   // the last segment, the closed playlist, the final journal — retried, GB may be mid-roll

@@ -8,7 +8,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | **done · v342** (2026-09-17) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
-| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | planned | — |
+| 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | building | — |
 
 Facts the design rests on (measured 2026-09-17):
 

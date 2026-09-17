@@ -16,7 +16,9 @@ const os = require('os');
 const path = require('path');
 
 const DISPLAY_LOW = 100, DISPLAY_HIGH = 199;   // the pool owns :99; recordings live above it
-const SIZES = { '720p': { width: 1280, height: 720 }, '1080p': { width: 1920, height: 1080 } };
+/** The quality ladder: size and frame rate per rung; audio follows (kbps). */
+const SIZES = { '720p': { width: 1280, height: 720, fps: 30, audioKbps: 160 }, '1080p': { width: 1920, height: 1080, fps: 30, audioKbps: 192 }, '1080p60': { width: 1920, height: 1080, fps: 60, audioKbps: 192 } };
+const QUALITIES = Object.keys(SIZES);
 const SINK = 'rec';
 
 function sizeOf(quality) { return SIZES[String(quality || '720p')] || SIZES['720p']; }
@@ -75,12 +77,12 @@ function chromeArgs(base, size) {
  * recording must never starve the pool), AAC audio. `mode` 'mp4' writes one file (with -t when
  * `seconds` is set); 'hls' writes 10-second segments and a playlist that plays while recording.
  */
-function ffmpegArgs({ display, size, fps = 30, out, mode = 'mp4', seconds = 0, threads = 2, crf = 23 }) {
+function ffmpegArgs({ display, size, fps = size.fps || 30, out, mode = 'mp4', seconds = 0, threads = 2, crf = 23, audioKbps = size.audioKbps || 160 }) {
   const a = ['-hide_banner', '-loglevel', 'error',
     '-thread_queue_size', '1024', '-f', 'x11grab', '-framerate', String(fps), '-video_size', `${size.width}x${size.height}`, '-draw_mouse', '0', '-i', `:${display}`,
     '-thread_queue_size', '1024', '-f', 'pulse', '-i', `${SINK}.monitor`,
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-threads', String(threads), '-pix_fmt', 'yuv420p', '-g', String(fps * 2),
-    '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2'];
+    '-c:a', 'aac', '-b:a', `${audioKbps}k`, '-ar', '48000', '-ac', '2'];
   if (seconds > 0) a.push('-t', String(seconds));
   if (mode === 'hls') a.push('-f', 'hls', '-hls_time', '10', '-hls_list_size', '0', '-hls_flags', 'independent_segments', '-hls_segment_filename', path.join(out, 'seg-%05d.ts'), path.join(out, 'index.m3u8'));
   else a.push('-movflags', '+faststart', '-y', out);
@@ -194,4 +196,4 @@ function startFfmpeg(opts, pulseServer, log) {
   return { proc, done, stop };
 }
 
-module.exports = { SIZES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, capabilities, freeBytes, profilePrefs, writePrefs, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };
+module.exports = { SIZES, QUALITIES, SINK, DISPLAY_LOW, DISPLAY_HIGH, sizeOf, recordingsRoot, capabilities, freeBytes, profilePrefs, writePrefs, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, startDisplay, startPulse, cloneCookies, launchBrowser, startFfmpeg };
