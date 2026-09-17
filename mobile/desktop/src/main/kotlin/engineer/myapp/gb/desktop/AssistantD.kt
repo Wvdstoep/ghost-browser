@@ -90,6 +90,9 @@ object AssistantD {
         }
     }
 
+    /** An ask from elsewhere in the app (a lead row's "draft offer"): a fresh chat, the message sent; the Agent tab shows it. */
+    fun ask(st: DesktopState, text: String) = bg { newChat(st); send(st, text); st.activity.value = "asked the agent — open the Agent tab" }
+
     fun actions(st: DesktopState, openUrl: (String) -> Unit, openApprovals: () -> Unit, openSettings: () -> Unit, close: () -> Unit, connect: () -> Unit) = AssistantActions(
         onSend = { send(st, it) },
         onNew = { bg { newChat(st) } },

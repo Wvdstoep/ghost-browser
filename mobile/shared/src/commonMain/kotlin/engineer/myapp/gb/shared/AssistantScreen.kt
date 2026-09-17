@@ -67,6 +67,8 @@ object AssistantHooks {
     var playMedia: ((downloadUrl: String, name: String, mime: String) -> Unit)? = null
     /** The download url of the file playing right now (audio), or null. */
     val playing = mutableStateOf<String?>(null)
+    /** Ask the agent something from elsewhere in the app (a lead row's "draft the offer"): opens the chat and sends it. */
+    var ask: ((text: String) -> Unit)? = null
 }
 
 class AssistantActions(
@@ -203,6 +205,9 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
                         if (t.status == "blocked") Label("Could not finish", Color(0xFFE0A100))
                         if (t.status == "stopped") Label("Stopped", Color(0xFFE5484D))
                         MarkdownText(t.text, onOpenUrl = onOpenUrl)
+                        // THE RESULT ITSELF — the picture, the song, the file — belongs in the answer, not under a fold
+                        val results = t.steps.filter { it.imageData.isNotBlank() || it.download.isNotBlank() }
+                        if (results.isNotEmpty()) { Spacer(Modifier.height(8.dp)); results.forEach { s -> StepMedia(s, decode, inAnswer = true) } }
                         if (t.cards.isNotEmpty()) {
                             Spacer(Modifier.height(10.dp))
                             FlowRowCompat(t.cards.map { c -> { CardChip(c) { onCard(c) } } })
@@ -221,7 +226,7 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
                     Spacer(Modifier.width(4.dp))
                     Text("${t.steps.size} step${if (t.steps.size == 1) "" else "s"} · ${t.steps.take(3).joinToString(", ") { it.label.lowercase() }}${if (t.steps.size > 3) "…" else ""}", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (expanded) StepTimeline(t.steps, done = true, decode = decode)
+                if (expanded) StepTimeline(t.steps, done = true, decode = decode, showMedia = false)
             }
         }
     }
@@ -251,7 +256,7 @@ private fun FlowRowCompat(items: List<@Composable () -> Unit>) {
 }
 
 @Composable
-private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boolean = false, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null) {
+private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boolean = false, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null, showMedia: Boolean = true) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.padding(start = 8.dp, top = 6.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         steps.forEachIndexed { i, s ->
@@ -267,13 +272,28 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                     if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     // the server sends a human line per result; raw JSON (older turns) stays hidden
                     if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[") && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (showMedia) StepMedia(s, decode)
+                }
+            }
+        }
+    }
+}
+
+/** The media a step produced — a picture (with Save), or a file card (play/open + Save). Shown in the answer for done turns, in the timeline while live. */
+@Composable
+private fun StepMedia(s: AssistantStep, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)?, inAnswer: Boolean = false) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth()) {
                     // a captured FILE that is not a picture (a video, a PDF, an export): a card with Save
                     if (s.download.isNotBlank() && s.imageData.isBlank()) {
                         val saveF = AssistantHooks.saveFile
                         var saved by remember(s.download) { mutableStateOf(s.download in AssistantHooks.autoSaved) }
                         Surface(color = cs.surfaceVariant.copy(alpha = 0.6f), shape = RoundedCornerShape(10.dp), modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) {
-                            val media = s.fileKind == "audio" || s.fileKind == "video" || s.fileMime.startsWith("audio/") || s.fileMime.startsWith("video/")
-                            val isAudio = s.fileKind == "audio" || s.fileMime.startsWith("audio/")
+                            // kind from the server when it sends one; the file name tells the rest (an older server, a bare download)
+                            val ext = s.fileName.substringAfterLast('.', "").lowercase()
+                            val isAudio = s.fileKind == "audio" || s.fileMime.startsWith("audio/") || ext in setOf("mp3", "wav", "m4a", "ogg", "aac", "flac", "opus")
+                            val isVideo = s.fileKind == "video" || s.fileMime.startsWith("video/") || ext in setOf("mp4", "webm", "mov", "mkv")
+                            val media = isAudio || isVideo
                             val play = AssistantHooks.playMedia
                             val nowPlaying = AssistantHooks.playing.value == s.download
                             Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -308,9 +328,6 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                             }
                         }
                     }
-                }
-            }
-        }
     }
 }
 
