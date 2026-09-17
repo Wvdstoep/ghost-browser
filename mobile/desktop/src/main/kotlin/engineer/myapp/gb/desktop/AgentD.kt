@@ -53,9 +53,9 @@ object Agent {
      *  into the running job. */
     @Volatile private var operatorJobId: String = ""
     private fun runOperatorJob(st: DesktopState, goal: String) {
-        if (goal.isBlank()) { push(st, "assistant", "Tell the operator what to do: /op make a post watcher for my LinkedIn posts — or /op why does the notifications watcher draft nothing?"); return }
-        if (st.agentBusy.value) { push(st, "assistant", "A job is still running here. Use /say to talk into it, or wait."); return }
-        push(st, "user", "/op $goal"); st.agentBusy.value = true
+        if (goal.isBlank()) { push(st, "assistant", "Tell the operator what to do — e.g. make a post watcher for my LinkedIn posts, or: why does the notifications watcher draft nothing?"); return }
+        if (st.agentBusy.value) { push(st, "assistant", "The agent is still busy here. Wait for it to finish, then hand the operator its job."); return }
+        push(st, "user", "⚙ $goal"); st.agentBusy.value = true
         thread(isDaemon = true) {
             try {
                 val started = try { JSONObject(Cluster.authed("POST", "/v1/operator/jobs", JSONObject().put("goal", goal).toString())) } catch (e: Exception) { JSONObject().put("error", e.message ?: "no answer") }
@@ -87,15 +87,23 @@ object Agent {
     }
     private fun sayToOperator(st: DesktopState, text: String) {
         val jid = operatorJobId
-        if (jid.isBlank()) { push(st, "assistant", "No operator job is running. Start one with /op <goal>."); return }
-        push(st, "user", "/say $text")
+        if (jid.isBlank()) { push(st, "assistant", "No operator job is running. Switch on Operator and give it a goal."); return }
+        push(st, "user", "💬 $text")
         thread(isDaemon = true) { try { Cluster.authed("POST", "/v1/operator/jobs/$jid/say", JSONObject().put("text", text).toString()) } catch (e: Exception) { push(st, "assistant", "⚠ could not reach the job: ${e.message}") } }
+    }
+    private fun stopOperator(st: DesktopState) {
+        val jid = operatorJobId
+        if (jid.isBlank()) { push(st, "assistant", "No operator job is running."); return }
+        push(st, "user", "⏹ stop")
+        thread(isDaemon = true) { try { Cluster.authed("POST", "/v1/operator/jobs/$jid/stop", "{}") } catch (e: Exception) { push(st, "assistant", "⚠ could not reach the job: ${e.message}") } }
     }
 
     fun send(st: DesktopState, main: CefBrowser?, text: String) {
         val t = text.trim()
-        if (t.startsWith("/op ") || t == "/op") { runOperatorJob(st, t.removePrefix("/op").trim()); return }
+        // The Operator switch sends every message as "/op": a new job, or — while one runs — spoken into it.
+        if (t.startsWith("/op ") || t == "/op") { val g = t.removePrefix("/op").trim(); if (operatorJobId.isNotBlank()) sayToOperator(st, g) else runOperatorJob(st, g); return }
         if (t.startsWith("/say ")) { sayToOperator(st, t.removePrefix("/say").trim()); return }
+        if (t == "/stop") { stopOperator(st); return }
         if (st.agentBusy.value) return
         // Cloud (default) uses the cluster's LLM via the control channel — no key needed. A custom
         // self-hosted endpoint+key overrides.

@@ -12,12 +12,15 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,7 +66,7 @@ fun AgentChatScreen(
                 val scroll = rememberScrollState()
                 LaunchedEffect(messages.size, busy) { scroll.animateScrollTo(scroll.maxValue) }
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = 14.dp, vertical = 16.dp)) {
-                    if (messages.isEmpty()) Text("What can I do for you?\n\nI can browse for you, run your automations, inspect your platforms, or drive your other devices — just ask.",
+                    if (messages.isEmpty()) Text("What can I do for you?\n\nI can browse for you, run your automations, inspect your platforms, or drive your other devices — just ask.\n\nSwitch on Operator below to hand a job to the engineer inside your browser: it reads the logs and flows, changes the smallest wrong thing, runs it and proves the result.",
                         color = cs.onSurfaceVariant, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                     messages.forEach { m ->
                         when (m.role) {
@@ -116,18 +119,42 @@ private fun ToolChip(name: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * The input, with the OPERATOR switch: on, a message is a goal for the engineer inside Ghost Browser
+ * (it reads the machine, changes the smallest wrong thing, runs and proves it) — sent as "/op <goal>",
+ * which the platform side routes: a new job, or spoken into the one already running. While a job runs
+ * the Stop chip ends it ("/stop"). Off, it is the plain browsing agent.
+ */
 @Composable
 private fun AgentInput(busy: Boolean, onSend: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth().background(cs.surface).padding(10.dp), verticalAlignment = Alignment.Bottom) {
-        Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(20.dp), modifier = Modifier.weight(1f)) {
-            BasicTextField(text, { text = it }, textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp), cursorBrush = SolidColor(Brand),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
-                decorationBox = { inner -> if (text.isEmpty()) Text("Message the agent…", color = cs.onSurfaceVariant, fontSize = 15.sp); inner() })
+    var operator by rememberSaveable { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().background(cs.surface)) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = operator, onClick = { operator = !operator },
+                label = { Text(if (operator && busy) "Operator · working" else "Operator", fontSize = 12.sp) },
+                leadingIcon = { Icon(Icons.Default.Build, null, modifier = Modifier.size(15.dp)) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Brand.copy(alpha = 0.18f), selectedLabelColor = cs.onSurface, selectedLeadingIconColor = Brand))
+            if (operator && busy) {
+                Spacer(Modifier.width(8.dp))
+                AssistChip(onClick = { onSend("/stop") }, label = { Text("Stop", fontSize = 12.sp) },
+                    leadingIcon = { Icon(Icons.Default.Stop, null, modifier = Modifier.size(15.dp)) })
+            }
+            Spacer(Modifier.weight(1f))
+            if (operator) Text("fixes flows, watchers & roles inside your browser", color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(Modifier.width(8.dp))
-        FilledIconButton(onClick = { if (!busy && text.isNotBlank()) { onSend(text.trim()); text = "" } }, enabled = !busy,
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn)) { Icon(Icons.Default.Send, "Send") }
+        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
+            Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(20.dp), border = if (operator) BorderStroke(1.dp, Brand.copy(alpha = 0.6f)) else null, modifier = Modifier.weight(1f)) {
+                BasicTextField(text, { text = it }, textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp), cursorBrush = SolidColor(Brand),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+                    decorationBox = { inner -> if (text.isEmpty()) Text(when { operator && busy -> "Tell the running job something…"; operator -> "What should the operator do?"; else -> "Message the agent…" }, color = cs.onSurfaceVariant, fontSize = 15.sp); inner() })
+            }
+            Spacer(Modifier.width(8.dp))
+            // in operator mode the send stays live while a job runs — the message is spoken into it
+            val canSend = text.isNotBlank() && (!busy || operator)
+            FilledIconButton(onClick = { if (canSend) { onSend(if (operator) "/op " + text.trim() else text.trim()); text = "" } }, enabled = canSend,
+                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn)) { Icon(Icons.Default.Send, "Send") }
+        }
     }
 }
