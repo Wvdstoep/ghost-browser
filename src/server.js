@@ -1785,7 +1785,8 @@ async function postWatchTick(wf, owner, opts) {
       const found = await pw.discoverOnPage((await session()).page, log);
       const have = new Set((cfg.postUrls || []).map((u) => pw.postIdOf(u)));
       const add = found.filter((u) => !have.has(pw.postIdOf(u)));
-      if (add.length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add) }); log.info(`[post-watch] now watching ${add.length} new post(s)${(found.theirs || []).length ? ` (${found.theirs.length} under other people's posts)` : ''}`); }
+      const theirsIds = Array.from(new Set((cfg.theirsIds || []).concat(found.theirs || []).map(String)));
+      if (add.length || theirsIds.length !== (cfg.theirsIds || []).length) { cfg = feed.setConfig(wf.id, { postUrls: (cfg.postUrls || []).concat(add), theirsIds }); if (add.length) log.info(`[post-watch] now watching ${add.length} new post(s)${(found.theirs || []).length ? ` (${found.theirs.length} under other people's posts)` : ''}`); }
     } catch (e) { log.error(`[post-watch] self-discovery: ${e.message}`); }
   }
   const all = pw.discover(wf.id, cfg, feed);
@@ -1826,6 +1827,21 @@ async function postWatchTick(wf, owner, opts) {
  */
 ops.install({ app, authed, workflows, pool, profiles, consoleOwner, log });
 const operatorRuns = new Map();
+/* THE LOCK IS PER PROFILE. Passes used to take turns globally — one browser. Each profile has its own
+   browser copy now, so a LinkedIn pass never makes a Facebook pass wait; two passes in the SAME profile
+   still take turns (they share that copy). A poster lock "poster:<wid>" belongs to its watcher's profile. */
+function watcherProfileOf(id) {
+  const wid = String(id || '').replace(/^(poster|probe):/, '');
+  try {
+    const cfg = require('./watcherFeed').getConfig(wid) || {};
+    if (cfg.profile) return profiles.safeName(cfg.profile);
+    if (String(cfg.mode) === 'posts') return 'facebook';
+    const wf = workflows.read(wid); const node = wf && (wf.nodes || []).find((n) => n && n.type === 'agent' && n.profile);
+    if (node) return profiles.safeName(node.profile);
+  } catch (e) { /* unknown */ }
+  return profiles.safeName(settingsStore.read().browserProfile || 'facebook');
+}
+function profileBusy(profile) { const want = profiles.safeName(profile || ''); for (const k of runningWatchers) if (watcherProfileOf(k) === want) return k; return null; }
 const assistantWalks = new Set();   // every walk any assistant turn started (ids), so a stale one is ours to stop
 function operatorContext() {
   const owner = consoleOwner(); const feed = require('./watcherFeed'); const pw = require('./postWatch');
@@ -1860,14 +1876,15 @@ function operatorContext() {
       return { url, title, controls, text, screenshot: shot, screenshotUrl: shot ? '/v1/operator/shots/' + require('path').basename(shot) : null };
     },
     probe: async (id, url, expand) => {
-      if (runningWatchers.size) return { error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')}) — wait for it` };
+      { const holder = profileBusy(watcherProfileOf(id)); if (holder) return { error: `busy: a pass holds the ${watcherProfileOf(id)} browser (${holder}) — wait for it` }; }
       runningWatchers.add('probe:' + id);
       try { const s = await sessionFor(profiles.safeName((feed.getConfig(id) || {}).profile || 'facebook')); return await pw.probePage(s.page, url, { expand: !!expand }); }
       finally { runningWatchers.delete('probe:' + id); }
     },
     runWatcher: (id) => {
       const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' };
-      if (runningWatchers.size) return { status: 'busy', note: `another pass holds the browser (${[...runningWatchers].join(', ')}) — wait with gb_watcher_wait, then run again` };
+      const holder = profileBusy(watcherProfileOf(wf.id));
+      if (holder) return { status: 'busy', note: `another pass holds the ${watcherProfileOf(wf.id)} browser (${holder}) — wait with gb_watcher_wait, then run again` };
       runningWatchers.add(wf.id);
       const runId = `${wf.id}-${Date.now()}`;
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
@@ -2220,7 +2237,8 @@ async function scheduleTick() {
     if (cfg.type !== 'schedule') continue;
     const last = workflows.runsFor(wf.id, 1)[0];
     if (!scheduleDue(cfg, last ? Date.parse(last.started_at) : 0, when)) continue;
-    if (runningWatchers.size) { log.info(`[workflow-sched] "${wf.name}" waits — another watcher pass holds the browser (${[...runningWatchers].join(', ')})`); continue; }
+    const holder = profileBusy(watcherProfileOf(wf.id));
+    if (holder) { log.info(`[workflow-sched] "${wf.name}" waits — another pass holds the ${watcherProfileOf(wf.id)} browser (${holder})`); continue; }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
