@@ -311,11 +311,13 @@ fun openWatcherResultsD(st: DesktopState, id: String) = bg {
         for (i in 0 until feed.length()) { val it = feed.optJSONObject(i) ?: continue
             if (it.optBoolean("handled")) continue
             val f = it.optJSONObject("fields"); val fields = ArrayList<Pair<String, String>>()
-            f?.keys()?.forEach { k -> f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
+            val hidden = setOf("thread", "why", "postTitle", "postId", "rootId", "commentId")   // shown elsewhere on the card
+            f?.keys()?.forEach { k -> if (k !in hidden) f.optString(k).takeIf { v -> v.isNotBlank() }?.let { v -> fields.add(k to v) } }
             // The feed item carries its own draft (written back by the follow-up), keyed exactly.
             items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" },
                 draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false,
-                draftState = it.optString("draftState")))
+                draftState = it.optString("draftState"),
+                postId = f?.optString("postId") ?: "", postTitle = f?.optString("postTitle") ?: "", why = f?.optString("why") ?: "", thread = f?.optString("thread") ?: ""))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
@@ -330,6 +332,18 @@ fun approveDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem, e
         Cluster.authed("POST", "/v1/watchers/$wid/feed/approve", JSONObject().put("key", item.feedKey).put("text", edited).toString())
         st.log("● approved — the cluster re-checks the thread, then posts your words")
     } catch (e: Exception) { st.log("! approve: ${e.message}") }
+    openWatcherResultsD(st, wid)
+}
+/** Post watcher: follow a post by its link / stop following one (by post id). */
+fun watchPostD(st: DesktopState, url: String) = bg {
+    val wid = st.artifactWid.value; if (wid.isBlank()) return@bg
+    try { Cluster.authed("POST", "/v1/watchers/$wid/posts", JSONObject().put("url", url).toString()); st.log("● watching that post — its threads appear after the next pass") }
+    catch (e: Exception) { st.log("! watch post: ${e.message}") }
+}
+fun mutePostD(st: DesktopState, postId: String) = bg {
+    val wid = st.artifactWid.value; if (wid.isBlank() || postId.isBlank()) return@bg
+    try { Cluster.authed("DELETE", "/v1/watchers/$wid/posts", JSONObject().put("url", "https://www.facebook.com/?post_id=$postId").toString()); st.log("○ post muted") }
+    catch (e: Exception) { st.log("! mute post: ${e.message}") }
     openWatcherResultsD(st, wid)
 }
 fun denyDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem) = bg {

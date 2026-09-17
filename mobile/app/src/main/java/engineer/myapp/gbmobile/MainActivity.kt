@@ -1485,6 +1485,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (feedKey.isBlank()) return
             apiCall("POST", "/v1/watchers/$wid/feed/deny", JSONObject().put("key", feedKey).toString(), "artifact_deny")
         }
+        // Post watcher: follow a post by its link / stop following one (by post id).
+        @android.webkit.JavascriptInterface fun watchPost(url: String) {
+            val wid = pendingResults?.first ?: return
+            if (url.isNotBlank()) apiCall("POST", "/v1/watchers/$wid/posts", JSONObject().put("url", url.trim()).toString(), "artifact_watchpost")
+        }
+        @android.webkit.JavascriptInterface fun mutePost(postId: String) {
+            val wid = pendingResults?.first ?: return
+            if (postId.isNotBlank()) apiCall("DELETE", "/v1/watchers/$wid/posts", JSONObject().put("url", "https://www.facebook.com/?post_id=$postId").toString(), "artifact_mutepost")
+        }
         @android.webkit.JavascriptInterface fun runFlow(flowId: String, itemJson: String) {
             try {
                 val item = JSONObject(itemJson)
@@ -1527,20 +1536,35 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
  .deny{background:transparent;color:#F2857D;border:1px solid var(--line);border-radius:9px;padding:11px 16px}
  .card.hasdraft{border-color:var(--brand)}
  .chip{display:inline-block;font:10px monospace;letter-spacing:.5px;border-radius:50px;padding:2px 8px;background:var(--hi);color:var(--text);margin-top:6px} .chip.dim{color:var(--muted)} .chip.err{color:#F2857D}
+ .watchbar{display:flex;gap:8px;margin-bottom:6px} .watchbar input{flex:1;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px;font:inherit}
+ .post{display:flex;align-items:center;gap:10px;margin:14px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)} .ptitle{flex:1;font-size:14px;font-weight:600} .mute{background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:9px;padding:6px 10px;font-size:12px}
+ .why{color:var(--brand);font:11px monospace;margin-top:4px}
+ .thread{margin:10px 0 0;border-top:1px solid var(--line);padding-top:8px} .tl{font-size:12px;padding:3px 0;color:var(--text);white-space:pre-wrap} .tl.me{color:var(--brand)}
 </style></head><body>
 <header><h1>$safeName</h1><span class="count" id="count"></span><button class="x" onclick="GbArtifact.close()">Close</button></header>
 <div class="wrap" id="wrap"></div>
 <script>
  var ITEMS = $itemsJson; var FLOWS = $flowsJson;
  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
- function fieldsHtml(f){ if(!f) return ''; var h=''; for(var k in f){ if(!f[k]) continue; h+='<div class="row"><span class="k">'+esc(k)+'</span><span class="v">'+esc(f[k])+'</span></div>'; } return h; }
+ var HIDE={thread:1,why:1,postTitle:1,postId:1,rootId:1,commentId:1};
+ function fieldsHtml(f){ if(!f) return ''; var h=''; for(var k in f){ if(!f[k]||HIDE[k]) continue; h+='<div class="row"><span class="k">'+esc(k)+'</span><span class="v">'+esc(f[k])+'</span></div>'; } return h; }
  function flowOptions(){ var o='<option value="">Run a flow on this…</option>'; for(var i=0;i<FLOWS.length;i++){ o+='<option value="'+esc(FLOWS[i].id)+'">'+esc(FLOWS[i].name)+'</option>'; } return o; }
+ function threadHtml(t,i){ if(!t) return ''; var lines=String(t).split('\n'); var h='<div class="thread" id="th'+i+'" style="display:none">'; for(var i=0;i<lines.length;i++){ var mine=lines[i].indexOf('YOU:')===0; h+='<div class="tl'+(mine?' me':'')+'">'+esc(lines[i])+'</div>'; } return h+'</div>'; }
+ function toggleThread(i){ var el=document.getElementById('th'+i); if(el) el.style.display = el.style.display==='none' ? 'block' : 'none'; }
+ function watchPost(){ var u=document.getElementById('wurl').value.trim(); if(!u) return; try{ GbArtifact.watchPost(u); document.getElementById('wst').textContent='Watching ✓ — its threads appear after the next pass.'; document.getElementById('wurl').value=''; }catch(e){ document.getElementById('wst').textContent='Error: '+e; } }
+ function mutePost(pid){ try{ GbArtifact.mutePost(pid); var g=document.getElementById('g'+pid); if(g) g.style.opacity=0.4; }catch(e){} }
  function render(){
    document.getElementById('count').textContent = ITEMS.length + (ITEMS.length===1?' item':' items');
    var wrap=document.getElementById('wrap');
-   if(!ITEMS.length){ wrap.innerHTML='<div class="empty">Nothing collected yet. When this watcher next runs and finds something, it appears here.</div>'; return; }
-   var html='';
-   for(var i=0;i<ITEMS.length;i++){ var it=ITEMS[i];
+   var head='<div class="watchbar"><input id="wurl" placeholder="Watch a post — paste its link"><button class="run" onclick="watchPost()">Watch</button></div><div class="status" id="wst"></div>';
+   if(!ITEMS.length){ wrap.innerHTML=head+'<div class="empty">Nothing collected yet. When this watcher next runs and finds something, it appears here.</div>'; return; }
+   // grouped by post: the post's first words as the header, its threads under it
+   var groups={}, order=[]; for(var g=0; g<ITEMS.length; g++){ var p=ITEMS[g].postId||''; if(!groups[p]){ groups[p]=[]; order.push(p);} groups[p].push(g); }
+   var html=head;
+   for(var oi=0; oi<order.length; oi++){ var pid=order[oi]; var idxs=groups[pid];
+     if(pid){ var title=''; for(var t=0;t<idxs.length;t++){ if(ITEMS[idxs[t]].postTitle){ title=ITEMS[idxs[t]].postTitle; break; } }
+       html+='<div class="post" id="g'+esc(pid)+'"><div class="ptitle"><div class="kind">POST</div><div>'+esc(title||pid)+'</div></div><button class="mute" onclick="mutePost(\''+esc(pid)+'\')">Mute post</button></div>'; }
+   for(var ii=0; ii<idxs.length; ii++){ var i=idxs[ii]; var it=ITEMS[i];
      var st=it.draftState||'';
      var hasDraft = it.draft && it.feedKey && st!=='posting';
      var chip=''; if(st==='drafting') chip='<span class="chip">drafting…</span>'; else if(st==='none') chip='<span class="chip dim">nothing to reply</span>';
@@ -1551,14 +1575,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      if(it.image) html+='<img class="avatar" src="'+esc(it.image)+'">';
      html+='<div><div class="kind">'+esc(it.kind||'item')+'</div><div class="title">'+esc(it.title||'Untitled')+'</div>'+chip;
      if(it.url) html+='<a class="link" href="javascript:void(0)" onclick="GbArtifact.openUrl(\''+esc(it.url).replace(/'/g,"\\'")+'\')">Open ↗</a>';
+     if(it.thread) html+='<a class="link" style="margin-left:14px" href="javascript:void(0)" onclick="toggleThread('+i+')">Show thread</a>';
+     if(it.why) html+='<div class="why">'+esc(it.why)+'</div>';
      html+='</div></div>';
+     if(it.thread) html+=threadHtml(it.thread,i);
      var fh=fieldsHtml(it.fields); if(fh) html+='<div class="fields">'+fh+'</div>';
      if(hasDraft){ html+='<div class="dbadge">DRAFT READY</div><textarea class="draft" id="d'+i+'">'+esc(it.draft)+'</textarea>'
        +'<div class="btnrow"><button class="approve" onclick="approveItem('+i+')">Approve &amp; post</button><button class="deny" onclick="denyItem('+i+')">Deny</button></div>'; }
      html+='<div class="act"><select id="sel'+i+'">'+flowOptions()+'</select><button class="run" onclick="runItem('+i+')">Run flow</button></div>';
      html+='<div class="status" id="st'+i+'"></div>';
      html+='</div>';
-   }
+   } }
    wrap.innerHTML=html;
  }
  function fade(i){ var c=document.getElementById('card'+i); if(c) c.style.opacity=0.45; }
@@ -2090,7 +2117,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         .put("url", it.optString("url")).put("image", it.optString("image")).put("kind", it.optString("kind"))
                         .put("feedKey", it.optString("key"))
                         .put("draft", it.optString("draft")).put("jobId", it.optString("draftJobId")).put("pid", it.optString("draftPid"))
-                        .put("draftState", it.optString("draftState")).put("posted", it.optString("posted")))
+                        .put("draftState", it.optString("draftState")).put("posted", it.optString("posted"))
+                        .put("postId", it.optJSONObject("fields")?.optString("postId") ?: "").put("postTitle", it.optJSONObject("fields")?.optString("postTitle") ?: "")
+                        .put("why", it.optJSONObject("fields")?.optString("why") ?: "").put("thread", it.optJSONObject("fields")?.optString("thread") ?: ""))
                 }
                 showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", items, shellUi.flows.value))
             } catch (e: Exception) { vm.log("! results parse: ${data.take(120)}"); showArtifact(buildArtifactHtml(pendingResults?.second ?: "Watcher", JSONArray(), shellUi.flows.value)) }
@@ -2101,6 +2130,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "artifact_approve_err" -> vm.log("! approve: ${data.take(140)}")
             "artifact_deny" -> vm.log("○ dismissed")
             "artifact_deny_err" -> vm.log("! deny: ${data.take(140)}")
+            "artifact_watchpost" -> vm.log("● watching that post — its threads appear after the next pass")
+            "artifact_watchpost_err" -> vm.log("! watch post: ${data.take(140)}")
+            "artifact_mutepost" -> vm.log("○ post muted")
+            "artifact_mutepost_err" -> vm.log("! mute post: ${data.take(140)}")
             "devrunsave" -> vm.log("↑ run journaled to shared history")
             "devrunsave_err" -> vm.log("! journal run: ${data.take(120)}")
             "flowrunstatus" -> try {

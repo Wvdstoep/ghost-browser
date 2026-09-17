@@ -86,4 +86,8 @@ data class ResultItem(
     val feedKey: String = "",      // this item's key in the watcher feed (to mark handled)
     val handled: Boolean = false,
     val draftState: String = "",   // "" | drafting | drafted | none | skipped-old | posting | post-failed | handled
+    val postId: String = "",       // the post this item belongs to (cards group by it)
+    val postTitle: String = "",    // first words of that post
+    val why: String = "",          // why this is (or is not) yours: "replied to you", "mentions you", …
+    val thread: String = "",       // the branch as a transcript ("YOU: …\nJoe: …"), what you'd open Facebook to read
 )

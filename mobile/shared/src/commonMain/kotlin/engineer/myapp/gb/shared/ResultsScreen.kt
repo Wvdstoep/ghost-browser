@@ -35,8 +35,11 @@ fun ResultsScreen(
     onOpenUrl: (String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    onWatchPost: ((url: String) -> Unit)? = null,   // post watcher: add a post to follow
+    onMutePost: ((postId: String) -> Unit)? = null, // post watcher: stop following a post
 ) {
     val cs = MaterialTheme.colorScheme
+    var watchUrl by remember { mutableStateOf("") }
     Column(modifier.fillMaxSize().background(cs.background)) {
         Row(Modifier.fillMaxWidth().background(cs.surface).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -45,14 +48,37 @@ fun ResultsScreen(
             }
             OutlinedButton(onClick = onClose, shape = RoundedCornerShape(9.dp)) { Text("Close", color = cs.onSurface) }
         }
+        if (onWatchPost != null) {
+            // Follow a post that has had no notification yet (a fresh one): paste its link.
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(watchUrl, { watchUrl = it }, singleLine = true, modifier = Modifier.weight(1f), placeholder = { Text("Watch a post — paste its link", fontSize = 13.sp) }, shape = RoundedCornerShape(10.dp))
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { if (watchUrl.isNotBlank()) { onWatchPost(watchUrl.trim()); watchUrl = "" } }, enabled = watchUrl.isNotBlank(), shape = RoundedCornerShape(9.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Watch") }
+            }
+        }
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(if (loading) "Loading results…" else "Nothing collected yet. When this watcher next runs and finds something, it appears here.",
                     color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(32.dp))
             }
         } else {
+            // Grouped by post: the post's first words as the header, its threads under it.
+            val groups = items.groupBy { it.postId }
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-                items.forEach { it -> ResultCard(it, flows, onRunFlow, onApproveDraft, onDenyDraft, onOpenUrl); Spacer(Modifier.height(12.dp)) }
+                groups.forEach { (pid, its) ->
+                    if (pid.isNotBlank()) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("POST", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+                                Text(its.firstOrNull { it.postTitle.isNotBlank() }?.postTitle ?: pid, style = MaterialTheme.typography.titleSmall, color = cs.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (onMutePost != null) TextButton(onClick = { onMutePost(pid) }) { Text("Mute post", color = cs.onSurfaceVariant, fontSize = 12.sp) }
+                        }
+                    }
+                    its.forEach { it -> ResultCard(it, flows, onRunFlow, onApproveDraft, onDenyDraft, onOpenUrl); Spacer(Modifier.height(12.dp)) }
+                    Spacer(Modifier.height(8.dp))
+                }
             }
         }
     }
@@ -83,9 +109,21 @@ private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (Stri
             }
         }
         Text(item.title.ifBlank { "Untitled" }, style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
-        if (item.url.isNotBlank()) {
-            Spacer(Modifier.height(2.dp))
-            Text("Open ↗", color = Brand, fontSize = 13.sp, modifier = Modifier.clickable { onOpenUrl(item.url) })
+        // Why this is yours (or not), and the whole branch on demand — what you'd open Facebook to read.
+        if (item.why.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text(item.why, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = Brand) }
+        var showThread by remember(item.feedKey) { mutableStateOf(false) }
+        Row {
+            if (item.url.isNotBlank()) { Spacer(Modifier.height(2.dp)); Text("Open ↗", color = Brand, fontSize = 13.sp, modifier = Modifier.clickable { onOpenUrl(item.url) }) }
+            if (item.thread.isNotBlank()) { Spacer(Modifier.width(14.dp)); Text(if (showThread) "Hide thread" else "Show thread", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.clickable { showThread = !showThread }) }
+        }
+        if (showThread) {
+            Spacer(Modifier.height(8.dp))
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.background).padding(10.dp)) {
+                item.thread.split('\n').forEach { line ->
+                    val mine = line.startsWith("YOU:")
+                    Text(line, fontSize = 12.sp, color = if (mine) Brand else cs.onSurface, modifier = Modifier.padding(vertical = 2.dp))
+                }
+            }
         }
         if (item.fields.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
