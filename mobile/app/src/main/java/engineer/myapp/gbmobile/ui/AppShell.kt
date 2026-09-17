@@ -141,6 +141,7 @@ class ShellActions(
     // downloads — the files the cluster browser captured
     val onLoadFiles: () -> Unit = {},
     val onDeleteFile: (id: String) -> Unit = {},
+    val onDeleteRecording: (id: String) -> Unit = {},
 )
 
 private fun hostOf(url: String): String {
@@ -201,7 +202,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         topInset = Modifier.statusBarsPaddingSafe(), leads = shell.leads.value,
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
-                    "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }), topInset = Modifier.statusBarsPaddingSafe())
+                    "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }, onDeleteRecording = act.onDeleteRecording), topInset = Modifier.statusBarsPaddingSafe())
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
                         shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
                         topInset = Modifier.statusBarsPaddingSafe(),

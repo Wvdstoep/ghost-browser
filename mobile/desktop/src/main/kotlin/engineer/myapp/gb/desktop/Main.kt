@@ -100,6 +100,15 @@ private fun DesktopShell(error: String?, state: DesktopState) {
     var screen by remember { mutableStateOf("browser") }
     val activeTab = Tabs.activeTab()
     val openUrl: (String) -> Unit = { u -> Tabs.go(u); screen = "browser" }
+    // RECORDINGS on the desktop: the app's own Chromium tabs hold the cluster session, so a recording plays in a
+    // tab (the live playlist or the seekable mp4) and saves through the tab's own download (self-saved, any size)
+    LaunchedEffect(Unit) {
+        val RH = engineer.myapp.gb.shared.RecordingHooks; val base = { Cluster.clusterUrl.trimEnd('/') }
+        RH.play = { rec -> openUrl(base() + (if (rec.running) rec.playlist.ifBlank { "/v1/recordings/${rec.id}/index.m3u8" } else rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" })) }
+        RH.save = { rec -> Tabs.go(base() + rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" } + "?download=1"); state.activity.value = "saving ${rec.name} through the browser's download" }
+        RH.stop = { id -> stopRecordingD(state, id) }
+        RH.refresh = { id -> refreshRecordingD(state, id) }
+    }
     Box(Modifier.fillMaxSize()) {
     // Poll the approvals gate while its screen is open, so drafts + activity stay live.
     LaunchedEffect(screen) {
@@ -130,7 +139,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             )
             "devices" -> DeviceHubScreenD(state)
             "settings" -> SettingsScreenD(state, openUrl, onOpenDevices = { screen = "devices" }, onOpenDownloads = { screen = "downloads" })
-            "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(state.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = { loadFilesD(state) }, onDelete = { id -> deleteFileD(state, id) }, onClose = { screen = "settings" }))
+            "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(state.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = { loadFilesD(state) }, onDelete = { id -> deleteFileD(state, id) }, onClose = { screen = "settings" }, onDeleteRecording = { id -> deleteRecordingD(state, id) }))
             "agent" -> {
                 LaunchedEffect(Unit) { AssistantD.open(state) }
                 engineer.myapp.gb.shared.AssistantScreen(state.assistant, AssistantD.actions(state, openUrl = openUrl, openApprovals = { screen = "approvals" }, openSettings = { state.aiModal.value = true }, close = { screen = "browser" }, connect = { screen = "settings" }))

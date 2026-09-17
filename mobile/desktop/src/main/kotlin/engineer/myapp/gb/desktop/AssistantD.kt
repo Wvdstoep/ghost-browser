@@ -70,7 +70,18 @@ object AssistantD {
         if (v == null) { st.assistant.error.value = "Could not reach your Ghost Browser (${raw.take(80)})"; st.agentBusy.value = false; return }
         frame(st, v)
         chatId = v.id; st.assistant.chat.value = v; st.assistant.error.value = ""; st.agentBusy.value = v.live != null
-        if (v.live != null && !polling) { polling = true; bg { try { while (true) { Thread.sleep(2500); val cur = AssistantJson.chat(Cluster.authed("GET", "/v1/assistant/chats/$chatId", null)) ?: break; frame(st, cur); st.assistant.chat.value = cur; st.agentBusy.value = cur.live != null; if (cur.live == null) break } } finally { polling = false } } }
+        recordingsOf(st, v)
+        if (v.live != null && !polling) { polling = true; bg { try { while (true) { Thread.sleep(2500); val cur = AssistantJson.chat(Cluster.authed("GET", "/v1/assistant/chats/$chatId", null)) ?: break; frame(st, cur); st.assistant.chat.value = cur; st.agentBusy.value = cur.live != null; recordingsOf(st, cur); if (cur.live == null) break } } finally { polling = false } } }
+    }
+    /** A recording somewhere in the chat keeps its card's numbers fresh: the list is re-read every ~5 s while one runs. */
+    @Volatile private var recPolledAt = 0L; @Volatile private var recPolling = false
+    private fun recordingsOf(st: DesktopState, v: AssistantChatView) {
+        val ids = (v.turns.flatMap { t -> t.steps.map { it.recording } + t.cards.filter { it.kind == "recording" }.map { it.id } } + (v.live?.steps?.map { it.recording } ?: emptyList())).filter { it.isNotBlank() }.toSet()
+        if (ids.isEmpty()) return
+        val known = engineer.myapp.gb.shared.RecordingHooks.recordings.value
+        val anyRunning = ids.any { known[it]?.running != false }
+        if (System.currentTimeMillis() - recPolledAt > 4500) { recPolledAt = System.currentTimeMillis(); loadRecordingsD(st) }
+        if (anyRunning && !recPolling) { recPolling = true; bg { try { while (true) { Thread.sleep(5000); loadRecordingsD(st); val k = engineer.myapp.gb.shared.RecordingHooks.recordings.value; if (ids.none { k[it]?.running == true }) break } } finally { recPolling = false } } }
     }
     private fun newChat(st: DesktopState) {
         val v = AssistantJson.chat(Cluster.authed("POST", "/v1/assistant/chats", "{}"))

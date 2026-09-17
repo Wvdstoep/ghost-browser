@@ -151,9 +151,21 @@ fun loadFilesD(st: DesktopState) = bg {
     st.downloads.loading.value = true
     if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null) AssistantD.open(st)   // installs the play/save hooks
     try { st.downloads.files.value = AssistantJson.files(Cluster.authed("GET", "/v1/files", null)) } catch (e: Exception) { st.activity.value = "downloads: ${e.message}" }
+    loadRecordingsD(st)
     st.downloads.loading.value = false
 }
 fun deleteFileD(st: DesktopState, id: String) = bg { try { Cluster.authed("DELETE", "/v1/files/$id", null) } catch (e: Exception) {}; loadFilesD(st) }
+/** Recordings (GET /v1/recordings): the list for Downloads and the map the cards in the chat read. */
+fun loadRecordingsD(st: DesktopState) {
+    try {
+        val (list, free) = AssistantJson.recordings(Cluster.authed("GET", "/v1/recordings", null))
+        st.downloads.recordings.value = list; st.downloads.recordingsFreeBytes.value = free
+        engineer.myapp.gb.shared.RecordingHooks.recordings.value = engineer.myapp.gb.shared.RecordingHooks.recordings.value + list.associateBy { it.id }
+    } catch (e: Exception) { st.activity.value = "recordings: ${e.message}" }
+}
+fun refreshRecordingD(st: DesktopState, id: String) = bg { try { AssistantJson.recording(Cluster.authed("GET", "/v1/recordings/$id", null))?.let { r -> engineer.myapp.gb.shared.RecordingHooks.recordings.value = engineer.myapp.gb.shared.RecordingHooks.recordings.value + (r.id to r) } } catch (e: Exception) {} }
+fun stopRecordingD(st: DesktopState, id: String) = bg { try { Cluster.authed("POST", "/v1/recordings/$id/stop", "{}") } catch (e: Exception) {}; loadRecordingsD(st) }
+fun deleteRecordingD(st: DesktopState, id: String) = bg { try { Cluster.authed("DELETE", "/v1/recordings/$id", null) } catch (e: Exception) {}; loadRecordingsD(st) }
 
 fun loadApprovals(st: DesktopState) = bg {
     st.jobsLoading.value = true
