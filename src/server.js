@@ -1787,7 +1787,7 @@ app.post('/v1/watchers/:id/probe', authed, async (req, res) => {
   try {
     let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
     if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
-    res.json(await pw.probePage(s.page, url, { expand: !!(req.body || {}).expand }));
+    res.json(await pw.probePage(s.page, url, { expand: !!(req.body || {}).expand, html: !!(req.body || {}).html }));
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { runningWatchers.delete(req.params.id); }
 });

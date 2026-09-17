@@ -396,6 +396,8 @@ async function probePage(page, url, opts) {
       expanders: q('[role="button"]').map((b) => (b.innerText || '').trim()).filter((t) => /antwoord|repl|opmerking|comment/i.test(t)).slice(0, 25) };
   });
   dump.expand = expand;
+  // fixtures: the rendered page itself, so the extractor can be tested against real HTML offline
+  if (opts && opts.html) { try { dump.html = await page.evaluate(() => document.documentElement.outerHTML); } catch { dump.html = ''; } }
   return dump;
 }
 
