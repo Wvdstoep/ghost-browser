@@ -123,7 +123,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i]; if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
-      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '' } : {}) });
+      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}) });
     }
     return out.slice(-60);
   }
