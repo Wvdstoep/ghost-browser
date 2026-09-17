@@ -138,6 +138,7 @@ function registerOperatorTools(reg, ctx) {
   }, { repeatable: true });
   R('gb_flow_run_status', 'What a run did, summarized.', obj({ runId: { type: 'string' } }, ['runId']), async ({ runId }) => summarizeRun(ctx.workflows.readRun(runId)) || { error: `no run ${runId}` }, { repeatable: true });
   R('gb_flow_runs', 'Recent runs of one automation, newest first, summarized.', obj({ flowId: { type: 'string' } }, ['flowId']), async ({ flowId }) => ctx.workflows.runsFor(flowId, 10).map(summarizeRun), { repeatable: true });
+  R('gb_people', 'The PEOPLE the owner talks with on a platform — memory across posts: exchanges, what the owner promised them, what they asked, COMMERCIAL SIGNALS (leads). One name for the full record + the drafter\'s profile; leadsOnly for the leads. Also the draft OUTCOMES (posted as-is / edited / rewritten).', obj({ platform: { type: 'string', description: 'default facebook' }, name: { type: 'string' }, leadsOnly: { type: 'boolean' } }), async ({ platform, name, leadsOnly }) => ctx.people ? ctx.people(platform, name, leadsOnly) : { error: 'not wired' }, { repeatable: true });
   R('gb_platforms', 'The platform registry: where a login exists (signedIn), which profile holds it, what may be done there.', obj({}), async () => ctx.platforms(), { repeatable: true });
 
   return reg.names().length;

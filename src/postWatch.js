@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const llm = require('./llm');
 const humanize = require('./humanize');
+const people = require('./people');
 
 const DIR = path.join(process.env.PROFILE_DIR || '/profiles', 'post-threads');
 
@@ -270,6 +271,12 @@ function ingest(wid, tree, cfg, feed) {
       out.push({ node: n, key: item.key, rootId, branch: list, needsReply: addressed && !answered, isMe });
     });
   }
+  /* PEOPLE MEMORY (people.js): every branch lands on the records of the people the owner talks with;
+     a person with a commercial signal is a lead, and the card says so. Never breaks a pass. */
+  try {
+    people.remember('facebook', tree, out, { urlOf: (n) => deepLink(tree, n) });
+    for (const e of out) if (!e.isMe && people.isLead('facebook', e.node.author)) { const it = feed.list(wid).find((x) => x.key === e.key); if (it && !(it.fields || {}).lead) feed.mark(wid, e.key, { fields: Object.assign({}, it.fields, { lead: true }) }); }
+  } catch (err) { /* memory is a bonus, never the pass */ }
   return out;
 }
 
@@ -336,7 +343,9 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
       + 'Write in the language of the POST and the thread (an English post gets English replies even when someone answers with one word). Use ONLY what the post and '
       + 'the thread say: never invent facts, projects, problems or a persona for the owner; if you lack context, keep it short and about their message. '
       + 'Output ONLY the reply text - no quotes, no preamble.';
-    const user = `YOUR POST (you wrote this):\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\nWrite ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
+    // what is known about this person from other posts, and what the owner tends to change in drafts
+    let memory = ''; let lessons = ''; try { memory = people.profileOf('facebook', e.node.author, { exceptPostId: tree.postId }); lessons = people.editLessons(); } catch (err) { memory = ''; lessons = ''; }
+    const user = `YOUR POST (you wrote this):\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
     try {
       const out = await llm.chat({ host: llmCfg.llmHost, model: llmCfg.llmModel, key: llmCfg.llmKey, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
       const text = humanize((out && out.content) || '');

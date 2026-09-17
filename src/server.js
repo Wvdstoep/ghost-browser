@@ -1697,7 +1697,11 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
       const r = await pw.postReply((await session()).page, it.url, text, { meName: cfgP.meName || '', dryRun, touch });
       log.info(`[poster] ${it.fields && it.fields.author}: ${JSON.stringify(r)}`);
       if (dryRun) feed.mark(wid, it.key, { dryRunResult: (r.dryRun ? 'ok: ' : 'failed: ') + r.detail });
-      else if (r.posted) feed.mark(wid, it.key, { posting: false, handled: true, posted: 'posted — ' + r.detail, fields: Object.assign({}, it.fields, { status: 'answered' }) });
+      else if (r.posted) {
+        feed.mark(wid, it.key, { posting: false, handled: true, posted: 'posted — ' + r.detail, fields: Object.assign({}, it.fields, { status: 'answered' }) });
+        // what the owner posted vs what was drafted: the drafter learns from the difference
+        try { const o = require('./people').recordOutcome('facebook', (it.fields || {}).author, { draft: it.draft, posted: text }); log.info(`[post-watch] outcome for ${(it.fields || {}).author}: ${o.kind} (${o.similarity})`); } catch (e) { /* bonus */ }
+      }
       else if (r.alreadyAnswered) feed.mark(wid, it.key, { posting: false, handled: true, posted: 'already answered on the page', fields: Object.assign({}, it.fields, { status: 'answered' }) });
       else feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + r.detail });
     } catch (e) {
@@ -1868,6 +1872,7 @@ function operatorContext() {
     saveFlow: (flow) => { const r = workflows.save(flow, paletteNames()); return (r && r.workflow) || r; },
     runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
+    people: (platform, name, leadsOnly) => { const people = require('./people'); if (name) { const r = people.load(platform || 'facebook', name); return r ? { ...r, profile: people.profileOf(platform || 'facebook', name) } : { error: 'no memory of that person yet' }; } return { people: people.list(platform || 'facebook', { leadsOnly: !!leadsOnly }).slice(0, 40), outcomes: people.outcomes() }; },
     stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
     /* When the turn ends, its walks end with it. */
     stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
@@ -1952,6 +1957,10 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
     res.json({ id: run.id, status: 'running' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+/* PEOPLE — memory per person across posts, leads, and what the owner's edits taught (people.js). */
+app.get('/v1/people', authed, (req, res) => { const people = require('./people'); res.json({ people: people.list(String(req.query.platform || 'facebook'), { leadsOnly: req.query.leads === '1' }), outcomes: people.outcomes() }); });
+app.get('/v1/people/outcomes', authed, (_req, res) => res.json(require('./people').outcomes()));
+app.get('/v1/people/:platform/:name', authed, (req, res) => { const people = require('./people'); const r = people.load(req.params.platform, req.params.name); if (!r) return res.status(404).json({ error: 'no memory of that person yet' }); res.json({ ...r, profile: people.profileOf(req.params.platform, req.params.name) }); });
 app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
 app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title)));
 /* THE BACKDROP: while a turn runs, the chat view carries a small frame of the browser the agent works
