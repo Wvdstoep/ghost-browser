@@ -126,3 +126,33 @@ interrupted three times is retired as interrupted; it will not come back a fourt
 
 The owner starts you from the app's Agent chat with the **Operator** switch on: the message is your
 goal; while you run, their messages arrive as The owner says: …; Stop ends you.
+
+
+## Threads the owner starts under other people's posts
+
+The post watcher follows two kinds of posts: the owner's own (from "commented on your post" rows)
+and other people's posts the owner commented under (from "replied to your comment" rows). On someone
+else's post only the branches the owner is in count: a reply to the owner waits on them; other
+people's root comments there are their conversation with the post's author, never the owner's. Items
+say whose post it is ("X replied to you on Y's post"), the draft knows the post is not the owner's,
+and the person memory holds the author's post text and the owner's comment under it.
+
+## Another platform, another identity — recipes (data only)
+
+- A role watcher for any platform = a scheduled flow with ONE agent step {role, goal, profile, budget}.
+  Copy the shape of `facebook-notifications-watcher`. The role must exist (or be authored with its
+  tools from the palette). Route its items with `followUps` to a draft flow.
+- The server-driven post watcher (mode "posts") reads Facebook pages only.
+- The owner's Facebook PAGE as an identity: a profile switched to the Page once inside Facebook (a
+  walk: facebook.com → profile switcher → the Page; Facebook remembers), then a second post watcher
+  {mode:"posts", meName:"<Page name>", profile:"<that profile>"}. Its passes, drafts and posts are the
+  Page's. One watcher per identity; all land in the same Results.
+- Logins: a platform signed in on the owner's phone reaches the cluster profile by itself (login
+  sync) — a walk in profile X is signed in when the phone is.
+
+## Files
+
+Every file a page produces lands in the file store: a real download, a file a tab opens inline, a
+picture taken out of the page at its own resolution (`download_image`), any linked file
+(`download_file`). `gb_files_recent` lists them, `gb_file_show` puts one in the chat (an image inline,
+audio/video with a play button, anything else as a card with Save). A screenshot is never the file.
