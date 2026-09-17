@@ -5,7 +5,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | Phase | Name | State | Proof |
 |---|---|---|---|
 | 0 | Foundations: sound, a display per recording, a volume of its own | **done · v336** (2026-09-17) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
-| 1 | The engine: any duration, nothing in memory, survives restarts | building (engine + page + routes; proof pending) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
+| 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | planned | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | planned | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
 | 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | planned | — |
@@ -50,6 +50,14 @@ Facts the design rests on (measured 2026-09-17):
 - **Endpoints.** `POST /v1/recordings {url, profile, until, maxMinutes, quality}`, `GET /v1/recordings`, `GET /v1/recordings/:id`, `POST /v1/recordings/:id/stop`, `DELETE /v1/recordings/:id`, `GET /v1/recordings/:id/index.m3u8` and `/seg-*.ts` (streaming; live while recording), `GET /v1/recordings/:id/mp4` (on-demand `ffmpeg -f concat -c copy` into a cached file, then streamed with Range support — no base64, no size cap).
 - **Busy gate.** A running recording counts as busy for `gb-auto-deploy.sh` until Phase 3 makes recordings roll-proof.
 - **Tests.** State machine with a fake ffmpeg/browser (start, tick, end conditions, partial after restart); playlist serving; concat; disk guard.
+
+## Phase 1 — proof (2026-09-17, v337/v338)
+
+- A 2-minute YouTube recording through the API: the playlist and a segment were fetched while it recorded (2 entries, no end tag), 13 segments / 120 s at the end, an mp4 of 7.4 MB built by stream copy.
+- A recording running THROUGH a pod roll (v337 → v338): closed at boot as `partial` — 4 segments / 40 s, playlist closed, a partial mp4 of 465 KB served.
+- A fresh 60-second recording on v338 (Big Buck Bunny, profile `google`, Polish exit): full screen, no consent wall, no translate bubble, mean −24.1 dB / max −0.4 dB. The busy list carried the recording; the watchers ran untouched.
+- What it took: consent answered by cookie (`SOCS=CAI`) before the page loads, the wall watched for 10 s in 20 languages otherwise; the video waited for as attached (a player hides it until play); a big-play-button before a click on the video; cookies through Playwright, not a file copy; translate off through the throw-away profile's Preferences.
+- YouTube and the Google profile: a Google login only reaches YouTube once youtube.com is visited signed in. The Phase 2 recipe's read-only walk (find the video) runs in the `google` profile on YouTube, so the pool's live context then carries the YouTube cookies straight into the recorder (`liveContextFor`). Platform matching maps youtube.com → profile `google`.
 
 ## Phase 2 — The agent and the app
 
