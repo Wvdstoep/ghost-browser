@@ -19,6 +19,7 @@ const { analyzePage, clickByIndex } = require('./inspector');
 const accounts = require('./accounts');
 const profiles = require('./profiles');
 const settingsStore = require('./settings');
+const watchProfile = require('./watchProfile');
 const company = require('./company');
 const jobs = require('./jobs');
 const agent = require('./agent');
@@ -1438,10 +1439,13 @@ function makeRunAgent(client) {
      */
     if (node.values && typeof node.values === 'object') cfg.replayValues = node.values;
     if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
-    const want = node.profile ? profiles.safeName(node.profile) : '';
+    const base = node.profile ? profiles.safeName(node.profile) : '';
+    // a WATCHER's step crawls in the watchers' own browser copy (see watchProfile.js), never the owner's
+    const want = client.watch && base ? watchProfile.ensureWatchProfile(process.env.PROFILE_DIR || '/profiles', base) : base;
     let s = want ? pool.listFor(owner).find((x) => x.profile === want) : null;
     if (s) s = pool.get(s.sessionId);
     if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want || undefined, takeover: true }); s = pool.get(o.sessionId); }
+    if (client.watch && base && want !== base) { try { const b = pool.listFor(owner).find((x) => x.profile === base); const live = b && pool.get(b.sessionId); if (live && live.context && s.context) await watchProfile.syncCookies(live.context, s.context); } catch (e) { log.warn(`[watch] cookie sync: ${e.message}`); } }
     const _in = (context && context.input) || {};
     const job = jobs.create({ owner, goal: String(goal).slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: workflowId || null, runId: runId || null, nodeId: node.id || null,
       feedKey: _in.feedKey || null, feedWorkflowId: _in.feedWorkflowId || null,
@@ -1685,7 +1689,7 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
        already running to finish — however long it takes, up to 12 min. Never proceed on top of it:
        a crawl and a post on the same page mean the wrong page for one of them. */
     runningWatchers.add(lockKey);
-    const t0 = Date.now(); const others = () => [...runningWatchers].some((k) => k !== lockKey);
+    const t0 = Date.now(); const others = () => [...runningWatchers].some((k) => k !== lockKey && k.startsWith('poster:'));
     while (others() && Date.now() - t0 < 720000) await new Promise((r) => setTimeout(r, 2000));
     if (others()) { runningWatchers.delete(lockKey); feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: browser busy for 12 min' } : { posting: false, postFailed: true, posted: 'failed: the browser stayed busy for 12 minutes — approve again' }); return; }
     try {
@@ -1747,12 +1751,17 @@ async function postWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   let cfg = feed.getConfig(wf.id);
   const llmCfg = settingsStore.read();
-  const want = profiles.safeName(cfg.profile || 'facebook');
+  /* THE PASS RUNS IN THE WATCHERS' OWN BROWSER (src/watchProfile.js): a copy of the login profile, so
+     the owner's browser stays free for walks, looks and the poster while a pass crawls. */
+  const base = profiles.safeName(cfg.profile || 'facebook');
+  const want = watchProfile.ensureWatchProfile(process.env.PROFILE_DIR || '/profiles', base);
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  let synced = false;
   const session = async () => {
     let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
     let dead = false; try { dead = !s || !s.page || (s.page.isClosed && s.page.isClosed()); } catch (e) { dead = true; }
     if (dead) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
+    if (!synced) { synced = true; try { const b = pool.listFor(owner).find((x) => x.profile === base); const live = b && pool.get(b.sessionId); if (live && live.context) { const n = await watchProfile.syncCookies(live.context, s.context); if (n) log.info(`[post-watch] ${want}: ${n} cookies synced from ${base}`); } } catch (e) { log.warn(`[post-watch] cookie sync: ${e.message}`); } }
     return s;
   };
   // A crawl drives the page directly; without this the pool reads it as idle and reaps the browser mid-pass.
@@ -1846,7 +1855,7 @@ function operatorContext() {
       runningWatchers.add(wf.id);
       const runId = `${wf.id}-${Date.now()}`;
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
-      else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
+      else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
       return { runId, status: 'running' };
     },
     setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, paletteNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
@@ -1861,7 +1870,6 @@ function operatorContext() {
        unattended (its acts become proposals at the gate — nothing outward without the owner). */
     startWalk: async ({ goal, profile, role, maxSteps, maxPages }) => {
       const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
-      if (runningWatchers.size) return { error: `busy: a watcher pass holds the browser (${[...runningWatchers].join(', ')}) — wait with gb_watcher_wait, then start the walk` };
       const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
       const s = await sessionFor(profiles.safeName(profile || cfg.browserProfile || 'facebook'));
       if (s.job) { const held = jobs.get(s.job); if (held && ['running', 'idle'].includes(held.status)) return { error: `that profile is busy with job ${s.job} — wait for it (gb_walk_wait) or use another profile` }; }
@@ -2120,7 +2128,7 @@ async function scheduleTick() {
       continue;
     }
     const startedAtS = Date.now();
-    workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
+    workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2, watch: true }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
       .then((run) => { recordRolePass(wf, startedAtS, run); return triggerFollowUps(wf, owner); })
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`))
       .finally(() => runningWatchers.delete(wf.id));
