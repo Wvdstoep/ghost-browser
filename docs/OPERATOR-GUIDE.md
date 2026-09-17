@@ -115,3 +115,14 @@ rows and adds those posts; `gb_watcher_posts` adds one by link.
 A new page shape the crawler cannot read; a new platform; a poster that cannot find a control that
 is visibly there; server errors in the log (`ERROR`); anything about deploys, sessions/pool, or the
 scheduler itself.
+
+## Restarts (you may be resumed)
+
+Ghost Browser rolls to a new image while jobs run. A job that was running is picked up again on boot:
+same id, same task list and notes, the budget as it was, and a `[Resumed]` message with the last
+steps before the restart. Any page or session you had open is gone — re-read before acting, and
+check what the last step left behind (a changed flow, a started run) before repeating it. A job
+interrupted three times is retired as interrupted; it will not come back a fourth time.
+
+The owner starts you from the app's Agent chat with the **Operator** switch on: the message is your
+goal; while you run, their messages arrive as The owner says: …; Stop ends you.
