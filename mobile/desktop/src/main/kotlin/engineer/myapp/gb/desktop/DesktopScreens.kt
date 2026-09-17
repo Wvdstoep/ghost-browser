@@ -320,7 +320,8 @@ fun openWatcherResultsD(st: DesktopState, id: String) = bg {
             items.add(engineer.myapp.gb.shared.ResultItem(it.optString("title"), fields, it.optString("url"), it.optString("image"), it.optString("kind").ifBlank { "item" },
                 draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false,
                 draftState = it.optString("draftState"),
-                postId = f?.optString("postId") ?: "", postTitle = f?.optString("postTitle") ?: "", why = f?.optString("why") ?: "", thread = f?.optString("thread") ?: ""))
+                postId = f?.optString("postId") ?: "", postTitle = f?.optString("postTitle") ?: "", why = f?.optString("why") ?: "", thread = f?.optString("thread") ?: "",
+                lead = f?.optBoolean("lead") == true))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
