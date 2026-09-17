@@ -1558,8 +1558,9 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
     postWatchTick(wf, consoleOwner() || req.client.owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
     return res.json({ runId, status: 'running', mode: 'posts' });
   }
+  const startedAtM = Date.now();
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
-    .then(() => triggerFollowUps(wf, req.client.owner))
+    .then((run) => { recordRolePass(wf, startedAtM, run); return triggerFollowUps(wf, req.client.owner); })
     .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`))
     .finally(() => runningWatchers.delete(wf.id));
   res.json({ runId, status: 'running' });
@@ -1845,7 +1846,7 @@ function operatorContext() {
       runningWatchers.add(wf.id);
       const runId = `${wf.id}-${Date.now()}`;
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
-      else workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then(() => triggerFollowUps(wf, owner)).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+      else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
       return { runId, status: 'running' };
     },
     setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, paletteNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
@@ -1940,6 +1941,18 @@ app.delete('/v1/watchers/:id/posts', authed, (req, res) => {
  * one profile session by takeover rather than colliding). The flow's action is correlated back to the
  * item by URL in the UI. Nothing here is site- or reply-specific.
  */
+
+/* One health record for a ROLE watcher's pass (a post watcher writes its own in postWatchTick). */
+function recordRolePass(wf, startedAt, run) {
+  try {
+    const feed = require('./watcherFeed'); const items = feed.list(wf.id);
+    const fresh = items.filter((it) => (it.lastSeen || 0) >= startedAt).length;
+    const waiting = items.filter((it) => !it.handled && ((it.fields || {}).status === 'waiting on you' || it.draft)).length;
+    const errored = run && (run.status === 'error' || (run.steps || []).some((s) => s && s.status === 'error'));
+    feed.setConfig(wf.id, { lastPass: { startedAt, endedAt: Date.now(), posts: 0, messages: fresh, waiting, drafts: items.filter((it) => it.draft && (it.lastSeen || 0) >= startedAt).length, verified: 0, corrected: 0, errors: errored ? [String((run && run.error) || 'a step errored')] : [] } });
+  } catch (e) { /* best effort */ }
+}
+
 async function triggerFollowUps(wf, owner) {
   try {
     if (!wf || !wf.id || !owner) return;
@@ -2033,8 +2046,9 @@ async function scheduleTick() {
       postWatchTick(wf, owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
       continue;
     }
+    const startedAtS = Date.now();
     workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
-      .then(() => triggerFollowUps(wf, owner))
+      .then((run) => { recordRolePass(wf, startedAtS, run); return triggerFollowUps(wf, owner); })
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`))
       .finally(() => runningWatchers.delete(wf.id));
   }
