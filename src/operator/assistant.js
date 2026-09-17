@@ -46,6 +46,46 @@ const labelOf = (name) => STEP_LABELS[name] || String(name || '').replace(/^gb_/
 /* The exit and the plan bookkeeping are not "steps" the owner needs to see (the task list shows live). */
 const HIDDEN_STEPS = new Set(['reply', 'finish', 'save_task_list', 'update_task']);
 
+/** One human line for a tool's result — what the owner sees under a step instead of JSON. */
+function briefOf(name, text) {
+  const s = String(text || '').trim(); if (!s) return '';
+  let v = null; try { v = JSON.parse(s.replace(/… \(\d+ more chars.*$/s, '').replace(/\n… \(.*$/s, '')); } catch { v = null; }
+  if (v === null && /^[[{]/.test(s)) {
+    // the event keeps only the head of a long result: read the numbers that matter from it
+    const num = (k) => { const m = s.match(new RegExp(`"${k}"\\s*:\\s*(\\d+)`)); return m ? Number(m[1]) : null; };
+    const err = s.match(/"error"\s*:\s*"([^"]{1,120})/); if (err) return 'did not work: ' + err[1];
+    if (name === 'gb_watcher_feed') { const t = num('total'); const u = num('unhandled'); return t != null ? `${t} item${t === 1 ? '' : 's'}${u != null ? ` · ${u} open` : ''}` : ''; }
+    if (name === 'gb_watchers') { const c = (s.match(/"active"\s*:\s*true/g) || []).length; return c ? `${c} watcher${c === 1 ? '' : 's'} on` : ''; }
+    return '';
+  }
+  if (v && typeof v === 'object' && v.error) return 'did not work: ' + String(v.error).slice(0, 120);
+  const n = (x) => Array.isArray(x) ? x.length : 0;
+  try {
+    switch (name) {
+      case 'gb_watchers': return Array.isArray(v) ? `${v.length} watcher${v.length === 1 ? '' : 's'} · ${v.filter((w) => w.active).length} on` : '';
+      case 'gb_watcher_health': return v ? `${v.running ? 'running now' : v.sinceMinutes != null ? `last pass ${v.sinceMinutes} min ago` : 'no pass yet'}${v.lastPass ? ` · ${v.lastPass.messages || 0} messages · ${v.lastPass.waiting || 0} waiting` : ''}` : '';
+      case 'gb_watcher_feed': { const items = v && Array.isArray(v.items) ? v.items : null; const total = v && v.counts && v.counts.total != null ? v.counts.total : items ? items.length : null; const waiting = items ? items.filter((i) => /wait/i.test(String(i.state || i.standing || ''))).length : null; return total != null ? `${total} item${total === 1 ? '' : 's'}${waiting != null ? ` · ${waiting} waiting on you` : ''}` : ''; }
+      case 'gb_busy': return v && n(v.running) ? `browser busy: ${v.running.join(', ')}` : 'browser free';
+      case 'gb_watcher_run': return v && v.status === 'busy' ? 'another pass holds the browser' : v && v.runId ? 'pass started' : '';
+      case 'gb_watcher_wait': return v && v.stillRunning ? 'still running' : v && v.lastPass ? `pass done · ${v.lastPass.messages || 0} messages · ${v.lastPass.waiting || 0} waiting` : 'pass done';
+      case 'gb_flows': return Array.isArray(v) ? `${v.length} automations` : '';
+      case 'gb_roles': return Array.isArray(v) ? `${v.length} roles` : '';
+      case 'gb_platforms': return Array.isArray(v) ? `${v.length} platforms` : '';
+      case 'gb_runs_recent': return Array.isArray(v) ? `${v.length} recent runs` : '';
+      case 'gb_logs': return `${s.split('\n').length} log lines`;
+      case 'gb_look': return v ? `${v.title || v.url || 'page'}${n(v.controls) ? ` · ${v.controls.length} controls` : ''}` : '';
+      case 'gb_walk': return v && v.jobId ? `browsing in ${v.profile || 'the browser'}` : '';
+      case 'gb_walk_wait': return v ? (v.stillRunning ? 'still browsing' : `${v.status || 'done'}${n(v.proposals) ? ` · ${v.proposals.length} draft${v.proposals.length === 1 ? '' : 's'} for you` : ''}`) : '';
+      case 'gb_flow_save': case 'gb_role_save': case 'gb_role_update': case 'gb_watcher_config': case 'gb_watcher_toggle': case 'gb_watcher_posts': return v && v.id ? `saved ${v.id}` : 'saved';
+      case 'gb_flow_run': return v && v.runId ? 'run started' : '';
+      case 'gb_flow_wait': return v ? `${v.status || 'done'}${v.verified ? ' · verified' : ''}` : '';
+      case 'gb_memory_write': return 'noted';
+      case 'gb_guide': case 'gb_memory_read': return 'read';
+    }
+  } catch { /* fall through */ }
+  return v && typeof v === 'object' ? '' : s.slice(0, 120);
+}
+
 function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) {
   if (typeof startTurn !== 'function') throw new Error('assistant needs startTurn');
   const L = log || { info() {}, warn() {}, error() {} };
@@ -81,7 +121,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i]; if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
-      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? String(r.text || '').slice(0, 300) : '', t: e.t });
+      out.push({ name: e.name, label: labelOf(e.name), args: e.args && typeof e.args === 'object' ? JSON.stringify(e.args).slice(0, 200) : '', text: r ? briefOf(e.name, r.text) : '', t: e.t });
     }
     return out.slice(-60);
   }
