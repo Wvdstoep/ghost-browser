@@ -76,6 +76,7 @@ class SettingsActions(
     val onSaveOllama: (endpoint: String, apiKey: String, model: String, hfToken: String) -> Unit,
     val onFetchModels: (endpoint: String, apiKey: String) -> Unit,
     val onPullClusterConfig: () -> Unit,
+    val onOpenDownloads: () -> Unit = {},
     val onRefreshDevices: () -> Unit,
     val onOpenTailscale: () -> Unit,
     val onSetTheme: (Int) -> Unit,
@@ -120,6 +121,11 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                         Ghost("Open Device Hub", Modifier.weight(1f), act.onOpenHub)
                     }
                     Note("Profiles, automations and roles auto-sync from the cluster on sign-in — one account, same data on every device.")
+                }
+
+                // 1b ─ Downloads: every file the cluster browser captured, like any browser's list ------
+                SectionCard("⬇", "Downloads", "Files your Ghost Browser captured — songs, pictures, exports. Play, save to this device, or delete") {
+                    Primary("Open downloads", Modifier.fillMaxWidth(), act.onOpenDownloads)
                 }
 
                 // 2 ─ Profiles ------------------------------------------------------------------------

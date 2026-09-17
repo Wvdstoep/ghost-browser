@@ -43,6 +43,14 @@ object AssistantJson {
             AiModelInfo(o.optString("llmModel"), o.optString("llmHost"), o.optBoolean("keySet"), o.optString("keyHint"), state)
         }
     } catch (e: Exception) { null }
+    /** GET /v1/files → what the cluster browser captured (newest first). */
+    fun files(json: String): List<FileInfo> = try {
+        val a = JSONObject(json).optJSONArray("files") ?: JSONArray(); val out = ArrayList<FileInfo>()
+        fun millis(v: Any?): Long = when (v) { is Number -> v.toLong(); is String -> try { java.time.Instant.parse(v).toEpochMilli() } catch (e: Exception) { v.toLongOrNull() ?: 0L }; else -> 0L }
+        for (i in 0 until a.length()) { val f = a.optJSONObject(i) ?: continue
+            out.add(FileInfo(f.optString("id"), f.optString("name").ifBlank { f.optString("id") }, f.optString("kind"), f.optString("mime"), f.optLong("size"), millis(f.opt("at")), f.optString("source"))) }
+        out.sortedByDescending { it.at }
+    } catch (e: Exception) { emptyList() }
     /** GET /v1/people → the people worth your words (people memory). */
     fun people(json: String): List<PersonInfo> = try {
         val a = JSONObject(json).optJSONArray("people") ?: JSONArray(); val out = ArrayList<PersonInfo>()

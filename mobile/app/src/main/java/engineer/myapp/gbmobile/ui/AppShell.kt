@@ -81,6 +81,7 @@ class ShellUi {
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
     val leads = mutableStateOf<List<engineer.myapp.gb.shared.PersonInfo>>(emptyList())   // people worth your words
+    val downloads = engineer.myapp.gb.shared.DownloadsUi()   // every file the cluster browser captured
     // watchers — scheduled background tasks (own UI, separate from the gate)
     val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
     val watchersLoading = mutableStateOf(false)
@@ -137,6 +138,9 @@ class ShellActions(
     val onSaveWatcher: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) -> Unit,
     val onToggleWatcher: (id: String, active: Boolean) -> Unit,
     val onOpenWatcherResults: (id: String) -> Unit,
+    // downloads — the files the cluster browser captured
+    val onLoadFiles: () -> Unit = {},
+    val onDeleteFile: (id: String) -> Unit = {},
 )
 
 private fun hostOf(url: String): String {
@@ -197,6 +201,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         topInset = Modifier.statusBarsPaddingSafe(), leads = shell.leads.value,
                     )
                     "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
+                    "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }), topInset = Modifier.statusBarsPaddingSafe())
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
                         shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
                         topInset = Modifier.statusBarsPaddingSafe(),

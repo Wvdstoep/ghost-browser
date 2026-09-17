@@ -108,7 +108,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         }
     }
     GbScaffold(
-        host = "", tabCount = Tabs.list.size, selected = if (screen == "devices") "settings" else screen,
+        host = "", tabCount = Tabs.list.size, selected = if (screen == "devices" || screen == "downloads") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
         showTopBar = false,     // desktop uses its own BrowserBar + tab strip
         approvalsBadge = state.jobs.value.sumOf { it.proposals.size },
@@ -129,7 +129,8 @@ private fun DesktopShell(error: String?, state: DesktopState) {
                 onRefresh = { loadApprovals(state) }, leads = state.leads.value,
             )
             "devices" -> DeviceHubScreenD(state)
-            "settings" -> SettingsScreenD(state, openUrl) { screen = "devices" }
+            "settings" -> SettingsScreenD(state, openUrl, onOpenDevices = { screen = "devices" }, onOpenDownloads = { screen = "downloads" })
+            "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(state.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = { loadFilesD(state) }, onDelete = { id -> deleteFileD(state, id) }, onClose = { screen = "settings" }))
             "agent" -> {
                 LaunchedEffect(Unit) { AssistantD.open(state) }
                 engineer.myapp.gb.shared.AssistantScreen(state.assistant, AssistantD.actions(state, openUrl = openUrl, openApprovals = { screen = "approvals" }, openSettings = { state.aiModal.value = true }, close = { screen = "browser" }, connect = { screen = "settings" }))
