@@ -107,6 +107,7 @@ Facts the design rests on (measured 2026-09-17):
 - A cap on pods of their own (`MAX_REMOTE_RECORDINGS`, 3) with a demand signal (`demand.refusedRemote`, `lastRefusedAt`) on the recordings list for the capacity controller to read.
 - The app: chapter count on the card, a disk warning under Downloads (red under 5 GB, "will refuse to start" under 2 GB).
 - From the owner's live test on the way: the playlist a player follows lists only the segments that are here (no 404 at the live edge); the mp4 is built from the files present (a cut recording plays as a clean partial; all three on the cluster strict-decode clean); recorder pods get 6 GiB / 4 CPU (1080p was OOM-killed at 3 GiB); the pod's stop poll is a light call.
+- The tenant namespace has a quota on REQUESTS (10 GiB memory, 4 CPU; 8.6 GiB and 2.3 CPU in use by the tenant's apps): a recorder pod that asked to reserve 2 GiB was never created and the Job sat there retrying. Now the pod reserves 1 GiB / 0.5 CPU and bursts to 6 GiB / 4 CPU (limits are not under the quota), and a Job that gets no pod within 25 s is taken back — the recording runs inside Ghost Browser instead and counts as demand. Proven on v344: a pod within the quota, 60 s with sound; the quota's usage back where it was after.
 - Left as follow-ups: a Recordings panel in the console, subtitles through the platform's speech service, per-recording CPU/memory telemetry, and the capacity controller actually consuming the demand signal (a platform-side change).
 
 ## Out of scope, on purpose
