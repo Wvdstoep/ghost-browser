@@ -223,6 +223,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.post { fitNarrowScreen(w) }
         web = w; activeTab = i
         lastUrl = h.url
+        try { syncLoginForTab(h, h.url) } catch (e: Exception) { /* a tab already loaded before the update still syncs */ }
         if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
         shellUi.url.value = if (h.url == HOME) "" else h.url
         shellUi.screen.value = "browser"
@@ -674,6 +675,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         settingsUi.platforms.value = out
         shellUi.platforms.value = out   // also feed the omnibox shortcuts
         syncLoginsToCluster(out)        // a login on this phone is a login on the cluster — by itself
+        for (t in tabs) try { syncLoginForTab(t, t.url) } catch (e: Exception) { /* every open tab, once the platform list is here */ }
     }
 
     /** LOGIN SYNC. Every platform signed in on this phone signs the cluster's matching profile in too:
@@ -698,8 +700,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val host = try { Uri.parse(url).host } catch (e: Exception) { null } ?: return
         val plats = settingsUi.platforms.value ?: emptyList()
         if (plats.isEmpty()) { if (!platformsRequested) { platformsRequested = true; loadPlatforms() }; return }
-        val apex = apexOf(host)
-        val p = plats.firstOrNull { pl -> apexOf((try { Uri.parse(pl.site).host } catch (e: Exception) { null }) ?: "") == apex } ?: return
+        // the LONGEST preset host the tab's host ends with wins: aistudio.google.com over google.com, the
+        // GB console's own host over my-app.engineer; the console itself is never a platform to sync
+        val tabHost = host.removePrefix("www.")
+        val clusterHost = try { Uri.parse(vm.clusterUrl.trim()).host?.removePrefix("www.") } catch (e: Exception) { null }
+        val p = plats.mapNotNull { pl -> val ph = (try { Uri.parse(pl.site).host } catch (e: Exception) { null })?.removePrefix("www.") ?: return@mapNotNull null
+                if (ph == clusterHost) null else if (tabHost == ph || tabHost.endsWith(".$ph")) pl to ph.length else null }
+            .maxByOrNull { it.second }?.first ?: return
         val cookieStr = try {
             if (h.profile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(h.profile).cookieManager.getCookie(url) ?: ""
             else CookieManager.getInstance().getCookie(url) ?: ""
