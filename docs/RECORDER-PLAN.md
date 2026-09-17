@@ -7,7 +7,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | 0 | Foundations: sound, a display per recording, a volume of its own | **done · v336** (2026-09-17) | a 60 s recording of a public video has picture AND sound; the pool's sessions and watchers notice nothing |
 | 1 | The engine: any duration, nothing in memory, survives restarts | **done · v338** (2026-09-17) | a 2-hour recording plays while it records and after; a pod roll mid-recording leaves a playable partial |
 | 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
-| 3 | Elastic: a recording is its own pod, resources added not borrowed | building (Job per recording, handoff + push over HTTP, reconcile; RBAC) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
+| 3 | Elastic: a recording is its own pod, resources added not borrowed | **done · v342** (2026-09-17) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
 | 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | planned | — |
 
 Facts the design rests on (measured 2026-09-17):
@@ -83,6 +83,14 @@ Facts the design rests on (measured 2026-09-17):
 - **Scheduler in code.** Before creating a Job read node capacity (metrics API); queue when free CPU < 2 or memory < 3 GiB; N concurrent recordings max (setting); on GB restart re-adopt Jobs by label. Fallback: when Jobs cannot be created (RBAC missing, quota) the Phase 1 in-pod path runs — the owner is told which one is used.
 - **Capacity hook.** Queued recordings older than X minutes are a demand signal to the platform's capacity controller (rent-a-node), so more work means more machine — a code path, not a raised limit.
 - **Proof.** Three recordings at once; `kubectl top` on the browser pod stays within ±100m CPU / ±200 MiB of rest; `kubectl rollout restart deploy/ghost-browser` during a recording, the recording finishes intact.
+
+## Phase 3 — proof (2026-09-17, v341/v342)
+
+- A recording started through the API became a Kubernetes Job of its own (`ghost-browser-rec-<id>`, requests 1 CPU / 1.5 GiB, limits 2 CPU / 3 GiB, a 20 GiB scratch disk, no service-account token). The pod fetched the handoff (the ask, 1151 cookies, the profile's identity, GB's exit proxy by name), recorded 60 s of YouTube full screen with sound (mean −23.9 dB / max −0.4 dB) through the profile's residential exit, and pushed 6 segments, the playlist and its journal back over HTTP with the recording's token. The playlist streamed by ticket, a bad ticket got 401.
+- A 4-minute recording in its own pod kept recording while Ghost Browser was restarted underneath it (the pushes failed for the length of the roll — `ENOTFOUND ghost-browser-pods` while the headless name had no pod — and caught up after): 240 s, 24 segments, 34 MB, sound at full level, nothing lost. Recordings in pods of their own are not counted by the deploy gate any more; they do not need it.
+- Fallback proven in the unit tests: when the cluster refuses the Job the recording runs in this pod and the journal says why.
+- Two traps on the live node: the ghost-browser *cluster IP* refuses pod-to-pod traffic (the pod IP answers, the host answers, the NAT rules are correct) — the recorder reaches GB through a headless twin service (`ghost-browser-pods`) that resolves straight to the pod and re-resolves after a roll; and a brand-new pod is refused on its very first connection while the node syncs its policy (try 1 fails, try 2 works) — the recorder asks for the handoff for up to 5 minutes. Both are in the platform manifests (Role, RoleBinding, headless Service) so a fresh install gets them.
+- Not done in this phase: the capacity-controller hook (queued recordings as a demand signal) and a node-capacity check before creating a Job — the Job's requests already make the scheduler refuse what does not fit; both stay on the Phase 4 list.
 
 ## Phase 4 — State of the art
 
