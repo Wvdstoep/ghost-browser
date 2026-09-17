@@ -46,12 +46,17 @@ async function crawl(getPage, url, log, touch) {
   for (const root of roots) {
     const link = `https://www.facebook.com/groups/${tree.group || 'x'}/posts/${tree.postId}/?comment_id=${root.id}`;
     try {
-      const sub = await openAndRead(await getPage(), link, null, false, touch);
-      for (const n of sub.nodes) {
+      const take = (sub) => { for (const n of sub.nodes) {
         if (n.id !== root.id && n.cid !== root.id) continue;          // only this branch
         n.i = root.i + (n.isReply ? (n.i + 1) / 10000 : 0);             // stays right after its root, in order
         byId.set(n.id, n);
-      }
+      } };
+      take(await openAndRead(await getPage(), link, null, false, touch));
+      /* A reply TO a reply is not rendered on the root comment's page (the owner's "haha fair" under
+         Joe, "Just checked the link" under Peter were invisible there) - the latest reply's own deep
+         link renders the whole sub-thread. One more page for each branch that has replies. */
+      const replies = [...byId.values()].filter((n) => n.isReply && n.cid === root.id).sort((a, b) => b.i - a.i);
+      if (replies.length) take(await openAndRead(await getPage(), `${link}&reply_comment_id=${replies[0].id}`, null, false, touch));
     } catch (e) { if (log) log.error(`[post-watch] branch of ${root.author}: ${e.message}`); }
   }
   tree.nodes = [...byId.values()].sort((a, b) => a.i - b.i);
