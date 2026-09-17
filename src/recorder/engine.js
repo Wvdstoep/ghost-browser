@@ -18,6 +18,9 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const STATES = ['starting', 'recording', 'finishing', 'done', 'partial', 'failed'];
+const RUNNING = ['starting', 'recording', 'finishing'];
+const STALE_MS = 3 * 60 * 1000;   // a pod that has not reported for this long is taken as gone
+const newToken = () => require('crypto').randomBytes(24).toString('hex');
 const UNTIL = ['video-ends', 'duration', 'owner-stop'];
 const TICK_MS = 5000;
 const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024;   // the disk guard: end cleanly with 2 GiB left
@@ -65,6 +68,21 @@ class Recorder {
     this.maxConcurrent = maxConcurrent; this.tickMs = tickMs; this.clock = clock;
     this.live = new Map();   // id → { rec, ctx: { display, pulse, context, page, ff }, stopReq }
     fs.mkdirSync(root, { recursive: true });
+    // PLAYBACK TICKETS: a native player or a download cannot carry the owner's session reliably, so the
+    // media routes also accept a short-lived signed ticket in the URL — per recording, never a key.
+    const sf = path.join(root, '.ticket-secret');
+    try { this.secret = fs.readFileSync(sf, 'utf8').trim(); if (!this.secret) throw new Error('empty'); } catch { this.secret = newToken(); try { fs.writeFileSync(sf, this.secret, { mode: 0o600 }); } catch { /* memory only then */ } }
+  }
+
+  /** A ticket for one recording's media, valid `ttlMs` (12 h): "<expiry>.<hmac>" — the app puts it in the URL as ?t=. */
+  ticket(id, ttlMs = 12 * 3600 * 1000) {
+    const exp = this.clock() + ttlMs; const mac = require('crypto').createHmac('sha256', this.secret).update(`${id}|${exp}`).digest('hex').slice(0, 32);
+    return { t: `${exp}.${mac}`, exp };
+  }
+  checkTicket(id, t) {
+    const [exp, mac] = String(t || '').split('.'); if (!exp || !mac || Number(exp) < this.clock()) return false;
+    const want = require('crypto').createHmac('sha256', this.secret).update(`${id}|${exp}`).digest('hex').slice(0, 32);
+    return mac.length === want.length && require('crypto').timingSafeEqual(Buffer.from(mac), Buffer.from(want));
   }
 
   dirOf(id) { return path.join(this.root, String(id).replace(/[^a-z0-9_-]/gi, '')); }
@@ -75,8 +93,12 @@ class Recorder {
     return out.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
   }
   get(id) { const j = readJournal(this.dirOf(id)); return j ? this.view(j) : null; }
-  view(j) { const live = this.live.get(j.id); return { ...j, live: !!live, playlist: `/v1/recordings/${j.id}/index.m3u8`, mp4: `/v1/recordings/${j.id}/mp4` }; }
+  /** A recording in its own pod (mode "job") is live while its journal says so — its process is elsewhere. */
+  view(j) { const { token, ...pub } = j; const live = this.live.has(j.id) || (j.mode === 'job' && RUNNING.includes(j.state)); return { ...pub, live, playlist: `/v1/recordings/${j.id}/index.m3u8`, mp4: `/v1/recordings/${j.id}/mp4` }; }
+  /** Recordings this process holds (they die with it — the deploy gate waits for them). */
   running() { return [...this.live.values()].map((l) => l.rec.id); }
+  /** Recordings in pods of their own (they survive a roll of this process). */
+  runningRemote() { return this.list().filter((r) => r.mode === 'job' && RUNNING.includes(r.state)).map((r) => r.id); }
 
   _save(rec) { const dir = this.dirOf(rec.id); fs.mkdirSync(dir, { recursive: true }); const f = path.join(dir, 'recording.json'); fs.writeFileSync(f + '.tmp', JSON.stringify(rec)); fs.renameSync(f + '.tmp', f); }
   _set(rec, patch) { Object.assign(rec, patch); this._save(rec); }
@@ -85,7 +107,7 @@ class Recorder {
   adopt() {
     let n = 0;
     for (const r of this.list()) {
-      if (!['starting', 'recording', 'finishing'].includes(r.state) || this.live.has(r.id)) continue;
+      if (!RUNNING.includes(r.state) || this.live.has(r.id) || r.mode === 'job') continue;   // a pod of its own is reconcile()'s business
       const dir = this.dirOf(r.id); closePlaylist(dir);
       const st = statsOf(dir);
       const rec = readJournal(dir); this._set(rec, { state: st.segments ? 'partial' : 'failed', endedAt: this.clock(), reason: 'the recorder process went away (a restart)', ...st });
@@ -103,17 +125,62 @@ class Recorder {
     if (this.deps.freeBytes(this.root) < MIN_FREE_BYTES) throw new Error('less than 2 GiB free on the recordings volume — remove old recordings first');
     const until = UNTIL.includes(a.until) ? a.until : 'video-ends';
     const maxMinutes = Math.min(HARD_MAX_MIN, Math.max(1, Number(a.maxMinutes) || DEFAULT_MAX_MIN[until]));
-    const rec = { id: newId(), url, profile: String(a.profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default', quality: a.quality === '1080p' ? '1080p' : '720p',
-      until, maxMinutes, title: String(a.title || '').slice(0, 120), state: 'starting', startedAt: this.clock(), recordingAt: 0, endedAt: 0, seconds: 0, bytes: 0, segments: 0, error: null, reason: '', pageTitle: '', display: null };
+    const rec = { id: a.id && /^[a-z0-9-]+$/i.test(a.id) ? a.id : newId(), url, profile: String(a.profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default', quality: a.quality === '1080p' ? '1080p' : '720p',
+      until, maxMinutes, title: String(a.title || '').slice(0, 120), state: 'starting', startedAt: this.clock(), recordingAt: 0, endedAt: 0, seconds: 0, bytes: 0, segments: 0, error: null, reason: '', pageTitle: '', display: null, mode: 'local' };
+    // A POD OF ITS OWN when the cluster allows it (Phase 3): resources added, not borrowed, and a roll of
+    // this process cannot cut it. The pod reports back over HTTP with this recording's token. If the
+    // Job cannot be created the recording runs here, and the journal says which.
+    const remote = this.deps.remote;
+    if (remote && a.mode !== 'local' && remote.available()) {
+      rec.mode = 'job'; rec.token = newToken(); rec.updatedAt = this.clock(); this._save(rec);
+      Promise.resolve().then(() => remote.launch(rec)).then((j) => { const cur = readJournal(this.dirOf(rec.id)); if (cur && cur.mode === 'job') this._set(cur, { jobName: (j && j.jobName) || '' }); this.log.info(`[recorder] ${rec.id} runs as ${j && j.jobName} (a pod of its own)`); })
+        .catch((e) => { this.log.warn(`[recorder] ${rec.id}: no pod of its own (${e.message}) — recording in this pod instead`); const cur = readJournal(this.dirOf(rec.id)); if (cur && RUNNING.includes(cur.state)) { delete cur.token; this._set(cur, { mode: 'local', fallback: e.message }); this._runLocal(cur); } });
+      return this.view(rec);
+    }
     this._save(rec);
-    const entry = { rec, ctx: {}, stopReq: '' }; this.live.set(rec.id, entry);
-    entry.done = this._run(entry).catch((e) => { this.log.warn(`[recorder] ${rec.id} run: ${e.message}`); });
+    this._runLocal(rec);
     return this.view(rec);
   }
+  _runLocal(rec) { const entry = { rec, ctx: {}, stopReq: '' }; this.live.set(rec.id, entry); entry.done = this._run(entry).catch((e) => { this.log.warn(`[recorder] ${rec.id} run: ${e.message}`); }); return entry; }
 
-  stop(id, reason = 'stopped by the owner') { const l = this.live.get(id); if (!l) return { error: 'not recording' }; if (!l.stopReq) l.stopReq = reason; return { ok: true, id }; }
+  stop(id, reason = 'stopped by the owner') {
+    const l = this.live.get(id); if (l) { if (!l.stopReq) l.stopReq = reason; return { ok: true, id }; }
+    const j = readJournal(this.dirOf(id));
+    if (j && j.mode === 'job' && RUNNING.includes(j.state)) { if (!j.stopRequested) this._set(j, { stopRequested: reason }); if (this.deps.remote && this.deps.remote.stop) { try { this.deps.remote.stop(j); } catch { /* the pod polls for it anyway */ } } return { ok: true, id, remote: true }; }
+    return { error: 'not recording' };
+  }
 
-  remove(id) { if (this.live.has(id)) return { error: 'still recording — stop it first' }; const dir = this.dirOf(id); if (!readJournal(dir)) return { removed: false }; fs.rmSync(dir, { recursive: true, force: true }); return { removed: true }; }
+  remove(id) { const j = readJournal(this.dirOf(id)); if (this.live.has(id) || (j && j.mode === 'job' && RUNNING.includes(j.state))) return { error: 'still recording — stop it first' }; if (!j) return { removed: false }; fs.rmSync(this.dirOf(id), { recursive: true, force: true }); return { removed: true }; }
+
+  /** What a recorder pod needs to begin: the ask, the owner's cookies, the profile's identity — and whether the owner has asked it to stop. */
+  handoff(id) { const j = readJournal(this.dirOf(id)); if (!j) return null; return { id: j.id, url: j.url, profile: j.profile, quality: j.quality, until: j.until, maxMinutes: j.maxMinutes, title: j.title, stop: j.stopRequested || '' }; }
+  tokenOf(id) { const j = readJournal(this.dirOf(id)); return (j && j.token) || ''; }
+
+  /** The pod's journal, merged into ours: only its own fields, never ours (mode, token, url). Terminal states close the playlist. */
+  remoteUpdate(id, patch = {}) {
+    const j = readJournal(this.dirOf(id)); if (!j || j.mode !== 'job') return null;
+    const allowed = ['state', 'seconds', 'bytes', 'segments', 'pageTitle', 'prepared', 'reason', 'error', 'recordingAt', 'endedAt', 'display'];
+    const p = {}; for (const k of allowed) if (patch[k] !== undefined) p[k] = patch[k];
+    if (p.state && !STATES.includes(p.state)) delete p.state;
+    this._set(j, { ...p, updatedAt: this.clock() });
+    if (!RUNNING.includes(j.state)) closePlaylist(this.dirOf(id));
+    return this.view(j);
+  }
+
+  /** Recordings in pods of their own: a pod that is gone, or silent for too long, leaves a playable partial. */
+  async reconcile() {
+    let n = 0;
+    for (const r of this.list()) {
+      if (r.mode !== 'job' || !RUNNING.includes(r.state)) continue;
+      let alive = true; try { alive = this.deps.remote ? await this.deps.remote.alive(r) : false; } catch { alive = true; }
+      const silent = this.clock() - (r.updatedAt || r.startedAt || 0) > STALE_MS;
+      if (alive && !silent) continue;
+      const dir = this.dirOf(r.id); closePlaylist(dir); const st = statsOf(dir); const j = readJournal(dir);
+      this._set(j, { ...st, state: st.segments ? 'partial' : 'failed', endedAt: this.clock(), reason: alive ? 'the recorder pod went silent' : 'the recorder pod is gone' }); n++;
+      this.log.warn(`[recorder] ${r.id}: ${j.reason} — closed as ${j.state}`);
+    }
+    return n;
+  }
 
   async _run(entry) {
     const { rec, ctx } = entry; const d = this.deps; const dir = this.dirOf(rec.id); const size = d.sizeOf(rec.quality);
@@ -207,4 +274,4 @@ function runConcat(dir) {
   });
 }
 
-module.exports = { Recorder, statsOf, closePlaylist, concatArgs, videoKey, STATES, UNTIL, MIN_FREE_BYTES, DEFAULT_MAX_MIN, HARD_MAX_MIN };
+module.exports = { Recorder, statsOf, closePlaylist, concatArgs, videoKey, STATES, RUNNING, STALE_MS, UNTIL, MIN_FREE_BYTES, DEFAULT_MAX_MIN, HARD_MAX_MIN };

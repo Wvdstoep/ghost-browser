@@ -11,6 +11,13 @@
 # down. Every line here is printed on purpose.
 set -e
 
+# A RECORDER POD (MODE=recorder): one recording, no server, no pool, no shared display — the recording's
+# sidecar starts its own Xvfb and sound server. See src/recorder/recorder-main.js and docs/RECORDER-PLAN.md.
+if [ "${MODE:-}" = "recorder" ]; then
+  echo "[ghost] recorder pod for ${RECORDING_ID:-?} → ${GB_URL:-?}"
+  exec node src/recorder/recorder-main.js
+fi
+
 DISPLAY_NUM="${DISPLAY_NUM:-99}"
 export DISPLAY=":${DISPLAY_NUM}"
 
