@@ -29,8 +29,36 @@ const EXPAND = /^(?:(?:bekijk|view|show|see|toon)\s+)?(?:(?:all|alle|nog|more|me
 const SORT_BTN = /^(?:meest relevant|most relevant|nieuwste|newest|oudste|oldest)$/i;
 const SORT_ALL = /^(?:alle opmerkingen|all comments|alle reacties)$/i;
 
-/** Open the post on the given Playwright page, reveal the whole thread, and read it. */
+/**
+ * Open the post, then EVERY root comment's own page. The post page lazy-renders replies: after every
+ * visible "N antwoorden bekijken" was clicked, Adam's and Mike's comments still showed no reply and no
+ * control at all — while the same comments' deep links showed the owner's reply at once. So the post
+ * page only gives the list of root comments; each branch is read from its comment link, complete.
+ */
 async function crawl(page, url, log) {
+  const tree = await openAndRead(page, url, log, true);
+  const byId = new Map(); tree.nodes.forEach((n) => byId.set(n.id, n));
+  const roots = tree.nodes.filter((n) => !n.isReply).slice(0, 40);
+  for (const root of roots) {
+    const link = `https://www.facebook.com/groups/${tree.group || 'x'}/posts/${tree.postId}/?comment_id=${root.id}`;
+    try {
+      const sub = await openAndRead(page, link, null, false);
+      for (const n of sub.nodes) {
+        if (n.id !== root.id && n.cid !== root.id) continue;          // only this branch
+        n.i = root.i + (n.isReply ? (n.i + 1) / 10000 : 0);             // stays right after its root, in order
+        byId.set(n.id, n);
+      }
+    } catch (e) { if (log) log.error(`[post-watch] branch of ${root.author}: ${e.message}`); }
+  }
+  tree.nodes = [...byId.values()].sort((a, b) => a.i - b.i);
+  tree.url = String(url); tree.crawledAt = Date.now();
+  if (log) log.info(`[post-watch] ${roots.length} root comment(s) read from their own pages → ${tree.nodes.length} messages`);
+  return tree;
+}
+
+/** One page: land on it (proving the post is there), optionally sort to all comments, reveal what is
+ *  hidden, read the comment articles. */
+async function openAndRead(page, url, log, sortAll) {
   const { dismissConsent, settle } = require('./inspector');
   const pid = postIdOf(url);
   // Land on the post and PROVE it before reading: another walk on this profile can navigate the
@@ -51,7 +79,7 @@ async function crawl(page, url, log) {
   }
   const { candidates, press } = helpers(page);
   // Show ALL comments (Facebook defaults to "most relevant", which hides some) — best effort.
-  try { const sb = await candidates(SORT_BTN); if (sb[0] && await press(sb[0])) { await page.waitForTimeout(900); const sa = await candidates(SORT_ALL); if (sa[0]) { await press(sa[0]); await page.waitForTimeout(1500); } } } catch { /* optional */ }
+  try { const sb = sortAll ? await candidates(SORT_BTN) : []; if (sb[0] && await press(sb[0])) { await page.waitForTimeout(900); const sa = await candidates(SORT_ALL); if (sa[0]) { await press(sa[0]); await page.waitForTimeout(1500); } } } catch { /* optional */ }
   /* Reveal every hidden reply / more comments / truncated text. ONE click per round, then re-query:
      Facebook re-renders the whole list after each expand, so handles from before the click are stale
      and a stale-handle failure used to read as "nothing left" — the crawl quit after ~9 expands with
