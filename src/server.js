@@ -1764,6 +1764,9 @@ async function postWatchTick(wf, owner) {
   health.endedAt = Date.now();
   feed.setConfig(wf.id, { lastPass: health });
 }
+// Which watcher passes hold the browser right now. NOT owner-scoped on purpose: the deploy gate asks
+// with the master's key and sessions are per owner, so it rolled the pod straight through a crawl.
+app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers] }));
 // A watcher's health: its last pass, whether one is running now, and whether it has gone quiet.
 app.get('/v1/watchers/:id/health', authed, (req, res) => {
   try {
