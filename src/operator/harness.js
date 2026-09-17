@@ -34,7 +34,7 @@ const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v 
 const looksFailed = (out) => { const s = typeof out === 'string' ? out : JSON.stringify(out || {}); return /^\{"error"|refused|"error":|not found|failed:/i.test(String(s).slice(0, 200)); };
 
 class OperatorRun {
-  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR }) {
+  constructor({ id, goal, chat, llm, registry, systemPrompt, orientation, log, now = Date.now, startIterations = 150, maxIterations = 400, persistDir = JOB_DIR, restore = null }) {
     if (!chat || !registry || !systemPrompt) throw new Error('OperatorRun needs chat, registry, systemPrompt');
     this.id = id || `op-${now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     this.goal = String(goal || '').trim();
@@ -46,6 +46,15 @@ class OperatorRun {
     this.tasks = []; this.events = []; this.messages = []; this.report = null; this.finalLine = '';
     this.startedAt = now(); this.endedAt = 0; this.error = null;
     this._pendingSay = []; this._stop = false; this._recentCalls = []; this._nudges = 0; this._failStreak = 0; this._repeatStreak = 0;
+    this._restored = false;
+    /* RESUME after a restart: a job that was running when the pod rolled continues from its journal —
+       its id, goal, task list (with the notes), budget and the transcript tail — instead of being lost. */
+    if (restore && restore.id) {
+      this.id = restore.id; this.goal = String(restore.goal || this.goal); this.tasks = Array.isArray(restore.tasks) ? restore.tasks : [];
+      this.iterations = Number(restore.iterations) || 0; this.budget = Math.max(this.budget, Number(restore.budget) || 0);
+      this.events = Array.isArray(restore.events) ? restore.events : []; this.startedAt = restore.startedAt || this.startedAt;
+      this._restored = true; this._resumes = (Number(restore.resumes) || 0) + 1;
+    }
     this._registerBuiltins();
   }
 
@@ -79,13 +88,13 @@ class OperatorRun {
   _persist() {
     try {
       fs.mkdirSync(this.persistDir, { recursive: true });
-      const rec = { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
+      const rec = { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, tasks: this.tasks, events: this.events.slice(-400), report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, messages: this.messages.slice(-80) };
       const f = path.join(this.persistDir, this.id + '.json'); fs.writeFileSync(f + '.tmp', JSON.stringify(rec)); fs.renameSync(f + '.tmp', f);
     } catch { /* best effort */ }
   }
 
   view() {
-    return { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
+    return { id: this.id, goal: this.goal, status: this.status, iterations: this.iterations, budget: this.budget, resumes: this._resumes || 0, tasks: this.tasks, report: this.report, finalLine: this.finalLine, startedAt: this.startedAt, endedAt: this.endedAt, error: this.error, events: this.events.slice(-120) };
   }
 
   _orientationMessage() {
@@ -110,9 +119,24 @@ class OperatorRun {
     }
   }
 
+  /** What the job had done before the restart, as one digest the model reads on resume. The raw transcript is
+      not replayed: a tool result without the assistant turn that called it confuses the providers, and the
+      task list + notes already carry what was learned. */
+  _resumeDigest() {
+    const tail = this.events.filter((e) => e.kind === 'thought' || e.kind === 'tool' || e.kind === 'result' || e.kind === 'say').slice(-24);
+    const lines = tail.map((e) => e.kind === 'thought' ? `you: ${String(e.text || '').slice(0, 300)}`
+      : e.kind === 'tool' ? `call ${e.name}(${JSON.stringify(e.args || {}).slice(0, 200)})`
+      : e.kind === 'result' ? `→ ${String(e.text || '').slice(0, 300)}`
+      : `owner: ${String(e.text || '').slice(0, 300)}`);
+    return `[Resumed] Ghost Browser restarted while this job was running (resume ${this._resumes}, ${this.iterations} iterations done before). Nothing you changed was lost, but any page you had open is gone: re-read before acting. Last steps before the restart:\n${lines.join('\n') || '(none recorded)'}\n\nContinue from the task list. Verify what the last step left behind before repeating it.`;
+  }
+
   async run() {
-    this.status = 'running'; this._event('start', { goal: this.goal });
+    if (this._restored) this._event('resume', { resumes: this._resumes, iterations: this.iterations });
+    else this._event('start', { goal: this.goal });
+    this.status = 'running';
     this.messages = [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: this._orientationMessage() }];
+    if (this._restored) this.messages.push({ role: 'user', content: this._resumeDigest() });
     this._persist();
     try {
       while (!this._stop && this.status === 'running') {
@@ -176,4 +200,26 @@ function listPersisted(dir = JOB_DIR) {
   try { return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => { try { const r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); if (r.status === 'running') r.status = 'interrupted'; delete r.messages; return r; } catch { return null; } }).filter(Boolean).sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0)); } catch { return []; }
 }
 
-module.exports = { OperatorRun, listPersisted, JOB_DIR };
+const MAX_RESUMES = 3;
+
+/** Journals of jobs that were running when the process died — the ones to resume on boot. A job that has
+    already been resumed MAX_RESUMES times is marked interrupted instead (a job that kills the process every
+    time must not keep coming back). */
+function interruptedJobs(dir = JOB_DIR) {
+  const out = [];
+  try {
+    for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
+      let r; try { r = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
+      if (r.status !== 'running') continue;
+      if ((Number(r.resumes) || 0) >= MAX_RESUMES) {
+        r.status = 'interrupted'; r.finalLine = `BLOCKED: interrupted by a restart ${MAX_RESUMES} times — not resumed again`; r.endedAt = Date.now();
+        try { fs.writeFileSync(path.join(dir, f), JSON.stringify(r)); } catch { /* best effort */ }
+        continue;
+      }
+      out.push(r);
+    }
+  } catch { /* no journals yet */ }
+  return out.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+}
+
+module.exports = { OperatorRun, listPersisted, interruptedJobs, JOB_DIR, MAX_RESUMES };

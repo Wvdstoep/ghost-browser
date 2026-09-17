@@ -1859,19 +1859,33 @@ function operatorContext() {
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
   };
 }
+/** One job: fresh from a goal, or resumed from the journal a restart left behind (restore = the record). */
+function startOperatorJob(goal, cfg, restore = null) {
+  const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
+  const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
+  const reg = new Registry(); registerOperatorTools(reg, operatorContext());
+  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg, systemPrompt: operatorPrompt(), orientation: () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; }, log });
+  operatorRuns.set(run.id, run);
+  run.run().catch((e) => log.error(`[operator] ${run.id}: ${e.message}`));
+  log.info(`[operator] ${restore ? 'resumed' : 'job'} ${run.id}: ${String(run.goal).slice(0, 120)}`);
+  return run;
+}
+/** Jobs the last process died on come back by themselves — the journal carries the task list and the
+    last steps, the harness tells the model it is resuming. Bounded (see MAX_RESUMES in the harness). */
+function resumeOperatorJobs() {
+  const { interruptedJobs } = require('./operator/harness');
+  const cfg = settingsStore.read(); if (!cfg.llmModel) return 0;
+  const jobs = interruptedJobs(); let n = 0;
+  for (const j of jobs) { if (operatorRuns.has(j.id)) continue; try { startOperatorJob(j.goal, cfg, j); n++; } catch (e) { log.error(`[operator] resume ${j.id} failed: ${e.message}`); } }
+  return n;
+}
 app.post('/v1/operator/jobs', authed, (req, res) => {
   const goal = String((req.body || {}).goal || '').trim();
   if (!goal) return res.status(400).json({ error: 'goal required — what should the operator do, in plain words' });
   const cfg = settingsStore.read();
   if (!cfg.llmModel) return res.status(400).json({ error: 'no AI model configured — set it under agent Settings first' });
   try {
-    const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
-    const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
-    const reg = new Registry(); registerOperatorTools(reg, operatorContext());
-    const run = new OperatorRun({ goal, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg, systemPrompt: operatorPrompt(), orientation: () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; }, log });
-    operatorRuns.set(run.id, run);
-    run.run().catch((e) => log.error(`[operator] ${run.id}: ${e.message}`));
-    log.info(`[operator] job ${run.id}: ${goal.slice(0, 120)}`);
+    const run = startOperatorJob(goal, cfg);
     res.json({ id: run.id, status: 'running' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2666,6 +2680,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       const n = workflows.recoverRuns({ runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, log });
       if (n) log.info(`[workflow] found ${n} interrupted run(s) to resume`);
     } catch (e) { log.error(`[workflow] recovery failed: ${(e && e.message) || e}`); }
+    try { const n = resumeOperatorJobs(); if (n) log.info(`[operator] resumed ${n} interrupted job(s)`); }
+    catch (e) { log.error(`[operator] recovery failed: ${(e && e.message) || e}`); }
   }, 5000);
 });
 
