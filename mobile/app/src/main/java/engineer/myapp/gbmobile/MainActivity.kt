@@ -1302,6 +1302,97 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         return try { JSONObject(s.substring(a, b + 1)) } catch (e: Exception) { null }
     }
 
+    // ---- THE ASSISTANT — one chat, one agent, on the cluster ------------------------------------
+    // The phone is a thin client: it sends the owner's words to Ghost Browser (bearer key, same channel
+    // as watchers/approvals), polls the chat while a turn runs, and renders what comes back. No model
+    // call ever leaves the phone, so no key and no proxy 403s here. All calls run on agentExec
+    // (apiAwait latches; never on the main thread) and land on the UI via runOnUiThread.
+
+    @Volatile private var assistantChatId: String = ""
+    private val assistantPollH by lazy { android.os.Handler(mainLooper) }
+    private val ASSIST = shellUi.assistant
+
+    private fun assistantOpen() {
+        shellUi.switcherOpen.value = false; shellUi.screen.value = "agent"
+        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        if (!ASSIST.connected.value) return
+        agentExec.execute {
+            aiModelLoad()
+            if (assistantChatId.isBlank()) {
+                val list = AssistantJson.chats(apiAwait("GET", "/v1/assistant/chats", null))
+                runOnUiThread { ASSIST.chats.value = list }
+                val first = list.firstOrNull { !it.running } ?: list.firstOrNull()
+                if (first != null) assistantLoad(first.id) else assistantNew()
+            } else assistantLoad(assistantChatId)
+        }
+        startPipLoop()
+    }
+    private fun assistantRefreshChats() { val list = AssistantJson.chats(apiAwait("GET", "/v1/assistant/chats", null)); runOnUiThread { ASSIST.chats.value = list } }
+    /** Load a chat (worker thread) and, while a turn runs, keep polling it every 2.5 s. */
+    private fun assistantLoad(id: String) {
+        val raw = apiAwait("GET", "/v1/assistant/chats/$id", null)
+        val v = AssistantJson.chat(raw)
+        runOnUiThread {
+            if (v == null) { ASSIST.error.value = "Could not reach your Ghost Browser (${raw.take(80)})"; shellUi.agentBusy.value = false; return@runOnUiThread }
+            assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.error.value = ""
+            shellUi.agentBusy.value = v.live != null
+            assistantPollH.removeCallbacksAndMessages(null)
+            if (v.live != null) assistantPollH.postDelayed({ if (shellUi.screen.value == "agent" || true) agentExec.execute { assistantLoad(v.id) } }, 2500)
+        }
+    }
+    private fun assistantNew() {
+        val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", "{}"))
+        runOnUiThread { if (v != null) { assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.error.value = ""; shellUi.agentBusy.value = false } else ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?" }
+        assistantRefreshChats()
+    }
+    private fun assistantSend(text: String) {
+        if (text.isBlank()) return
+        // the owner's words appear at once; the cluster's copy replaces it on the next load
+        ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
+        shellUi.agentBusy.value = true
+        agentExec.execute {
+            if (assistantChatId.isBlank()) { val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", "{}")); if (v == null) { runOnUiThread { ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"; shellUi.agentBusy.value = false }; return@execute }; assistantChatId = v.id }
+            val id = assistantChatId
+            val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster") }
+            if (r.has("error")) runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
+            assistantLoad(id)
+        }
+    }
+    /** A card the assistant handed the owner: a door into results, approvals or a page. */
+    private fun assistantCard(c: engineer.myapp.gb.shared.AssistantCard) {
+        when (c.kind) {
+            "results" -> if (c.watcherId.isNotBlank()) openWatcherResults(c.watcherId)
+            "approvals" -> { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() }
+            "url" -> if (c.url.isNotBlank()) { shellUi.screen.value = "browser"; load(c.url) }
+        }
+    }
+
+    // ---- The AI model: Ghost Browser's own setting, edited from here ----------------------------
+    private val AIM = shellUi.aiModel
+    private fun aiModelLoad() {
+        runOnUiThread { AIM.loading.value = true }
+        val info = AssistantJson.model(apiAwait("GET", "/v1/agent/settings", null))
+        runOnUiThread { AIM.loading.value = false; if (info != null) { AIM.info.value = info; ASSIST.model.value = info.model } else AIM.note.value = "could not read the model from your Ghost Browser" }
+    }
+    private fun aiModelBody(host: String, key: String, model: String? = null): String {
+        val b = JSONObject(); if (host.isNotBlank()) b.put("llmHost", host.trim().removeSuffix("/").removeSuffix("/v1")); if (key.isNotBlank()) b.put("llmKey", key.trim()); if (model != null && model.isNotBlank()) b.put("llmModel", model.trim()); return b.toString()
+    }
+    private fun aiModelList(host: String, key: String) {
+        runOnUiThread { AIM.busy.value = true; AIM.note.value = "asking your Ghost Browser…" }
+        val (list, note) = AssistantJson.models(apiAwait("POST", "/v1/agent/models", aiModelBody(host, key)))
+        runOnUiThread { AIM.busy.value = false; AIM.models.value = list; AIM.note.value = note }
+    }
+    private fun aiModelTest(host: String, key: String, model: String) {
+        runOnUiThread { AIM.busy.value = true; AIM.note.value = "testing $model…" }
+        val r = try { JSONObject(apiAwait("POST", "/v1/agent/test", aiModelBody(host, key, model))) } catch (e: Exception) { JSONObject().put("error", "no answer") }
+        runOnUiThread { AIM.busy.value = false; AIM.note.value = if (r.has("error")) "✗ ${r.optString("error").take(120)}" else "✓ $model answers" }
+    }
+    private fun aiModelSave(host: String, key: String, model: String) {
+        val r = try { JSONObject(apiAwait("PUT", "/v1/agent/settings", aiModelBody(host, key, model))) } catch (e: Exception) { JSONObject().put("error", "no answer") }
+        runOnUiThread { AIM.note.value = if (r.has("error")) "✗ ${r.optString("error").take(120)}" else "✓ saved — the agent now runs on ${r.optString("llmModel", model)}" }
+        aiModelLoad()
+    }
+
     // ---- Cluster panel --------------------------------------------------------------------------
 
     /** Build the shell (browser/flows/agent) actions. */
@@ -1317,10 +1408,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onCloseTab = { i -> closeTab(i) },
         onNav = { s -> shellUi.screen.value = s; if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows") },
         onOpenSettings = { openSettings() },
-        onOpenAgent = { openAgentChat() },
+        onOpenAgent = { assistantOpen() },
         onCloseAgent = { shellUi.screen.value = "browser" },
-        onNewAgentChat = { newAgentChat() },
-        onSendAgent = { t -> sendAgentMessage(t) },
+        assistant = engineer.myapp.gb.shared.AssistantActions(
+            onSend = { t -> assistantSend(t) },
+            onNew = { agentExec.execute { assistantNew() } },
+            onOpen = { id -> agentExec.execute { assistantLoad(id) } },
+            onDelete = { id -> agentExec.execute { apiAwait("DELETE", "/v1/assistant/chats/$id", null); assistantRefreshChats(); if (id == assistantChatId) { assistantChatId = ""; runOnUiThread { shellUi.assistant.chat.value = null } } } },
+            onStop = { agentExec.execute { val id = assistantChatId; if (id.isNotBlank()) { apiAwait("POST", "/v1/assistant/chats/$id/stop", "{}"); assistantLoad(id) } } },
+            onCard = { c -> assistantCard(c) },
+            onRefreshChats = { agentExec.execute { assistantRefreshChats() } },
+            onSettings = { shellUi.aiSettingsOpen.value = true },
+            onClose = { shellUi.screen.value = "browser" },
+            onOpenUrl = { u -> shellUi.screen.value = "browser"; load(u) },
+            onConnect = { openSettings() },
+        ),
+        aiModel = engineer.myapp.gb.shared.AiModelActions(
+            onLoad = { agentExec.execute { aiModelLoad() } },
+            onList = { host, key -> agentExec.execute { aiModelList(host, key) } },
+            onTest = { host, key, model -> agentExec.execute { aiModelTest(host, key, model) } },
+            onSave = { host, key, model -> agentExec.execute { aiModelSave(host, key, model) } },
+        ),
         onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
         onRunFlow = { id, name -> runFlow(id, name) },
         onCreateFlow = { name, steps -> createFlow(name, steps) },
