@@ -115,6 +115,8 @@ Facts the design rests on (measured 2026-09-17):
 
 Until the platform spawns recorders (Phase 5), one recording runs at a time (`MAX_RECORDINGS_TOTAL`, 1). A recording asked for while one runs is `queued`: it keeps its place, starts by itself the moment the running one ends (also after a restart), and can be taken out of the queue with Stop. The recordings list carries `queued` (ids in order) and each queued recording its `queuePos`; the app shows the queue under Downloads and on the card ("queued · #2"); the agent's `record_start` answers "queued, position n" and `record_list` lists the queue.
 
+Proven on v346 (2026-09-18): two one-minute asks three seconds apart — the second sat at position 1 while the first recorded, started by itself 105 s later as a pod of its own, and both ended done.
+
 ## Phase 5 — The platform spawns the recorder
 
 **Why.** A recorder Job created by GB inside the tenant's namespace competes with the tenant's own apps for the namespace quota (10 GiB of reservations, 8.6 in use → one recorder pod at most, a second one refused), and the tenant's plan and rented machines are invisible to a tool. Spawning recorders is a platform capability: the platform knows the plan (recording minutes, parallel recordings, storage), the tenant's rented VMs and BYON nodes, and the capacity controller; a tool should ask, not decide.
