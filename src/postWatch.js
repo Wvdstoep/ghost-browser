@@ -427,9 +427,17 @@ async function postReply(page, url, text, opts) {
     const arts = Array.from(document.querySelectorAll('[role="article"]')).filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || '') && a.getClientRects().length > 0 && !a.closest('[aria-hidden="true"]'));
     return arts.find((a) => Array.from(a.querySelectorAll('a[href*="comment_id="]')).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('reply_comment_id=' + id) || (!h.includes('reply_comment_id=') && h.includes('comment_id=' + id)); })) || null;
   }, targetId);
-  const target = await findTarget();
-  const el = target.asElement();
-  if (!el) return { posted: false, detail: `comment ${targetId} not found on its own page` };
+  let el = (await findTarget()).asElement();
+  if (!el) {
+    // once more from the top — the page may have been mid-render, or been moved under us
+    await page.waitForTimeout(3000);
+    await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try { await settle(page); } catch { /* rendering */ }
+    await page.waitForTimeout(3000); alive();
+    await expandAll(page, candidates, press, alive);
+    el = (await findTarget()).asElement();
+  }
+  if (!el) return { posted: false, detail: `comment ${targetId} not found on its own page (tried twice)` };
   const already = await el.evaluate((a, me) => {
     // a later reply by the owner TO this author already present? (re-check before posting)
     const label = a.getAttribute('aria-label') || '';
