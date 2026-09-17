@@ -53,6 +53,9 @@ data class Watcher(
     val followUpFlowId: String = "",       // legacy single follow-up (kept for older configs)
     val followUpRepliesOnly: Boolean = true, // legacy
     val followUps: List<FollowUpRoute> = emptyList(), // the engine: each notification kind → its own flow
+    val health: String = "",       // last pass, in one line ("12 min ago · 34 messages · 2 waiting · 3 verified, 1 corrected")
+    val stale: Boolean = false,    // active but no pass for too long — the watcher has gone quiet
+    val running: Boolean = false,  // a pass is in progress right now
 )
 
 /** One routing rule of a watcher: items of these kinds run this flow. Empty kinds = any kind. */
