@@ -236,8 +236,13 @@ function ingest(wid, tree, cfg, feed) {
   const out = [];
   const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   const mentionsMe = (n) => !!me && String(n.text || '').trim().toLowerCase().startsWith(me);
+  /* SOMEONE ELSE'S POST. The owner commented under a post of another person's; that person (or anyone)
+     replied. Only the branches the owner is in are the owner's business here: a root comment by
+     somebody else is their conversation with the post's author, never the owner's to answer. */
+  const theirs = !!tree.postAuthor && !!me && !same(tree.postAuthor, me);
   for (const [rootId, list] of Object.entries(branches)) {
     const rootAuthor = (byId[rootId] || list[0] || {}).author || '';
+    if (theirs && !list.some(isMe)) continue;
     list.forEach((n, i) => {
       const parent = byId[n.parentId];
       const mine = isMe(n);
@@ -249,7 +254,7 @@ function ingest(wid, tree, cfg, feed) {
       // "continuing": the root author carrying on their OWN thread after the owner answered them
       // (Peter answering the owner's question) - not anyone replying to the root author.
       const toMe = n.isReply && (same(n.replyTo, me) || mentionsMe(n) || (same(n.author, rootAuthor) && same(n.replyTo, rootAuthor) && talkedBefore));
-      const addressed = !mine && (!n.isReply || toMe);
+      const addressed = !mine && (theirs ? toMe : (!n.isReply || toMe));
       // A person is answered only when a LATER reply of the owner's in this branch is TO THEM (the
       // label says who each reply answers). Replying to Dennis does not answer Peter.
       const repliedTo = addressed && list.some((m, j) => j > i && isMe(m) && (same(m.replyTo, n.author) || (!m.replyTo && !n.isReply)));
@@ -258,12 +263,12 @@ function ingest(wid, tree, cfg, feed) {
       const answered = repliedTo || reacted;
       const status = mine ? 'you' : (!addressed ? 'side conversation' : (repliedTo ? 'answered' : (reacted ? 'you reacted' : 'waiting on you')));
       const target = n.replyTo || (parent ? parent.author : '');
-      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}` : `${n.author} commented on your post`);
+      const title = mine ? `you replied to ${target || 'a comment'}` : (n.isReply ? `${n.author} replied to ${toMe ? 'you' : (target || 'a comment')}${theirs ? ` on ${tree.postAuthor}'s post` : ''}` : (theirs ? `${n.author} commented on ${tree.postAuthor}'s post` : `${n.author} commented on your post`));
       // WHY it is (or is not) the owner's, in the words a card can show; and the branch as a transcript
       // the owner would otherwise open Facebook to read.
       const why = mine ? 'your reply' : !addressed ? `${n.author} and ${target || 'someone'} talking to each other` : !n.isReply ? 'commented on your post' : same(n.replyTo, me) ? 'replied to you' : mentionsMe(n) ? 'mentions you' : 'continued after your answer';
       const thread = list.map((m) => `${isMe(m) ? 'YOU' : m.author}: ${String(m.text || '').replace(/\s+/g, ' ').slice(0, 220)}`).join('\n');
-      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, why, postId: tree.postId, postTitle: String(tree.postText || '').replace(/\s+/g, ' ').slice(0, 90), commentId: n.id, rootId, replyTo: target, thread };
+      const fields = { type: n.isReply ? 'reply' : 'comment', author: n.author, said: n.text, when: n.when, status, why, postId: tree.postId, postTitle: (theirs ? `${tree.postAuthor}: ` : '') + String(tree.postText || '').replace(/\s+/g, ' ').slice(0, 90), postAuthor: tree.postAuthor || '', theirs, commentId: n.id, rootId, replyTo: target, thread };
       const { item } = feed.upsert(wid, { title, fields, url: deepLink(tree, n), kind: n.isReply ? 'reply' : 'comment' });
       const patch = { fields: Object.assign({}, item.fields, fields), isMe: mine };
       if (mine || answered || !addressed) patch.handled = true;    // nothing for the owner to do here, and it stays gone
@@ -345,7 +350,8 @@ async function draftAll(wid, tree, entries, cfg, llmCfg, feed, log) {
       + 'Output ONLY the reply text - no quotes, no preamble.';
     // what is known about this person from other posts, and what the owner tends to change in drafts
     let memory = ''; let lessons = ''; try { memory = people.profileOf('facebook', e.node.author, { exceptPostId: tree.postId }); lessons = people.editLessons(); } catch (err) { memory = ''; lessons = ''; }
-    const user = `YOUR POST (you wrote this):\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
+    const theirs = !!tree.postAuthor && !!meName && String(tree.postAuthor).trim().toLowerCase() !== meName;
+    const user = `${theirs ? `THE POST (by ${tree.postAuthor} — not yours; you commented under it)` : 'YOUR POST (you wrote this)'}:\n${tree.postText || '(post text not captured - reply only to what they said)'}\n\nTHIS COMMENT THREAD, in order:\n${transcript}\n\n${memory ? memory + '\n\n' : ''}${lessons ? lessons + '\n\n' : ''}Write ONE reply to ${e.node.author}'s last message: "${String(e.node.text).slice(0, 600)}". Speak to ${e.node.author} only, building on what was said in this thread. If it is just thanks or an emoji, one short warm line is enough.`;
     try {
       const out = await llm.chat({ host: llmCfg.llmHost, model: llmCfg.llmModel, key: llmCfg.llmKey, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
       const text = humanize((out && out.content) || '');
@@ -411,7 +417,8 @@ function discover(wid, cfg, feed) {
   const from = cfg.discoverFrom || 'facebook-notifications-watcher';
   if (from && from !== wid) {
     for (const it of feed.list(from)) {
-      if (!/(je bericht|your post|jouw bericht)/i.test(String(it.title || '') + ' ' + String((it.fields || {}).detail || ''))) continue;
+      const t = String(it.title || '') + ' ' + String((it.fields || {}).detail || '');
+      if (!/(je bericht|your post|jouw bericht|je opmerking|jouw opmerking|je reactie|jouw reactie|your comment|your reply)/i.test(t)) continue;
       const pid = postIdOf(it.url); if (!pid || ids.has(pid)) continue;
       const group = (String(it.url).match(/\/groups\/([^/?]+)/) || [])[1]; if (!group) continue;
       ids.add(pid); urls.push(`https://www.facebook.com/groups/${group}/posts/${pid}/`);
@@ -434,17 +441,22 @@ async function discoverOnPage(page, log) {
     for (const a of Array.from(document.querySelectorAll('a[href*="notif_id="], a[href*="notif_t="]'))) {
       const href = a.href || '';
       const txt = ((a.getAttribute('aria-label') || '') + ' ' + (a.innerText || '')).replace(/\s+/g, ' ').trim();
-      if (!/(je bericht|jouw bericht|your post)/i.test(txt)) continue;
+      const mine = /(je bericht|jouw bericht|your post)/i.test(txt);
+      // a reply to a COMMENT of the owner's on someone else's post: a conversation the owner started there
+      const theirs = !mine && /(je opmerking|jouw opmerking|je reactie|jouw reactie|your comment|your reply|op je reactie|op je opmerking)/i.test(txt);
+      if (!mine && !theirs) continue;
       let u; try { u = new URL(href); } catch (e) { continue; }
       const pid = u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || '';
       const g = (u.pathname.match(/\/groups\/([^/?]+)/) || [])[1] || '';
       if (!pid || !g || seen.has(pid)) continue;
-      seen.add(pid); out.push({ postId: pid, group: g, text: txt.slice(0, 120) });
+      seen.add(pid); out.push({ postId: pid, group: g, text: txt.slice(0, 120), theirs });
     }
     return out;
   }).catch(() => []);
-  if (log) log.info(`[post-watch] notifications page: ${found.length} post(s) of yours with activity`);
-  return found.map((f) => `https://www.facebook.com/groups/${f.group}/posts/${f.postId}/`);
+  if (log) log.info(`[post-watch] notifications page: ${found.filter((f) => !f.theirs).length} post(s) of yours with activity, ${found.filter((f) => f.theirs).length} thread(s) of yours under other people's posts`);
+  const urls = found.map((f) => `https://www.facebook.com/groups/${f.group}/posts/${f.postId}/`);
+  urls.theirs = found.filter((f) => f.theirs).map((f) => f.postId);
+  return urls;
 }
 
 /** Ground truth for one comment link: every comment article Facebook renders there, as the watcher's

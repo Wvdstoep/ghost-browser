@@ -42,12 +42,22 @@ function remember(platform, tree, entries, { now = Date.now(), urlOf = () => '' 
   const postId = String((tree && tree.postId) || ''); const postTitle = norm(tree && tree.postText).slice(0, 90);
   const recs = new Map(); const get = (name) => { const k = slug(name); if (!recs.has(k)) recs.set(k, load(platform, name) || blank(platform, name, now)); return recs.get(k); };
   const seenIn = (rec, id) => rec.exchanges.some((x) => x.id === id);
+  /* SOMEONE ELSE'S POST: the post's author is a person the owner talks with — their POST is the first
+     exchange on their record, and the owner's root comment under it is "you → them". */
+  const postAuthor = norm(tree && tree.postAuthor);
+  const anyMe = (entries || []).find((e) => e && typeof e.isMe === 'function');
+  const theirs = !!postAuthor && !!anyMe && !anyMe.isMe({ author: postAuthor }) && (entries || []).some((e) => e.node && (typeof e.isMe === 'function' ? e.isMe(e.node) : e.isMe));
+  if (theirs && (tree.postText || '')) {
+    const rec = get(postAuthor); const pid = 'post:' + postId;
+    if (!seenIn(rec, pid)) rec.exchanges.push({ id: pid, t: now, who: 'them', kind: 'post', text: norm(tree.postText).slice(0, 400), postId, when: '' });
+    rec.posts[postId] = { title: postTitle, lastAt: now, theirs: true }; rec.lastSeen = now; touched.add(rec.name);
+  }
   for (const e of entries || []) {
     const n = e.node; if (!n || !n.author) continue;
     const isMe = typeof e.isMe === 'function' ? e.isMe : () => !!e.isMe;
     if (isMe(n)) {
-      // the owner's reply: goes on the record of the person it answers
-      const to = n.replyTo || ((e.branch || [])[0] && (e.branch || [])[0].author) || ''; if (!to || isMe({ author: to })) continue;
+      // the owner's reply: goes on the record of the person it answers (a root comment on their post: the author)
+      const to = n.replyTo || (theirs && !n.isReply ? postAuthor : '') || ((e.branch || [])[0] && (e.branch || [])[0].author) || ''; if (!to || isMe({ author: to })) continue;
       const rec = get(to); if (!seenIn(rec, n.id)) {
         rec.exchanges.push({ id: n.id, t: now, who: 'you', text: norm(n.text).slice(0, 400), postId, when: n.when || '' });
         if (PROMISE.test(n.text || '')) { const p = norm(n.text).slice(0, 200); if (!rec.promises.some((x) => x.text === p)) rec.promises.push({ text: p, t: now, postId }); }
@@ -88,7 +98,7 @@ function profileOf(platform, name, { exceptPostId = '' } = {}) {
   const lines = [];
   lines.push(`PERSON MEMORY — ${rec.name}: ${rec.exchanges.length} exchange(s) with you across ${Object.keys(rec.posts).length} post(s).`);
   if (posts.length) lines.push(`Earlier posts they engaged on: ${posts.map(([, p]) => `"${p.title}"`).slice(-3).join(', ')}.`);
-  if (earlier.length) lines.push('Earlier exchanges (oldest first):\n' + earlier.map((x) => `  ${x.who === 'you' ? 'YOU' : rec.name}: ${x.text.slice(0, 160)}`).join('\n'));
+  if (earlier.length) lines.push('Earlier exchanges (oldest first):\n' + earlier.map((x) => `  ${x.who === 'you' ? 'YOU' : rec.name}${x.kind === 'post' ? ' POSTED' : ''}: ${x.text.slice(0, 160)}`).join('\n'));
   if (rec.promises.length) lines.push(`You promised them: ${rec.promises.slice(-3).map((p) => `"${p.text.slice(0, 120)}"`).join('; ')} — honour or reference it, never re-promise.`);
   if (rec.asks.length) lines.push(`They asked before: ${rec.asks.slice(-3).map((a) => `"${a.text.slice(0, 100)}"`).join('; ')}.`);
   if (rec.signals.length) lines.push(`COMMERCIAL SIGNAL — they showed buying interest: ${rec.signals.slice(-2).map((s) => `"${s.text.slice(0, 120)}"`).join('; ')}. Answer helpfully and leave the door open; do not pitch.`);
