@@ -40,6 +40,10 @@ dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.google.mediapipe:tasks-genai:0.10.24")   // on-device Gemma (LLM Inference)
+    // --- the recording player: Media3/ExoPlayer plays the live HLS playlist and the seekable mp4, with real errors ---
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 
     // --- Jetpack Compose (foundation for the new UI: run sheet, settings, results) ---
     implementation(platform("androidx.compose:compose-bom:2024.09.02"))
