@@ -842,4 +842,4 @@ class BrowserPool {
   }
 }
 
-module.exports = { BrowserPool, refusePasskeys, followPopups, presentAs, PLATFORMS, passkeyRefusalScript, LIMITS, memoryLimitBytes, memoryUsedBytes };
+module.exports = { BrowserPool, refusePasskeys, followPopups, presentAs, PLATFORMS, passkeyRefusalScript, LIMITS, memoryLimitBytes, memoryUsedBytes, stealthChromium, CHROME_ARGS };

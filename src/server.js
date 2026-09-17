@@ -2075,6 +2075,21 @@ app.post('/v1/assistant/chats/:id/messages', authed, (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistant.stop(req.params.id)));
+/* THE RECORDER, Phase 0 (docs/RECORDER-PLAN.md): a probe records ONE page for a few seconds through the
+   recording sidecar — its own display, its own sound server, its own Chromium on a copy of the profile's
+   cookies — and reports whether the result has sound. The pool never notices. */
+app.post('/v1/recordings/probe', authed, async (req, res) => {
+  const { probe } = require('./recorder/probe');
+  const url = String((req.body || {}).url || '').trim(); if (!/^https?:\/\//.test(url)) return res.status(400).json({ error: 'url required' });
+  const profile = String((req.body || {}).profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
+  const cfg = (() => { try { return profiles.read(profile) || {}; } catch { return {}; } })();
+  try {
+    const out = await probe({ url, profile, seconds: Number((req.body || {}).seconds) || 20, quality: (req.body || {}).quality, profileDir: process.env.PROFILE_DIR || '/profiles', cfg, log,
+      store: (bytes, name) => fileAssets.put({ mime: 'video/mp4', kind: 'video', name, bytes, source: 'recorder-probe' }) });
+    log.info(`[recorder] probe ${url} → ${out.fileId} (${Math.round(out.bytes / 1024)} KB, sound=${out.sound}, ${JSON.stringify(out.audio)})`);
+    res.json({ ok: true, ...out, downloadUrl: out.fileId ? `/v1/files/${out.fileId}/raw?download=1` : null });
+  } catch (e) { log.warn(`[recorder] probe failed: ${e.message}`); res.status(500).json({ error: e.message }); }
+});
 /* Screenshots gb_look stored, for the app (png, by file name only). */
 app.get('/v1/operator/shots/:file', authed, (req, res) => {
   const f = String(req.params.file || '').replace(/[^0-9a-z._-]/gi, ''); if (!/\.(png|jpg|webp)$/.test(f)) return res.status(404).end();
