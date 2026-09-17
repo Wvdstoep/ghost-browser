@@ -63,7 +63,9 @@ fun DownloadsScreen(ui: DownloadsUi, act: DownloadsActions, modifier: Modifier =
                     Row(Modifier.padding(top = 4.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Videocam, null, tint = Brand, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
                         Text("Recordings", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface, modifier = Modifier.weight(1f))
-                        if (ui.recordingsFreeBytes.value > 0) Text("${ui.recordingsFreeBytes.value / 1_073_741_824} GB free", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                        val freeGb = ui.recordingsFreeBytes.value / 1_073_741_824
+                        // the disk is a budget: under 5 GB the number turns to a warning, under 2 GB a recording refuses to start
+                        if (ui.recordingsFreeBytes.value > 0) Text(if (freeGb < 2) "$freeGb GB free — recordings will refuse to start" else if (freeGb < 5) "$freeGb GB free — getting full" else "$freeGb GB free", color = if (freeGb < 5) cs.error else cs.onSurfaceVariant, fontSize = 11.sp, fontWeight = if (freeGb < 5) FontWeight.SemiBold else FontWeight.Normal)
                     }
                 }
                 items(ui.recordings.value, key = { "rec-" + it.id }) { r -> RecordingCard(r.id, onDelete = act.onDeleteRecording) }

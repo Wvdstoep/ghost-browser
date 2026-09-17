@@ -108,6 +108,14 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         RH.save = { rec -> Tabs.go(base() + rec.mp4.ifBlank { "/v1/recordings/${rec.id}/mp4" } + "?download=1"); state.activity.value = "saving ${rec.name} through the browser's download" }
         RH.stop = { id -> stopRecordingD(state, id) }
         RH.refresh = { id -> refreshRecordingD(state, id) }
+        RH.share = { rec -> Thread { try {
+            val sh = org.json.JSONObject(Cluster.authed("POST", "/v1/recordings/${rec.id}/share", "{\"days\":7}"))
+            if (sh.has("error")) { state.activity.value = "share: ${sh.optString("error")}" } else {
+                val link = base() + sh.optString("url")
+                try { java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(java.awt.datatransfer.StringSelection(link), null) } catch (e: Exception) {}
+                state.activity.value = "share link copied (expires in ${sh.optInt("days", 7)} days): $link"
+            }
+        } catch (e: Exception) { state.activity.value = "share: ${e.message}" } }.start() }
     }
     Box(Modifier.fillMaxSize()) {
     // Poll the approvals gate while its screen is open, so drafts + activity stay live.

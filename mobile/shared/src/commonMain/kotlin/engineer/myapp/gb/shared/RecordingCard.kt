@@ -35,6 +35,8 @@ object RecordingHooks {
     var save: ((rec: RecordingInfo) -> Unit)? = null
     /** Ask the platform for fresh info on one recording (called by a card that has none yet). */
     var refresh: ((id: String) -> Unit)? = null
+    /** A share link (a public player page that expires): the platform fetches it and puts it on the clipboard. */
+    var share: ((rec: RecordingInfo) -> Unit)? = null
 }
 
 fun recordingClock(secs: Int): String { val h = secs / 3600; val m = (secs % 3600) / 60; val s = secs % 60; return if (h > 0) "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}" else "$m:${s.toString().padStart(2, '0')}" }
@@ -66,12 +68,13 @@ fun RecordingCard(id: String, modifier: Modifier = Modifier, onDelete: ((id: Str
                         rec.state == "recording" -> "recording · ${recordingClock(rec.seconds)} · ${recordingSize(rec.bytes)}"
                         rec.state == "finishing" -> "finishing · ${recordingClock(rec.seconds)}"
                         rec.state == "failed" -> "failed · ${rec.error.ifBlank { rec.reason }}"
-                        else -> "${rec.state} · ${recordingClock(rec.seconds)} · ${recordingSize(rec.bytes)}" + (if (rec.reason.isNotBlank() && rec.state == "partial") " · ${rec.reason}" else "")
+                        else -> "${rec.state} · ${recordingClock(rec.seconds)} · ${recordingSize(rec.bytes)}" + (if (rec.chapters > 0) " · ${rec.chapters} chapters" else "") + (if (rec.reason.isNotBlank() && rec.state == "partial") " · ${rec.reason}" else "")
                     }
                     Text(line, color = if (running) Brand else if (rec?.state == "failed") cs.error else cs.onSurfaceVariant, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (rec != null && running && RecordingHooks.stop != null) IconButton(onClick = { RecordingHooks.stop?.invoke(rec.id) }) { Icon(Icons.Default.Stop, "Stop", tint = cs.error) }
+            if (rec != null && !running && rec.playable && RecordingHooks.share != null) IconButton(onClick = { RecordingHooks.share?.invoke(rec) }) { Icon(Icons.Default.Share, "Share link", tint = cs.onSurfaceVariant) }
             if (rec != null && !running && rec.playable && RecordingHooks.save != null) {
                 var saved by remember(rec.id) { mutableStateOf(false) }
                 IconButton(onClick = { RecordingHooks.save?.invoke(rec); saved = true }) { Icon(if (saved) Icons.Default.Check else Icons.Default.Download, "Save to device", tint = if (saved) Brand else cs.onSurfaceVariant) }
