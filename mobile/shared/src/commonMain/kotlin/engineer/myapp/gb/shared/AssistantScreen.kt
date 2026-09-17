@@ -59,6 +59,10 @@ class AssistantUi {
 object AssistantHooks {
     /** Save a picture (data: url) to the device under this name; null = no saving on this platform. */
     var saveImage: ((dataUrl: String, name: String) -> Unit)? = null
+    /** Save a captured FILE (any kind) to the device: the platform fetches the file's saveUrl (base64) from Ghost Browser. */
+    var saveFile: ((downloadUrl: String, name: String) -> Unit)? = null
+    /** Files already saved this session (download urls), so a file you asked for is saved once, by itself. */
+    val autoSaved: MutableSet<String> = mutableSetOf()
 }
 
 class AssistantActions(
@@ -177,6 +181,11 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
     val cs = MaterialTheme.colorScheme
     val stripe = when (t.status) { "blocked" -> Color(0xFFE0A100); "error", "stopped" -> Color(0xFFE5484D); else -> Color.Transparent }
     var details by remember { mutableStateOf(false) }
+    // a file the owner asked for saves itself to the device once the turn has landed (once per file)
+    LaunchedEffect(t.t) {
+        val saveF = AssistantHooks.saveFile ?: return@LaunchedEffect
+        t.steps.filter { it.download.isNotBlank() && it.download !in AssistantHooks.autoSaved }.forEach { s -> AssistantHooks.autoSaved += s.download; saveF(s.download, s.fileName) }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Box(Modifier.padding(top = 6.dp, end = 10.dp).size(22.dp).clip(CircleShape).background(Brand.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
             Icon(Icons.Default.AutoAwesome, null, tint = Brand, modifier = Modifier.size(13.dp))
@@ -254,6 +263,18 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                     if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     // the server sends a human line per result; raw JSON (older turns) stays hidden
                     if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[") && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // a captured FILE that is not a picture (a video, a PDF, an export): a card with Save
+                    if (s.download.isNotBlank() && s.imageData.isBlank()) {
+                        val saveF = AssistantHooks.saveFile
+                        var saved by remember(s.download) { mutableStateOf(s.download in AssistantHooks.autoSaved) }
+                        Surface(color = cs.surfaceVariant.copy(alpha = 0.6f), shape = RoundedCornerShape(10.dp), modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) {
+                            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.InsertDriveFile, null, tint = Brand, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                                Text(s.fileName.ifBlank { "file" }, Modifier.weight(1f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (saveF != null) TextButton(onClick = { saveF(s.download, s.fileName); saved = true }, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(if (saved) Icons.Default.Check else Icons.Default.Download, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(if (saved) "Saved" else "Save", fontSize = 12.sp) }
+                            }
+                        }
+                    }
                     // the picture the tool took — what the agent was looking at
                     if (s.imageData.isNotBlank() && decode != null) {
                         val bmp = remember(s.imageData) { try { decode(s.imageData) } catch (e: Throwable) { null } }

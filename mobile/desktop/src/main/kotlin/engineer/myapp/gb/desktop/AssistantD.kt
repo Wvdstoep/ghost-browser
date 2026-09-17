@@ -28,6 +28,11 @@ object AssistantD {
                 java.io.File(dir, fname).writeBytes(bytes); st.activity.value = "saved ${dir.resolve(fname)}"
             } catch (e: Exception) { st.activity.value = "save failed: ${e.message}" }
         }
+        // any captured FILE: fetched as base64 from Ghost Browser, saved into ~/Downloads like a picture
+        if (AssistantHooks.saveFile == null) AssistantHooks.saveFile = { downloadUrl, name ->
+            val id = Regex("/v1/files/([^/]+)/").find(downloadUrl)?.groupValues?.get(1)
+            if (id != null) bg { try { val o = JSONObject(Cluster.authed("GET", "/v1/files/$id/b64", null)); if (o.has("error")) st.activity.value = "save $name: ${o.optString("error")}" else AssistantHooks.saveImage?.invoke(o.optString("data"), name.ifBlank { o.optString("name") }) } catch (e: Exception) { st.activity.value = "save failed: ${e.message}" } }
+        }
         if (st.assistant.decodeImage == null) st.assistant.decodeImage = { data ->
             try { val bytes = java.util.Base64.getDecoder().decode(data.substringAfter("base64,", "")); org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap() } catch (e: Throwable) { null }
         }
