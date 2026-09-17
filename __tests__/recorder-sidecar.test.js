@@ -7,9 +7,21 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sizeOf, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, DISPLAY_LOW, SINK } from '../src/recorder/sidecar.js';
+import { sizeOf, xvfbArgs, pulseArgs, chromeArgs, ffmpegArgs, allocDisplay, capabilities, recordingsRoot, DISPLAY_LOW, SINK } from '../src/recorder/sidecar.js';
 
 describe('recording sidecar', () => {
+  it('says what this machine can do, and where recordings go on a laptop (beside the profiles folder)', () => {
+    const c = capabilities();
+    expect(c.tools).toHaveProperty('Xvfb'); expect(c.tools).toHaveProperty('pulseaudio'); expect(c.tools).toHaveProperty('ffmpeg');
+    expect(typeof c.ok).toBe('boolean'); if (!c.ok) expect(c.hint).toMatch(/docker|apt install/);
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-'));
+    const saved = { R: process.env.RECORDINGS_DIR, P: process.env.PROFILE_DIR };
+    try {
+      delete process.env.RECORDINGS_DIR; process.env.PROFILE_DIR = path.join(base, 'profiles');
+      if (!fs.existsSync('/recordings')) expect(recordingsRoot()).toBe(path.join(base, 'recordings'));
+      process.env.RECORDINGS_DIR = path.join(base, 'elsewhere'); expect(recordingsRoot()).toBe(path.join(base, 'elsewhere'));
+    } finally { if (saved.R) process.env.RECORDINGS_DIR = saved.R; else delete process.env.RECORDINGS_DIR; if (saved.P) process.env.PROFILE_DIR = saved.P; else delete process.env.PROFILE_DIR; }
+  });
   it('sizes come from a small ladder and default to 720p', () => {
     expect(sizeOf('720p')).toEqual({ width: 1280, height: 720 }); expect(sizeOf('1080p')).toEqual({ width: 1920, height: 1080 }); expect(sizeOf('4k')).toEqual({ width: 1280, height: 720 });
   });

@@ -2078,8 +2078,12 @@ app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistan
 /* THE RECORDER, Phase 0 (docs/RECORDER-PLAN.md): a probe records ONE page for a few seconds through the
    recording sidecar — its own display, its own sound server, its own Chromium on a copy of the profile's
    cookies — and reports whether the result has sound. The pool never notices. */
+/* What this machine can record with: the docker image has everything; a bare Linux install gets an apt
+   line; macOS/Windows run the image. The app and the agent read this before offering a recording. */
+app.get('/v1/recordings/capabilities', authed, (req, res) => res.json(require('./recorder/sidecar').capabilities()));
 app.post('/v1/recordings/probe', authed, async (req, res) => {
   const { probe } = require('./recorder/probe');
+  const caps = require('./recorder/sidecar').capabilities(); if (!caps.ok) return res.status(400).json({ error: `cannot record here: ${caps.hint}`, capabilities: caps });
   const url = String((req.body || {}).url || '').trim(); if (!/^https?:\/\//.test(url)) return res.status(400).json({ error: 'url required' });
   const profile = String((req.body || {}).profile || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
   const cfg = (() => { try { return profiles.read(profile) || {}; } catch { return {}; } })();
