@@ -1990,6 +1990,29 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
 app.get('/v1/people', authed, (req, res) => { const people = require('./people'); res.json({ people: people.list(String(req.query.platform || 'facebook'), { leadsOnly: req.query.leads === '1' }), outcomes: people.outcomes() }); });
 app.get('/v1/people/outcomes', authed, (_req, res) => res.json(require('./people').outcomes()));
 app.get('/v1/people/:platform/:name', authed, (req, res) => { const people = require('./people'); const r = people.load(req.params.platform, req.params.name); if (!r) return res.status(404).json({ error: 'no memory of that person yet' }); res.json({ ...r, profile: people.profileOf(req.params.platform, req.params.name) }); });
+/* LOGIN SYNC. A platform signed in on the owner's phone signs the cluster's profile in too: the app
+   posts that site's cookies here (no button — whenever they appear or change). They land in the
+   profile's pending-cookies file (applied on every launch of that profile, see pool.js) and, when the
+   profile's browser is open right now, in it at once. Cookies come without attributes from a WebView,
+   so the domain is the site's apex and the life 30 days; __Host- names get the url form. */
+app.post('/v1/profiles/:name/cookies', authed, async (req, res) => {
+  const name = profiles.safeName(req.params.name); const b = req.body || {};
+  const site = String(b.site || ''); let host = ''; try { host = new URL(site).hostname; } catch (e) { host = ''; }
+  const list = (Array.isArray(b.cookies) ? b.cookies : []).filter((c) => c && c.name && typeof c.value === 'string').slice(0, 200).map((c) => {
+    const base = { name: String(c.name), value: String(c.value), path: String(c.path || '/'), secure: c.secure !== false, httpOnly: !!c.httpOnly, sameSite: ['Strict', 'Lax', 'None'].includes(c.sameSite) ? c.sameSite : 'Lax', expires: Number(c.expires) > 0 ? Number(c.expires) : Math.floor(Date.now() / 1000) + 30 * 86400 };
+    if (/^__Host-/.test(base.name) || !(c.domain || host)) return { ...base, url: site || `https://${host}/`, path: '/' };
+    return { ...base, domain: String(c.domain || ('.' + host.split('.').slice(-2).join('.'))) };
+  });
+  if (!list.length) return res.status(400).json({ error: 'no cookies' });
+  const fs_ = require('fs'), path_ = require('path'); const dir = path_.join(process.env.PROFILE_DIR || '/profiles', name); const file = path_.join(dir, 'pending-cookies.json');
+  let cur = []; try { cur = JSON.parse(fs_.readFileSync(file, 'utf8')); } catch (e) { cur = []; }
+  const key = (c) => `${c.name}|${c.domain || c.url || ''}`; const byKey = new Map(cur.map((c) => [key(c), c])); for (const c of list) byKey.set(key(c), c);
+  try { fs_.mkdirSync(dir, { recursive: true }); fs_.writeFileSync(file, JSON.stringify([...byKey.values()]), { mode: 0o600 }); } catch (e) { return res.status(500).json({ error: e.message }); }
+  let applied = false;
+  try { const owner = consoleOwner(); const s0 = pool.listFor(owner).find((x) => x.profile === name); const s = s0 && pool.get(s0.sessionId); if (s && s.context) { await s.context.addCookies(list); applied = true; } } catch (e) { log.warn(`[login-sync] ${name}: ${e.message}`); }
+  log.info(`[login-sync] ${name}: ${list.length} cookie(s) from the app for ${host || 'the site'}${applied ? ' — applied to the open browser' : ' — applied at the next launch'}`);
+  res.json({ ok: true, profile: name, stored: byKey.size, applied });
+});
 app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
 app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title)));
 /* THE BACKDROP: while a turn runs, the chat view carries a small frame of the browser the agent works
