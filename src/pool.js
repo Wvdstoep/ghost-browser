@@ -395,9 +395,30 @@ function captureDownloads(context, log = console) {
       const ext = (name.split('.').pop() || '').toLowerCase();
       const mime = DL_MIME[ext] || 'application/octet-stream';
       const kind = /^audio\//.test(mime) ? 'audio' : /^video\//.test(mime) ? 'video' : /^image\//.test(mime) ? 'image' : 'file';
-      const id = fileAssets.put({ mime, name, kind, bytes });
+      const id = fileAssets.put({ mime, name, kind, bytes, source: 'download' });
       log.info?.(`[download] captured "${name}" (${bytes.length}B, ${kind}) → asset ${id}`);
     } catch (e) { log.warn?.(`[download] could not capture a download: ${e.message}`); }
+  });
+  /* THE OTHER DOOR (file engine): a site that opens the file in a NEW TAB instead of downloading it —
+     Google Flow's "download", many "open" links — never fires a download event. The tab's main
+     response IS the file: capture its bytes, keep the tab out of the way. */
+  const fileEngine = require('./fileEngine');
+  context.on('page', (p) => {
+    if (typeof p.on !== 'function') return;
+    p.on('response', async (r) => {
+      try {
+        const req = r.request(); if (!req.isNavigationRequest() || r.frame() !== p.mainFrame()) return;
+        const h = r.headers() || {}; const ct = h['content-type'] || '';
+        if (!fileEngine.shouldCapture(ct, h['content-length'])) return;
+        const bytes = await r.body(); if (!bytes || !bytes.length) return;
+        const mime = String(ct).split(';')[0].trim(); const name = fileEngine.nameFrom({ contentDisposition: h['content-disposition'], url: r.url(), mime });
+        let source = ''; try { source = new URL(r.url()).hostname; } catch { source = 'tab'; }
+        const id = fileAssets.put({ mime, name, kind: fileEngine.kindOf(mime), bytes, source: `tab:${source}` });
+        log.info?.(`[download] captured "${name}" shown in a tab (${bytes.length}B, ${fileEngine.kindOf(mime)}) → asset ${id}`);
+        // the tab did its job; close it unless it is the only page the session has
+        setTimeout(() => { try { if (context.pages().filter((x) => !x.isClosed()).length > 1) p.close().catch(() => {}); } catch (e) { /* gone */ } }, 1500);
+      } catch (e) { /* not a file after all */ }
+    });
   });
 }
 

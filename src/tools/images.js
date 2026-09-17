@@ -303,6 +303,34 @@ module.exports = {
    * NOTE: the exact way to reach the generated image is platform-shaped and confirmed by walking the
    * flow once; this is the mechanism the role drives.
    */
+  /* FILE ENGINE: any LINKED file — a PDF, a zip, an export, a video — fetched inside the logged-in page
+     (so the site's entitlement applies) and stored with its real name. index = a numbered link the look
+     showed; url = a direct address. Falls back to the browser's own request when the page's fetch is
+     refused (cross-origin). */
+  async download_file(ctx, a) {
+    const fileEngine = require('../fileEngine');
+    const page = ctx.page();
+    let url = String(a.url || '').trim();
+    if (!url && a.index != null) { try { url = await page.$eval(`[data-agent-index="${a.index}"]`, (el) => el.href || el.getAttribute('href') || el.src || (el.closest('a') && el.closest('a').href) || ''); } catch { url = ''; } }
+    if (!url) { ctx.observe('No file address: pass url, or the index of a link the look showed.'); return; }
+    try { url = new URL(url, page.url()).toString(); } catch { ctx.observe(`That is not a usable address: ${url}`); return; }
+    let bytes = null, mime = '', cd = '';
+    try {
+      const got = await page.evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); if (!r.ok) return { err: r.status }; const b = await r.blob(); const dataUrl = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(fr.error); fr.readAsDataURL(b); }); return { mime: r.headers.get('content-type') || b.type || '', cd: r.headers.get('content-disposition') || '', dataUrl }; }, url).catch(() => null);
+      if (got && !got.err && got.dataUrl) { bytes = Buffer.from(String(got.dataUrl).split(',')[1] || '', 'base64'); mime = got.mime; cd = got.cd; }
+    } catch { bytes = null; }
+    if (!bytes) {
+      try { const r = await page.request.get(url, { timeout: 120000 }); if (r.ok()) { bytes = await r.body(); const h = r.headers(); mime = h['content-type'] || ''; cd = h['content-disposition'] || ''; } } catch { bytes = null; }
+    }
+    if (!bytes || !bytes.length) { ctx.observe(`Could not fetch the file at ${url} — it may need a click on the page (a download button), which the browser captures by itself.`); return; }
+    mime = String(mime || fileEngine.mimeFor(url)).split(';')[0].trim() || 'application/octet-stream';
+    const name = a.name ? fileEngine.nameFrom({ contentDisposition: `filename="${a.name}"`, mime }) : fileEngine.nameFrom({ contentDisposition: cd, url, mime });
+    let source = ''; try { source = new URL(url).hostname; } catch { source = ''; }
+    const id = fileAssets.put({ kind: fileEngine.kindOf(mime), mime, name, bytes, source: `link:${source}` });
+    ctx.step('file', `downloaded ${fileEngine.describe({ name, mime, size: bytes.length, source })} as asset ${id}`);
+    ctx.observe(`Downloaded ${name} (${fileEngine.kindOf(mime)}, ${Math.round(bytes.length / 1024)} KB) — asset "${id}". The owner can see and save it from the chat; upload_file with assetId "${id}" puts it on another page.`);
+  },
+
   async download_image(ctx, a) {
     const page = ctx.page();
     // 1) Find the image ELEMENT — a handle we can both read a src from AND screenshot. The handle is
@@ -403,11 +431,16 @@ module.exports = {
     // Size it to spec so a platform never rejects it as too small ("min 1024x576"): a banner/cover →
     // 2048x1152, a profile photo → square. Captured art is display-size (~700px); this crops/scales
     // it to the exact size the site wants. Other kinds (scene frames) keep their captured size.
-    const kind = a.kind || 'image';
+    /* FILE ENGINE: the picture at its own resolution is the result; only a picture destined for a
+       site slot (profile, cover, post) is sized to that slot's spec. "sized for post" on a generated
+       image the owner asked for was the wrong default — the owner got a thumbnail. */
+    const kind = a.kind || 'original';
     let outBytes = bytes;
-    if (SPEC[kind]) { outBytes = await resizeImageBytes(bytes, SPEC[kind][0], SPEC[kind][1]); mime = 'image/png'; }
-    const id = fileAssets.put({ kind, mime, name: `download.${extFor(mime)}`, bytes: outBytes });
-    ctx.step('image', `downloaded a generated image (${outBytes.length} bytes, sized for ${kind}) as asset ${id}`);
+    if (SPEC[kind] && kind !== 'original') { outBytes = await resizeImageBytes(bytes, SPEC[kind][0], SPEC[kind][1]); mime = 'image/png'; }
+    let source = ''; try { source = new URL(page.url()).hostname; } catch { source = ''; }
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    const id = fileAssets.put({ kind: kind === 'original' ? 'image' : kind, mime, name: `${(a.name || source || 'image').replace(/[^a-z0-9._-]+/gi, '-')}-${stamp}.${extFor(mime)}`, bytes: outBytes, source: source ? `page:${source}` : 'page' });
+    ctx.step('image', `downloaded an image (${outBytes.length} bytes${kind !== 'original' ? `, sized for ${kind}` : ', original size'}) as asset ${id}`);
     ctx.observe(`Downloaded the image — asset "${id}" (${bytes.length} bytes). To use it on a page in THIS or a LATER step (even another login): upload_image or upload_file with assetId "${id}".`);
   },
 };

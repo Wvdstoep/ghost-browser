@@ -708,6 +708,14 @@ app.get('/v1/files/:id/raw', mediaAuth, (req, res) => {
   if (req.query.download) res.set('Content-Disposition', `attachment; filename="${String(f.name || f.id).replace(/[^\w.\-]/g, '_')}"`);
   res.send(f.bytes);
 });
+/* FILE ENGINE: the file as a data: url — the app has no byte channel of its own, so this is how a
+   captured file (a video, a PDF, an image) reaches the device's Downloads. Capped at 40 MB. */
+app.get('/v1/files/:id/b64', authed, (req, res) => {
+  const f = fileAssets.get(req.params.id);
+  if (!f || !f.bytes) return res.status(404).json({ error: 'no such file' });
+  if (f.bytes.length > 40 * 1024 * 1024) return res.status(413).json({ error: `too large for the app (${Math.round(f.bytes.length / 1048576)} MB) — open it on the desktop`, name: f.name, size: f.bytes.length });
+  res.json({ id: f.id, name: f.name, mime: f.mime, kind: f.kind, size: f.bytes.length, data: `data:${f.mime || 'application/octet-stream'};base64,${f.bytes.toString('base64')}` });
+});
 app.delete('/v1/files/:id', authed, (req, res) => {
   res.json({ removed: fileAssets.remove ? fileAssets.remove(req.params.id) : false });
 });
@@ -1189,7 +1197,7 @@ const TOOL_GROUPS = [
   { group: 'Conversations', names: roles.CONVERSATION },
   { group: 'Finding things', names: ['sweep', 'google', 'dig'] },
   { group: 'Saving what it finds', names: ['save_lead', 'save_gig', 'save_reply', 'save_reach', 'save_keywords', 'save_search', 'save_gsc_token', 'save_opportunity'] },
-  { group: 'Images', names: ['make_brand_image', 'upload_image', 'download_image'] },
+  { group: 'Images', names: ['make_brand_image', 'upload_image', 'download_image', 'download_file'] },
   { group: 'Your voice', names: ['remember_about_me', 'save_my_writing', 'describe_my_voice'] },
   { group: 'Diagnostics', names: ['diagnostics'] },
 ];
@@ -1878,7 +1886,7 @@ function operatorContext() {
     filesRecent: (kind, limit) => fileAssets.list().filter((f) => !kind || f.kind === kind).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, Math.min(30, Number(limit) || 10)).map((f) => ({ id: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, at: f.at, width: f.width || 0, height: f.height || 0, downloadUrl: `/v1/files/${f.id}/raw?download=1` })),
     fileShow: (id) => {
       const f = fileAssets.get(String(id || '')); if (!f) return { error: 'no such file' };
-      const out = { fileId: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, downloadUrl: `/v1/files/${f.id}/raw?download=1` };
+      const out = { fileId: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size || (f.bytes && f.bytes.length) || 0, source: f.source || '', downloadUrl: `/v1/files/${f.id}/raw?download=1`, saveUrl: `/v1/files/${f.id}/b64` };
       // anything that IS an image shows — a captured download (kind image) or a page screenshot the
       // walk took (kind screenshot); both are image/* and both are what the owner asked to see
       if (/^image\//.test(String(f.mime || '')) || f.kind === 'image' || f.kind === 'screenshot') {
@@ -1888,7 +1896,7 @@ function operatorContext() {
           require('fs').writeFileSync(require('path').join(dir, name), f.bytes); out.screenshotUrl = '/v1/operator/shots/' + name; out.shown = true;
         } catch (e) { out.error = 'could not show the image: ' + e.message; }
       }
-      if (!out.shown && !out.error) out.error = `not an image I can show (${f.kind}, ${f.mime}) — the owner can download it: ${out.downloadUrl}`;
+      if (!out.shown && !out.error) out.shown = 'file';   // not a picture: the chat shows a file card with Save (the app fetches saveUrl)
       return out;
     },
     stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
