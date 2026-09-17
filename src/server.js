@@ -2080,7 +2080,42 @@ app.post('/v1/assistant/chats/:id/stop', authed, (req, res) => res.json(assistan
    cookies — and reports whether the result has sound. The pool never notices. */
 /* What this machine can record with: the docker image has everything; a bare Linux install gets an apt
    line; macOS/Windows run the image. The app and the agent read this before offering a recording. */
+/* THE RECORDER, Phase 1 (docs/RECORDER-PLAN.md): a recording is a job with a journal — its own display,
+   sound server, browser and encoder, HLS segments on the recordings volume, end rules, owner stop,
+   closed as a playable partial after a restart. Streams while recording; an mp4 on demand. */
+const recorder = (() => {
+  const sc = require('./recorder/sidecar'); const pg = require('./recorder/page'); const { Recorder } = require('./recorder/engine');
+  const liveContextFor = (profile) => { try { const o = consoleOwner(); const s = pool.listFor(o).find((x) => x.profile === profile); const sess = s && pool.get(s.sessionId); return sess && sess.context ? sess.context : null; } catch { return null; } };
+  const deps = { capabilities: sc.capabilities, freeBytes: sc.freeBytes, sizeOf: sc.sizeOf, startDisplay: sc.startDisplay, startPulse: sc.startPulse, launchBrowser: sc.launchBrowser, startFfmpeg: sc.startFfmpeg,
+    cookiesFor: (profile) => pg.cookiesFor(profile, { liveContextFor, profileDir: process.env.PROFILE_DIR || '/profiles', log }), preparePage: pg.preparePage, videoState: pg.videoState,
+    profileConfig: (p) => { try { return profiles.read(p) || {}; } catch { return {}; } } };
+  return new Recorder({ root: sc.recordingsRoot(), deps, log, maxConcurrent: Math.max(1, Number(process.env.MAX_RECORDINGS) || 2) });
+})();
+app.get('/v1/recordings', authed, (req, res) => res.json({ recordings: recorder.list(), running: recorder.running(), root: recorder.root, freeBytes: require('./recorder/sidecar').freeBytes(recorder.root) }));
+app.post('/v1/recordings', authed, (req, res) => { try { res.json({ ok: true, recording: recorder.start(req.body || {}) }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get('/v1/recordings/capabilities', authed, (req, res) => res.json(require('./recorder/sidecar').capabilities()));
+app.get('/v1/recordings/:id', authed, (req, res) => { const r = recorder.get(req.params.id); if (!r) return res.status(404).json({ error: 'no such recording' }); res.json(r); });
+app.post('/v1/recordings/:id/stop', authed, (req, res) => res.json(recorder.stop(req.params.id)));
+app.delete('/v1/recordings/:id', authed, (req, res) => { const r = recorder.remove(req.params.id); res.status(r.error ? 409 : 200).json(r); });
+/* The stream: the playlist and its segments, straight from disk — live while recording (no ENDLIST yet), whole after. */
+app.get('/v1/recordings/:id/index.m3u8', authed, (req, res) => {
+  const f = require('path').join(recorder.dirOf(req.params.id), 'index.m3u8'); if (!require('fs').existsSync(f)) return res.status(404).end();
+  res.set('Cache-Control', 'no-store').type('application/vnd.apple.mpegurl').sendFile(f);
+});
+app.get('/v1/recordings/:id/:seg', authed, (req, res, next) => {
+  const seg = String(req.params.seg || ''); if (!/^seg-\d+\.ts$/.test(seg)) return next();
+  const f = require('path').join(recorder.dirOf(req.params.id), seg); if (!require('fs').existsSync(f)) return res.status(404).end();
+  res.set('Cache-Control', 'public, max-age=86400').type('video/mp2t').sendFile(f);
+});
+/* The file: one mp4 built by stream copy the first time, then served with Range so a player can seek and a download can resume. */
+app.get('/v1/recordings/:id/mp4', authed, async (req, res) => {
+  try {
+    const f = await recorder.mp4(req.params.id); const r = recorder.get(req.params.id);
+    const name = ((r && (r.title || r.pageTitle)) || req.params.id).replace(/[^\w .-]+/g, '_').slice(0, 80) + '.mp4';
+    if (req.query.download) res.set('Content-Disposition', `attachment; filename="${name}"`);
+    res.type('video/mp4').sendFile(f);
+  } catch (e) { res.status(409).json({ error: e.message }); }
+});
 app.post('/v1/recordings/probe', authed, async (req, res) => {
   const { probe } = require('./recorder/probe');
   const caps = require('./recorder/sidecar').capabilities(); if (!caps.ok) return res.status(400).json({ error: `cannot record here: ${caps.hint}`, capabilities: caps });
@@ -2115,7 +2150,7 @@ app.post('/v1/operator/jobs/:id/say', authed, (req, res) => { const r = operator
 app.post('/v1/operator/jobs/:id/stop', authed, (req, res) => { const r = operatorRuns.get(req.params.id); if (!r) return res.status(404).json({ error: 'not running' }); r.stop(); res.json({ ok: true }); });
 // Which watcher passes hold the browser right now. NOT owner-scoped on purpose: the deploy gate asks
 // with the master's key and sessions are per owner, so it rolled the pod straight through a crawl.
-app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers] }));
+app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers], recording: (typeof recorder !== 'undefined' && recorder) ? recorder.running() : [] }));
 // A watcher's health: its last pass, whether one is running now, and whether it has gone quiet.
 app.get('/v1/watchers/:id/health', authed, (req, res) => {
   try {
@@ -2906,6 +2941,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       const n = workflows.recoverRuns({ runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, log });
       if (n) log.info(`[workflow] found ${n} interrupted run(s) to resume`);
     } catch (e) { log.error(`[workflow] recovery failed: ${(e && e.message) || e}`); }
+    try { const n = recorder.adopt(); if (n) log.info(`[recorder] closed ${n} recording(s) a restart left open (playable partials)`); } catch (e) { log.warn(`[recorder] adopt: ${e.message}`); }
     try { const n = resumeOperatorJobs(); if (n) log.info(`[operator] resumed ${n} interrupted job(s)`); }
     catch (e) { log.error(`[operator] recovery failed: ${(e && e.message) || e}`); }
   }, 5000);
