@@ -1679,8 +1679,13 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   };
   const touch = () => { try { const s = pool.listFor(owner).find((x) => x.profile === want); const live = s && pool.get(s.sessionId); if (live) live.lastUsed = Date.now(); } catch (e) { /* best effort */ } };
   (async () => {
-    const t0 = Date.now(); while (runningWatchers.size && Date.now() - t0 < 240000) await new Promise((r) => setTimeout(r, 2000));
+    /* Claim a place at once (so the scheduler starts no NEW pass), then wait for the pass that is
+       already running to finish — however long it takes, up to 12 min. Never proceed on top of it:
+       a crawl and a post on the same page mean the wrong page for one of them. */
     runningWatchers.add(lockKey);
+    const t0 = Date.now(); const others = () => [...runningWatchers].some((k) => k !== lockKey);
+    while (others() && Date.now() - t0 < 720000) await new Promise((r) => setTimeout(r, 2000));
+    if (others()) { runningWatchers.delete(lockKey); feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: browser busy for 12 min' } : { posting: false, postFailed: true, posted: 'failed: the browser stayed busy for 12 minutes — approve again' }); return; }
     try {
       const pw = require('./postWatch');
       const r = await pw.postReply((await session()).page, it.url, text, { meName: cfgP.meName || '', dryRun, touch });
