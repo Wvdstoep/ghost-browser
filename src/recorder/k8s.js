@@ -65,10 +65,11 @@ const ns = () => (creds() || {}).namespace || process.env.POD_NAMESPACE || 'defa
 async function createJob(spec) { return call('POST', `/apis/batch/v1/namespaces/${spec.metadata.namespace}/jobs`, spec); }
 async function getJob(name) { return call('GET', `/apis/batch/v1/namespaces/${ns()}/jobs/${name}`); }
 async function listJobs(selector = 'app=ghost-browser-recorder') { const r = await call('GET', `/apis/batch/v1/namespaces/${ns()}/jobs?labelSelector=${encodeURIComponent(selector)}`); return (r && r.items) || []; }
+async function listPods(selector) { const r = await call('GET', `/api/v1/namespaces/${ns()}/pods?labelSelector=${encodeURIComponent(selector)}`); return (r && r.items) || []; }
 async function deleteJob(name) { return call('DELETE', `/apis/batch/v1/namespaces/${ns()}/jobs/${name}?propagationPolicy=Background`, null); }
 /** The image this very deployment runs, so a recorder Job is always the same build. */
 async function ownImage(deployment = 'ghost-browser') { const d = await call('GET', `/apis/apps/v1/namespaces/${ns()}/deployments/${deployment}`); const c = d && d.spec && d.spec.template.spec.containers[0]; return { image: c && c.image, imagePullSecrets: ((d && d.spec.template.spec.imagePullSecrets) || []).map((s) => s.name), serviceAccount: (d && d.spec.template.spec.serviceAccountName) || '' }; }
 /** Is the Job still going? active > 0, or not yet reported at all (just created). */
 function jobAlive(job) { if (!job || !job.status) return true; const s = job.status; if (s.succeeded || s.failed) return false; return (s.active || 0) > 0 || !s.startTime; }
 
-module.exports = { available, creds, call, jobSpec, createJob, getJob, listJobs, deleteJob, ownImage, jobAlive, ns };
+module.exports = { available, creds, call, jobSpec, createJob, getJob, listJobs, listPods, deleteJob, ownImage, jobAlive, ns };
