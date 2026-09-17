@@ -63,6 +63,10 @@ object AssistantHooks {
     var saveFile: ((downloadUrl: String, name: String) -> Unit)? = null
     /** Files already saved this session (download urls), so a file you asked for is saved once, by itself. */
     val autoSaved: MutableSet<String> = mutableSetOf()
+    /** Play a captured audio/video file (audio inline on the phone, video/desktop through the system player). Calling it again for the file that is playing stops it. */
+    var playMedia: ((downloadUrl: String, name: String, mime: String) -> Unit)? = null
+    /** The download url of the file playing right now (audio), or null. */
+    val playing = mutableStateOf<String?>(null)
 }
 
 class AssistantActions(
@@ -268,9 +272,22 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                         val saveF = AssistantHooks.saveFile
                         var saved by remember(s.download) { mutableStateOf(s.download in AssistantHooks.autoSaved) }
                         Surface(color = cs.surfaceVariant.copy(alpha = 0.6f), shape = RoundedCornerShape(10.dp), modifier = Modifier.padding(top = 6.dp).fillMaxWidth()) {
+                            val media = s.fileKind == "audio" || s.fileKind == "video" || s.fileMime.startsWith("audio/") || s.fileMime.startsWith("video/")
+                            val isAudio = s.fileKind == "audio" || s.fileMime.startsWith("audio/")
+                            val play = AssistantHooks.playMedia
+                            val nowPlaying = AssistantHooks.playing.value == s.download
                             Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.InsertDriveFile, null, tint = Brand, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
-                                Text(s.fileName.ifBlank { "file" }, Modifier.weight(1f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                // a song or a clip plays from the card, like a picture shows
+                                if (media && play != null) {
+                                    FilledIconButton(onClick = { play(s.download, s.fileName, s.fileMime) }, modifier = Modifier.size(36.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn)) {
+                                        Icon(if (nowPlaying) Icons.Default.Stop else if (isAudio) Icons.Default.PlayArrow else Icons.Default.PlayCircle, if (isAudio) "Play" else "Open", modifier = Modifier.size(20.dp))
+                                    }
+                                } else Icon(Icons.Default.InsertDriveFile, null, tint = Brand, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(s.fileName.ifBlank { "file" }, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (media) Text(if (nowPlaying) "playing…" else if (isAudio) "tap to play" else "tap to open in the player", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                }
                                 if (saveF != null) TextButton(onClick = { saveF(s.download, s.fileName); saved = true }, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(if (saved) Icons.Default.Check else Icons.Default.Download, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text(if (saved) "Saved" else "Save", fontSize = 12.sp) }
                             }
                         }
