@@ -48,6 +48,8 @@ const NAV_TIMEOUT = parseInt(process.env.NAV_TIMEOUT_MS, 10) || 30000;
 const log = {
   info: (m) => console.log(`[ghost] ${m}`),
   warn: (m) => console.warn(`[ghost] ${m}`),
+  // 14 call sites and no method: the first error path to run took the whole server down.
+  error: (m) => console.error(`[ghost] ERROR ${m}`),
 };
 
 const app = express();
