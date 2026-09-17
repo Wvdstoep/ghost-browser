@@ -54,6 +54,12 @@ class AssistantUi {
     val backdropProfile = mutableStateOf("")
 }
 
+/** Platform hooks the timeline calls without threading them through every composable. */
+object AssistantHooks {
+    /** Save a picture (data: url) to the device under this name; null = no saving on this platform. */
+    var saveImage: ((dataUrl: String, name: String) -> Unit)? = null
+}
+
 class AssistantActions(
     val onSend: (String) -> Unit,
     val onNew: () -> Unit,
@@ -245,7 +251,18 @@ private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boo
                     // the picture the tool took — what the agent was looking at
                     if (s.imageData.isNotBlank() && decode != null) {
                         val bmp = remember(s.imageData) { try { decode(s.imageData) } catch (e: Throwable) { null } }
-                        if (bmp != null) androidx.compose.foundation.Image(bmp, contentDescription = "what the agent saw", modifier = Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(max = 260.dp).clip(RoundedCornerShape(10.dp)), contentScale = androidx.compose.ui.layout.ContentScale.FillWidth, alignment = Alignment.TopCenter)
+                        if (bmp != null) {
+                            androidx.compose.foundation.Image(bmp, contentDescription = "what the agent saw", modifier = Modifier.padding(top = 6.dp).fillMaxWidth().heightIn(max = 260.dp).clip(RoundedCornerShape(10.dp)), contentScale = androidx.compose.ui.layout.ContentScale.FillWidth, alignment = Alignment.TopCenter)
+                            // the file itself (a generated image) or the frame: one tap saves it to the device
+                            val save = AssistantHooks.saveImage
+                            if (save != null) {
+                                var saved by remember(s.imageData) { mutableStateOf(false) }
+                                val name = s.fileName.ifBlank { s.image.substringAfterLast('/').ifBlank { "ghost-picture.jpg" } }
+                                AssistChip(onClick = { save(s.imageData, name); saved = true }, modifier = Modifier.padding(top = 4.dp),
+                                    label = { Text(if (saved) "Saved to device" else if (s.download.isNotBlank()) "Save ${s.fileName.ifBlank { "file" }}" else "Save picture", fontSize = 11.sp) },
+                                    leadingIcon = { Icon(if (saved) Icons.Default.Check else Icons.Default.Download, null, tint = Brand, modifier = Modifier.size(14.dp)) })
+                            }
+                        }
                     }
                 }
             }
