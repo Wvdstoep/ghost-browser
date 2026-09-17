@@ -119,6 +119,18 @@ describe('the recording engine', () => {
     expect(r.adopt()).toBe(0);
   });
 
+  it('retention removes the old first, then the oldest until the budget fits, never a live one', () => {
+    const root = tmp(); const day = 86400000; const t = 100 * day;
+    const put = (id, startedAt, bytes, state = 'done') => { const d = path.join(root, id); fs.mkdirSync(d); fs.writeFileSync(path.join(d, 'recording.json'), JSON.stringify({ id, url: 'https://x', state, startedAt, endedAt: startedAt + 60000, bytes, segments: 1 })); };
+    put('rec-ancient', t - 30 * day, 100); put('rec-big-old', t - 5 * day, 900); put('rec-mid', t - 3 * day, 500); put('rec-new', t - 1 * day, 400);
+    const r = new Recorder({ root, deps: fakeDeps().deps, log: quiet, clock: () => t });
+    const out = r.prune({ days: 14, maxBytes: 1000, now: t });
+    expect(out.removed.map((x) => x.id)).toEqual(['rec-ancient', 'rec-big-old']);   // ancient by age, big-old by budget (oldest first)
+    expect(out.removed[0].why).toMatch(/older than 14 days/); expect(out.removed[1].why).toMatch(/budget/);
+    expect(out.kept).toBe(2); expect(out.bytes).toBe(900); expect(r.get('rec-mid')).not.toBeNull(); expect(r.get('rec-new')).not.toBeNull();
+    expect(r.prune({ days: 14, maxBytes: 1000, now: t }).removed).toEqual([]);
+  });
+
   it('stats come from the files, a playlist is closed once, concat copies streams, video keys compare the video not the page', () => {
     const d = tmp(); expect(statsOf(d)).toEqual({ segments: 0, bytes: 0, seconds: 0 });
     fs.writeFileSync(path.join(d, 'index.m3u8'), '#EXTM3U\n#EXTINF:10.000,\nseg-00001.ts\n#EXTINF:4.500,\nseg-00002.ts\n'); fs.writeFileSync(path.join(d, 'seg-00001.ts'), Buffer.alloc(30)); fs.writeFileSync(path.join(d, 'seg-00002.ts'), Buffer.alloc(12));

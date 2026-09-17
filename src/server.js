@@ -1904,6 +1904,11 @@ function operatorContext() {
     people: (platform, name, leadsOnly) => { const people = require('./people'); if (name) { const r = people.load(platform || 'facebook', name); return r ? { ...r, profile: people.profileOf(platform || 'facebook', name) } : { error: 'no memory of that person yet' }; } return { people: people.list(platform || 'facebook', { leadsOnly: !!leadsOnly }).slice(0, 40), outcomes: people.outcomes() }; },
     /* FILES the browser captured (a page's Download button lands in the file store): list them, and put
        one in front of the owner — an image is copied into the shots dir so the chat inlines it. */
+    /* the recorder (defined further down; called only at run time) */
+    recordStart: (a) => { try { const r = recorder.start({ url: a.url, profile: a.profile, until: a.until, maxMinutes: a.maxMinutes, quality: a.quality, title: a.title }); return { ok: true, recordingId: r.id, recording: r, note: 'the recording runs on by itself after this turn — answer the owner now; the app shows its card' }; } catch (e) { return { error: e.message }; } },
+    recordStatus: (id) => { const r = recorder.get(String(id || '')); return r ? { recordingId: r.id, ...r } : { error: 'no such recording' }; },
+    recordStop: (id) => recorder.stop(String(id || '')),
+    recordList: () => ({ recordings: recorder.list().slice(0, 20).map((r) => ({ id: r.id, state: r.state, title: r.title || r.pageTitle, url: r.url, seconds: r.seconds, bytes: r.bytes, startedAt: r.startedAt })), running: recorder.running(), freeGB: Math.round(require('./recorder/sidecar').freeBytes(recorder.root) / 1073741824) }),
     filesRecent: (kind, limit) => fileAssets.list().filter((f) => !kind || f.kind === kind).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).slice(0, Math.min(30, Number(limit) || 10)).map((f) => ({ id: f.id, name: f.name, kind: f.kind, mime: f.mime, size: f.size, at: f.at, width: f.width || 0, height: f.height || 0, downloadUrl: `/v1/files/${f.id}/raw?download=1` })),
     fileShow: (id) => {
       const f = fileAssets.get(String(id || '')); if (!f) return { error: 'no such file' };
@@ -2317,7 +2322,10 @@ async function scheduleTick() {
 const _schedTimer = setInterval(() => { scheduleTick().catch(() => {}); reconcileDrafts().catch(() => {}); nightlyTick(); }, 60000);
 /* THE NIGHTLY SELF-CHECK (src/nightly.js): once a night the assistant gets a turn of its own — health,
    runs, errors, leads and promises — fixes the small things, reports in a chat named "Nightly check". */
+let _prunedDay = '';
 function nightlyTick() {
+  // recordings retention, once a night in the quiet hour, model or no model
+  try { const d = new Date(); const day = d.toISOString().slice(0, 10); if (d.getUTCHours() === require('./nightly').HOUR_UTC && _prunedDay !== day) { _prunedDay = day; const p = recorder.prune({ days: Math.max(1, Number(process.env.RECORDINGS_KEEP_DAYS) || 14), maxBytes: (Number(process.env.RECORDINGS_KEEP_GB) || 30) * 1073741824 }); if (p.removed.length) log.info(`[recorder] retention removed ${p.removed.length} recording(s): ${p.removed.map((r) => r.id + ' (' + r.why + ')').join(', ')}`); } } catch (e) { log.warn(`[recorder] retention: ${e.message}`); }
   try {
     const nightly = require('./nightly');
     if (!nightly.due()) return;

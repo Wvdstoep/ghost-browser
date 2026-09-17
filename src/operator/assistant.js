@@ -27,7 +27,7 @@ const HISTORY_TURNS = 12;
 /** The assistant's exit: what it says to the owner, plus what the app can render as cards. */
 const REPLY_SPEC = {
   name: 'reply',
-  description: 'ANSWER the owner and end this turn. text = the answer in the owner\'s language, plain and complete (markdown is fine: short headings, bullets, bold). details = optional evidence/what you did for a "details" fold. cards = optional actions for the app: {kind:"results", watcherId, title} opens a watcher\'s results; {kind:"approvals", title} opens the approvals; {kind:"url", url, title} opens a page; {kind:"choice", title} is an ANSWER OPTION when you ask the owner something — tapping it sends the title back as their next message. status "blocked" only when you could not do what was asked.',
+  description: 'ANSWER the owner and end this turn. text = the answer in the owner\'s language, plain and complete (markdown is fine: short headings, bullets, bold). details = optional evidence/what you did for a "details" fold. cards = optional actions for the app: {kind:"results", watcherId, title} opens a watcher\'s results; {kind:"approvals", title} opens the approvals; {kind:"url", url, title} opens a page; {kind:"recording", id, title} shows a recording (added by itself for every recording you start); {kind:"choice", title} is an ANSWER OPTION when you ask the owner something — tapping it sends the title back as their next message. status "blocked" only when you could not do what was asked.',
   schema: { type: 'object', properties: { text: { type: 'string' }, details: { type: 'string' }, cards: { type: 'array', items: { type: 'object' } }, status: { type: 'string', enum: ['done', 'blocked'] } }, required: ['text'] },
   map: ({ text, details, cards, status }) => ({ status: status === 'blocked' ? 'blocked' : 'done', summary: String(text || '').slice(0, 600), report: { answer: String(text || ''), details: details ? String(details) : '', cards: Array.isArray(cards) ? cards.slice(0, 8) : [] } }),
   proseIsReply: true,
@@ -40,7 +40,7 @@ const STEP_LABELS = {
   gb_watchers: 'Checking watchers', gb_watcher_health: 'Checking watcher health', gb_watcher_feed: 'Reading watcher results', gb_watcher_config: 'Updating watcher settings', gb_watcher_posts: 'Updating watched posts', gb_watcher_run: 'Running the watcher', gb_watcher_wait: 'Waiting for the pass', gb_watcher_toggle: 'Switching the watcher', gb_watcher_probe: 'Reading the thread',
   gb_tools: 'Checking the tool palette', gb_roles: 'Checking roles', gb_role_get: 'Reading a role', gb_role_save: 'Creating a role', gb_role_update: 'Updating a role',
   gb_flows: 'Checking automations', gb_flow_get: 'Reading an automation', gb_flow_save: 'Saving an automation', gb_flow_run: 'Running an automation', gb_flow_wait: 'Waiting for the run', gb_flow_runs: 'Checking runs', gb_flow_run_status: 'Checking the run', gb_platforms: 'Checking platforms',
-  gb_walk: 'Browsing for you', gb_walk_wait: 'Browsing…', gb_walk_stop: 'Stopping the walk', gb_files_recent: 'Checking captured files', gb_file_show: 'Showing the file', gb_people: 'Checking people', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
+  gb_walk: 'Browsing for you', record_start: 'Starting a recording', record_status: 'Checking the recording', record_stop: 'Stopping the recording', record_list: 'Listing recordings', gb_walk_wait: 'Browsing…', gb_walk_stop: 'Stopping the walk', gb_files_recent: 'Checking captured files', gb_file_show: 'Showing the file', gb_people: 'Checking people', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
 };
 const labelOf = (name) => STEP_LABELS[name] || String(name || '').replace(/^gb_/, '').replace(/_/g, ' ');
 /* The exit and the plan bookkeeping are not "steps" the owner needs to see (the task list shows live). */
@@ -80,6 +80,10 @@ function briefOf(name, text) {
       case 'gb_flow_run': return v && v.runId ? 'run started' : '';
       case 'gb_flow_wait': return v ? `${v.status || 'done'}${v.verified ? ' · verified' : ''}` : '';
       case 'gb_files_recent': return Array.isArray(v) ? `${v.length} file${v.length === 1 ? '' : 's'}${v[0] ? ` · newest ${v[0].name}` : ''}` : '';
+      case 'record_start': return v && v.recording ? `recording started (until ${v.recording.until}${v.recording.until === 'duration' ? ', ' + v.recording.maxMinutes + ' min' : ''})` : v && v.error ? v.error : '';
+      case 'record_status': return v && v.state ? `${v.state} · ${v.seconds || 0}s · ${Math.round((v.bytes || 0) / 1048576)} MB${v.reason ? ' · ' + v.reason : ''}` : '';
+      case 'record_stop': return v && v.ok ? 'stopping' : v && v.error ? v.error : '';
+      case 'record_list': return v && Array.isArray(v.recordings) ? `${v.recordings.length} recording(s), ${v.freeGB} GB free` : '';
       case 'gb_file_show': return v && v.shown ? `showing ${v.name}` : v && v.name ? `${v.name} (${v.kind})` : '';
       case 'gb_memory_write': return 'noted';
       case 'gb_guide': case 'gb_memory_read': return 'read';
@@ -90,6 +94,13 @@ function briefOf(name, text) {
 
 /** A turn's wall clock: past this the turn ends as blocked instead of browsing for an hour. */
 const TURN_MAX_MS = 40 * 60 * 1000;
+
+/** Every recording a turn started gets a card in the answer, whether or not the model added one. */
+function withRecordingCards(cards, steps) {
+  const out = cards.slice(); const have = new Set(out.filter((c) => c && c.kind === 'recording').map((c) => String(c.id)));
+  for (const s of steps) { if (s.recording && !have.has(String(s.recording))) { have.add(String(s.recording)); out.push({ kind: 'recording', id: String(s.recording), title: 'Recording' }); } }
+  return out;
+}
 
 function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) {
   if (typeof startTurn !== 'function') throw new Error('assistant needs startTurn');
@@ -128,7 +139,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
       // the harness keeps the args as clipped JSON TEXT (sometimes an object): both are fine here
       const argText = typeof e.args === 'string' ? e.args : (e.args && typeof e.args === 'object' ? JSON.stringify(e.args) : '');
-      out.push({ name: e.name, label: labelOf(e.name), args: String(argText || '').slice(0, 200), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}) });
+      out.push({ name: e.name, label: labelOf(e.name), args: String(argText || '').slice(0, 200), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}), ...(r && r.recording ? { recording: r.recording } : {}) });
     }
     return out.slice(-60);
   }
@@ -162,7 +173,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     let text = String(rep.answer || '').trim();
     if (!text) text = String(run.finalLine || '').replace(/^(DONE|BLOCKED):\s*/, '').trim() || (run.status === 'stopped' ? 'Stopped.' : 'I could not finish this one.');
     if (run.status === 'error') text = `Something went wrong on my side: ${run.error || 'unknown error'}. Ask again and I will retry.`;
-    c.turns.push({ role: 'assistant', text, t: now(), status: run.status, jobId: run.id, iterations: run.iterations, details: String(rep.details || ''), cards: Array.isArray(rep.cards) ? rep.cards : [], steps: stepsOf(run) });
+    c.turns.push({ role: 'assistant', text, t: now(), status: run.status, jobId: run.id, iterations: run.iterations, details: String(rep.details || ''), cards: withRecordingCards(Array.isArray(rep.cards) ? rep.cards : [], stepsOf(run)), steps: stepsOf(run) });
     while (c.turns.length > MAX_TURNS_KEPT) c.turns.shift();
     c.updatedAt = now(); save(c); live.delete(c.id);
   }
