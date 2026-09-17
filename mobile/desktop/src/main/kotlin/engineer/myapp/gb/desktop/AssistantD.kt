@@ -80,7 +80,7 @@ object AssistantD {
         onOpen = { id -> bg { load(st, id) } },
         onDelete = { id -> bg { Cluster.authed("DELETE", "/v1/assistant/chats/$id", null); refreshChats(st); if (id == chatId) { chatId = ""; st.assistant.chat.value = null } } },
         onStop = { bg { val id = chatId; if (id.isNotBlank()) { Cluster.authed("POST", "/v1/assistant/chats/$id/stop", "{}"); load(st, id) } } },
-        onCard = { c -> when (c.kind) { "results" -> if (c.watcherId.isNotBlank()) openWatcherResultsD(st, c.watcherId); "approvals" -> openApprovals(); "url" -> if (c.url.isNotBlank()) openUrl(c.url) } },
+        onCard = { c -> when (c.kind) { "results" -> if (c.watcherId.isNotBlank()) openWatcherResultsD(st, c.watcherId); "approvals" -> openApprovals(); "url" -> if (c.url.isNotBlank()) openUrl(c.url); "choice" -> send(st, c.title) } },
         onRefreshChats = { bg { refreshChats(st) } },
         onSettings = openSettings, onClose = close, onOpenUrl = openUrl, onConnect = connect,
     )

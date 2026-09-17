@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -182,9 +183,10 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
         }
         Column(Modifier.weight(1f)) {
             Surface(color = cs.surface, contentColor = cs.onSurface, shape = RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.6f))) {
-                Row(Modifier.height(IntrinsicSize.Min)) {
-                    if (stripe != Color.Transparent) Box(Modifier.width(3.dp).fillMaxHeight().background(stripe))
-                    Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                // the status stripe is DRAWN, not laid out: an IntrinsicSize.Min row measured the text at its
+                // narrowest width (one word per line) and grew the card into a tall blank box
+                Box(Modifier.drawBehind { if (stripe != Color.Transparent) drawRect(stripe, size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)) }) {
+                    Column(Modifier.padding(start = if (stripe != Color.Transparent) 17.dp else 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp)) {
                         if (t.status == "blocked") Label("Could not finish", Color(0xFFE0A100))
                         if (t.status == "stopped") Label("Stopped", Color(0xFFE5484D))
                         MarkdownText(t.text, onOpenUrl = onOpenUrl)
@@ -219,8 +221,12 @@ private fun Label(text: String, color: Color) {
 
 @Composable
 private fun CardChip(c: AssistantCard, onClick: () -> Unit) {
-    val icon = when (c.kind) { "results" -> Icons.Default.Inbox; "approvals" -> Icons.Default.Verified; else -> Icons.Default.OpenInNew }
-    AssistChip(onClick = onClick, label = { Text(c.title.ifBlank { when (c.kind) { "results" -> "Open results"; "approvals" -> "Open approvals"; else -> "Open" } }, fontSize = 12.sp) },
+    // a "choice" card is the agent asking you something: tapping it sends that option as your answer
+    val icon = when (c.kind) { "results" -> Icons.Default.Inbox; "approvals" -> Icons.Default.Verified; "choice" -> Icons.Default.TouchApp; else -> Icons.Default.OpenInNew }
+    if (c.kind == "choice") Button(onClick = onClick, shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Brand.copy(alpha = 0.14f), contentColor = MaterialTheme.colorScheme.onSurface), border = BorderStroke(1.dp, Brand.copy(alpha = 0.55f))) {
+        Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp)); Text(c.title.ifBlank { "Yes" }, fontSize = 13.sp)
+    } else AssistChip(onClick = onClick, label = { Text(c.title.ifBlank { when (c.kind) { "results" -> "Open results"; "approvals" -> "Open approvals"; else -> "Open" } }, fontSize = 12.sp) },
         leadingIcon = { Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)) }, border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Brand.copy(alpha = 0.5f)))
 }
 
