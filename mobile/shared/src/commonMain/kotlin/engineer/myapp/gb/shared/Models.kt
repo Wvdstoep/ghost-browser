@@ -44,6 +44,9 @@ data class ChatSummary(val id: String, val title: String, val updatedAt: Long, v
 data class PersonInfo(val name: String, val platform: String, val worth: Int, val lead: Boolean, val repliedBack: Int, val exchanges: Int, val posts: Int,
                       val signals: List<String>, val promises: List<String>, val lastSeen: Long)
 
+/** A file the cluster browser captured (GET /v1/files): what the Downloads screen lists. */
+data class FileInfo(val id: String, val name: String, val kind: String, val mime: String, val size: Long, val at: Long, val source: String)
+
 /** The model the agent runs on (GB's own settings, never the key): what the AI sheet shows. */
 data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "")
 

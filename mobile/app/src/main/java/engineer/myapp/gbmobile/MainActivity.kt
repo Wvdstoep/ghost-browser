@@ -1354,6 +1354,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun assistantOpen() {
         shellUi.switcherOpen.value = false; shellUi.screen.value = "agent"
         ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        assistantHooksInstall()
+        if (!ASSIST.connected.value) return
+        assistantOpenLoad()
+    }
+
+    /** The platform hooks the shared screens call (save, play, ask, decode) — installed once, from wherever they are first needed. */
+    private fun assistantHooksInstall() {
         // a picture in the chat (a generated image, a frame) saves to the phone's Downloads with one tap
         if (engineer.myapp.gb.shared.AssistantHooks.saveImage == null) engineer.myapp.gb.shared.AssistantHooks.saveImage = saveImageHook@{ data, name ->
             try {
@@ -1410,7 +1417,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (ASSIST.decodeImage == null) ASSIST.decodeImage = { data ->
             try { val b64 = data.substringAfter("base64,", ""); val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() } catch (e: Exception) { null }
         }
-        if (!ASSIST.connected.value) return
+    }
+
+    private fun assistantOpenLoad() {
         agentExec.execute {
             aiModelLoad()
             if (assistantChatId.isBlank()) {
@@ -1566,7 +1575,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onSaveWatcher = { id, name, mode, role, goal, profile, autoId, iv, fuF, fuR -> saveWatcher(id, name, mode, role, goal, profile, autoId, iv, fuF, fuR) },
         onToggleWatcher = { id, active -> toggleWatcher(id, active) },
         onOpenWatcherResults = { id -> openWatcherResults(id) },
+        onLoadFiles = { loadFiles() },
+        onDeleteFile = { id -> deleteCapturedFile(id) },
     )
+
+    /* ── Downloads: the files the cluster browser captured (GET /v1/files), like any browser's list ── */
+    private fun loadFiles() {
+        if (vm.clusterUrl.trim().isEmpty()) return
+        shellUi.downloads.loading.value = true
+        if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null || engineer.myapp.gb.shared.AssistantHooks.saveFile == null) assistantHooksInstall()
+        apiCall("GET", "/v1/files", null, "files")
+    }
+    private fun deleteCapturedFile(id: String) { apiCall("DELETE", "/v1/files/$id", null, "filedel"); loadFiles() }   // not `deleteFile`: Context has one
 
     /* ── Watchers: scheduled background tasks = active workflows with a schedule trigger ──────────── */
     private val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
@@ -2071,6 +2091,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onClearLog = { vm.clearLog() },
         onFetchModels = { ep, key -> fetchOllamaModels(ep, key) },
         onPullClusterConfig = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ pulling model config from cluster…"); apiCall("GET", "/v1/agent/settings", null, "agentcfg") } },
+        onOpenDownloads = { loadFiles(); shellUi.screen.value = "downloads" },
     )
 
     /** List models via the CLUSTER (POST /v1/agent/models) — the phone's direct call to ollama.com is
@@ -2347,6 +2368,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "approvals_err" -> { shellUi.jobsLoading.value = false; vm.log("! approvals: ${data.take(120)}") }
             "people" -> shellUi.leads.value = AssistantJson.people(data)
             "people_err" -> {}
+            "files" -> { shellUi.downloads.loading.value = false; shellUi.downloads.files.value = AssistantJson.files(data) }
+            "files_err" -> { shellUi.downloads.loading.value = false; vm.log("! downloads: ${data.take(120)}") }
+            "filedel" -> loadFiles()
+            "filedel_err" -> vm.log("! delete: ${data.take(120)}")
             "loginsync" -> try { val o = JSONObject(data); if (o.has("error")) vm.log("! login sync: ${o.optString("error")}") else vm.log("● cluster profile ${o.optString("profile")} has the login${if (o.optBoolean("applied")) " (applied to its open browser)" else " (applied at its next launch)"}") } catch (e: Exception) { vm.log("! login sync: ${data.take(100)}") }
             "loginsync_err" -> vm.log("! login sync: ${data.take(120)}")
             "watch_session" -> try {

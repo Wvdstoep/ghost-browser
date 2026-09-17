@@ -66,6 +66,7 @@ class DesktopState {
     val jobs = mutableStateOf<List<engineer.myapp.gb.shared.JobInfo>>(emptyList())
     val jobsLoading = mutableStateOf(false)
     val leads = mutableStateOf<List<engineer.myapp.gb.shared.PersonInfo>>(emptyList())   // people worth your words
+    val downloads = engineer.myapp.gb.shared.DownloadsUi()   // every file the cluster browser captured
     // watchers — scheduled background tasks
     val watchers = mutableStateOf<List<engineer.myapp.gb.shared.Watcher>>(emptyList())
     val watchersLoading = mutableStateOf(false)
@@ -145,6 +146,15 @@ fun loadPlatforms(st: DesktopState) = bg {
 private const val RD_GOAL_D = "Open Facebook notifications and my recent posts. For each NEW comment or reaction on MY posts, read the whole thread for context, then draft ONE natural reply that continues the conversation and moves toward my-app.engineer only where it genuinely fits. Propose EVERY reply for my approval - never post without approval. Skip threads that are hostile, off-topic, already handled, or where I chose not to engage. Keep watching and check back periodically."
 
 /** The approval gate: pull running watchers + their pending proposals from the jobs engine. */
+/** Downloads — the files the cluster browser captured (GET /v1/files); the chat's hooks play/save them. */
+fun loadFilesD(st: DesktopState) = bg {
+    st.downloads.loading.value = true
+    if (engineer.myapp.gb.shared.AssistantHooks.playMedia == null) AssistantD.open(st)   // installs the play/save hooks
+    try { st.downloads.files.value = AssistantJson.files(Cluster.authed("GET", "/v1/files", null)) } catch (e: Exception) { st.activity.value = "downloads: ${e.message}" }
+    st.downloads.loading.value = false
+}
+fun deleteFileD(st: DesktopState, id: String) = bg { try { Cluster.authed("DELETE", "/v1/files/$id", null) } catch (e: Exception) {}; loadFilesD(st) }
+
 fun loadApprovals(st: DesktopState) = bg {
     st.jobsLoading.value = true
     try { st.leads.value = AssistantJson.people(Cluster.authed("GET", "/v1/people?platform=facebook", null)) } catch (e: Exception) { /* the section stays hidden */ }
@@ -475,7 +485,7 @@ fun DeviceHubScreenD(st: DesktopState) {
 
 /* ── Settings ──────────────────────────────────────────────────────────────────────────────── */
 @Composable
-fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit) {
+fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit, onOpenDownloads: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     LaunchedEffect(Unit) { if (st.platforms.value.isEmpty()) loadPlatforms(st); if (st.devices.value.isEmpty()) loadDevices(st) }
     Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(20.dp)) {
@@ -494,6 +504,12 @@ fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices
             Spacer(Modifier.height(10.dp))
             OutlinedButton(onClick = { loadPlatforms(st); loadDevices(st); loadFlows(st) }, shape = RoundedCornerShape(12.dp)) { Text("Re-sync now") }
             Note("Sign in on the Browser tab (my-app.engineer → open Ghost Browser from Tools). The node then auto-registers — one account, same data on every device.")
+        }
+
+        SectionD("⬇  Downloads") {
+            Text("Every file your Ghost Browser captured — songs, pictures, exports. Play, save to this machine, or delete.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onOpenDownloads, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Open downloads") }
         }
 
         SectionD("👤  Profiles") {
