@@ -92,7 +92,8 @@ describe("threads the owner started on other people's posts", () => {
     ] }, { meName: 'Wesley Stoep' }, feed);
     expect(item(feed, 'Eric Sijbesma', 'eens!').fields.status).toBe('waiting on you'); expect(item(feed, 'Eric Sijbesma', 'eens!').fields.theirs).toBe(true);
     expect(item(feed, 'Wesley Stoep', 'goed punt').fields.status).toBe('you');
-    expect(item(feed, 'Sander Rombout', 'ik snap het')).toBeUndefined();
+    // Sander's root comment is not produced again — only the stale item remains, and it is folded away
+    expect(Object.values(feed.items).filter((it) => it.fields.author === 'Sander Rombout').map((it) => it.key)).toEqual(['https://fb/old']);
     const stale = feed.items['https://fb/old']; expect(stale.handled).toBe(true); expect(stale.fields.status).toBe('side conversation');
   });
 
