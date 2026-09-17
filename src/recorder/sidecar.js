@@ -162,7 +162,8 @@ async function launchBrowser({ profileDir, display, pulseServer, size, cfg = {},
   const { stealthChromium, CHROME_ARGS } = require('../pool');
   const profiles = require('../profiles');
   let proxy = {};
-  try {
+  if (cfg.proxyServer) proxy = { proxy: { server: String(cfg.proxyServer) } };   // a recorder pod: GB's own exit proxy, by name
+  else try {
     const ts = require('../tailscale'); const routeAll = require('../settings').read().routeThroughTailnet !== false;
     const px = profiles.launchProxy(cfg.proxy, ts.proxyUrl(), { routeAll }); if (px) proxy = { proxy: px };
   } catch (e) { log && log.warn && log.warn(`[rec] exit not applied: ${e.message}`); }

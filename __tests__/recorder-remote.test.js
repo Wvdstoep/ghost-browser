@@ -43,7 +43,10 @@ describe('a recording as a pod of its own', () => {
     expect(r.tokenOf(v.id)).toMatch(/^[0-9a-f]{48}$/); expect(r.running()).toEqual([]); expect(r.runningRemote()).toEqual([v.id]);
     await sleep(20); expect(launched).toEqual([v.id]); expect(r.get(v.id).jobName).toBe('ghost-browser-rec-' + v.id);
     const h = r.handoff(v.id); expect(h).toMatchObject({ id: v.id, url: 'https://x/v', profile: 'google', until: 'video-ends', stop: '' });
-    expect(r.remoteUpdate(v.id, { state: 'recording', seconds: 30, bytes: 1000, segments: 3, pageTitle: 'T', mode: 'local', url: 'https://evil' })).toMatchObject({ state: 'recording', seconds: 30, mode: 'job', url: 'https://x/v' });
+    // the pod's numbers are ignored: what counts is what arrived here (the pod deletes what it pushed)
+    expect(r.remoteUpdate(v.id, { state: 'recording', seconds: 30, bytes: 1000, segments: 3, pageTitle: 'T', mode: 'local', url: 'https://evil' })).toMatchObject({ state: 'recording', seconds: 0, segments: 0, pageTitle: 'T', mode: 'job', url: 'https://x/v' });
+    fs.writeFileSync(path.join(r.dirOf(v.id), 'index.m3u8'), '#EXTM3U\n#EXTINF:10.000,\nseg-00000.ts\n#EXTINF:10.000,\nseg-00001.ts\n'); fs.writeFileSync(path.join(r.dirOf(v.id), 'seg-00000.ts'), Buffer.alloc(40)); fs.writeFileSync(path.join(r.dirOf(v.id), 'seg-00001.ts'), Buffer.alloc(2));
+    expect(r.remoteUpdate(v.id, { state: 'recording' })).toMatchObject({ seconds: 20, segments: 2, bytes: 42 });
     expect(r.remove(v.id)).toEqual({ error: 'still recording — stop it first' });
     expect(r.stop(v.id)).toEqual({ ok: true, id: v.id, remote: true }); expect(r.handoff(v.id).stop).toBe('stopped by the owner');
     fs.writeFileSync(path.join(r.dirOf(v.id), 'index.m3u8'), '#EXTM3U\n#EXTINF:10.000,\nseg-00001.ts\n'); fs.writeFileSync(path.join(r.dirOf(v.id), 'seg-00001.ts'), Buffer.alloc(5));

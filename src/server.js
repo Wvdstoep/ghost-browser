@@ -2111,7 +2111,10 @@ app.get('/v1/recordings/:id/handoff', recPod, async (req, res) => {
   const h = recorder.handoff(req.params.id); if (!h) return res.status(404).json({ error: 'no such recording' });
   try { const pg = require('./recorder/page'); const cookies = await pg.cookiesFor(h.profile, { liveContextFor: (p) => { try { const o = consoleOwner(); const x = pool.listFor(o).find((y) => y.profile === p); const sess = x && pool.get(x.sessionId); return sess && sess.context ? sess.context : null; } catch { return null; } }, profileDir: process.env.PROFILE_DIR || '/profiles', log });
     let cfg = {}; try { cfg = profiles.read(h.profile) || {}; } catch { cfg = {}; }
-    res.json({ ...h, cookies, cfg: { locale: cfg.locale, timezone: cfg.timezone, userAgent: cfg.userAgent, proxy: cfg.proxy } });
+    // the exit: the same proxy the profile's browser would use here, reachable from the pod by the headless name
+    let proxyServer = '';
+    try { const ts = require('./tailscale'); const routeAll = require('./settings').read().routeThroughTailnet !== false; const px = profiles.launchProxy(cfg.proxy, ts.proxyUrl(), { routeAll }); if (px && px.server) proxyServer = String(px.server).replace('127.0.0.1', process.env.RECORDER_PROXY_HOST || 'ghost-browser-pods'); } catch (e) { log.warn(`[recorder] handoff exit: ${e.message}`); }
+    res.json({ ...h, cookies, cfg: { locale: cfg.locale, timezone: cfg.timezone, userAgent: cfg.userAgent, proxy: cfg.proxy, proxyServer } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/v1/recordings/:id/segments/:name', recPod, express.raw({ type: '*/*', limit: '400mb' }), (req, res) => {
