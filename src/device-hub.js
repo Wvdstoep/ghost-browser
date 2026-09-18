@@ -149,6 +149,21 @@ function mountDeviceHub(app, authed) {
     res.json({ ok: true, next: d.logSeq });
   });
 
+  // In-process API for the scheduler: is there an online device of this owner that can run a job with
+  // these requirements? Mirrors /v1/device/route's scoring. Returns {deviceId,name,caps} or null.
+  const capableDevice = (owner, need = {}) => {
+    const now = Date.now();
+    const online = [...devices.entries()].filter(([, d]) => d.owner === owner && (now - d.lastSeen) < 40000).map(([id, d]) => ({ id, name: d.name, caps: d.caps || normCaps({}) }));
+    const ok = (c) => {
+      for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (need[k] && !c.caps[k]) return false;
+      if (need.platform && c.caps.platform !== need.platform) return false;
+      if (need.profile && !(c.caps.profiles || []).includes(need.profile)) return false;
+      return true;
+    };
+    const pick = online.find(ok) || null;
+    return pick ? { deviceId: pick.id, name: pick.name, caps: pick.caps } : null;
+  };
+
   // The operator/master reads a device's recent log; ?after=<n> returns only newer lines.
   app.get("/v1/device/:deviceId/log", authed, (req, res) => {
     const d = dev(req.params.deviceId);
@@ -174,5 +189,6 @@ function mountDeviceHub(app, authed) {
     const timer = setTimeout(() => { if (settled) return; settled = true; d.resultWaiters.delete(cmd.id); res.status(504).json({ error: "device did not respond in time", id: cmd.id }); }, 60000);
     d.resultWaiters.set(cmd.id, (r) => { if (settled) return; settled = true; clearTimeout(timer); res.json({ ok: true, id: cmd.id, result: r }); });
   });
+  return { capableDevice, deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })) };
 }
 module.exports = { mountDeviceHub };
