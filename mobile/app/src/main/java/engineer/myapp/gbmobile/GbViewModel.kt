@@ -67,6 +67,11 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         t
     }
 
+    // --- durable cluster login (Bearer): minted ONCE behind the SSO sign-in, then every cluster call
+    //     uses it natively, independent of any browsing profile — no per-profile re-sign-in. ---
+    var clusterKey: String get() = sp.getString("clusterKey", "") ?: ""
+        set(v) { sp.edit().putString("clusterKey", v).apply() }
+
     // --- profiles (isolated cookie jars) ---
     val profiles = MutableLiveData<List<String>>(loadProfiles())
     val currentProfile = MutableLiveData(sp.getString("profile", "default") ?: "default")

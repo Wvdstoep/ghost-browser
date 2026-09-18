@@ -1021,7 +1021,7 @@ app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() 
  * none, and neither half looks broken. Getting it wrong was silent. These cannot be typed wrongly
  * because there is nothing to type.
  */
-require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
+const deviceHub = require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
 /* DURABLE DEVICE LOGIN: the app signs in ONCE through the SSO handoff (this call rides that cookie), gets a
    durable Bearer token, and from then on reaches the cluster natively with it — no WebView, no per-profile
    sign-in. Only the signed-in owner (the console) may enroll a device; a device token is the owner on their
@@ -2376,6 +2376,19 @@ async function scheduleTick() {
     if (!scheduleDue(cfg, last ? Date.parse(last.started_at) : 0, when)) continue;
     const holder = profileBusy(watcherProfileOf(wf.id));
     if (holder) { log.info(`[workflow-sched] "${wf.name}" waits — another pass holds the ${watcherProfileOf(wf.id)} browser (${holder})`); continue; }
+    // A Cloudflare-gated platform (LinkedIn) must run on a real device — the phone that holds the login,
+    // its own fingerprint and residential IP. The cluster's exit only redirect-loops there. If no capable
+    // device is connected, DO NOT run on the cluster: skip and say so, visibly, until the device is back.
+    const wProfile = watcherProfileOf(wf.id);
+    if (sites.needsDevice(wProfile)) {
+      const dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + wProfile });
+      if (!dev) {
+        try { require('./watcherFeed').setConfig(wf.id, { lastPass: { at: Date.now(), status: 'waiting-device', note: `${wProfile} needs your device connected — it will run there, not on the cluster` } }); } catch (e) {}
+        log.info(`[workflow-sched] "${wf.name}" waits for a device — ${wProfile} runs on your phone, not the cluster`);
+        continue;
+      }
+      log.info(`[workflow-sched] "${wf.name}" → runs on ${dev.name} (${wProfile} on the device)`);
+    }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */

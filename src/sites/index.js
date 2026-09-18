@@ -43,6 +43,9 @@ const SITES = {
     label: 'LinkedIn',
     site: 'linkedin.com',
     start: 'https://www.linkedin.com/login',
+    // Cloudflare managed-challenge gate: from the cluster's datacenter exit every LinkedIn page redirect-loops.
+    // It must run on a REAL device — the phone that holds the login, its own fingerprint and residential IP.
+    needsDevice: true,
     defaults: { presentAs: 'windows', blockPasskeys: true, note: 'business' },
     hint: 'Sign in. If it offers a passkey, choose another way — a container has no fingerprint reader and that prompt never finishes.',
   },
@@ -217,4 +220,6 @@ function list(existing = []) {
   return built.concat(authored);
 }
 
-module.exports = { SITES, get, list, profileNameFor, borrowsProfile, pinnedProfile, servedProfile };
+/** Does this site have to run on a real device (Cloudflare-gated)? Looks up by key or served profile name. */
+function needsDevice(profileOrKey) { const k = String(profileOrKey || '').replace(/^p_/, ''); const s = SITES[k] || Object.values(SITES).find((x) => x.site === k || profileNameFor(x) === k); return !!(s && s.needsDevice); }
+module.exports = { SITES, get, list, profileNameFor, borrowsProfile, pinnedProfile, servedProfile, needsDevice };

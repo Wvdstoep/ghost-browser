@@ -171,6 +171,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
         renderRoleSpinner()
         observe()
+        // a device that has enrolled once is connected on launch — native calls with the saved key, no sign-in
+        if (vm.clusterKey.isNotBlank() && vm.clusterUrl.isNotBlank()) {
+            vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; vm.log("● connected with this device's saved login")
+            netExec.execute { try { autoSyncSharedData() } catch (e: Exception) {} }
+        }
         fetchLearnFeed()   // new-tab home feed (my-app.engineer /learn)
 
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -622,6 +627,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // deny, run a flow) calls in from the WebView's bridge thread — and when the control channel was
         // not ready the fallback below touched the API WebView directly and threw ("Java exception was
         // raised during method invocation"). Hop to the main thread once, here, for every caller.
+        // ONCE ENROLLED, every cluster call goes native with the device's durable Bearer key — no WebView,
+        // no per-profile cookie jar, so opening a platform never re-triggers a cluster sign-in. The WebView
+        // path below is only the fallback used to enroll the first time (it rides the SSO cookie).
+        if (vm.clusterKey.isNotBlank()) { nativeApiCall(method, path, body, tag); return }
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) { runOnUiThread { apiCall(method, path, body, tag) }; return }
         val js = "window.__gbApi(" + JSONObject.quote(method) + "," + JSONObject.quote(path) + "," +
             (if (body == null) "null" else JSONObject.quote(body)) + "," + JSONObject.quote(tag) + ")"
@@ -634,6 +643,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (apiReady && apiWeb != null) call() else apiQueue.add(call)
     }
 
+    private val netExec = java.util.concurrent.Executors.newFixedThreadPool(4)
+    /** A cluster call over a plain connection with the durable device key — the result lands on the SAME
+     *  dispatcher (onBridge) by tag, so every existing handler keeps working unchanged. */
+    private fun nativeApiCall(method: String, path: String, body: String?, tag: String) {
+        netExec.execute {
+            try {
+                val url = java.net.URL(vm.clusterUrl.trim().trimEnd('/') + path)
+                val c = url.openConnection() as java.net.HttpURLConnection
+                c.requestMethod = method; c.connectTimeout = 20000; c.readTimeout = 60000
+                c.setRequestProperty("Authorization", "Bearer ${vm.clusterKey}")
+                c.setRequestProperty("Accept", "application/json")
+                if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.outputStream.use { it.write(body.toByteArray()) } }
+                val code = c.responseCode
+                val txt = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code == 401) {   // the key was revoked or expired — drop it and fall back to the SSO enrolment
+                    vm.clusterKey = ""; runOnUiThread { vm.log("· cluster login expired — reconnecting"); onBridge(tag + "_err", "unauthorized"); ensureApiWeb() }
+                } else runOnUiThread { onBridge(if (code in 200..299) tag else tag + "_err", txt) }
+            } catch (e: Exception) { runOnUiThread { onBridge(tag + "_err", e.message ?: "network error") } }
+        }
+    }
+
     private fun stopApiWeb() {
         apiReady = false; apiQueue.clear()
         apiWeb?.let { pw -> try { (pw.parent as? ViewGroup)?.removeView(pw); pw.destroy() } catch (e: Exception) {} }
@@ -644,6 +674,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  profiles/platforms and automations pull from the cluster automatically, so the data is just
      *  there. Replaces the manual "fetch" buttons. UI-toolkit-independent — survives the Compose rewrite. */
     private fun autoSyncSharedData() {
+        // First time on a fresh device: mint the durable login through the SSO-authed WebView, then the
+        // enrol handler stores it and calls this again — this second pass runs native with the key.
+        if (vm.clusterKey.isBlank()) {
+            vm.log("↻ connecting this device to the cluster…")
+            apiCall("POST", "/v1/device/auth", JSONObject().put("deviceId", vm.deviceToken).put("name", android.os.Build.MODEL).toString(), "enroll")
+            return
+        }
         runOnUiThread { vm.log("↻ syncing your data from the cluster…") }
         apiCall("GET", "/v1/agent/roles", null, "roles_list")
         apiCall("GET", "/v1/profiles/presets", null, "platforms")
@@ -2177,8 +2214,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
             try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
         } else {
-            if (cookiesFor(vm.clusterUrl).isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return }
-            vm.clusterInfo.value = "Cluster: connecting…"; vm.log("→ connecting (control channel on the GB origin)…")
+            // a durable device login means no fresh sign-in is needed; only require the SSO cookie to enrol the first time
+            if (vm.clusterKey.isBlank() && cookiesFor(vm.clusterUrl).isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return }
+            vm.clusterInfo.value = "Cluster: connecting…"; vm.log(if (vm.clusterKey.isNotBlank()) "→ connecting with this device's saved login…" else "→ connecting (control channel on the GB origin)…")
+            if (vm.clusterKey.isNotBlank()) { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; autoSyncSharedData() }
             startControlWeb()
             try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
         }
@@ -2309,6 +2348,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun onBridge(tag: String, data: String) {
+        // The one-time enrolment result: the SSO-authed WebView minted a durable device key. Store it, and
+        // from now on every cluster call goes native with it — no more per-profile sign-in.
+        if (tag == "enroll" || tag == "enroll_err") {
+            if (tag == "enroll") try { val o = JSONObject(data); val t = o.optString("token"); if (t.isNotBlank()) { vm.clusterKey = t; vm.log("● connected — this device stays signed in"); autoSyncSharedData() } else vm.log("! enrol: ${o.optString("error", data.take(80))}") } catch (e: Exception) { vm.log("! enrol: ${data.take(80)}") }
+            else vm.log("! enrol failed: ${data.take(80)}")
+            return
+        }
         // Awaitable agent API calls: resolve the waiting latch (tag = "agentapi:<id>" or "..._err").
         if (tag.startsWith("agentapi:")) {
             val err = tag.endsWith("_err")
