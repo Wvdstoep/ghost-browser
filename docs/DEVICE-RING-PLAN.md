@@ -6,8 +6,8 @@ Status board (keep current; it is the hand-off between sessions):
 
 | Phase | Name | State | Proof it is done |
 |---|---|---|---|
-| 0 | Robust native presence | planned | With the app in the foreground the phone stays online in the hub for 30+ min with no SSO cookie; killing the app shows it offline within a minute; no WebView needed for presence |
-| 1 | Profile-targeted on-device commands | planned | A command names a profile; the phone runs navigate/perceive/type/click in THAT profile's browser and returns the result; LinkedIn opens signed-in in the p_linkedin profile |
+| 0 | Robust native presence | **built · app** (2026-09-18) — proof needs the phone on the new app | With the app in the foreground the phone stays online in the hub for 30+ min with no SSO cookie; killing the app shows it offline within a minute; no WebView needed for presence |
+| 1 | Profile-targeted on-device commands | **built · app** (2026-09-18) — a command with a profile runs in that profile hidden browser | A command names a profile; the phone runs navigate/perceive/type/click in THAT profile's browser and returns the result; LinkedIn opens signed-in in the p_linkedin profile |
 | 2 | The on-device crawl | planned | A LinkedIn post/notification is read on the phone (its login, its IP, no Cloudflare loop), the thread returns to the cluster, and the cluster ingests → drafts → gates it exactly like Facebook |
 | 3 | Real Cloudflare-wall detection | planned | A site that redirect-loops or shows a Cloudflare challenge from the cluster is auto-flagged needsDevice; the flag is data, not a hardcode; LinkedIn is detected, not listed |
 | 4 | The scheduler dispatches to the ring | planned | A due LinkedIn watch runs its pass on the connected phone end to end; an approved reply to a gated platform posts from the phone; no device → clean waiting-device, never the cluster |
