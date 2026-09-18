@@ -2381,13 +2381,16 @@ async function scheduleTick() {
     // device is connected, DO NOT run on the cluster: skip and say so, visibly, until the device is back.
     const wProfile = watcherProfileOf(wf.id);
     if (sites.needsDevice(wProfile)) {
+      // Cloudflare-gated: NEVER on the cluster (it only redirect-loops there). It runs on a real device.
+      // The on-device pass is dispatched by the device ring; here we only make sure the cluster never
+      // attempts it, and we record whether a capable device is connected so the app can show the state.
       const dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + wProfile });
-      if (!dev) {
-        try { require('./watcherFeed').setConfig(wf.id, { lastPass: { at: Date.now(), status: 'waiting-device', note: `${wProfile} needs your device connected — it will run there, not on the cluster` } }); } catch (e) {}
-        log.info(`[workflow-sched] "${wf.name}" waits for a device — ${wProfile} runs on your phone, not the cluster`);
-        continue;
-      }
-      log.info(`[workflow-sched] "${wf.name}" → runs on ${dev.name} (${wProfile} on the device)`);
+      const status = dev ? 'on-device' : 'waiting-device';
+      const note = dev ? `${wProfile} runs on ${dev.name} (your device), not the cluster` : `${wProfile} needs your device connected — it runs there, never on the cluster`;
+      try { require('./watcherFeed').setConfig(wf.id, { lastPass: { at: Date.now(), status, note, device: dev ? dev.name : null } }); } catch (e) {}
+      log.info(`[workflow-sched] "${wf.name}" ${status} — ${note}`);
+      runningWatchers.delete(wf.id);   // we claimed the slot above; release it — the cluster does not run this
+      continue;                         // TODO on-device dispatch: hand the pass to the device ring when a device is present
     }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
