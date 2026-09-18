@@ -2321,6 +2321,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // a command may name a profile → run it in that profile's own hidden browser (the login lives there)
         val prof = body.optString("profile", "")
         cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
+        // a command may ask for the DESKTOP site (LinkedIn's mobile web omits comments; desktop renders the
+        // full, stable comment DOM). Set the reader's UA before it loads; "desktop":false restores mobile.
+        if (body.has("desktop")) { val ua = if (body.optBoolean("desktop")) DESKTOP_UA else null
+            val l = CountDownLatch(1); runOnUiThread { try { cmdTarget().settings.userAgentString = ua ?: cmdTarget().settings.userAgentString.replace(Regex("\\(X11[^)]*\\)"), "(Linux; Android 13)") } catch (e: Exception) {}; l.countDown() }; l.await(3, TimeUnit.SECONDS) }
         return try {
             when (path) {
                 "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
