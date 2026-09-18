@@ -2094,7 +2094,7 @@ const recorder = (() => {
   const deps = { capabilities: sc.capabilities, freeBytes: sc.freeBytes, sizeOf: sc.sizeOf, startDisplay: sc.startDisplay, startPulse: sc.startPulse, launchBrowser: sc.launchBrowser, startFfmpeg: sc.startFfmpeg,
     cookiesFor: (profile) => pg.cookiesFor(profile, { liveContextFor, profileDir: process.env.PROFILE_DIR || '/profiles', log }), preparePage: pg.preparePage, videoState: pg.videoState, platformCookies: pg.platformCookies,
     profileConfig: (p) => { try { return profiles.read(p) || {}; } catch { return {}; } } };
-  deps.remote = require('./recorder/remote').makeRemote({ log });
+  deps.remote = require('./recorder/remote').chooseRemote({ log });   // Phase 5: the platform spawns recorders when RECORDER_PLATFORM_URL/TOKEN are set
   const rec = new Recorder({ root: sc.recordingsRoot(), deps, log, maxConcurrent: Math.max(1, Number(process.env.MAX_RECORDINGS) || 2) });
   // pods of their own: a pod gone or silent leaves a playable partial; checked every minute
   setInterval(() => rec.reconcile().catch((e) => log.warn(`[recorder] reconcile: ${e.message}`)), 60000).unref();
@@ -2113,7 +2113,7 @@ app.get('/v1/recordings/:id/handoff', recPod, async (req, res) => {
     let cfg = {}; try { cfg = profiles.read(h.profile) || {}; } catch { cfg = {}; }
     // the exit: the same proxy the profile's browser would use here, reachable from the pod by the headless name
     let proxyServer = '';
-    try { const ts = require('./tailscale'); const routeAll = require('./settings').read().routeThroughTailnet !== false; const px = profiles.launchProxy(cfg.proxy, ts.proxyUrl(), { routeAll }); if (px && px.server) proxyServer = String(px.server).replace('127.0.0.1', process.env.RECORDER_PROXY_HOST || 'ghost-browser-pods'); } catch (e) { log.warn(`[recorder] handoff exit: ${e.message}`); }
+    try { const ts = require('./tailscale'); const routeAll = require('./settings').read().routeThroughTailnet !== false; const px = profiles.launchProxy(cfg.proxy, ts.proxyUrl(), { routeAll }); if (px && px.server) proxyServer = String(px.server).replace('127.0.0.1', process.env.RECORDER_PROXY_HOST || (recorder.deps.remote && recorder.deps.remote.host) || 'ghost-browser-pods'); } catch (e) { log.warn(`[recorder] handoff exit: ${e.message}`); }
     res.json({ ...h, cookies, cfg: { locale: cfg.locale, timezone: cfg.timezone, userAgent: cfg.userAgent, proxy: cfg.proxy, proxyServer } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
