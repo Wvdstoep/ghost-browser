@@ -18,7 +18,9 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
     if (imageInfo) return imageInfo;
     imageInfo = await k8s.ownImage(); if (!imageInfo.image) throw new Error('could not read the deployment image'); return imageInfo;
   }
+  let host = 'ghost-browser-pods'; try { host = new URL(gbUrl).hostname; } catch { /* keep */ }
   return {
+    host,
     available: () => enabled && k8s.available(),
     /** Create the Job; the recording's token is its only key to GB. */
     async launch(rec) {
@@ -51,4 +53,48 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
   };
 }
 
-module.exports = { makeRemote };
+/**
+ * PHASE 5 — the PLATFORM spawns the recorder. When the install carries RECORDER_PLATFORM_URL and
+ * RECORDER_PLATFORM_TOKEN (the provisioner injects them), GB asks the platform for a recorder instead of
+ * creating a Job in its own namespace: the platform knows the plan, the tenant's rented machines and its
+ * own capacity, and places the pod where it belongs. The recording protocol does not change — the pod
+ * still takes the handoff from GB and pushes segments back with the recording's token — only who
+ * creates the pod. The contract:
+ *   POST   {url}/api/recorders            { recordingId, gbUrl, proxyHost, token, quality, maxMinutes } → 201 { jobRef, where } | 403 { reason:'plan' } | 409 { reason:'capacity', retryAfterSec }
+ *   GET    {url}/api/recorders/{jobRef}   → { alive, hasPod, state }
+ *   DELETE {url}/api/recorders/{jobRef}   → 200
+ */
+function makePlatformRemote({ log, url = process.env.RECORDER_PLATFORM_URL || '', token = process.env.RECORDER_PLATFORM_TOKEN || '', host = '', request = null } = {}) {
+  const base = String(url).replace(/\/$/, '');
+  const ns = (() => { try { return k8s.ns(); } catch { return 'default'; } })();
+  // the tenant's GB as seen from the platform's namespace: the headless twin by its full cluster name
+  const gbHost = host || process.env.RECORDER_HOST || `ghost-browser-pods.${ns}.svc.cluster.local`;
+  const call = request || (async (method, path, body) => {
+    const res = await fetch(base + path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
+    let j = null; try { j = await res.json(); } catch { j = {}; }
+    if (!res.ok) throw Object.assign(new Error(`${method} ${path} → ${res.status}: ${(j && (j.error || j.reason)) || ''}`), { status: res.status, body: j });
+    return j;
+  });
+  return {
+    host: gbHost,
+    available: () => !!(base && token),
+    async launch(rec) {
+      const j = await call('POST', '/api/recorders', { recordingId: rec.id, gbUrl: `http://${gbHost}:3000`, proxyHost: gbHost, token: rec.token, quality: rec.quality, maxMinutes: rec.maxMinutes, title: rec.title });
+      log && log.info && log.info(`[recorder] ${rec.id}: the platform runs it as ${j.jobRef} (${j.where || 'platform'})`);
+      return { jobName: j.jobRef, where: j.where || 'platform' };
+    },
+    async alive(rec) { try { const j = await call('GET', `/api/recorders/${encodeURIComponent(rec.jobName || rec.id)}`); return j.alive !== false; } catch (e) { return e.status === 404 ? false : true; } },
+    async podExists(rec) { try { const j = await call('GET', `/api/recorders/${encodeURIComponent(rec.jobName || rec.id)}`); return j.hasPod !== false; } catch { return true; } },
+    async cancel(rec) { try { await call('DELETE', `/api/recorders/${encodeURIComponent(rec.jobName || rec.id)}`); } catch { /* gone already */ } return true; },
+    stop() { return true; },
+    async sweep() { return 0; },
+  };
+}
+
+/** The remote for this install: the platform's when it is wired in, else a Job in our own namespace. */
+function chooseRemote(opts = {}) {
+  const pr = makePlatformRemote(opts); if (pr.available()) { opts.log && opts.log.info && opts.log.info('[recorder] recorders are spawned by the platform'); return pr; }
+  return makeRemote(opts);
+}
+
+module.exports = { makeRemote, makePlatformRemote, chooseRemote };

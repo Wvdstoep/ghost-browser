@@ -99,6 +99,25 @@ describe('a recording as a pod of its own', () => {
     const r2 = new Recorder({ root, deps: baseDeps(), log: quiet, clock: () => 5000 }); expect(r2.checkTicket('rec-a', tk.t)).toBe(true);   // the secret is on disk
   });
 
+  it('Phase 5: with a platform wired in, the recorder is asked from the platform, not created in our namespace — same protocol, the pod reaches GB by its full cluster name', async () => {
+    const { makePlatformRemote, chooseRemote, makeRemote } = await import('../src/recorder/remote.js');
+    const calls = []; const request = async (method, path, body) => { calls.push([method, path, body]); if (method === 'POST') return { jobRef: 'rec-job-7', where: 'byon:node-a' }; if (method === 'GET') return { alive: true, hasPod: true }; return {}; };
+    const pr = makePlatformRemote({ url: 'https://platform.test/', token: 'ptok', host: 'ghost-browser-pods.pod-x.svc.cluster.local', request, log: quiet });
+    expect(pr.available()).toBe(true); expect(pr.host).toBe('ghost-browser-pods.pod-x.svc.cluster.local');
+    const j = await pr.launch({ id: 'rec-1', token: 'rtok', quality: '1080p', maxMinutes: 30, title: 'T' });
+    expect(j).toEqual({ jobName: 'rec-job-7', where: 'byon:node-a' });
+    expect(calls[0]).toEqual(['POST', '/api/recorders', { recordingId: 'rec-1', gbUrl: 'http://ghost-browser-pods.pod-x.svc.cluster.local:3000', proxyHost: 'ghost-browser-pods.pod-x.svc.cluster.local', token: 'rtok', quality: '1080p', maxMinutes: 30, title: 'T' }]);
+    expect(await pr.alive({ jobName: 'rec-job-7' })).toBe(true); expect(await pr.podExists({ jobName: 'rec-job-7' })).toBe(true); expect(await pr.cancel({ jobName: 'rec-job-7' })).toBe(true);
+    expect(calls.map((c) => c[0] + ' ' + c[1]).slice(1)).toEqual(['GET /api/recorders/rec-job-7', 'GET /api/recorders/rec-job-7', 'DELETE /api/recorders/rec-job-7']);
+    // the platform says no: plan (403) → the engine's fallback path gets a clear reason
+    const no = makePlatformRemote({ url: 'https://platform.test', token: 'p', request: async () => { throw Object.assign(new Error('POST /api/recorders → 403: plan'), { status: 403 }); }, log: quiet });
+    await expect(no.launch({ id: 'rec-2', token: 't' })).rejects.toThrow(/403: plan/);
+    // no platform wired in: our own namespace's Job remote is chosen (and says so through its host)
+    expect(makePlatformRemote({ url: '', token: '' }).available()).toBe(false);
+    const own = chooseRemote({ log: quiet }); expect(own.host).toBe('ghost-browser-pods'); expect(typeof own.launch).toBe('function');
+    expect(makeRemote({ log: quiet, gbUrl: 'http://gb-custom:3000' }).host).toBe('gb-custom');
+  });
+
   it('the pod pushes only segments that are complete: never the one being written, all of them at the end', () => {
     const d = tmp(); for (const n of ['seg-00001.ts', 'seg-00002.ts', 'seg-00003.ts']) fs.writeFileSync(path.join(d, n), '');
     const pushed = new Set(['seg-00001.ts']);

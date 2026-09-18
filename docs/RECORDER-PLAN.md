@@ -9,7 +9,7 @@ Status board (keep this table current; it is the hand-off between sessions):
 | 2 | The agent and the app: ask, watch, stream, download | **built · v340 · app** (2026-09-17) — chat proof done; the phone's Play / Save / Stop are the owner's check | "go to the newest MrBeast video, record it full screen with sound and save it" works end to end from the chat |
 | 3 | Elastic: a recording is its own pod, resources added not borrowed | **done · v342** (2026-09-17) | three recordings run at once; the browser pod's CPU/memory stay flat; a GB roll cuts none of them |
 | 4 | State of the art: quality ladder, thumbnails, chapters, share links, telemetry | **done · v343 · app** (2026-09-17) — console panel, subtitles and the controller's consumer side left as follow-ups |
-| 5 | The platform spawns the recorder: gated by the tenant's plan and rented machines, not by a tool inside the tenant's namespace | planned (GB side pluggable; provisioner side to design) | — |
+| 5 | The platform spawns the recorder: gated by the tenant's plan and rented machines, not by a tool inside the tenant's namespace | building (GB side: `chooseRemote` → platform remote when `RECORDER_PLATFORM_URL`/`TOKEN` are set; provisioner side in progress) | — |
 
 Facts the design rests on (measured 2026-09-17):
 
