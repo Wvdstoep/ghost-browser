@@ -2030,7 +2030,13 @@ app.get('/v1/people/:platform/:name', authed, (req, res) => { const people = req
 app.post('/v1/profiles/:name/cookies', authed, async (req, res) => {
   const name = profiles.safeName(req.params.name); const b = req.body || {};
   const site = String(b.site || ''); let host = ''; try { host = new URL(site).hostname; } catch (e) { host = ''; }
-  const list = (Array.isArray(b.cookies) ? b.cookies : []).filter((c) => c && c.name && typeof c.value === 'string').slice(0, 200).map((c) => {
+  /* NEVER carry a device-bound cookie across machines: an edge/routing/bot cookie is tied to the IP,
+     the browser and a short clock of the device that set it, so the phone's copy makes the cluster's
+     session redirect-loop (LinkedIn's `lidc` routing + Cloudflare's `__cf_bm`, seen live). The server
+     re-mints every one of these for whoever connects, so dropping them costs nothing and the identity
+     cookies (li_at, JSESSIONID, the FB session, ...) still sign the session in. */
+  const EPHEMERAL = /^(__cf_bm|cf_clearance|__cfruid|__cf_ob_info|lidc|AWSALB|AWSALBCORS|incap_ses|visid_incap)/i;
+  const list = (Array.isArray(b.cookies) ? b.cookies : []).filter((c) => c && c.name && typeof c.value === 'string' && !EPHEMERAL.test(String(c.name))).slice(0, 200).map((c) => {
     const base = { name: String(c.name), value: String(c.value), path: String(c.path || '/'), secure: c.secure !== false, httpOnly: !!c.httpOnly, sameSite: ['Strict', 'Lax', 'None'].includes(c.sameSite) ? c.sameSite : 'Lax', expires: Number(c.expires) > 0 ? Number(c.expires) : Math.floor(Date.now() / 1000) + 30 * 86400 };
     if (/^__Host-/.test(base.name) || !(c.domain || host)) return { ...base, url: site || `https://${host}/`, path: '/' };
     return { ...base, domain: String(c.domain || ('.' + host.split('.').slice(-2).join('.'))) };
