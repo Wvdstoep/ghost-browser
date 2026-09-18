@@ -175,6 +175,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.clusterKey.isNotBlank() && vm.clusterUrl.isNotBlank()) {
             vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; vm.log("● connected with this device's saved login")
             netExec.execute { try { autoSyncSharedData() } catch (e: Exception) {} }
+            // register with the device hub and keep polling, so the hub shows online and watches can route here —
+            // otherwise the app looked connected while the hub saw the phone offline and never routed to it.
+            startControlWeb()
+            try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
         }
         fetchLearnFeed()   // new-tab home feed (my-app.engineer /learn)
 
