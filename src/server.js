@@ -1682,7 +1682,7 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
      that comment by id, press its Reply, type the exact words, submit, and prove the reply is on the
      page with the owner's name — never typing twice. Shares the one browser with the watcher passes:
      wait for a running pass (up to 4 min) and hold the lock while posting. */
-  const lockKey = `poster:${wid}`;
+  const lockKey = `poster:${wid}:${runId}`;   // one lock PER POST: four approvals of the same watcher take turns instead of typing over each other
   const cfgP = feed.getConfig(wid) || {};
   const want = profiles.safeName(cfgP.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   const session = async () => {
@@ -1832,7 +1832,7 @@ const operatorRuns = new Map();
    browser copy now, so a LinkedIn pass never makes a Facebook pass wait; two passes in the SAME profile
    still take turns (they share that copy). A poster lock "poster:<wid>" belongs to its watcher's profile. */
 function watcherProfileOf(id) {
-  const wid = String(id || '').replace(/^(poster|probe):/, '');
+  const wid = String(id || '').replace(/^(poster|probe):/, '').replace(/:watcher-post-approved-reply-\d+$/, '');   // a poster lock carries its post id
   try {
     const cfg = require('./watcherFeed').getConfig(wid) || {};
     if (cfg.profile) return profiles.safeName(cfg.profile);
