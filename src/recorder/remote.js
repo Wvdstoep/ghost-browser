@@ -64,13 +64,14 @@ function makeRemote({ log, gbUrl = process.env.RECORDER_GB_URL || 'http://ghost-
  *   GET    {url}/api/recorders/{jobRef}   → { alive, hasPod, state }
  *   DELETE {url}/api/recorders/{jobRef}   → 200
  */
-function makePlatformRemote({ log, url = process.env.RECORDER_PLATFORM_URL || '', token = process.env.RECORDER_PLATFORM_TOKEN || '', host = '', request = null } = {}) {
+function makePlatformRemote({ log, url = process.env.RECORDER_PLATFORM_URL || '', token = process.env.RECORDER_PLATFORM_TOKEN || '', tenant = process.env.RECORDER_PLATFORM_TENANT || '', host = '', request = null } = {}) {
   const base = String(url).replace(/\/$/, '');
   const ns = (() => { try { return k8s.ns(); } catch { return 'default'; } })();
   // the tenant's GB as seen from the platform's namespace: the headless twin by its full cluster name
   const gbHost = host || process.env.RECORDER_HOST || `ghost-browser-pods.${ns}.svc.cluster.local`;
+  // the platform's door: a per-tenant recorder token and the tenant's name (the token opens no other tenant's)
   const call = request || (async (method, path, body) => {
-    const res = await fetch(base + path, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
+    const res = await fetch(base + path, { method, headers: { 'x-recorder-token': token, 'x-pod-name': tenant || ns.replace(/^pod-/, ''), 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
     let j = null; try { j = await res.json(); } catch { j = {}; }
     if (!res.ok) throw Object.assign(new Error(`${method} ${path} → ${res.status}: ${(j && (j.error || j.reason)) || ''}`), { status: res.status, body: j });
     return j;
