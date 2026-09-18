@@ -609,7 +609,7 @@ class BrowserPool {
       if (cfg.presentAs) await presentAs(persistent, cfg.presentAs, this.log);
       captureDownloads(persistent, this.log);   // any Download button → the file store
       // LOGIN SYNC: the cookies the owner's device sent for this profile (see /v1/profiles/:name/cookies)
-      try { const pf = path.join(dir, 'pending-cookies.json'); if (fs.existsSync(pf)) { const list = JSON.parse(fs.readFileSync(pf, 'utf8')); if (Array.isArray(list) && list.length) { await persistent.addCookies(list); this.log.info?.(`[login-sync] ${safe}: ${list.length} cookie(s) from the owner's device applied`); } } } catch (e) { this.log.warn?.(`[login-sync] ${safe}: ${e.message}`); }
+      try { const pf = path.join(dir, 'pending-cookies.json'); if (fs.existsSync(pf)) { let list = JSON.parse(fs.readFileSync(pf, 'utf8')); if (Array.isArray(list)) list = list.filter((c) => c && !/^(__cf_bm|cf_clearance|__cfruid|__cf_ob_info|lidc|AWSALB|AWSALBCORS|incap_ses|visid_incap)/i.test(String(c.name || ''))); if (Array.isArray(list) && list.length) { await persistent.addCookies(list); this.log.info?.(`[login-sync] ${safe}: ${list.length} cookie(s) from the owner's device applied`); } } } catch (e) { this.log.warn?.(`[login-sync] ${safe}: ${e.message}`); }
       const page = persistent.pages()[0] || await persistent.newPage();
       const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const at = Date.now();
