@@ -63,6 +63,25 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var activeTab = -1
     private lateinit var web: WebView                     // always the active tab's WebView
 
+    // PROFILE-TARGETED device commands (Device Ring, Phase 1): a command may name a profile; it then runs
+    // in that profile's OWN hidden browser (where the login lives), never the visible tab, so a background
+    // pass — a LinkedIn read on the phone — never disturbs what the owner is looking at. Commands run one
+    // at a time on the ring thread, so a single per-command target field is safe.
+    private val ringWebs = java.util.concurrent.ConcurrentHashMap<String, WebView>()
+    @Volatile private var cmdWeb: WebView? = null
+    private fun cmdTarget(): WebView = cmdWeb ?: web
+    /** The current command target's URL (main-thread read). */
+    private fun targetUrl(): String { val t = cmdTarget(); val h = arrayOfNulls<String>(1); val l = CountDownLatch(1); runOnUiThread { h[0] = t.url; l.countDown() }; l.await(3, TimeUnit.SECONDS); return h[0] ?: "" }
+    /** A hidden browser for one profile, built once, off-screen — driven only by the ring. */
+    private fun ringWebFor(profile: String): WebView {
+        ringWebs[profile]?.let { return it }
+        val h = TabHandle(HOME, "ring:$profile", profile)
+        val w = buildWebView(h); h.web = w
+        runOnUiThread { try { (b.root as ViewGroup).addView(w, 1, 1) } catch (e: Exception) {} }
+        ringWebs[profile] = w
+        return w
+    }
+
     private var gbJs: String = ""
     @Volatile private var lastUrl: String = ""
     @Volatile private var loadLatch: CountDownLatch? = null
@@ -406,8 +425,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         var u = url.trim(); if (u.isEmpty()) return currentUrl()
         if (!u.startsWith("http") && !u.startsWith("file:")) u = "https://$u"
         u = mobileFbUrl(u)
+        val fu = u; val target = cmdTarget()
+        if (cmdWeb != null) {   // a background profile browser: no shared latch, gate on content instead
+            runOnUiThread { target.loadUrl(fu) }
+            Thread.sleep(1200); waitSettle(9000); return targetUrl()
+        }
         val latch = CountDownLatch(1); loadLatch = latch
-        val fu = u
         runOnUiThread { shellUi.url.value = fu; web.loadUrl(fu) }
         latch.await(25, TimeUnit.SECONDS); Thread.sleep(400)
         waitSettle(6000)   // lazy-loaded pages (Facebook) fire onPageFinished on a skeleton — wait for real content
@@ -488,8 +511,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun evalJs(script: String): String {
-        val latch = CountDownLatch(1); val holder = arrayOfNulls<String>(1)
-        runOnUiThread { web.evaluateJavascript(script) { v -> holder[0] = v; latch.countDown() } }
+        val latch = CountDownLatch(1); val holder = arrayOfNulls<String>(1); val target = cmdTarget()
+        runOnUiThread { target.evaluateJavascript(script) { v -> holder[0] = v; latch.countDown() } }
         latch.await(20, TimeUnit.SECONDS)
         return holder[0] ?: "null"
     }
@@ -2295,6 +2318,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  the eval/nav helpers hop to the main thread themselves. */
     fun runDeviceCommand(path: String, bodyStr: String): String {
         val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
+        // a command may name a profile → run it in that profile's own hidden browser (the login lives there)
+        val prof = body.optString("profile", "")
+        cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
         return try {
             when (path) {
                 "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
@@ -2313,6 +2339,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 else -> "{\"error\":\"unknown path\"}"
             }
         } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
+        finally { cmdWeb = null }
     }
 
     // ── THE DEVICE RING (native): register + long-poll + result with the durable key, kept alive by the
