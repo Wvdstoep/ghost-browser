@@ -134,6 +134,7 @@ app.get('/v1/config', (_req, res) => res.json({
  * opening a session in the console and then driving it from a script is one session, not two.
  */
 const bearer = auth(keys);
+const deviceTokens = require('./deviceTokens'); try { deviceTokens.load(keys, log); } catch (e) { log.warn(`[device-token] load: ${e.message}`); }
 
 /*
  * SSO-ONLY mode. A platform-managed install (Ghost Browser connected from the Tools tab) belongs to
@@ -1021,6 +1022,20 @@ app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() 
  * because there is nothing to type.
  */
 require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
+/* DURABLE DEVICE LOGIN: the app signs in ONCE through the SSO handoff (this call rides that cookie), gets a
+   durable Bearer token, and from then on reaches the cluster natively with it — no WebView, no per-profile
+   sign-in. Only the signed-in owner (the console) may enroll a device; a device token is the owner on their
+   phone (console:true), and it is revocable. */
+app.post('/v1/device/auth', authed, (req, res) => {
+  const owner = req.client && req.client.owner; if (!owner) return res.status(401).json({ error: 'sign in first' });
+  const b = req.body || {};
+  const rec = deviceTokens.mint(keys, { owner, deviceId: b.deviceId, name: b.name });
+  log.info(`[device-token] enrolled "${rec.name}" for ${owner}`);
+  res.json({ ok: true, token: rec.token, deviceId: rec.deviceId, name: rec.name, owner });
+});
+app.get('/v1/device/tokens', authed, (req, res) => res.json({ devices: deviceTokens.list(req.client && req.client.owner) }));
+app.delete('/v1/device/tokens/:deviceId', authed, (req, res) => res.json({ revoked: deviceTokens.revoke(keys, req.client && req.client.owner, req.params.deviceId) }));
+
 
 // --- On-device run journals (S1). A flow executed LOCALLY on a phone/desktop node POSTs its journal
 // here over the authed SSO API (no control channel needed), so on-device runs are visible in the shared
