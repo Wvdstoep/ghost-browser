@@ -2355,10 +2355,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val txt = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
         return code to txt
     }
+    /** Self-hosted watchdog (no third-party push): the OS job scheduler revives the ring service ~every 15 min,
+     *  even after a swipe-away or reboot, so the phone comes back as a node on its own. */
+    private fun scheduleRingWatchdog() {
+        try {
+            val req = androidx.work.PeriodicWorkRequestBuilder<RingWatchdogWorker>(15, java.util.concurrent.TimeUnit.MINUTES)
+                .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build()).build()
+            androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork("gb-ring-watchdog", androidx.work.ExistingPeriodicWorkPolicy.UPDATE, req)
+        } catch (e: Exception) { vm.log("! watchdog schedule: ${e.message}") }
+    }
+
     @Volatile private var askedBattery = false
     private fun startDeviceRing() {
         if (ringOn || vm.clusterKey.isBlank()) return
-        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption() } }
+        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption() }; scheduleRingWatchdog() }
         ringOn = true
         ringExec.execute {
             var registered = false

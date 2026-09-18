@@ -40,6 +40,8 @@ dependencies {
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.google.mediapipe:tasks-genai:0.10.24")   // on-device Gemma (LLM Inference)
+    // --- self-hosted device presence watchdog (no third-party push): revive the ring service via the OS job scheduler ---
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // --- the recording player: Media3/ExoPlayer plays the live HLS playlist and the seekable mp4, with real errors ---
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")

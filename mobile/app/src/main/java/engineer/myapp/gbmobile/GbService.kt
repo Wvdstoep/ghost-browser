@@ -55,7 +55,23 @@ class GbService : Service() {
             val pm = getSystemService(PowerManager::class.java)
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gb:poll").apply { acquire() }
         }
+        // revived by the watchdog after the app was killed: bring the app back so the ring + its browser live
+        // again (the ring needs the app process, a headless service cannot drive a WebView). Best-effort —
+        // Android may refuse a background Activity start, in which case the next launch or watchdog tick retries.
+        if (intent?.getStringExtra("reason") == "watchdog") {
+            try { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
+        }
         return START_STICKY
+    }
+
+    // Swiped away from recents: re-arm the self-hosted watchdog so the OS revives us within ~15 min. No push service.
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try {
+            val req = androidx.work.OneTimeWorkRequestBuilder<RingWatchdogWorker>()
+                .setInitialDelay(10, java.util.concurrent.TimeUnit.SECONDS).build()
+            androidx.work.WorkManager.getInstance(applicationContext).enqueue(req)
+        } catch (e: Exception) {}
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
