@@ -175,10 +175,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (vm.clusterKey.isNotBlank() && vm.clusterUrl.isNotBlank()) {
             vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; vm.log("● connected with this device's saved login")
             netExec.execute { try { autoSyncSharedData() } catch (e: Exception) {} }
-            // register with the device hub and keep polling, so the hub shows online and watches can route here —
-            // otherwise the app looked connected while the hub saw the phone offline and never routed to it.
-            startControlWeb()
+            // native presence with the durable key — stays online while the foreground service runs, no WebView, no cookie
             try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
+            startDeviceRing()
         }
         fetchLearnFeed()   // new-tab home feed (my-app.engineer /learn)
 
@@ -2214,15 +2213,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun doConnectToggle() {
-        if (ctrlWeb != null) {
-            stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
+        if (ctrlWeb != null || ringOn) {
+            stopDeviceRing(); stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
             try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
         } else {
             // a durable device login means no fresh sign-in is needed; only require the SSO cookie to enrol the first time
             if (vm.clusterKey.isBlank() && cookiesFor(vm.clusterUrl).isBlank()) { vm.log("! not signed in — tap Sign in, open Ghost Browser from Tools, then Connect"); return }
             vm.clusterInfo.value = "Cluster: connecting…"; vm.log(if (vm.clusterKey.isNotBlank()) "→ connecting with this device's saved login…" else "→ connecting (control channel on the GB origin)…")
-            if (vm.clusterKey.isNotBlank()) { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; autoSyncSharedData() }
-            startControlWeb()
+            if (vm.clusterKey.isNotBlank()) { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on"; autoSyncSharedData(); startDeviceRing() }
+            else startControlWeb()   // first time: the WebView rides the SSO cookie to enrol, then the ring takes over
             try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
         }
     }
@@ -2291,6 +2290,76 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
+    /** Run one device command on the browser and return its result JSON. Shared by the WebView control
+     *  channel and the native device ring, so both drive the phone the same way. Runs on a worker thread;
+     *  the eval/nav helpers hop to the main thread themselves. */
+    fun runDeviceCommand(path: String, bodyStr: String): String {
+        val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
+        return try {
+            when (path) {
+                "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
+                "/v1/analyze" -> evalGb("window.__gb.mark()")
+                "/v1/info" -> evalGb("window.__gb.info()")
+                "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
+                "/v1/posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
+                "/v1/perceive" -> { waitSettle(6000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
+                "/v1/click_text" -> nativeTapFromCoords(evalGb("window.__gb.coordsText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")"))
+                "/v1/click" -> nativeTapFromCoords(evalGb("window.__gb.coords(${body.optInt("index", -1)})"))
+                "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
+                "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
+                "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
+                "/v1/fetch" -> fetchInPage(body)
+                "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
+                else -> "{\"error\":\"unknown path\"}"
+            }
+        } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
+    }
+
+    // ── THE DEVICE RING (native): register + long-poll + result with the durable key, kept alive by the
+    //    foreground service. No WebView, no SSO cookie — so the phone stays a reachable node reliably. ──
+    @Volatile private var ringOn = false
+    private val ringExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private fun ringHttp(method: String, path: String, body: String?, timeoutMs: Int): Pair<Int, String> {
+        val c = java.net.URL(vm.clusterUrl.trim().trimEnd('/') + path).openConnection() as java.net.HttpURLConnection
+        c.requestMethod = method; c.connectTimeout = 15000; c.readTimeout = timeoutMs
+        c.setRequestProperty("Authorization", "Bearer ${vm.clusterKey}"); c.setRequestProperty("Accept", "application/json")
+        if (body != null) { c.doOutput = true; c.setRequestProperty("Content-Type", "application/json"); c.outputStream.use { it.write(body.toByteArray()) } }
+        val code = c.responseCode
+        val txt = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+        return code to txt
+    }
+    private fun startDeviceRing() {
+        if (ringOn || vm.clusterKey.isBlank()) return
+        ringOn = true
+        ringExec.execute {
+            var registered = false
+            while (ringOn) {
+                try {
+                    if (!registered) {
+                        val reg = ringHttp("POST", "/v1/device/register", JSONObject().put("deviceId", vm.deviceToken).put("name", android.os.Build.MODEL).put("caps", phoneCaps()).toString(), 20000)
+                        if (reg.first == 401) { runOnUiThread { vm.clusterKey = ""; vm.log("· device login expired — sign in again"); ringOn = false }; break }
+                        registered = reg.first in 200..299
+                        if (registered) runOnUiThread { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on — this device is connected"; vm.log("● device connected (native) — stays online while the app runs") }
+                        else { Thread.sleep(4000); continue }
+                    }
+                    val (code, txt) = ringHttp("GET", "/v1/device/poll?deviceId=" + java.net.URLEncoder.encode(vm.deviceToken, "UTF-8"), null, 35000)
+                    if (code == 401) { runOnUiThread { vm.clusterKey = ""; ringOn = false }; break }
+                    if (code == 404) { registered = false; continue }         // server forgot us (restart) → re-register
+                    if (code == 200 && txt.isNotBlank()) {
+                        val cmd = try { JSONObject(txt) } catch (e: Exception) { null }
+                        val cid = cmd?.optString("id") ?: ""
+                        if (cmd != null && cid.isNotBlank()) {
+                            val out = runDeviceCommand(cmd.optString("path", "/v1/info"), cmd.optJSONObject("body")?.toString() ?: "{}")
+                            try { ringHttp("POST", "/v1/device/result", JSONObject().put("deviceId", vm.deviceToken).put("id", cid).put("result", out).toString(), 20000) } catch (e: Exception) {}
+                        }
+                    }
+                    // 204 (no command within the long-poll window) just loops; lastSeen was refreshed by the poll
+                } catch (e: Exception) { Thread.sleep(3000) }
+            }
+        }
+    }
+    private fun stopDeviceRing() { ringOn = false }
+
     // JS -> app bridge: injected page code hands results back here.
     inner class Bridge {
         @JavascriptInterface
@@ -2320,29 +2389,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         @JavascriptInterface
         fun onCommand(id: String, path: String, bodyStr: String) {
             cmdExec.execute {
-                val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
-                val out = try {
-                    when (path) {
-                        "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
-                        "/v1/analyze" -> evalGb("window.__gb.mark()")
-                        "/v1/info" -> evalGb("window.__gb.info()")
-                        "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
-                        "/v1/posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
-                        "/v1/perceive" -> {   // one reliable look: settle, then url+title+elements+text together
-                            waitSettle(6000)
-                            "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}"
-                        }
-                        "/v1/click_text" -> nativeTapFromCoords(evalGb("window.__gb.coordsText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")"))
-                        "/v1/click" -> nativeTapFromCoords(evalGb("window.__gb.coords(${body.optInt("index", -1)})"))
-                        "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
-                        "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
-                        "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
-                        "/v1/fetch" -> fetchInPage(body)
-                        // Embed the code as an expression (NOT eval()) so a page's CSP (e.g. Facebook's) can't block it.
-                        "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
-                        else -> "{\"error\":\"unknown path\"}"
-                    }
-                } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "error") + "}" }
+                val out = runDeviceCommand(path, bodyStr)
                 runOnUiThread {
                     vm.log("↺ ran $path")
                     ctrlWeb?.evaluateJavascript("window.__gbResult(" + JSONObject.quote(id) + ",200," + JSONObject.quote(out) + ")", null)
@@ -2355,7 +2402,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // The one-time enrolment result: the SSO-authed WebView minted a durable device key. Store it, and
         // from now on every cluster call goes native with it — no more per-profile sign-in.
         if (tag == "enroll" || tag == "enroll_err") {
-            if (tag == "enroll") try { val o = JSONObject(data); val t = o.optString("token"); if (t.isNotBlank()) { vm.clusterKey = t; vm.log("● connected — this device stays signed in"); autoSyncSharedData() } else vm.log("! enrol: ${o.optString("error", data.take(80))}") } catch (e: Exception) { vm.log("! enrol: ${data.take(80)}") }
+            if (tag == "enroll") try { val o = JSONObject(data); val t = o.optString("token"); if (t.isNotBlank()) { vm.clusterKey = t; vm.log("● connected — this device stays signed in"); startDeviceRing(); autoSyncSharedData() } else vm.log("! enrol: ${o.optString("error", data.take(80))}") } catch (e: Exception) { vm.log("! enrol: ${data.take(80)}") }
             else vm.log("! enrol failed: ${data.take(80)}")
             return
         }
