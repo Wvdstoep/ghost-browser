@@ -2355,8 +2355,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val txt = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
         return code to txt
     }
+    @Volatile private var askedBattery = false
     private fun startDeviceRing() {
         if (ringOn || vm.clusterKey.isBlank()) return
+        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption() } }
         ringOn = true
         ringExec.execute {
             var registered = false
@@ -2386,6 +2388,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
     private fun stopDeviceRing() { ringOn = false }
+
+    /** Ask Android once to exempt GB from battery optimization, so the foreground service + device ring keep
+     *  polling when the screen is off / the app is backgrounded (Samsung Doze otherwise kills them). */
+    private fun requestBatteryExemption() {
+        try {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                vm.log("· asking Android to keep this device connected in the background")
+                @android.annotation.SuppressLint("BatteryLife")
+                val i = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))
+                startActivity(i)
+            }
+        } catch (e: Exception) { vm.log("! battery exemption: ${e.message}") }
+    }
 
     // JS -> app bridge: injected page code hands results back here.
     inner class Bridge {
