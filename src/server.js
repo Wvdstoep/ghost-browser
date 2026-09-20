@@ -1720,10 +1720,17 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
     const fields = Object.assign({}, item.fields || {}, {
       payment: offer.payment, workDays: offer.workDays, hours: offer.hours, priced: offer.priced,
       size: offer.size || '', english_not_sent: offer.textEn || '',
+      /* THE CHECK IS WORTHLESS IF THE OWNER CANNOT SEE IT. offerFor inspects its own Polish
+         and retries once, but the first version of this route dropped the surviving findings
+         on the floor, so a rough draft still looked clean on the results screen. Stored in
+         fields so it renders beside the draft, and echoed in the response below. */
+      voice_issues: (offer.voiceIssues || []).join(", "),
+      scoped_quote: !!offer.scoped,
     });
     feed.mark(req.params.id, item.key, { draft: offer.text, fields });
     res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified,
-      draft: offer.text, english: offer.textEn || '', payment: offer.payment, hours: offer.hours, size: offer.size, pinned: !reprice && prev > 0, workDays: offer.workDays, priced: offer.priced });
+      draft: offer.text, english: offer.textEn || '', payment: offer.payment, hours: offer.hours, size: offer.size, pinned: !reprice && prev > 0, workDays: offer.workDays, priced: offer.priced,
+      voiceIssues: offer.voiceIssues || [], scoped: !!offer.scoped, bandHours: offer.bandHours || 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

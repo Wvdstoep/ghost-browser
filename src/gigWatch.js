@@ -318,7 +318,10 @@ const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zl
   + 'Nie pisz "calosc wyceniam na", bo wyceniasz etap, nie calosc.\n\n'
   /* {PRICE} substitutes a BARE NUMBER, so a body reading "Cena pierwszego etapu to 6850"
      shipped with no currency at all. The form field carries it, the sentence did not. */
-  + 'Po tokenie {PRICE} zawsze dopisz " zl", na przyklad "Cena pierwszego etapu to {PRICE} zl".'
+  /* SPELLED WITH THE POLISH SIGN ON PURPOSE. The first version of this rule said " zl" in
+     ASCII while the voice block demanded diacritics, so the model followed the more specific
+     instruction and wrote "6850 zl". The two rules now agree. */
+  + 'Po tokenie {PRICE} zawsze dopisz jednostke " zł", na przyklad "Cena pierwszego etapu to {PRICE} zł".'
   + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
   + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
   + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
