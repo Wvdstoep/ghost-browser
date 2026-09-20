@@ -46,6 +46,38 @@ function configFor(wid) {
 
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
+/** Cheap stable fingerprint, so a conversation is only translated when it actually changed. */
+function fingerprint(s) {
+  const t = String(s || '');
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+  return String(h) + ':' + t.length;
+}
+
+/**
+ * ENGLISH ALONGSIDE, NEVER INSTEAD.
+ *
+ * The owner does not read Polish, so a Polish reply he cannot read is the same as no reply at all.
+ * Every conversation therefore carries an English rendering for HIM - it is stored beside the
+ * original and is never sent anywhere. Only translated when the fingerprint moves, because a pass
+ * runs every ten minutes and re-translating an unchanged thread is spend for nothing.
+ */
+async function toEnglish(text, settings) {
+  const body = clean(text);
+  if (!body) return '';
+  const llm = require('./llm');
+  const cfg = settings || {};
+  if (!cfg.llmModel) return '';
+  const out = await llm.chat({
+    host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey,
+    messages: [
+      { role: 'system', content: 'Translate the user text into plain English. Keep names, numbers, prices and dates exactly. Do not summarise, do not add anything, do not comment. Reply with the translation only.' },
+      { role: 'user', content: body.slice(0, 4000) },
+    ],
+  });
+  return String((out && out.content) || '').trim();
+}
+
 /** Read the sent/closed buckets and every offer in them. */
 async function readOffers(page, url) {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -151,6 +183,10 @@ async function tick(getPage, wid, opts) {
   const log = o.log || (() => {});
   const page = await getPage();
   const out = [];
+  /* What this watcher already knows, by url - used to reuse a translation when a thread has not
+     moved, so a ten-minute pass does not pay to translate the same words again. */
+  const knownByUrl = {};
+  try { feed.list(wid).forEach((e) => { if (e.url) knownByUrl[e.url] = e; }); } catch (e) { /* first run */ }
 
   /* ── sent offers and their standing ───────────────────────────────────────────────────────── */
   try {
@@ -196,6 +232,16 @@ async function tick(getPage, wid, opts) {
     const mine = (cfg.meNames || []).filter((n) => n).map((n) => String(n).toLowerCase());
     const tail = convo.slice(-240).toLowerCase();
     const waiting = mine.length ? !mine.some((n) => tail.includes(n)) : true;
+
+    /* English for the owner, reused when the thread has not moved since the last pass. */
+    const fp = fingerprint(convo);
+    const known = knownByUrl[url];
+    const kf = (known && known.fields) || {};
+    let english = kf.convoFp === fp ? (kf.english_not_sent || '') : '';
+    if (!english && convo) {
+      try { english = await toEnglish(convo, o.settings); } catch (e) { log(`[reply-watch] translate: ${e.message}`); }
+    }
+
     out.push({
       url,
       title: clean(t.label) || clean((body && body.title)) || url,
@@ -203,6 +249,8 @@ async function tick(getPage, wid, opts) {
       fields: {
         type: 'reply', box: t.box, waitingOnUs: waiting,
         convo: convo.slice(0, 2000),
+        english_not_sent: english.slice(0, 2500),
+        convoFp: fp,
         heads: (body && body.heads) || [],
       },
     });

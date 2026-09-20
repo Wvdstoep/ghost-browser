@@ -1704,10 +1704,16 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
     /* Price and days are read off the GIG, so they are produced with the words and stored beside
        them - the approve step must never invent a number the owner has not seen. */
     const offer = await gigWatch.offerFor(item, { settings: settingsStore.read(), demoUrl, demoVerified });
-    const fields = Object.assign({}, item.fields || {}, { payment: offer.payment, workDays: offer.workDays, priced: offer.priced });
+    /* english_not_sent is for an owner who does not read Polish: it sits in fields (which the
+       results screen renders as its own row) and NEVER in draft, because draft is the text the
+       poster types into the offer form. The name says so out loud. */
+    const fields = Object.assign({}, item.fields || {}, {
+      payment: offer.payment, workDays: offer.workDays, priced: offer.priced,
+      english_not_sent: offer.textEn || '',
+    });
     feed.mark(req.params.id, item.key, { draft: offer.text, fields });
     res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified,
-      draft: offer.text, payment: offer.payment, workDays: offer.workDays, priced: offer.priced });
+      draft: offer.text, english: offer.textEn || '', payment: offer.payment, workDays: offer.workDays, priced: offer.priced });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1970,7 +1976,7 @@ async function replyWatchTick(wf, owner, opts) {
     live.lastUsed = Date.now();
     return live.page;
   };
-  return gigReplies.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null });
+  return gigReplies.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null, settings: settingsStore.read() });
 }
 
 async function postWatchTick(wf, owner, opts) {
