@@ -261,11 +261,20 @@ async function tick(getPage, wid, opts) {
  *
  * Nothing is sent from here. The draft lands on the feed item and the owner approves it.
  */
-const VOICE_PL = 'Pisz po polsku, zwyczajnie i konkretnie, jak czlowiek ktory zna sie na rzeczy. '
-  + 'Bez mydlenia oczu, bez "z przyjemnoscia", bez listy zalet, bez emoji, bez podpisu na koncu. '
-  + 'Nie uzywaj myslnikow ani srednikow. Krotko: 5 do 9 zdan. Zacznij od TEGO, co klient opisal, '
-  + 'wlasnymi slowami, zeby bylo jasne ze przeczytales. Powiedz co dokladnie zrobisz i w jakim czasie. '
-  + 'Zakoncz JEDNYM konkretnym pytaniem. Nigdy nie wspominaj o AI.';
+/* WRITTEN IN CORRECT POLISH ON PURPOSE. The previous version of this block was itself
+   spelled without diacritics, so it demonstrated diacritic-free Polish to the model and got
+   diacritic-free Polish back. The instruction and the example now agree. */
+const VOICE_PL = 'Pisz po polsku, zwyczajnie i konkretnie, jak człowiek który zna się na rzeczy. '
+  + 'Bez mydlenia oczu, bez "z przyjemnością", bez listy zalet, bez emoji, bez podpisu na końcu. '
+  + 'Nie używaj myślników ani średników. Krótko: 5 do 9 zdań. Zacznij od TEGO, co klient opisał, '
+  + 'własnymi słowami, żeby było jasne że przeczytałeś zlecenie. Powiedz co dokładnie zrobisz '
+  + 'i w jakim czasie. Zakończ JEDNYM konkretnym pytaniem. Nigdy nie wspominaj o AI.'
+  + ' ORTOGRAFIA: pisz poprawną polszczyzną z pełnymi polskimi znakami ą ć ę ł ń ó ś ź ż. '
+  + 'Tekst bez polskich znaków wygląda na wygenerowany maszynowo i przekreśla ofertę. '
+  + 'Nie zostawiaj literówek.'
+  + ' FORMA: zwracaj się do klienta konsekwentnie w liczbie mnogiej, czyli "potrzebujecie", '
+  + '"macie", "waszym", "u was". Nigdy nie mieszaj tego z formą pojedynczą "potrzebujesz" '
+  + 'ani "masz", i nie zmieniaj formy w trakcie tekstu.';
 
 /** What may be claimed. Kept beside the prompt so a draft never invents experience. */
 const EVIDENCE = 'Buduje i utrzymuje wielodostepna platforme na Kubernetes (ponad 100 uslug, certyfikaty TLS '
@@ -307,6 +316,9 @@ const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zl
   + 'Jesli cale zlecenie nie zmiesci sie w work_days, {PRICE} jest cena PIERWSZEGO ETAPU i musisz '
   + 'napisac wprost, ze kolejne etapy wyceniasz osobno po odbiorze pierwszego. '
   + 'Nie pisz "calosc wyceniam na", bo wyceniasz etap, nie calosc.\n\n'
+  /* {PRICE} substitutes a BARE NUMBER, so a body reading "Cena pierwszego etapu to 6850"
+     shipped with no currency at all. The form field carries it, the sentence did not. */
+  + 'Po tokenie {PRICE} zawsze dopisz " zl", na przyklad "Cena pierwszego etapu to {PRICE} zl".'
   + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
   + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
   + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
@@ -330,12 +342,39 @@ function firstJson(text) {
  * { text, payment, workDays, priced } - `priced` false means the model gave no usable number and the
  * caller must not submit a price it invented.
  */
+/* A PROMPT IS A REQUEST, THIS IS THE CHECK.
+ * The first real offer came back with no diacritics anywhere and a bare number for the
+ * price, and nothing in the pipeline noticed - the owner did, reading the draft. These are
+ * the three faults that are cheap to detect and expensive to send, so the watcher looks for
+ * them in its own output, retries once, and reports whatever survives.
+ *
+ * Checked on the MESSAGE TEMPLATE, before {PRICE} is substituted, so the currency rule can
+ * be verified against the token itself rather than against a number.
+ */
+const PL_DIACRITICS = /[\u0105\u0107\u0119\u0142\u0144\u00f3\u015b\u017a\u017c\u0104\u0106\u0118\u0141\u0143\u00d3\u015a\u0179\u017b]/;
+function voiceIssues(message) {
+  const t = String(message || '');
+  const out = [];
+  /* Polish this long without a single diacritic is not a style choice, it is machine output.
+     Short strings are exempt because a genuine one-liner can legitimately carry none. */
+  if (t.length > 120 && !PL_DIACRITICS.test(t)) out.push('brak-polskich-znakow');
+  if (t.includes('{PRICE}') && !/\{PRICE\}\s*(zl|z\u0142|PLN)/.test(t)) out.push('cena-bez-waluty');
+  /* Mixing plural and singular address inside one offer reads worse than either alone. */
+  const plural = /\b(potrzebujecie|macie|waszym|waszej|u was)\b/i.test(t);
+  const singular = /\b(potrzebujesz|masz|twoim|twojej|u ciebie)\b/i.test(t);
+  if (plural && singular) out.push('mieszana-forma-adresu');
+  return out;
+}
+
 async function offerFor(gig, opts) {
   const o = opts || {};
   const llm = require('./llm');
   const f = (gig && gig.fields) || {};
   const demo = o.demoUrl && o.demoVerified ? o.demoUrl : '';
-  const sys = `${VOICE_PL}\n\nO wykonawcy (tylko prawda, nie zmyslaj nic poza tym):\n${EVIDENCE}`
+  /* Tone is the owner's, not the code's: a watcher's config may carry its own `voice`, so
+     changing how offers read never needs a deploy. Falls back to VOICE_PL. */
+  const voice = String((o.pricing || {}).voice || VOICE_PL);
+  const sys = `${voice}\n\nO wykonawcy (tylko prawda, nie zmyslaj nic poza tym):\n${EVIDENCE}`
     + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.')
     + `\n\n${PRICING_PL}`
     + '\n\nODPOWIEDZ WYLACZNIE JSON-em, bez komentarza i bez znacznikow kodu, dokladnie w tym ksztalcie:\n'
@@ -352,12 +391,28 @@ async function offerFor(gig, opts) {
   /* llm.chat is the call that exists everywhere (complete does not ship in every build), and it
      answers with a message object, so the text is out.content. */
   const cfg = o.settings || {};
-  const out = await llm.chat({
-    host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey,
-    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
-  });
-  const raw = String((out && out.content) || '').trim();
-  const j = firstJson(raw);
+  /* ONE CORRECTIVE RETRY. The faults voiceIssues finds are the kind a model fixes when told
+     exactly what was wrong, so it is worth a second call before handing the owner a bad draft.
+     Whatever still fails after the retry is RETURNED rather than swallowed, so a rough offer is
+     visible in the results screen instead of only being caught by someone reading Polish. */
+  let raw = '';
+  let j = null;
+  let issues = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const sysNow = attempt === 0 ? sys : sys
+      + '\n\nPOPRAWKA. Poprzednia odpowiedz miala te bledy: ' + issues.join(', ') + '. '
+      + 'Napisz pole message jeszcze raz, poprawna polszczyzna z pelnymi polskimi znakami, '
+      + 'konsekwentnie w liczbie mnogiej, z waluta po tokenie {PRICE}.';
+    const out = await llm.chat({
+      host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey,
+      messages: [{ role: 'system', content: sysNow }, { role: 'user', content: user }],
+    });
+    raw = String((out && out.content) || '').trim();
+    j = firstJson(raw);
+    if (!j || !j.message) break;
+    issues = voiceIssues(j.message);
+    if (!issues.length) break;
+  }
   if (!j || !j.message) {
     /* No usable JSON: keep the words (better than nothing) but refuse to invent a price. */
     return { text: raw, textEn: '', payment: 0, workDays: 0, hours: 0, priced: false };
@@ -408,10 +463,11 @@ async function offerFor(gig, opts) {
        fields and never under draft. */
     text, textEn, payment, workDays, hours, priced,
     size: usedSize, sizeFromModel: known, scoped, bandHours,
+    voiceIssues: issues,
   };
 }
 
 /** Back-compat: the text alone, for callers that only want a draft. */
 async function draftFor(gig, opts) { return (await offerFor(gig, opts)).text; }
 
-module.exports = { tick, rank, ageDaysOf, draftFor, offerFor, configFor, compile, DEFAULTS, clampPrice, firstJson };
+module.exports = { voiceIssues, tick, rank, ageDaysOf, draftFor, offerFor, configFor, compile, DEFAULTS, clampPrice, firstJson };
