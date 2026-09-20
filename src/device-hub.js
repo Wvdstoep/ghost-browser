@@ -186,7 +186,7 @@ function mountDeviceHub(app, authed) {
     if (w) w.deliver(cmd); else d.queue.push(cmd);
     if (b.wait === false) return res.json({ ok: true, id: cmd.id, queued: !w });
     let settled = false;
-    const timer = setTimeout(() => { if (settled) return; settled = true; d.resultWaiters.delete(cmd.id); res.status(504).json({ error: "device did not respond in time", id: cmd.id }); }, 60000);
+    const timer = setTimeout(() => { if (settled) return; settled = true; d.resultWaiters.delete(cmd.id); res.status(504).json({ error: "device did not respond in time", id: cmd.id }); }, 180000);
     d.resultWaiters.set(cmd.id, (r) => { if (settled) return; settled = true; clearTimeout(timer); res.json({ ok: true, id: cmd.id, result: r }); });
   });
   return { capableDevice, deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })) };
