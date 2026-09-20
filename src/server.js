@@ -2449,6 +2449,10 @@ async function scheduleTick() {
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
     runningWatchers.add(wf.id);
     if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'gigs') {
+      /* Record the pass BEFORE it runs, exactly as the posts branch does: scheduleDue() reads the
+         last run to decide whether a watcher is due, so a mode that never persists a run looks like
+         it has never run and fires on every single scheduler tick. */
+      workflows.persistRun({ id: `${wf.id}-${Date.now()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: when.toISOString(), ended_at: when.toISOString(), steps: [] });
       gigWatchTick(wf, owner).catch((e) => log.error('[gig-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
       continue;
     }
