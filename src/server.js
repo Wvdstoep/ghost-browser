@@ -1893,6 +1893,11 @@ async function gigWatchTick(wf, owner, opts) {
  * does. `confirm:true` completes it once that is trusted.
  */
 async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
+  /* Both are owner data, not code: the contract term is a legal choice and the stage label is
+     cosmetic, and neither should need a deploy to change. */
+  const gcfg = (() => { try { return require('./watcherFeed').getConfig(wid) || {}; } catch (e) { return {}; } })();
+  const copyright = String(gcfg.copyrightTransfer || '');
+  const stageName = String(gcfg.stageName || 'Etap 1');
   const feed = require('./watcherFeed');
   const cfg = feed.getConfig(wid) || {};
   const want = profiles.safeName(cfg.profile || 'useme');
@@ -1946,7 +1951,17 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
     if (ed) {
       ed.scrollIntoView({ block: 'center' });
       ed.focus();
-      try { document.execCommand('selectAll', false, null); } catch (e) {}
+      /* SELECT THE EDITOR'S OWN CONTENTS, NOT "the document". execCommand('selectAll') did not
+         reliably cover a contenteditable here, so insertText appended to the draft useme had
+         restored from the previous run and the body doubled to exactly 2x its length. A Range
+         over the node's contents is what insertText then replaces. */
+      try {
+        const r = document.createRange();
+        r.selectNodeContents(ed);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      } catch (e) {}
       try { document.execCommand('insertText', false, arg.body); } catch (e) {}
       out.body = (ed.innerText || '').trim().length;
       if (out.body) out.how = 'execCommand';
@@ -1977,8 +1992,12 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
       }
     }
     out.editors = eds.length;
+    /* The old setter always used the INPUT prototype's descriptor, which does not apply to a
+       textarea, and stages-0-description is a textarea. Pick the descriptor by element type. */
     const setNative = (el, v) => {
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype
+        : el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+      const set = Object.getOwnPropertyDescriptor(proto, 'value').set;
       set.call(el, String(v));
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1987,10 +2006,56 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
     if (pay) { setNative(pay, arg.payment); out.payment = pay.value; }
     const wd = document.querySelector('#id_work_days');
     if (wd) { setNative(wd, arg.days); out.days = wd.value; }
+
+    /* STAGE 0 IS THE CONTRACT, THE TOP FIELDS ARE A SUMMARY. Filling only the summary is what
+       produced ten required-field errors on every run. */
+    const q = (n) => document.querySelector('[name="' + n + '"]') || document.getElementById('id_' + n);
+    const stage = {};
+    const sn = q('stages-0-name');
+    if (sn) { setNative(sn, arg.stageName); stage.name = sn.value; }
+    const sp = q('stages-0-payment');
+    if (sp) { setNative(sp, arg.payment); stage.payment = sp.value; }
+    const sw = q('stages-0-work_days');
+    if (sw) { setNative(sw, arg.days); stage.days = sw.value; }
+    const sd = q('stages-0-description');
+    if (sd) { setNative(sd, arg.body); stage.descLen = String(sd.value || '').length; }
+    out.stage = stage;
+
+    /* COPYRIGHT IS A CONTRACT TERM AND IS NEVER GUESSED. Report the real options so the owner can
+       choose once, then apply their choice to the top-level group and to the stage. */
+    const radios = (n) => [].slice.call(document.querySelectorAll('input[type=radio][name="' + n + '"]'));
+    const labelOf = (r) => {
+      const l = (r.id && document.querySelector('label[for="' + r.id + '"]')) || (r.closest && r.closest('label'));
+      return ((l && l.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 48);
+    };
+    out.copyrightOptions = radios('copyright_transfer').map((r) => r.value + ' = ' + labelOf(r));
+    out.copyrightSet = '';
+    if (arg.copyright) {
+      let hits = 0;
+      ['copyright_transfer', 'stages-0-copyright_transfer'].forEach((n) => {
+        const hit = radios(n).filter((r) => r.value === arg.copyright)[0];
+        if (hit) {
+          if (!hit.checked) { try { hit.click(); } catch (e) { hit.checked = true; } }
+          hit.checked = true;
+          hit.dispatchEvent(new Event('change', { bubbles: true }));
+          hits += 1;
+        }
+      });
+      if (hits) out.copyrightSet = arg.copyright + ' x' + hits;
+    }
     return out;
-  }, { body: String(text), payment: String(payment), days: String(workDays) });
+  }, { body: String(text), payment: String(payment), days: String(workDays),
+    stageName: String(stageName), copyright: String(copyright || '') });
 
   if (!filled.body) throw new Error('could not type the offer body [editors=' + filled.editors + ' how=' + filled.how + (filled.err ? ' err=' + filled.err : '') + ']');
+
+  /* STOP RATHER THAN CHOOSE A CONTRACT TERM. copyright_transfer decides whether the client gets
+     the copyright or a licence, so it is the owner's call once, in config, not a default here. */
+  if (!filled.copyrightSet) {
+    return { stage: 'blocked', url: it.url,
+      note: 'copyright term is not configured, so nothing was submitted. Set copyrightTransfer in'
+        + ' the watcher config to one of: ' + (filled.copyrightOptions || []).join('  |  ') };
+  }
 
   /* MATCH POLISH WHATEVER WAY IT IS SPELLED. Diacritics are stripped before comparing, because
      the ASCII matcher that used to be here could not see "Wyslij" written with the s-acute. NFD
@@ -2075,6 +2140,7 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
         + (after.errs.length ? ' [errors: ' + after.errs.join(' | ') + ']' : '')
         + (after.missing.length ? ' [empty required: ' + after.missing.join(', ') + ']' : '')
         + (after.unchecked.length ? ' [unchecked: ' + after.unchecked.join(', ') + ']' : '')
+        + ' [stage0: ' + JSON.stringify(filled.stage || {}) + ' copyright: ' + (filled.copyrightSet || 'NONE') + ']'
         + ' [fields: ' + (after.inventory || []).join(' ') + ']'
         + (after.editors && after.editors.length ? ' [editors: ' + after.editors.join(' ') + ']' : '')
         + ' [clicked: ' + (went.clicked || '?') + ']' };
