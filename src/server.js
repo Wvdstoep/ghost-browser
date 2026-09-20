@@ -1992,14 +1992,26 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
 
   if (!filled.body) throw new Error('could not type the offer body [editors=' + filled.editors + ' how=' + filled.how + (filled.err ? ' err=' + filled.err : '') + ']');
 
+  /* MATCH POLISH WHATEVER WAY IT IS SPELLED. Diacritics are stripped before comparing, because
+     the ASCII matcher that used to be here could not see "Wyslij" written with the s-acute. NFD
+     decomposes most Polish letters, but l-stroke is a single codepoint that does not decompose,
+     so it is mapped by hand. `labels` is collected so a failure can say what it actually saw. */
   const went = await page.evaluate(() => {
-    const b = [].slice.call(document.querySelectorAll('button,input[type=submit]'))
-      .filter((x) => x.offsetParent && /podsumowania|dalej|zapisz/i.test((x.innerText || x.value || '')));
-    if (!b.length) return false;
+    const plain = (v) => String(v || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\u0142/g, 'l').replace(/\u0141/g, 'L')
+      .toLowerCase();
+    const all = [].slice.call(document.querySelectorAll('button,input[type=submit],a[role=button]'))
+      .filter((x) => x.offsetParent);
+    const labels = all.map((x) => (x.innerText || x.value || '').trim()).filter(Boolean).slice(0, 25);
+    const b = all.filter((x) => /podsumowani|dalej|zapisz|przejdz|kontynu/.test(plain(x.innerText || x.value)));
+    if (!b.length) return { ok: false, labels, url: location.href };
     b[0].click();
-    return true;
+    return { ok: true, labels, clicked: (b[0].innerText || b[0].value || '').trim() };
   });
-  if (!went) throw new Error('no button through to the summary');
+  if (!went.ok) {
+    throw new Error('no button through to the summary [buttons: ' + (went.labels || []).join(' | ') + ']');
+  }
   await page.waitForTimeout(3500);
 
   const after = await page.evaluate(() => {
@@ -2012,17 +2024,31 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
     return { stage: 'summary', url: after.url, note: 'filled and waiting on the summary: ' + payment + ' PLN, ' + workDays + ' d (body via ' + filled.how + ', ' + filled.body + ' chars)' };
   }
 
+  /* THE BUG THAT STOPPED A CONFIRMED SEND. The old pattern was /wyslij|zloz|potwierd/ in ASCII,
+     which cannot match "Wyslij" as Polish actually spells it, with the s-acute. Normalising both
+     sides fixes every spelling at once, and the labels come back either way so a miss is
+     diagnosable from the note instead of needing another deploy to learn anything. */
   const sent = await page.evaluate(() => {
-    const b = [].slice.call(document.querySelectorAll('button,input[type=submit]'))
-      .filter((x) => x.offsetParent && /wyslij|złóż|zloz|potwierd/i.test((x.innerText || x.value || '')));
-    if (!b.length) return false;
+    const plain = (v) => String(v || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/\u0142/g, 'l').replace(/\u0141/g, 'L')
+      .toLowerCase();
+    const all = [].slice.call(document.querySelectorAll('button,input[type=submit],a[role=button]'))
+      .filter((x) => x.offsetParent);
+    const labels = all.map((x) => (x.innerText || x.value || '').trim()).filter(Boolean).slice(0, 25);
+    const b = all.filter((x) => /wyslij|zloz|potwierdz|zatwierdz|wyslanie|slij ofert/.test(plain(x.innerText || x.value)));
+    if (!b.length) return { ok: false, labels, url: location.href };
     b[0].click();
-    return true;
+    return { ok: true, labels, clicked: (b[0].innerText || b[0].value || '').trim() };
   });
-  if (!sent) return { stage: 'summary', url: after.url, note: 'summary reached but no submit control found' };
+  if (!sent.ok) {
+    return { stage: 'summary', url: sent.url || after.url,
+      note: 'summary reached but no submit control found [buttons: ' + (sent.labels || []).join(' | ') + ']' };
+  }
   await page.waitForTimeout(4000);
   const done = await page.evaluate(() => location.href);
-  return { stage: 'submitted', url: done, note: payment + ' PLN, ' + workDays + ' d' };
+  return { stage: 'submitted', url: done,
+    note: payment + ' PLN, ' + workDays + ' d (submitted via "' + (sent.clicked || '?') + '")' };
 }
 
 /**
