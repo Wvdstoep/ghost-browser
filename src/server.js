@@ -1899,26 +1899,68 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
   await page.waitForTimeout(1500);
 
   /* Signed out, or the gig stopped taking offers: say so rather than typing into nothing. */
-  const gate = await page.evaluate(() => ({
-    url: location.href,
-    hasBody: !!document.querySelector('[contenteditable="true"]'),
-    hasPay: !!document.querySelector('#id_payment'),
-  }));
+  /* Find the editor by isContentEditable, the DOM PROPERTY. The first version selected
+     [contenteditable="true"] and found nothing — useme's markdown box does not carry that literal
+     attribute (the analyze tool reported editable:true from the property), so the body silently
+     came out empty and the pass aborted with "could not type the offer body". */
+  const gate = await page.evaluate(() => {
+    const eds = [].slice.call(document.querySelectorAll('*')).filter((e) => e.isContentEditable);
+    const pick = eds.sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
+    return {
+      url: location.href,
+      hasBody: !!pick,
+      hasPay: !!document.querySelector('#id_payment'),
+      editors: eds.length,
+      pickTag: pick ? (pick.tagName + '.' + String(pick.className || '').split(' ')[0]) : '',
+      textareas: document.querySelectorAll('textarea').length,
+    };
+  });
   if (!gate.hasBody || !gate.hasPay) {
-    throw new Error('offer form not available (' + gate.url + ') - signed out, or this gig no longer takes offers');
+    throw new Error('offer form not available (' + gate.url + ') - signed out, or this gig no longer takes offers'
+      + ' [editors=' + gate.editors + ' textareas=' + gate.textareas + ']');
   }
 
   const filled = await page.evaluate((arg) => {
     const out = {};
     /* The body is a markdown contenteditable; a framework-bound field ignores a plain value write,
        so generate real input events the way a person typing does. */
-    const ed = document.querySelector('[contenteditable="true"]');
+    const eds = [].slice.call(document.querySelectorAll('*')).filter((e) => e.isContentEditable);
+    const ed = eds.sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
+    out.how = 'none';
     if (ed) {
+      ed.scrollIntoView({ block: 'center' });
       ed.focus();
       try { document.execCommand('selectAll', false, null); } catch (e) {}
       try { document.execCommand('insertText', false, arg.body); } catch (e) {}
       out.body = (ed.innerText || '').trim().length;
-    } else out.body = 0;
+      if (out.body) out.how = 'execCommand';
+      /* Some editors ignore execCommand. Write the text in and announce it the way a keystroke does,
+         which is what a framework-bound editor listens for. */
+      if (!out.body) {
+        try {
+          ed.textContent = arg.body;
+          ed.dispatchEvent(new InputEvent('input', { bubbles: true, data: arg.body, inputType: 'insertText' }));
+          ed.dispatchEvent(new Event('change', { bubbles: true }));
+          out.body = (ed.innerText || '').trim().length;
+          if (out.body) out.how = 'textContent+input';
+        } catch (e) { out.err = String(e && e.message); }
+      }
+    }
+    /* Last resort: a plain textarea behind the fancy editor. */
+    if (!out.body) {
+      const ta = [].slice.call(document.querySelectorAll('textarea')).filter((t) => t.offsetParent || t.value !== undefined)[0];
+      if (ta) {
+        try {
+          const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+          set.call(ta, arg.body);
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+          ta.dispatchEvent(new Event('change', { bubbles: true }));
+          out.body = String(ta.value || '').trim().length;
+          if (out.body) out.how = 'textarea';
+        } catch (e) { out.err = String(e && e.message); }
+      }
+    }
+    out.editors = eds.length;
     const setNative = (el, v) => {
       const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
       set.call(el, String(v));
@@ -1932,7 +1974,7 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
     return out;
   }, { body: String(text), payment: String(payment), days: String(workDays) });
 
-  if (!filled.body) throw new Error('could not type the offer body');
+  if (!filled.body) throw new Error('could not type the offer body [editors=' + filled.editors + ' how=' + filled.how + (filled.err ? ' err=' + filled.err : '') + ']');
 
   const went = await page.evaluate(() => {
     const b = [].slice.call(document.querySelectorAll('button,input[type=submit]'))
@@ -1951,7 +1993,7 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
   });
 
   if (!confirm) {
-    return { stage: 'summary', url: after.url, note: 'filled and waiting on the summary: ' + payment + ' PLN, ' + workDays + ' d' };
+    return { stage: 'summary', url: after.url, note: 'filled and waiting on the summary: ' + payment + ' PLN, ' + workDays + ' d (body via ' + filled.how + ', ' + filled.body + ' chars)' };
   }
 
   const sent = await page.evaluate(() => {
