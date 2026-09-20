@@ -1697,9 +1697,13 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
         demoVerified = !!(r && r.ok);
       } catch (e) { demoVerified = false; }
     }
-    const draft = await gigWatch.draftFor(item, { settings: settingsStore.read(), demoUrl, demoVerified });
-    feed.mark(req.params.id, item.key, { draft });
-    res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified, draft });
+    /* Price and days are read off the GIG, so they are produced with the words and stored beside
+       them - the approve step must never invent a number the owner has not seen. */
+    const offer = await gigWatch.offerFor(item, { settings: settingsStore.read(), demoUrl, demoVerified });
+    const fields = Object.assign({}, item.fields || {}, { payment: offer.payment, workDays: offer.workDays, priced: offer.priced });
+    feed.mark(req.params.id, item.key, { draft: offer.text, fields });
+    res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified,
+      draft: offer.text, payment: offer.payment, workDays: offer.workDays, priced: offer.priced });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1709,6 +1713,21 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   if (!it) return res.status(404).json({ error: 'no such item' });
   const text = String(b.text || it.draft || '').trim();
   if (!text) return res.status(400).json({ error: 'nothing to post' });
+  /* A GIG WATCHER POSTS AN OFFER, NOT A REPLY. Sending it down the comment replier could only ever
+     fail on "no comment id in the link", which is exactly what happened the first time a gig was
+     approved. Route it to the form driver instead. */
+  if (String((feed.getConfig(wid) || {}).mode) === 'gigs') {
+    const gigRun = 'gig-offer-' + Date.now();
+    const f0 = it.fields || {};
+    const pay = Number(b.payment || f0.payment || 0);
+    const days = Number(b.workDays || f0.workDays || 0) || 7;
+    if (!(pay > 0)) return res.status(400).json({ error: 'no price on this gig yet - press Draft again to price it' });
+    feed.mark(wid, it.key, { posting: true, postFailed: false, postRunId: gigRun, draft: text });
+    postGigOffer(wid, it, consoleOwner() || req.client.owner, text, pay, days, !!b.confirm)
+      .then((r) => { feed.mark(wid, it.key, { posting: false, posted: r.stage, postUrl: r.url, postNote: r.note, handled: r.stage === 'submitted' }); log.info('[gig-offer] ' + it.key + ': ' + r.stage + ' ' + r.note); })
+      .catch((e) => { feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + e.message }); log.error('[gig-offer] ' + it.key + ': ' + e.message); });
+    return res.json({ mode: 'gigs', runId: gigRun, status: 'posting', payment: pay, workDays: days });
+  }
   const dryRun = !!b.dryRun;
   // still parked at a live gate? then the yes belongs to that job
   let live = null; try { live = it.draftJobId ? jobs.get(it.draftJobId) : null; } catch (e) { live = null; }
@@ -1823,6 +1842,109 @@ async function gigWatchTick(wf, owner, opts) {
     return live.page;
   };
   return gigWatch.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null });
+}
+
+/**
+ * POST ONE OFFER ON A JOB BOARD.
+ *
+ * A gig is not a comment thread: there is nothing to reply under, there is a form. useme's offer
+ * flow is /pl/jobs/<id>/offer/start/ with a contenteditable markdown body, a price, a number of
+ * working days, and a button through to a summary. So the comment replier can never work here - it
+ * looks for a comment id and gives up - and this drives the real form instead.
+ *
+ * It STOPS AT THE SUMMARY on purpose. The owner already approved the words, but price and days are
+ * money, and a summary page is the last place a human can see all three together before a client
+ * does. `confirm:true` completes it once that is trusted.
+ */
+async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
+  const feed = require('./watcherFeed');
+  const cfg = feed.getConfig(wid) || {};
+  const want = profiles.safeName(cfg.profile || 'useme');
+  const m = String(it.url || '').match(/\/jobs\/[^/]*,(\d+)\/?$/);
+  if (!m) throw new Error('no useme job id in the link');
+  const jobId = m[1];
+  if (!(Number(payment) > 0)) throw new Error('no price for this gig - redraft it');
+
+  const cap = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  let ref = pool.listFor(owner).find((x) => x.profile === want);
+  let live = null;
+  try { live = ref ? pool.get(ref.sessionId) : null; } catch (e) { live = null; }
+  let dead = false;
+  try { dead = !live || !live.page || (live.page.isClosed && live.page.isClosed()); } catch (e) { dead = true; }
+  if (dead) { const o = await pool.createSession({ owner, maxConcurrent: cap, profile: want, takeover: true }); live = pool.get(o.sessionId); }
+  live.lastUsed = Date.now();
+  const page = live.page;
+
+  await page.goto('https://useme.com/pl/jobs/' + jobId + '/offer/start/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await page.waitForTimeout(1500);
+
+  /* Signed out, or the gig stopped taking offers: say so rather than typing into nothing. */
+  const gate = await page.evaluate(() => ({
+    url: location.href,
+    hasBody: !!document.querySelector('[contenteditable="true"]'),
+    hasPay: !!document.querySelector('#id_payment'),
+  }));
+  if (!gate.hasBody || !gate.hasPay) {
+    throw new Error('offer form not available (' + gate.url + ') - signed out, or this gig no longer takes offers');
+  }
+
+  const filled = await page.evaluate((arg) => {
+    const out = {};
+    /* The body is a markdown contenteditable; a framework-bound field ignores a plain value write,
+       so generate real input events the way a person typing does. */
+    const ed = document.querySelector('[contenteditable="true"]');
+    if (ed) {
+      ed.focus();
+      try { document.execCommand('selectAll', false, null); } catch (e) {}
+      try { document.execCommand('insertText', false, arg.body); } catch (e) {}
+      out.body = (ed.innerText || '').trim().length;
+    } else out.body = 0;
+    const setNative = (el, v) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(el, String(v));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const pay = document.querySelector('#id_payment');
+    if (pay) { setNative(pay, arg.payment); out.payment = pay.value; }
+    const wd = document.querySelector('#id_work_days');
+    if (wd) { setNative(wd, arg.days); out.days = wd.value; }
+    return out;
+  }, { body: String(text), payment: String(payment), days: String(workDays) });
+
+  if (!filled.body) throw new Error('could not type the offer body');
+
+  const went = await page.evaluate(() => {
+    const b = [].slice.call(document.querySelectorAll('button,input[type=submit]'))
+      .filter((x) => x.offsetParent && /podsumowania|dalej|zapisz/i.test((x.innerText || x.value || '')));
+    if (!b.length) return false;
+    b[0].click();
+    return true;
+  });
+  if (!went) throw new Error('no button through to the summary');
+  await page.waitForTimeout(3500);
+
+  const after = await page.evaluate(() => {
+    const c = document.body.cloneNode(true);
+    c.querySelectorAll('script,style,noscript,svg').forEach((e) => e.remove());
+    return { url: location.href, text: (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400) };
+  });
+
+  if (!confirm) {
+    return { stage: 'summary', url: after.url, note: 'filled and waiting on the summary: ' + payment + ' PLN, ' + workDays + ' d' };
+  }
+
+  const sent = await page.evaluate(() => {
+    const b = [].slice.call(document.querySelectorAll('button,input[type=submit]'))
+      .filter((x) => x.offsetParent && /wyslij|złóż|zloz|potwierd/i.test((x.innerText || x.value || '')));
+    if (!b.length) return false;
+    b[0].click();
+    return true;
+  });
+  if (!sent) return { stage: 'summary', url: after.url, note: 'summary reached but no submit control found' };
+  await page.waitForTimeout(4000);
+  const done = await page.evaluate(() => location.href);
+  return { stage: 'submitted', url: done, note: payment + ' PLN, ' + workDays + ' d' };
 }
 
 async function postWatchTick(wf, owner, opts) {
