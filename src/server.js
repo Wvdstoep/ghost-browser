@@ -2014,14 +2014,45 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
   }
   await page.waitForTimeout(3500);
 
+  /* VERIFY THE ADVANCE, DO NOT ASSUME IT. The previous version read the page here and then
+     reported a reached summary unconditionally, so "filled and waiting on the summary" was
+     returned on runs where the browser had never left the form. The form refuses to advance
+     while a required field is empty or invalid, and that refusal was invisible. */
   const after = await page.evaluate(() => {
     const c = document.body.cloneNode(true);
     c.querySelectorAll('script,style,noscript,svg').forEach((e) => e.remove());
-    return { url: location.href, text: (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400) };
+    const errs = [].slice.call(document.querySelectorAll(
+      '.error, .errors, .invalid-feedback, .help-block, .alert, [class*="error"], [aria-invalid="true"]'))
+      .map((e) => (e.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean).slice(0, 10);
+    const missing = [].slice.call(document.querySelectorAll('input,select,textarea'))
+      .filter((e) => e.required && e.offsetParent && !String(e.value || '').trim())
+      .map((e) => e.name || e.id || e.type).slice(0, 10);
+    const unchecked = [].slice.call(document.querySelectorAll('input[type=checkbox]'))
+      .filter((e) => e.offsetParent && e.required && !e.checked)
+      .map((e) => e.name || e.id).slice(0, 10);
+    /* #id_payment exists only on the offer FORM, so its presence means we never advanced. */
+    return {
+      url: location.href,
+      stillOnForm: !!document.querySelector('#id_payment'),
+      errs, missing, unchecked,
+      text: (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+    };
   });
 
+  if (after.stillOnForm) {
+    return { stage: 'blocked', url: after.url,
+      note: 'the form would not advance past the offer page'
+        + (after.errs.length ? ' [errors: ' + after.errs.join(' | ') + ']' : '')
+        + (after.missing.length ? ' [empty required: ' + after.missing.join(', ') + ']' : '')
+        + (after.unchecked.length ? ' [unchecked required: ' + after.unchecked.join(', ') + ']' : '')
+        + ' [clicked: ' + (went.clicked || '?') + '] [page: ' + after.text.slice(0, 220) + ']' };
+  }
+
   if (!confirm) {
-    return { stage: 'summary', url: after.url, note: 'filled and waiting on the summary: ' + payment + ' PLN, ' + workDays + ' d (body via ' + filled.how + ', ' + filled.body + ' chars)' };
+    /* Reaching this line now MEANS something: the stillOnForm guard above has already ruled out
+       the case where the browser never left the offer page. */
+    return { stage: 'summary', url: after.url, note: 'filled and verified on the summary: ' + payment + ' PLN, ' + workDays + ' d (body via ' + filled.how + ', ' + filled.body + ' chars)' };
   }
 
   /* THE BUG THAT STOPPED A CONFIRMED SEND. The old pattern was /wyslij|zloz|potwierd/ in ASCII,
