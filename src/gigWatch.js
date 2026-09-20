@@ -63,6 +63,18 @@ const DEFAULTS = {
   maxDetail: 10,        // page loads one pass may spend learning offer counts
   offersPerPoint: 10,   // ten people already bidding costs about one strong keyword match
   freshDays: { 1: 4, 2: 3, 4: 1 }, // age in days -> bonus; anything older scores 0
+
+  /* PRICING IS OURS, EFFORT IS THE MODEL'S.
+     Asking a model for a price produced 7200 zl and then 13000 zl for the SAME gig - 1.8x on
+     identical input, decided by whichever run happened to be approved. Unusable for a number a
+     client reads. So the model now estimates HOURS, which it judges far more stably, and the price
+     is arithmetic we control: hours * rate * (1 - discount). The rate is the owner's, so "a little
+     under market" is a policy here rather than something we hope the model honoured. */
+  hourlyRatePln: 130,   // ~ the owner's $35/hr
+  discountPct: 12,      // under market on purpose: a profile with no contracts needs a reason
+  minHours: 2,
+  maxHours: 200,
+  roundToPln: 50,       // a quote ending in 50 or 00 reads as deliberate, not computed
 };
 
 /** Config is JSON, so patterns arrive as strings. Compile once per pass, and never let a bad pattern
@@ -267,10 +279,12 @@ const PRICE_FLOOR_PLN = 300;
 const PRICE_CEIL_PLN = 60000;
 /** Days, never weeks: the owner's promise is a few days, a week at the outside. */
 const MAX_WORK_DAYS = 7;
-const PRICING_PL = 'WYCENA. Podaj cene w PLN za CALOSC zlecenia, realistyczna dla polskiego rynku freelancerskiego '
-  + '(stawki dev/integracje zwykle 90-200 zl/h). Oszacuj naklad pracy z opisu, policz cene, a potem zejdz '
-  + 'okolo 10-15% PONIZEJ typowej ceny rynkowej - wykonawca dopiero zaczyna na tym portalu i potrzebuje '
-  + 'pierwszych zlecen, ale NIE zaniżaj drastycznie, bo to sygnalizuje slaba jakosc.\n\n'
+const PRICING_PL = 'NAKLAD PRACY. NIE podawaj ceny. Oszacuj tylko `hours` - ile godzin roboczych realnie zajmie '
+  + 'to zlecenie jednemu doswiadczonemu programiscie, liczac analize, implementacje, testy i wdrozenie. '
+  + 'Badz konkretny i powsciagliwy: male zadanie to kilka godzin, duza integracja wielu systemow to '
+  + 'kilkadziesiat. Cene policzy system na podstawie Twoich godzin.\n\n'
+  + 'W tresci oferty wstaw dokladnie token {PRICE} tam, gdzie ma pojawic sie kwota calosci w zl '
+  + '(na przyklad "Calosc wyceniam na {PRICE} zl"). Nie wpisuj zadnej wlasnej liczby jako ceny.\n\n'
   + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
   + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
   + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
@@ -303,8 +317,8 @@ async function offerFor(gig, opts) {
     + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.')
     + `\n\n${PRICING_PL}`
     + '\n\nODPOWIEDZ WYLACZNIE JSON-em, bez komentarza i bez znacznikow kodu, dokladnie w tym ksztalcie:\n'
-    + '{"payment_pln": <liczba>, "work_days": <liczba>, "message": "<tresc oferty po polsku>", '
-    + '"message_en": "<doslowne tlumaczenie message na angielski>"}\n'
+    + '{"hours": <liczba>, "work_days": <liczba>, "message": "<tresc oferty po polsku, z tokenem {PRICE}>", '
+    + '"message_en": "<doslowne tlumaczenie message na angielski, z tym samym tokenem {PRICE}>"}\n'
     + 'message_en to WYLACZNIE tlumaczenie tego samego tekstu dla wlasciciela konta, ktory nie mowi po polsku. '
     + 'Nie dodawaj tam nic, czego nie ma w message.';
   const user = 'Zlecenie z useme.\n\n'
@@ -324,21 +338,39 @@ async function offerFor(gig, opts) {
   const j = firstJson(raw);
   if (!j || !j.message) {
     /* No usable JSON: keep the words (better than nothing) but refuse to invent a price. */
-    return { text: raw, textEn: '', payment: 0, workDays: 0, priced: false };
+    return { text: raw, textEn: '', payment: 0, workDays: 0, hours: 0, priced: false };
   }
-  const payment = clampPrice(j.payment_pln);
+
+  /* The price is arithmetic, not opinion: the model's hours, the owner's rate, the owner's discount.
+     Same gig in, same number out - which is the whole point of moving off a model-quoted price. */
+  const p = o.pricing || {};
+  const num = (v, d) => (Number(v) > 0 ? Number(v) : d);
+  const rate = num(p.hourlyRatePln, DEFAULTS.hourlyRatePln);
+  const disc = Math.max(0, Math.min(60, Number(p.discountPct != null ? p.discountPct : DEFAULTS.discountPct)));
+  const step = num(p.roundToPln, DEFAULTS.roundToPln);
+  const hours = Math.max(num(p.minHours, DEFAULTS.minHours), Math.min(num(p.maxHours, DEFAULTS.maxHours), Math.round(Number(j.hours) || 0)));
+  const payment = clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step);
+  const priced = Number(j.hours) > 0 && payment > 0;
+
   /* Days-not-weeks is the pitch, so the promise is capped here too - a model that answers 21 must
      not quietly commit the owner to three weeks. */
   const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
+
+  const money = String(payment);
+  const put = (s) => String(s || '').replace(/\{PRICE\}/g, money).trim();
+  let text = put(j.message);
+  let textEn = put(j.message_en);
+  /* A model that forgot the token would otherwise send an offer with no number in it at all. */
+  if (priced && !String(j.message).includes('{PRICE}') && !text.includes(money)) {
+    text += ` Całość wyceniam na ${money} zł.`;
+    if (textEn) textEn += ` I price the whole project at ${money} PLN.`;
+  }
+
   return {
     /* text is what gets SENT. textEn exists only so an owner who does not read Polish can see what
        he is approving - it must never reach the form, which is why the caller stores it under
        fields and never under draft. */
-    text: String(j.message).trim(),
-    textEn: String(j.message_en || '').trim(),
-    payment,
-    workDays,
-    priced: payment > 0 && Number(j.payment_pln) > 0,
+    text, textEn, payment, workDays, hours, priced,
   };
 }
 
