@@ -1709,10 +1709,18 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
        has seen. `reprice:true` is the deliberate way to change it. */
     const prev = Number((item.fields || {}).payment) || 0;
     const reprice = !!(req.body && req.body.reprice);
+    /* THE TERM IS PINNED LIKE THE PRICE. A pinned price over a free-floating scope is not
+       stability: the same gig came back `xl` at 7 days then `large` at 5 days, and because the
+       price was held the offer silently drifted to 171 zl/h. An explicit workDays in the body is
+       the owner setting the term; otherwise the term the owner has already seen is kept. */
+    const prevDays = Number((item.fields || {}).workDays) || 0;
+    const askDays = Number((req.body && req.body.workDays) || 0);
+    const pinDays = reprice ? askDays : (askDays || prevDays);
     const offer = await gigWatch.offerFor(item, {
       settings: settingsStore.read(), demoUrl, demoVerified,
       pricing: gigWatch.configFor(req.params.id),
       pinnedPayment: reprice ? 0 : prev,
+      pinnedWorkDays: pinDays,
     });
     /* english_not_sent is for an owner who does not read Polish: it sits in fields (which the
        results screen renders as its own row) and NEVER in draft, because draft is the text the
@@ -1730,7 +1738,8 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
     feed.mark(req.params.id, item.key, { draft: offer.text, fields });
     res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified,
       draft: offer.text, english: offer.textEn || '', payment: offer.payment, hours: offer.hours, size: offer.size, pinned: !reprice && prev > 0, workDays: offer.workDays, priced: offer.priced,
-      voiceIssues: offer.voiceIssues || [], scoped: !!offer.scoped, bandHours: offer.bandHours || 0 });
+      voiceIssues: offer.voiceIssues || [], scoped: !!offer.scoped, bandHours: offer.bandHours || 0,
+      daysPinned: !!offer.daysPinned });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

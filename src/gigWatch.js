@@ -373,6 +373,8 @@ async function offerFor(gig, opts) {
   const o = opts || {};
   const llm = require('./llm');
   const f = (gig && gig.fields) || {};
+  /* Declared before the prompt, because the prompt has to carry it. */
+  const pinnedDays = Math.max(0, Math.min(MAX_WORK_DAYS, Math.round(Number(o.pinnedWorkDays) || 0)));
   const demo = o.demoUrl && o.demoVerified ? o.demoUrl : '';
   /* Tone is the owner's, not the code's: a watcher's config may carry its own `voice`, so
      changing how offers read never needs a deploy. Falls back to VOICE_PL. */
@@ -390,7 +392,15 @@ async function offerFor(gig, opts) {
     + `OPIS: ${String(f.desc || f.snippet || '').slice(0, 1500)}\n`
     + `LICZBA ZLOZONYCH OFERT: ${f.offers == null ? 'nieznana' : f.offers}\n`
     + `BUDZET: ${f.budget || 'do negocjacji'}\n\n`
-    + 'W polu message napisz sama tresc oferty, bez tematu i bez podpisu.';
+    + 'W polu message napisz sama tresc oferty, bez tematu i bez podpisu.'
+    /* A PINNED TERM IS A CONSTRAINT ON THE WORDS, NOT JUST ON THE FORM FIELD. Clamping work_days
+       after the model has written its message is what produced the first broken offer: the prose
+       described one scope while the form committed to another. If the owner has already seen a
+       term, the model is told so and must scope stage one to fit it. */
+    + (pinnedDays
+      ? `\n\nTERMIN JEST JUZ USTALONY I NIE WOLNO GO ZMIENIAC: work_days = ${pinnedDays}. `
+        + `Opisz zakres pierwszego etapu tak, zeby realnie zmiescil sie w ${pinnedDays} dniach roboczych.`
+      : '');
   /* llm.chat is the call that exists everywhere (complete does not ship in every build), and it
      answers with a message object, so the text is out.content. */
   const cfg = o.settings || {};
@@ -436,7 +446,9 @@ async function offerFor(gig, opts) {
      `xl` is 110 hours, which at 8h/day is ~14 working days, so an xl gig quoted a fortnight of
      labour while the form committed to 7 days. Capping hours at workDays * hoursPerDay is what
      makes {PRICE} the price of the commitment rather than of a scope we are not promising. */
-  const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
+  /* ONCE AGREED, STAY AGREED - the same rule the price already follows. */
+  const workDays = pinnedDays
+    || Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
   const perDay = num(p.hoursPerDay, DEFAULTS.hoursPerDay);
   const bandHours = num(bands[usedSize], DEFAULTS.hoursBySize[DEFAULTS.defaultSize]);
   const hours = Math.min(bandHours, workDays * perDay);
@@ -465,7 +477,7 @@ async function offerFor(gig, opts) {
        he is approving - it must never reach the form, which is why the caller stores it under
        fields and never under draft. */
     text, textEn, payment, workDays, hours, priced,
-    size: usedSize, sizeFromModel: known, scoped, bandHours,
+    size: usedSize, sizeFromModel: known, scoped, bandHours, daysPinned: pinnedDays > 0,
     voiceIssues: issues,
   };
 }

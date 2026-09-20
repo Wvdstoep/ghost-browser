@@ -17,10 +17,16 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
 let reply = "";
+let seenUser = [];
 const llmPath = require.resolve("../src/llm");
 require.cache[llmPath] = {
   id: llmPath, filename: llmPath, loaded: true, children: [], paths: [],
-  exports: { chat: async () => ({ content: reply }) },
+  exports: {
+    chat: async (a) => {
+      seenUser.push(a.messages[1].content);
+      return { content: reply };
+    },
+  },
 };
 
 const gigWatch = require("../src/gigWatch");
@@ -70,5 +76,49 @@ describe("offerFor: the quote may not exceed the promise", () => {
     reply = model("xl", 5);
     const o = await gigWatch.offerFor(gig("big"), { pricing: { hoursPerDay: 6 } });
     expect(o.hours).toBe(30);
+  });
+});
+
+/*
+ * THE TERM IS PINNED LIKE THE PRICE.
+ *
+ * The price pin alone was not stability. The same gig came back `xl` at 7 days on one run and
+ * `large` at 5 days on the next, and because the price was held at 6850 while the scope shrank
+ * from 56 to 40 hours, the offer silently drifted to 171 zl/h against a 130 rate. Pinning the
+ * days closes that. The prompt must also LEARN the pinned term, otherwise clamping it after the
+ * model has written its message reproduces the original defect: prose describing one scope while
+ * the form commits to another.
+ */
+describe("offerFor: a pinned term holds, and the model is told about it", () => {
+  beforeEach(() => { reply = ""; seenUser = []; });
+
+  it("keeps the agreed term instead of the model's answer", async () => {
+    reply = model("large", 5);
+    const o = await gigWatch.offerFor(gig("x"), { pricing: {}, pinnedWorkDays: 7 });
+    expect(o.workDays).toBe(7);
+    expect(o.daysPinned).toBe(true);
+    expect(o.hours).toBe(56);          // 7 x 8, not the 5-day 40
+  });
+
+  it("tells the model the term is fixed, so the words match the form", async () => {
+    reply = model("large", 5);
+    await gigWatch.offerFor(gig("x"), { pricing: {}, pinnedWorkDays: 7 });
+    const sent = seenUser[seenUser.length - 1];
+    expect(sent).toContain("TERMIN JEST JUZ USTALONY");
+    expect(sent).toContain("work_days = 7");
+  });
+
+  it("says nothing about a term when none is pinned", async () => {
+    reply = model("large", 5);
+    const o = await gigWatch.offerFor(gig("x"), { pricing: {} });
+    expect(o.workDays).toBe(5);
+    expect(o.daysPinned).toBe(false);
+    expect(seenUser[seenUser.length - 1]).not.toContain("TERMIN JEST JUZ USTALONY");
+  });
+
+  it("will not let a pinned term break the one week rule", async () => {
+    reply = model("xl", 3);
+    const o = await gigWatch.offerFor(gig("x"), { pricing: {}, pinnedWorkDays: 30 });
+    expect(o.workDays).toBe(7);
   });
 });
