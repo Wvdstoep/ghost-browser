@@ -80,6 +80,7 @@ const DEFAULTS = {
      band is a judgement models make consistently, where guessing an integer is not - so the model
      picks a size and the HOURS FOR THAT SIZE ARE OURS. Retune a band here and every future quote
      moves with it, no deploy. */
+  hoursPerDay: 8,
   hoursBySize: { small: 8, medium: 24, large: 60, xl: 110 },
   defaultSize: 'medium',
 };
@@ -294,8 +295,18 @@ const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zl
   + '  large  - integracja wielu systemow albo caly modul z logika biznesowa i przypadkami brzegowymi\n'
   + '  xl     - duzy projekt: wiele systemow, migracja danych, duzo nieznanych, dlugie wdrozenie\n'
   + 'Godziny i cene policzy system na podstawie rozmiaru.\n\n'
-  + 'W tresci oferty wstaw dokladnie token {PRICE} tam, gdzie ma pojawic sie kwota calosci w zl '
-  + '(na przyklad "Calosc wyceniam na {PRICE} zl"). Nie wpisuj zadnej wlasnej liczby jako ceny.\n\n'
+  /* {PRICE} USED TO MEAN "THE WHOLE GIG", WHICH CONTRADICTED THE TERMIN BLOCK BELOW.
+     The days rule says: if the gig will not fit in a week, promise only a working first part.
+     The price rule said: quote the whole project. A model obeying BOTH produced an offer that
+     delivered stage one in 7 days and priced all three stages at one number - which is how an xl
+     multi-system integration came out at a single small figure with a one-week date on the form.
+     The price now covers exactly what the offer COMMITS to deliver inside work_days. */
+  + 'W tresci oferty wstaw dokladnie token {PRICE} tam, gdzie ma pojawic sie kwota w zl za TO, CO '
+  + 'DEKLARUJESZ ODDAC w terminie work_days. To NIE jest cena calego zlecenia. '
+  + 'Nie wpisuj zadnej wlasnej liczby jako ceny.\n'
+  + 'Jesli cale zlecenie nie zmiesci sie w work_days, {PRICE} jest cena PIERWSZEGO ETAPU i musisz '
+  + 'napisac wprost, ze kolejne etapy wyceniasz osobno po odbiorze pierwszego. '
+  + 'Nie pisz "calosc wyceniam na", bo wyceniasz etap, nie calosc.\n\n'
   + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
   + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
   + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
@@ -363,16 +374,23 @@ async function offerFor(gig, opts) {
   const size = String(j.size || '').toLowerCase().trim();
   const known = Object.prototype.hasOwnProperty.call(bands, size);
   const usedSize = known ? size : String(p.defaultSize || DEFAULTS.defaultSize);
-  const hours = num(bands[usedSize], DEFAULTS.hoursBySize[DEFAULTS.defaultSize]);
+  /* DAYS FIRST, BECAUSE THE PROMISE BOUNDS THE QUOTE. The bands were decoupled from the day cap:
+     `xl` is 110 hours, which at 8h/day is ~14 working days, so an xl gig quoted a fortnight of
+     labour while the form committed to 7 days. Capping hours at workDays * hoursPerDay is what
+     makes {PRICE} the price of the commitment rather than of a scope we are not promising. */
+  const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
+  const perDay = num(p.hoursPerDay, DEFAULTS.hoursPerDay);
+  const bandHours = num(bands[usedSize], DEFAULTS.hoursBySize[DEFAULTS.defaultSize]);
+  const hours = Math.min(bandHours, workDays * perDay);
+  /* scoped = the gig is bigger than the promise, so this quote is stage one and the words must say
+     so. Surfaced in the return so the results screen can show it instead of it being invisible. */
+  const scoped = hours < bandHours;
   /* ONCE PRICED, STAY PRICED. A gig the owner has already seen a number for keeps that number on a
      redraft, so rewriting the words can never quietly move the quote. Repricing is deliberate. */
   const pinned = Number(o.pinnedPayment) > 0 ? clampPrice(o.pinnedPayment) : 0;
   const payment = pinned || clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step);
   const priced = payment > 0;
 
-  /* Days-not-weeks is the pitch, so the promise is capped here too - a model that answers 21 must
-     not quietly commit the owner to three weeks. */
-  const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
 
   const money = String(payment);
   const put = (s) => String(s || '').replace(/\{PRICE\}/g, money).trim();
@@ -380,8 +398,8 @@ async function offerFor(gig, opts) {
   let textEn = put(j.message_en);
   /* A model that forgot the token would otherwise send an offer with no number in it at all. */
   if (priced && !String(j.message).includes('{PRICE}') && !text.includes(money)) {
-    text += ` Całość wyceniam na ${money} zł.`;
-    if (textEn) textEn += ` I price the whole project at ${money} PLN.`;
+    text += scoped ? ` Ten etap wyceniam na ${money} zł.` : ` Wyceniam to na ${money} zł.`;
+    if (textEn) textEn += scoped ? ` I price this stage at ${money} PLN.` : ` I price this at ${money} PLN.`;
   }
 
   return {
@@ -389,7 +407,7 @@ async function offerFor(gig, opts) {
        he is approving - it must never reach the form, which is why the caller stores it under
        fields and never under draft. */
     text, textEn, payment, workDays, hours, priced,
-    size: usedSize, sizeFromModel: known,
+    size: usedSize, sizeFromModel: known, scoped, bandHours,
   };
 }
 
