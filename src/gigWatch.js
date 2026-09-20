@@ -253,19 +253,63 @@ const EVIDENCE = 'Buduje i utrzymuje wielodostepna platforme na Kubernetes (pona
   + 'Kubernetes, Kotlin/Android. Robie automatyzacje na prawdziwym Chromium, wiec radze sobie tam gdzie '
   + 'nie ma API, gdzie trzeba byc zalogowanym i gdzie Zapier czy Make sie poddaja.';
 
-async function draftFor(gig, opts) {
+/**
+ * PRICE IS PART OF THE OFFER, NOT A SETTING.
+ *
+ * A flat rate cannot fit both "wgranie plikow csv" and a multi-warehouse SAP integration, so the
+ * price is read off the GIG: scope, systems named, how much is still unknown. It is then placed a
+ * little UNDER what the work would normally fetch in Poland - the same launch tactic as the hourly
+ * rate: a profile with no completed contracts needs a reason to be picked, and a modest discount is
+ * that reason without signalling cheap work. The bounds below are a sanity net, not the price: they
+ * only stop an absurd answer from reaching a client.
+ */
+const PRICE_FLOOR_PLN = 300;
+const PRICE_CEIL_PLN = 60000;
+/** Days, never weeks: the owner's promise is a few days, a week at the outside. */
+const MAX_WORK_DAYS = 7;
+const PRICING_PL = 'WYCENA. Podaj cene w PLN za CALOSC zlecenia, realistyczna dla polskiego rynku freelancerskiego '
+  + '(stawki dev/integracje zwykle 90-200 zl/h). Oszacuj naklad pracy z opisu, policz cene, a potem zejdz '
+  + 'okolo 10-15% PONIZEJ typowej ceny rynkowej - wykonawca dopiero zaczyna na tym portalu i potrzebuje '
+  + 'pierwszych zlecen, ale NIE zaniżaj drastycznie, bo to sygnalizuje slaba jakosc.\n\n'
+  + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
+  + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
+  + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
+  + 'a reszte dowozisz etapami. Nigdy nie pisz o tygodniach ani miesiacach jako terminie startowym.';
+
+const clampPrice = (n) => Math.max(PRICE_FLOOR_PLN, Math.min(PRICE_CEIL_PLN, Math.round(Number(n) || 0)));
+
+/** Pull the first JSON object out of a model answer that may be wrapped in prose or fences. */
+function firstJson(text) {
+  const s = String(text || '');
+  const start = s.indexOf('{');
+  if (start < 0) return null;
+  for (let end = s.lastIndexOf('}'); end > start; end = s.lastIndexOf('}', end - 1)) {
+    try { return JSON.parse(s.slice(start, end + 1)); } catch (e) { /* try a shorter tail */ }
+  }
+  return null;
+}
+
+/**
+ * The offer: the words, the price and the days, all derived from the gig. Returns
+ * { text, payment, workDays, priced } - `priced` false means the model gave no usable number and the
+ * caller must not submit a price it invented.
+ */
+async function offerFor(gig, opts) {
   const o = opts || {};
   const llm = require('./llm');
   const f = (gig && gig.fields) || {};
   const demo = o.demoUrl && o.demoVerified ? o.demoUrl : '';
   const sys = `${VOICE_PL}\n\nO wykonawcy (tylko prawda, nie zmyslaj nic poza tym):\n${EVIDENCE}`
-    + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.');
-  const user = 'Napisz oferte na to zlecenie z useme.\n\n'
+    + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.')
+    + `\n\n${PRICING_PL}`
+    + '\n\nODPOWIEDZ WYLACZNIE JSON-em, bez komentarza i bez znacznikow kodu, dokladnie w tym ksztalcie:\n'
+    + '{"payment_pln": <liczba>, "work_days": <liczba>, "message": "<tresc oferty>"}';
+  const user = 'Zlecenie z useme.\n\n'
     + `TYTUL: ${gig.title || ''}\n`
     + `OPIS: ${String(f.desc || f.snippet || '').slice(0, 1500)}\n`
     + `LICZBA ZLOZONYCH OFERT: ${f.offers == null ? 'nieznana' : f.offers}\n`
     + `BUDZET: ${f.budget || 'do negocjacji'}\n\n`
-    + 'Napisz sama tresc oferty, bez tematu i bez podpisu.';
+    + 'W polu message napisz sama tresc oferty, bez tematu i bez podpisu.';
   /* llm.chat is the call that exists everywhere (complete does not ship in every build), and it
      answers with a message object, so the text is out.content. */
   const cfg = o.settings || {};
@@ -273,7 +317,25 @@ async function draftFor(gig, opts) {
     host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey,
     messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
   });
-  return String((out && out.content) || '').trim();
+  const raw = String((out && out.content) || '').trim();
+  const j = firstJson(raw);
+  if (!j || !j.message) {
+    /* No usable JSON: keep the words (better than nothing) but refuse to invent a price. */
+    return { text: raw, payment: 0, workDays: 0, priced: false };
+  }
+  const payment = clampPrice(j.payment_pln);
+  /* Days-not-weeks is the pitch, so the promise is capped here too - a model that answers 21 must
+     not quietly commit the owner to three weeks. */
+  const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
+  return {
+    text: String(j.message).trim(),
+    payment,
+    workDays,
+    priced: payment > 0 && Number(j.payment_pln) > 0,
+  };
 }
 
-module.exports = { tick, rank, ageDaysOf, draftFor, configFor, compile, DEFAULTS };
+/** Back-compat: the text alone, for callers that only want a draft. */
+async function draftFor(gig, opts) { return (await offerFor(gig, opts)).text; }
+
+module.exports = { tick, rank, ageDaysOf, draftFor, offerFor, configFor, compile, DEFAULTS, clampPrice, firstJson };
