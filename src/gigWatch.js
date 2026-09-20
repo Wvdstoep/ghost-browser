@@ -303,7 +303,10 @@ async function offerFor(gig, opts) {
     + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.')
     + `\n\n${PRICING_PL}`
     + '\n\nODPOWIEDZ WYLACZNIE JSON-em, bez komentarza i bez znacznikow kodu, dokladnie w tym ksztalcie:\n'
-    + '{"payment_pln": <liczba>, "work_days": <liczba>, "message": "<tresc oferty>"}';
+    + '{"payment_pln": <liczba>, "work_days": <liczba>, "message": "<tresc oferty po polsku>", '
+    + '"message_en": "<doslowne tlumaczenie message na angielski>"}\n'
+    + 'message_en to WYLACZNIE tlumaczenie tego samego tekstu dla wlasciciela konta, ktory nie mowi po polsku. '
+    + 'Nie dodawaj tam nic, czego nie ma w message.';
   const user = 'Zlecenie z useme.\n\n'
     + `TYTUL: ${gig.title || ''}\n`
     + `OPIS: ${String(f.desc || f.snippet || '').slice(0, 1500)}\n`
@@ -321,14 +324,18 @@ async function offerFor(gig, opts) {
   const j = firstJson(raw);
   if (!j || !j.message) {
     /* No usable JSON: keep the words (better than nothing) but refuse to invent a price. */
-    return { text: raw, payment: 0, workDays: 0, priced: false };
+    return { text: raw, textEn: '', payment: 0, workDays: 0, priced: false };
   }
   const payment = clampPrice(j.payment_pln);
   /* Days-not-weeks is the pitch, so the promise is capped here too - a model that answers 21 must
      not quietly commit the owner to three weeks. */
   const workDays = Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
   return {
+    /* text is what gets SENT. textEn exists only so an owner who does not read Polish can see what
+       he is approving - it must never reach the form, which is why the caller stores it under
+       fields and never under draft. */
     text: String(j.message).trim(),
+    textEn: String(j.message_en || '').trim(),
     payment,
     workDays,
     priced: payment > 0 && Number(j.payment_pln) > 0,
