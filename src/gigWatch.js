@@ -1,0 +1,273 @@
+'use strict';
+/**
+ * GIG WATCHER — new paid work, ranked by how few people are already bidding.
+ *
+ * A job board is a race, not a noticeboard. The same useme listing that carries 19 offers on the day
+ * it appears carries 90 six days later, and no wording beats arriving late. So this watches the BOARD
+ * the way postWatch watches a post: every pass re-reads the listing, keys each gig by its stable job
+ * url, remembers when it was FIRST seen, and surfaces the ones that are both a fit and still winnable.
+ *
+ * WHAT IS DATA AND WHAT IS CODE. Adding a board, retuning a keyword or changing how hard competition
+ * is punished must never need a deploy — that is the lesson platforms.js and userSites.js already
+ * wrote down. So every tunable lives in the WATCHER'S OWN CONFIG (watcherFeed.getConfig/setConfig):
+ * which boards to sweep, the fit and reject words with their weights, the thresholds. The constants
+ * below are only a SEED, written into the config on first run so the owner can see and edit them.
+ * What stays code is the one thing that genuinely is code: reading a specific site's DOM, exactly as
+ * sites/facebook.js does.
+ *
+ * Two numbers decide the ranking and they pull against each other: how well a gig matches the work we
+ * can actually do, and how many people are already bidding. A perfect match with 90 offers is worth
+ * less than a good match with 19, because only the second can still be won.
+ *
+ * Reading the board needs no login, so a pass runs unattended. APPLYING is a separate, owner-approved
+ * act from the residential node.
+ */
+const feed = require('./watcherFeed');
+
+/**
+ * THE SEED. Plain JSON on purpose: patterns are strings, not RegExp literals, so the whole thing
+ * round-trips through the config store and the owner can edit any of it without touching this file.
+ */
+const DEFAULTS = {
+  boards: [
+    { url: 'https://useme.com/pl/jobs/category/programowanie-i-it,35/', name: 'Programowanie i IT' },
+    { url: 'https://useme.com/pl/jobs/category/serwisy-internetowe,34/', name: 'Serwisy internetowe' },
+  ],
+  /* What we can actually win. Weighted because these are not equal: a named system we know beats a
+     generic "API" mention. The tag travels with the item so the feed can say WHY it ranked. */
+  fit: [
+    { p: 'scrap|pobieranie danych|web ?scraping|zbieranie danych', w: 6, tag: 'scraping' },
+    { p: 'automatyzacj|zautomatyzow|automation', w: 5, tag: 'automation' },
+    { p: 'integracj|integration|po[l\\u0142][a\\u0105]czenie', w: 5, tag: 'integration' },
+    { p: 'baselinker|allegro|shopify|woocommerce|magento|sap\\b|subiekt|comarch', w: 4, tag: 'ecom-system' },
+    { p: 'ollama|llm|agent[oa]w|wieloagentow|multi-?agent', w: 4, tag: 'ai-agents' },
+    { p: 'bez api|nie ma api|r[e\\u0119]cznie|przepisywan|r[e\\u0119]czne', w: 5, tag: 'manual-today' },
+    { p: 'n8n|make\\.com|zapier|workflow', w: 3, tag: 'no-code-automation' },
+    { p: 'excel|csv|arkusz|google sheets|bigquery', w: 3, tag: 'data-files' },
+    { p: 'node|react|next\\.?js|postgre|docker|kubernetes|typescript', w: 3, tag: 'our-stack' },
+    { p: 'panel|dashboard|crm|erp|saas', w: 2, tag: 'app-build' },
+    { p: '\\bapi\\b|rest\\b|webhook', w: 2, tag: 'api' },
+  ],
+  /* Not our edge, or a different trade entirely. */
+  neg: [
+    { p: 'grafik|logo|banner|ulotk|projekt graficzny', w: 8 },
+    { p: 'copywrit|tekst[oy]|t[l\\u0142]umaczen|redakcj', w: 8 },
+    { p: 'ksi[e\\u0119]gow|enova|kadry|p[l\\u0142]ac', w: 8 },
+    { p: 'tester manualny|testy penetracyjne|pentest', w: 7 },
+    { p: 'gra mobilna|unity|unreal', w: 7 },
+    { p: 'flutter|react native|swift', w: 4 },
+    { p: 'sharepoint|atlassian|jira|confluence', w: 4 },
+    { p: 'wordpress|elementor', w: 3 },
+  ],
+  minFit: 5,            // below this it is not our trade, so never spend a page load on it
+  maxDetail: 10,        // page loads one pass may spend learning offer counts
+  offersPerPoint: 10,   // ten people already bidding costs about one strong keyword match
+  freshDays: { 1: 4, 2: 3, 4: 1 }, // age in days -> bonus; anything older scores 0
+};
+
+/** Config is JSON, so patterns arrive as strings. Compile once per pass, and never let a bad pattern
+ *  written by hand take the whole watcher down. */
+function compile(rows) {
+  const out = [];
+  for (const r of rows || []) {
+    try { out.push({ re: new RegExp(r.p, 'i'), w: Number(r.w) || 0, tag: r.tag || '' }); } catch (e) { /* skip a malformed pattern */ }
+  }
+  return out;
+}
+
+const scoreText = (text, table) => {
+  let sum = 0; const tags = [];
+  for (const r of table) if (r.re.test(text)) { sum += r.w; if (r.tag) tags.push(r.tag); }
+  return { sum, tags };
+};
+
+/** Competition is not a tiebreak, it is subtracted - it is the number that decides winnability. */
+const competitionPenalty = (offers, perPoint) => (Number(offers) > 0 ? Number(offers) / (Number(perPoint) || 10) : 0);
+
+/** A gig seen on its first day is worth bidding; one that has sat a week rarely is. */
+function freshnessBonus(days, table) {
+  const t = table || {};
+  const keys = Object.keys(t).map(Number).filter((n) => !isNaN(n)).sort((a, b) => a - b);
+  for (const k of keys) if (days <= k) return Number(t[k]) || 0;
+  return 0;
+}
+
+function rank(item, cfg, fitTable, negTable) {
+  const hay = `${item.title || ''} ${item.snippet || ''} ${item.desc || ''}`;
+  const fit = scoreText(hay, fitTable);
+  const neg = scoreText(hay, negTable);
+  const penalty = competitionPenalty(item.offers, cfg.offersPerPoint);
+  const fresh = freshnessBonus(item.ageDays, cfg.freshDays);
+  const score = (fit.sum - neg.sum) - penalty + fresh;
+  return {
+    score: Math.round(score * 10) / 10,
+    fit: fit.sum, tags: fit.tags,
+    penalty: -Math.round(penalty * 10) / 10,
+    fresh,
+  };
+}
+
+/** Pull the listing rows. useme job urls are /pl/jobs/{slug},{id}/ and the id is stable. */
+async function readListing(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await page.waitForTimeout(1200);
+  return page.evaluate(() => {
+    const seen = {}; const out = [];
+    document.querySelectorAll('a').forEach((a) => {
+      const h = a.getAttribute('href') || '';
+      if (!/^\/(pl|en)\/jobs\/[^/]+,\d+\/?$/.test(h) || seen[h]) return;
+      seen[h] = 1;
+      const card = a.closest('div,li,article');
+      const ctx = card ? (card.textContent || '').replace(/\s+/g, ' ').trim() : '';
+      out.push({ href: h, title: (a.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160), snippet: ctx.slice(0, 400) });
+    });
+    return out;
+  });
+}
+
+/** The offer count lives only on the gig's own page, so this is the expensive call. */
+async function readDetail(page, url) {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await page.waitForTimeout(900);
+  return page.evaluate(() => {
+    const c = document.body.cloneNode(true);
+    c.querySelectorAll('script,style,noscript,svg').forEach((e) => e.remove());
+    const t = (c.textContent || '').replace(/\s+/g, ' ');
+    const offers = (t.match(/Wys[^\s]*ane oferty \((\d+)\)/) || [, null])[1];
+    const budget = (t.match(/Bud[^\s]*et ([^P]{0,40})/) || [, ''])[1].trim();
+    const posted = (t.match(/Opublikowano ([^K]{0,25})/) || [, ''])[1].trim();
+    const desc = (t.match(/Opis (.{0,900})/) || [, ''])[1].trim();
+    return { offers: offers == null ? null : Number(offers), budget, posted, desc };
+  });
+}
+
+/** "6 dni temu" / "wczoraj" / "godzine temu" -> days, so freshness can be scored. */
+function ageDaysOf(posted) {
+  const s = String(posted || '').toLowerCase();
+  if (/godzin|minut|chwil/.test(s)) return 0;
+  if (/wczoraj/.test(s)) return 1;
+  const m = s.match(/(\d+)\s*dni/); if (m) return Number(m[1]);
+  const w = s.match(/(\d+)\s*tyg/); if (w) return Number(w[1]) * 7;
+  return 99;
+}
+
+/** The watcher's config, seeded with the defaults the first time so the owner can see and edit it. */
+function configFor(wid) {
+  const cur = feed.getConfig(wid) || {};
+  if (!cur.boards || !cur.fit) return feed.setConfig(wid, Object.assign({ mode: 'gigs' }, DEFAULTS, cur));
+  return cur;
+}
+
+/**
+ * One pass: sweep the boards, pre-filter on the listing, open only the plausible gigs to learn how
+ * crowded they are, then upsert into this watcher's own feed so re-runs surface only what is new.
+ */
+async function tick(getPage, wid, opts) {
+  const o = opts || {};
+  const cfg = Object.assign({}, DEFAULTS, configFor(wid), o.config || {});
+  const fitTable = compile(cfg.fit);
+  const negTable = compile(cfg.neg);
+  const minFit = Number(cfg.minFit);
+  const maxDetail = Number(cfg.maxDetail);
+  const log = o.log || (() => {});
+  const page = await getPage();
+
+  const rows = [];
+  for (const b of cfg.boards || []) {
+    try {
+      const list = await readListing(page, b.url);
+      log(`[gig-watch] ${b.name || b.url}: ${list.length} listed`);
+      for (const r of list) rows.push(Object.assign({ category: b.name || '' }, r));
+    } catch (e) { log(`[gig-watch] ${b.name || b.url}: ${e.message}`); }
+  }
+
+  /* Pre-rank WITHOUT the offer count so page loads are only spent on plausible gigs. */
+  const pre = rows.map((r) => {
+    const hay = `${r.title} ${r.snippet}`;
+    return Object.assign({}, r, { preFit: scoreText(hay, fitTable).sum - scoreText(hay, negTable).sum });
+  }).sort((a, b) => b.preFit - a.preFit);
+
+  /* What we already know, by url: a gig already costed a detail load keeps its numbers, so a re-run
+     spends its budget reaching NEW gigs instead of re-reading the same ones. */
+  const knownByUrl = {};
+  try { feed.list(wid).forEach((e) => { if (e.url) knownByUrl[e.url] = e; }); } catch (e) { /* first run */ }
+
+  const out = [];
+  let spent = 0;
+  for (const r of pre) {
+    const url = 'https://useme.com' + r.href;
+    const known = knownByUrl[url];
+    const kf = (known && known.fields) || {};
+    let detail = null;
+    if (r.preFit >= minFit && spent < maxDetail && (!known || kf.offers == null)) {
+      try { detail = await readDetail(page, url); spent++; } catch (e) { log(`[gig-watch] detail ${r.href}: ${e.message}`); }
+    }
+    const item = {
+      url, title: r.title, snippet: r.snippet, category: r.category,
+      offers: detail ? detail.offers : (kf.offers != null ? kf.offers : null),
+      budget: detail ? detail.budget : (kf.budget || ''),
+      posted: detail ? detail.posted : (kf.posted || ''),
+      desc: detail ? detail.desc : (kf.desc || ''),
+    };
+    item.ageDays = ageDaysOf(item.posted);
+    Object.assign(item, rank(item, cfg, fitTable, negTable));
+    if (r.preFit >= minFit || (known && known.handled !== true)) out.push(item);
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  for (const it of out) {
+    try {
+      feed.upsert(wid, {
+        url: it.url, title: it.title, kind: 'gig',
+        fields: {
+          type: 'gig', score: it.score, fit: it.fit, penalty: it.penalty, fresh: it.fresh,
+          tags: it.tags, offers: it.offers, budget: it.budget, posted: it.posted,
+          ageDays: it.ageDays, category: it.category, snippet: it.snippet, desc: it.desc,
+        },
+      });
+    } catch (e) { log(`[gig-watch] upsert: ${e.message}`); }
+  }
+  log(`[gig-watch] ${out.length} ranked, ${spent} detail loads`);
+  return out;
+}
+
+/**
+ * THE OFFER, DRAFTED FROM THE GIG ITSELF.
+ *
+ * The two offers that got no reply were not badly written - they were late and they leaned on a demo
+ * link. So a draft does the opposite: it names the client's own system back to them, says what runs
+ * in days, and ends on ONE question. A demo link goes in ONLY when the caller has verified it answers
+ * 200 with a valid certificate, because a link that throws a browser warning costs more than no link.
+ *
+ * Nothing is sent from here. The draft lands on the feed item and the owner approves it.
+ */
+const VOICE_PL = 'Pisz po polsku, zwyczajnie i konkretnie, jak czlowiek ktory zna sie na rzeczy. '
+  + 'Bez mydlenia oczu, bez "z przyjemnoscia", bez listy zalet, bez emoji, bez podpisu na koncu. '
+  + 'Nie uzywaj myslnikow ani srednikow. Krotko: 5 do 9 zdan. Zacznij od TEGO, co klient opisal, '
+  + 'wlasnymi slowami, zeby bylo jasne ze przeczytales. Powiedz co dokladnie zrobisz i w jakim czasie. '
+  + 'Zakoncz JEDNYM konkretnym pytaniem. Nigdy nie wspominaj o AI.';
+
+/** What may be claimed. Kept beside the prompt so a draft never invents experience. */
+const EVIDENCE = 'Buduje i utrzymuje wielodostepna platforme na Kubernetes (ponad 100 uslug, certyfikaty TLS '
+  + 'per klient, automatyczne wdrozenia, monitoring). Stack: Node.js, React, PostgreSQL, Redis, Docker, '
+  + 'Kubernetes, Kotlin/Android. Robie automatyzacje na prawdziwym Chromium, wiec radze sobie tam gdzie '
+  + 'nie ma API, gdzie trzeba byc zalogowanym i gdzie Zapier czy Make sie poddaja.';
+
+async function draftFor(gig, opts) {
+  const o = opts || {};
+  const llm = require('./llm');
+  const f = (gig && gig.fields) || {};
+  const demo = o.demoUrl && o.demoVerified ? o.demoUrl : '';
+  const sys = `${VOICE_PL}\n\nO wykonawcy (tylko prawda, nie zmyslaj nic poza tym):\n${EVIDENCE}`
+    + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.');
+  const user = 'Napisz oferte na to zlecenie z useme.\n\n'
+    + `TYTUL: ${gig.title || ''}\n`
+    + `OPIS: ${String(f.desc || f.snippet || '').slice(0, 1500)}\n`
+    + `LICZBA ZLOZONYCH OFERT: ${f.offers == null ? 'nieznana' : f.offers}\n`
+    + `BUDZET: ${f.budget || 'do negocjacji'}\n\n`
+    + 'Napisz sama tresc oferty, bez tematu i bez podpisu.';
+  const text = await llm.complete({ settings: o.settings, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
+  return String(text || '').trim();
+}
+
+module.exports = { tick, rank, ageDaysOf, draftFor, configFor, compile, DEFAULTS };
