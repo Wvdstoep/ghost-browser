@@ -59,11 +59,22 @@ async function readOffers(page, url) {
     const txt = strip(document.body);
     const sent = (txt.match(/Wys[^\s]*ane oferty\s*(\d+)/) || [, null])[1];
     const closed = (txt.match(/Zamkni[^\s]*te oferty\s*(\d+)/) || [, null])[1];
-    /* Each offer card links to the job it was sent on, which is the stable key. */
-    const seen = {}; const offers = [];
-    document.querySelectorAll('a').forEach((a) => {
+
+    /* DO NOT ASSUME THE LINK SHAPE. The first version keyed offers on a /pl/jobs/<slug>,<id>/ link
+       and found NONE while the page plainly said "sent 2" — the cards link somewhere else. So take
+       any anchor that could be an offer or its job, and report every distinct href prefix seen so
+       the real shape shows up in the log instead of having to be guessed at. */
+    const kinds = {};
+    const anchors = [].slice.call(document.querySelectorAll('a')).map((a) => {
       const h = a.getAttribute('href') || '';
-      if (!/^\/(pl|en)\/jobs\/[^/]+,\d+\/?$/.test(h) || seen[h]) return;
+      const k = h.split('/').slice(0, 4).join('/');
+      if (h) kinds[k] = (kinds[k] || 0) + 1;
+      return { a, h };
+    });
+    const seen = {}; const offers = [];
+    anchors.forEach(({ a, h }) => {
+      if (!/^\/(pl|en)\/(jobs|offer|offers|deals?)\//.test(h) || seen[h]) return;
+      if (/\/(new|category)\//.test(h)) return;                     // board furniture, not an offer
       seen[h] = 1;
       const card = a.closest('div,li,article,section');
       offers.push({
@@ -72,7 +83,13 @@ async function readOffers(page, url) {
         context: card ? strip(card).slice(0, 700) : '',
       });
     });
-    return { sentCount: sent == null ? null : Number(sent), closedCount: closed == null ? null : Number(closed), offers, pageText: txt.slice(0, 600) };
+    return {
+      sentCount: sent == null ? null : Number(sent),
+      closedCount: closed == null ? null : Number(closed),
+      offers,
+      hrefKinds: Object.keys(kinds).sort((x, y) => kinds[y] - kinds[x]).slice(0, 12),
+      pageText: txt.slice(0, 600),
+    };
   });
 }
 
@@ -135,6 +152,11 @@ async function tick(getPage, wid, opts) {
   try {
     const off = await readOffers(page, cfg.offersUrl);
     log(`[reply-watch] offers: ${off.offers.length} listed (sent ${off.sentCount}, closed ${off.closedCount})`);
+    /* When the page says offers exist but none were recognised, the link shape moved. Print what is
+       actually there rather than leaving a silent zero. */
+    if (!off.offers.length && Number(off.sentCount) > 0) {
+      log(`[reply-watch] no offer links recognised — href shapes on the page: ${(off.hrefKinds || []).join(' ')}`);
+    }
     for (const ofr of off.offers) {
       const url = ofr.href.startsWith('http') ? ofr.href : 'https://useme.com' + ofr.href;
       /* Which bucket a card sits in is the standing; the page groups them, so read it off the text. */
