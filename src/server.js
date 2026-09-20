@@ -1705,20 +1705,25 @@ app.post('/v1/watchers/:id/feed/draft', authed, async (req, res) => {
        them - the approve step must never invent a number the owner has not seen. */
     /* pricing comes from THIS watcher's config (rate, discount, hour bounds, rounding), so the rate
        is the owner's and changing it needs no deploy. */
+    /* A gig already priced keeps its number: redrafting the words must not move the quote the owner
+       has seen. `reprice:true` is the deliberate way to change it. */
+    const prev = Number((item.fields || {}).payment) || 0;
+    const reprice = !!(req.body && req.body.reprice);
     const offer = await gigWatch.offerFor(item, {
       settings: settingsStore.read(), demoUrl, demoVerified,
       pricing: gigWatch.configFor(req.params.id),
+      pinnedPayment: reprice ? 0 : prev,
     });
     /* english_not_sent is for an owner who does not read Polish: it sits in fields (which the
        results screen renders as its own row) and NEVER in draft, because draft is the text the
        poster types into the offer form. The name says so out loud. */
     const fields = Object.assign({}, item.fields || {}, {
       payment: offer.payment, workDays: offer.workDays, hours: offer.hours, priced: offer.priced,
-      english_not_sent: offer.textEn || '',
+      size: offer.size || '', english_not_sent: offer.textEn || '',
     });
     feed.mark(req.params.id, item.key, { draft: offer.text, fields });
     res.json({ ok: true, key: item.key, title: item.title, url: item.url, demoUsed: demoVerified,
-      draft: offer.text, english: offer.textEn || '', payment: offer.payment, hours: offer.hours, workDays: offer.workDays, priced: offer.priced });
+      draft: offer.text, english: offer.textEn || '', payment: offer.payment, hours: offer.hours, size: offer.size, pinned: !reprice && prev > 0, workDays: offer.workDays, priced: offer.priced });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

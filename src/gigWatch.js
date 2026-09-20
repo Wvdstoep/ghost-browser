@@ -72,9 +72,16 @@ const DEFAULTS = {
      under market" is a policy here rather than something we hope the model honoured. */
   hourlyRatePln: 130,   // ~ the owner's $35/hr
   discountPct: 12,      // under market on purpose: a profile with no contracts needs a reason
-  minHours: 2,
-  maxHours: 200,
   roundToPln: 50,       // a quote ending in 50 or 00 reads as deliberate, not computed
+
+  /* ASK FOR A SIZE, NOT A NUMBER.
+     Even after moving off model-quoted prices, a free hours estimate still wandered: the same SAP
+     gig came back 70 h on one run and 50 h on the next (8000 zl vs 5700 zl). Classifying into a
+     band is a judgement models make consistently, where guessing an integer is not - so the model
+     picks a size and the HOURS FOR THAT SIZE ARE OURS. Retune a band here and every future quote
+     moves with it, no deploy. */
+  hoursBySize: { small: 8, medium: 24, large: 60, xl: 110 },
+  defaultSize: 'medium',
 };
 
 /** Config is JSON, so patterns arrive as strings. Compile once per pass, and never let a bad pattern
@@ -279,10 +286,14 @@ const PRICE_FLOOR_PLN = 300;
 const PRICE_CEIL_PLN = 60000;
 /** Days, never weeks: the owner's promise is a few days, a week at the outside. */
 const MAX_WORK_DAYS = 7;
-const PRICING_PL = 'NAKLAD PRACY. NIE podawaj ceny. Oszacuj tylko `hours` - ile godzin roboczych realnie zajmie '
-  + 'to zlecenie jednemu doswiadczonemu programiscie, liczac analize, implementacje, testy i wdrozenie. '
-  + 'Badz konkretny i powsciagliwy: male zadanie to kilka godzin, duza integracja wielu systemow to '
-  + 'kilkadziesiat. Cene policzy system na podstawie Twoich godzin.\n\n'
+const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zlecenie do jednego rozmiaru '
+  + 'w polu `size`, dokladnie jedna z wartosci: "small", "medium", "large", "xl".\n'
+  + '  small  - male, jednoznaczne zadanie, jeden system, kilka godzin pracy (np. wgranie pliku CSV, '
+  + 'drobna poprawka, prosty skrypt)\n'
+  + '  medium - jedna integracja albo jasno opisany modul, jeden lub dwa systemy\n'
+  + '  large  - integracja wielu systemow albo caly modul z logika biznesowa i przypadkami brzegowymi\n'
+  + '  xl     - duzy projekt: wiele systemow, migracja danych, duzo nieznanych, dlugie wdrozenie\n'
+  + 'Godziny i cene policzy system na podstawie rozmiaru.\n\n'
   + 'W tresci oferty wstaw dokladnie token {PRICE} tam, gdzie ma pojawic sie kwota calosci w zl '
   + '(na przyklad "Calosc wyceniam na {PRICE} zl"). Nie wpisuj zadnej wlasnej liczby jako ceny.\n\n'
   + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
@@ -317,7 +328,7 @@ async function offerFor(gig, opts) {
     + (demo ? `\n\nMozesz podac dzialajace demo: ${demo}` : '\n\nNIE podawaj zadnych linkow.')
     + `\n\n${PRICING_PL}`
     + '\n\nODPOWIEDZ WYLACZNIE JSON-em, bez komentarza i bez znacznikow kodu, dokladnie w tym ksztalcie:\n'
-    + '{"hours": <liczba>, "work_days": <liczba>, "message": "<tresc oferty po polsku, z tokenem {PRICE}>", '
+    + '{"size": "small|medium|large|xl", "work_days": <liczba>, "message": "<tresc oferty po polsku, z tokenem {PRICE}>", '
     + '"message_en": "<doslowne tlumaczenie message na angielski, z tym samym tokenem {PRICE}>"}\n'
     + 'message_en to WYLACZNIE tlumaczenie tego samego tekstu dla wlasciciela konta, ktory nie mowi po polsku. '
     + 'Nie dodawaj tam nic, czego nie ma w message.';
@@ -348,9 +359,16 @@ async function offerFor(gig, opts) {
   const rate = num(p.hourlyRatePln, DEFAULTS.hourlyRatePln);
   const disc = Math.max(0, Math.min(60, Number(p.discountPct != null ? p.discountPct : DEFAULTS.discountPct)));
   const step = num(p.roundToPln, DEFAULTS.roundToPln);
-  const hours = Math.max(num(p.minHours, DEFAULTS.minHours), Math.min(num(p.maxHours, DEFAULTS.maxHours), Math.round(Number(j.hours) || 0)));
-  const payment = clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step);
-  const priced = Number(j.hours) > 0 && payment > 0;
+  const bands = Object.assign({}, DEFAULTS.hoursBySize, p.hoursBySize || {});
+  const size = String(j.size || '').toLowerCase().trim();
+  const known = Object.prototype.hasOwnProperty.call(bands, size);
+  const usedSize = known ? size : String(p.defaultSize || DEFAULTS.defaultSize);
+  const hours = num(bands[usedSize], DEFAULTS.hoursBySize[DEFAULTS.defaultSize]);
+  /* ONCE PRICED, STAY PRICED. A gig the owner has already seen a number for keeps that number on a
+     redraft, so rewriting the words can never quietly move the quote. Repricing is deliberate. */
+  const pinned = Number(o.pinnedPayment) > 0 ? clampPrice(o.pinnedPayment) : 0;
+  const payment = pinned || clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step);
+  const priced = payment > 0;
 
   /* Days-not-weeks is the pitch, so the promise is capped here too - a model that answers 21 must
      not quietly commit the owner to three weeks. */
@@ -371,6 +389,7 @@ async function offerFor(gig, opts) {
        he is approving - it must never reach the form, which is why the caller stores it under
        fields and never under draft. */
     text, textEn, payment, workDays, hours, priced,
+    size: usedSize, sizeFromModel: known,
   };
 }
 
