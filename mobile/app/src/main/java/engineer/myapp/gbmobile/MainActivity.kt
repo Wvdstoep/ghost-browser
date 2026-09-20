@@ -72,12 +72,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun cmdTarget(): WebView = cmdWeb ?: web
     /** The current command target's URL (main-thread read). */
     private fun targetUrl(): String { val t = cmdTarget(); val h = arrayOfNulls<String>(1); val l = CountDownLatch(1); runOnUiThread { h[0] = t.url; l.countDown() }; l.await(3, TimeUnit.SECONDS); return h[0] ?: "" }
-    /** A hidden browser for one profile, built once, off-screen — driven only by the ring. */
+    /** A hidden browser for one profile, built once, off-screen — driven only by the ring.
+     *  ringWebFor runs on the ring's background executor, but a WebView MUST be constructed on the
+     *  UI thread — so build + attach it there and wait, or the ring silently drops the command. */
     private fun ringWebFor(profile: String): WebView {
         ringWebs[profile]?.let { return it }
-        val h = TabHandle(HOME, "ring:$profile", profile)
-        val w = buildWebView(h); h.web = w
-        runOnUiThread { try { (b.root as ViewGroup).addView(w, 1, 1) } catch (e: Exception) {} }
+        val holder = arrayOfNulls<WebView>(1)
+        val latch = CountDownLatch(1)
+        runOnUiThread {
+            try {
+                val h = TabHandle(HOME, "ring:$profile", profile)
+                val w = buildWebView(h); h.web = w
+                try { (b.root as ViewGroup).addView(w, 1, 1) } catch (e: Exception) {}
+                holder[0] = w
+            } catch (e: Exception) { vm.log("! ringWebFor $profile: ${e.message}") }
+            finally { latch.countDown() }
+        }
+        latch.await(10, TimeUnit.SECONDS)
+        val w = holder[0] ?: throw IllegalStateException("could not build browser for profile $profile")
         ringWebs[profile] = w
         return w
     }
@@ -2318,14 +2330,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  the eval/nav helpers hop to the main thread themselves. */
     fun runDeviceCommand(path: String, bodyStr: String): String {
         val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
-        // a command may name a profile → run it in that profile's own hidden browser (the login lives there)
-        val prof = body.optString("profile", "")
-        cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
-        // a command may ask for the DESKTOP site (LinkedIn's mobile web omits comments; desktop renders the
-        // full, stable comment DOM). Set the reader's UA before it loads; "desktop":false restores mobile.
-        if (body.has("desktop")) { val ua = if (body.optBoolean("desktop")) DESKTOP_UA else null
-            val l = CountDownLatch(1); runOnUiThread { try { cmdTarget().settings.userAgentString = ua ?: cmdTarget().settings.userAgentString.replace(Regex("\\(X11[^)]*\\)"), "(Linux; Android 13)") } catch (e: Exception) {}; l.countDown() }; l.await(3, TimeUnit.SECONDS) }
         return try {
+            // a command may name a profile → run it in that profile's own hidden browser (the login lives there).
+            // Kept inside the try so a build failure returns an error result instead of leaving the ring silent.
+            val prof = body.optString("profile", "")
+            cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
+            // a command may ask for the DESKTOP site (LinkedIn's mobile web omits comments; desktop renders the
+            // full, stable comment DOM). Set the reader's UA before it loads; "desktop":false restores mobile.
+            if (body.has("desktop")) { val ua = if (body.optBoolean("desktop")) DESKTOP_UA else null
+                val l = CountDownLatch(1); runOnUiThread { try { cmdTarget().settings.userAgentString = ua ?: cmdTarget().settings.userAgentString.replace(Regex("\\(X11[^)]*\\)"), "(Linux; Android 13)") } catch (e: Exception) {}; l.countDown() }; l.await(3, TimeUnit.SECONDS) }
             when (path) {
                 "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
                 "/v1/analyze" -> evalGb("window.__gb.mark()")
