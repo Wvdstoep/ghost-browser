@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gig board</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --line:#252a34; --ink:#e8eaee; --dim:#9aa3b2;
+    --good:#3fb950; --warn:#d6a53b; --bad:#d65c5c; --accent:#3fb950;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:22px 20px 14px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+  h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px}
+  .spacer{flex:1}
+  button{font:inherit;color:var(--ink);background:#20242d;border:1px solid var(--line);
+    border-radius:7px;padding:7px 13px;cursor:pointer}
+  button:hover{border-color:#39404d}
+  button.primary{background:var(--accent);color:#08210f;border-color:transparent;font-weight:600}
+  button:disabled{opacity:.55;cursor:default}
+  main{padding:18px 20px 60px;max-width:1080px}
+  .row{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px;margin-bottom:11px}
+  .score{min-width:74px;text-align:center}
+  .score b{display:block;font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+  .score span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .body{flex:1;min-width:0}
+  .title{font-weight:600;margin:0 0 5px}
+  .title a{color:inherit;text-decoration:none}
+  .title a:hover{text-decoration:underline}
+  .meta{color:var(--dim);font-size:13px;display:flex;flex-wrap:wrap;gap:12px;margin-bottom:7px}
+  .meta b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .tags{display:flex;flex-wrap:wrap;gap:5px}
+  .tag{font-size:11px;background:#1d2430;border:1px solid var(--line);color:var(--dim);
+    border-radius:20px;padding:2px 9px}
+  .acts{display:flex;flex-direction:column;gap:7px}
+  .draft{margin-top:11px;background:#12151b;border:1px solid var(--line);border-radius:8px;padding:12px;
+    white-space:pre-wrap;font-size:14px}
+  .empty{color:var(--dim);padding:30px 0}
+  .note{color:var(--dim);font-size:13px;margin:0 0 16px}
+  .crowd-low{color:var(--good)} .crowd-mid{color:var(--warn)} .crowd-high{color:var(--bad)}
+  .handled{opacity:.45}
+  .err{background:#2a1a1a;border:1px solid #57302f;color:#f0b3b3;padding:10px 13px;border-radius:8px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Gig board</h1>
+  <span class="sub" id="sub">loading…</span>
+  <span class="spacer"></span>
+  <button id="rescan">Rescan board</button>
+  <button id="reload">Refresh</button>
+</header>
+<main>
+  <p class="note">Ranked by fit minus competition. A gig you reach at 19 offers is worth more than a
+    better match at 90, because only the first can still be won. Drafts are never sent from here.</p>
+  <div id="err"></div>
+  <div id="list"><div class="empty">loading…</div></div>
+</main>
+<script>
+const WID = new URLSearchParams(location.search).get('w') || 'useme-gigs';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({credentials:'include'}, opts||{}));
+  if(!r.ok) throw new Error(path + ' -> ' + r.status);
+  return r.json();
+}
+function crowdClass(n){ if(n == null) return ''; return n <= 25 ? 'crowd-low' : n <= 60 ? 'crowd-mid' : 'crowd-high'; }
+function showErr(m){ $('err').innerHTML = m ? '<div class="err">'+esc(m)+'</div>' : ''; }
+
+function render(items){
+  const list = $('list');
+  if(!items.length){ list.innerHTML = '<div class="empty">No gigs yet. Press “Rescan board”.</div>'; return; }
+  list.innerHTML = items.map(it => {
+    const f = it.fields || {};
+    const offers = f.offers == null ? '?' : f.offers;
+    const tags = (f.tags||[]).map(t => '<span class="tag">'+esc(t)+'</span>').join('');
+    const age = f.ageDays == null || f.ageDays > 90 ? '' : (f.ageDays + 'd old');
+    return '<div class="row '+(it.handled?'handled':'')+'" data-key="'+esc(it.key)+'">'
+      + '<div class="score"><b>'+esc(f.score == null ? '—' : f.score)+'</b><span>score</span></div>'
+      + '<div class="body">'
+        + '<p class="title"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+esc(it.title||it.url)+'</a></p>'
+        + '<div class="meta">'
+          + '<span class="'+crowdClass(f.offers)+'">offers <b>'+esc(offers)+'</b></span>'
+          + '<span>fit <b>'+esc(f.fit==null?'—':f.fit)+'</b></span>'
+          + '<span>competition <b>'+esc(f.penalty==null?'—':f.penalty)+'</b></span>'
+          + (age?'<span>'+esc(age)+'</span>':'')
+          + (f.budget?'<span>'+esc(f.budget)+'</span>':'')
+          + (f.category?'<span>'+esc(f.category)+'</span>':'')
+        + '</div>'
+        + '<div class="tags">'+tags+'</div>'
+        + (it.draft ? '<div class="draft">'+esc(it.draft)+'</div>' : '')
+      + '</div>'
+      + '<div class="acts">'
+        + '<button class="draftBtn">'+(it.draft?'Redraft':'Draft offer')+'</button>'
+        + (it.draft ? '<button class="copyBtn">Copy</button>' : '')
+        + '<button class="doneBtn">'+(it.handled?'Unhide':'Hide')+'</button>'
+      + '</div>'
+    + '</div>';
+  }).join('');
+}
+
+async function load(){
+  try{
+    showErr('');
+    const d = await api('/v1/watchers/'+encodeURIComponent(WID)+'/feed');
+    const items = (d.items||[]).slice().sort((a,b) =>
+      (Number(a.handled)-Number(b.handled)) ||
+      (((b.fields||{}).score ?? -99) - ((a.fields||{}).score ?? -99)));
+    const c = d.counts||{};
+    $('sub').textContent = (c.total||0)+' gigs · '+(c.unhandled||0)+' open';
+    render(items);
+  }catch(e){ showErr(e.message + ' — open this page from the GB console so it carries your session.'); }
+}
+
+document.addEventListener('click', async (ev) => {
+  const row = ev.target.closest('.row');
+  if(ev.target.id === 'reload') return load();
+  if(ev.target.id === 'rescan'){
+    ev.target.disabled = true; ev.target.textContent = 'Scanning…';
+    try{ await api('/v1/workflows/'+encodeURIComponent(WID)+'/run', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+         setTimeout(load, 12000); }
+    catch(e){ showErr(e.message); }
+    finally{ setTimeout(()=>{ ev.target.disabled=false; ev.target.textContent='Rescan board'; }, 12000); }
+    return;
+  }
+  if(!row) return;
+  const key = row.dataset.key;
+  if(ev.target.classList.contains('draftBtn')){
+    ev.target.disabled = true; ev.target.textContent = 'Writing…';
+    try{ await api('/v1/watchers/'+encodeURIComponent(WID)+'/feed/draft',
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+         await load(); }
+    catch(e){ showErr(e.message); ev.target.disabled=false; ev.target.textContent='Draft offer'; }
+  }
+  if(ev.target.classList.contains('copyBtn')){
+    const t = row.querySelector('.draft'); if(t){ try{ await navigator.clipboard.writeText(t.textContent); ev.target.textContent='Copied'; }catch(e){} }
+  }
+  if(ev.target.classList.contains('doneBtn')){
+    const handled = !row.classList.contains('handled');
+    try{ await api('/v1/watchers/'+encodeURIComponent(WID)+'/feed/handled',
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key, handled})});
+         await load(); }
+    catch(e){ showErr(e.message); }
+  }
+});
+
+load();
+</script>
+</body>
+</html>

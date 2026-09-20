@@ -266,8 +266,14 @@ async function draftFor(gig, opts) {
     + `LICZBA ZLOZONYCH OFERT: ${f.offers == null ? 'nieznana' : f.offers}\n`
     + `BUDZET: ${f.budget || 'do negocjacji'}\n\n`
     + 'Napisz sama tresc oferty, bez tematu i bez podpisu.';
-  const text = await llm.complete({ settings: o.settings, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] });
-  return String(text || '').trim();
+  /* llm.chat is the call that exists everywhere (complete does not ship in every build), and it
+     answers with a message object, so the text is out.content. */
+  const cfg = o.settings || {};
+  const out = await llm.chat({
+    host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: user }],
+  });
+  return String((out && out.content) || '').trim();
 }
 
 module.exports = { tick, rank, ageDaysOf, draftFor, configFor, compile, DEFAULTS };
