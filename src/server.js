@@ -1581,6 +1581,10 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
   if (runningWatchers.size) return res.json({ runId: null, status: 'busy', note: `another watcher pass holds the browser (${[...runningWatchers].join(', ')}) — it starts as soon as that finishes` });
   runningWatchers.add(wf.id);
+  if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'replies') {
+    replyWatchTick(wf, consoleOwner() || req.client.owner, { force: true }).catch((e) => log.error('[reply-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
+    return res.json({ runId, status: 'running', mode: 'replies' });
+  }
   if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'gigs') {
     gigWatchTick(wf, consoleOwner() || req.client.owner, { force: true }).catch((e) => log.error('[gig-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
     return res.json({ runId, status: 'running', mode: 'gigs' });
@@ -1947,6 +1951,28 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
   return { stage: 'submitted', url: done, note: payment + ' PLN, ' + workDays + ' d' };
 }
 
+/**
+ * A REPLY PASS. The other half of the gig engine: gigWatch finds work, this watches the answer.
+ * Needs the owner's useme login, so it runs in the watcher's own profile like a post pass does.
+ */
+async function replyWatchTick(wf, owner, opts) {
+  const gigReplies = require('./gigReplies');
+  const cfg = require('./watcherFeed').getConfig(wf.id) || {};
+  const profile = profiles.safeName(cfg.profile || 'useme');
+  const cap = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  const getPage = async () => {
+    let ref = pool.listFor(owner).find((x) => x.profile === profile);
+    let live = null;
+    try { live = ref ? pool.get(ref.sessionId) : null; } catch (e) { live = null; }
+    let dead = false;
+    try { dead = !live || !live.page || (live.page.isClosed && live.page.isClosed()); } catch (e) { dead = true; }
+    if (dead) { const o = await pool.createSession({ owner, maxConcurrent: cap, profile, takeover: true }); live = pool.get(o.sessionId); }
+    live.lastUsed = Date.now();
+    return live.page;
+  };
+  return gigReplies.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null });
+}
+
 async function postWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   let cfg = feed.getConfig(wf.id);
@@ -2076,6 +2102,7 @@ function operatorContext() {
       if (holder) return { status: 'busy', note: `another pass holds the ${watcherProfileOf(wf.id)} browser (${holder}) — wait with gb_watcher_wait, then run again` };
       runningWatchers.add(wf.id);
       const runId = `${wf.id}-${Date.now()}`;
+      if (String((feed.getConfig(wf.id) || {}).mode) === 'replies') { replyWatchTick(wf, owner, { force: true }).catch((e) => log.error('[reply-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'gigs') { gigWatchTick(wf, owner, { force: true }).catch((e) => log.error('[gig-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
       else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
@@ -2570,6 +2597,11 @@ async function scheduleTick() {
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on
        "this browser cannot run a verify step", so no nightly automation could ever prove itself. */
     runningWatchers.add(wf.id);
+    if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'replies') {
+      workflows.persistRun({ id: `${wf.id}-${Date.now()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: when.toISOString(), ended_at: when.toISOString(), steps: [] });
+      replyWatchTick(wf, owner).catch((e) => log.error('[reply-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
+      continue;
+    }
     if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'gigs') {
       /* Record the pass BEFORE it runs, exactly as the posts branch does: scheduleDue() reads the
          last run to decide whether a watcher is due, so a mode that never persists a run looks like
