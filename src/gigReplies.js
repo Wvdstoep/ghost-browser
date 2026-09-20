@@ -71,10 +71,14 @@ async function readOffers(page, url) {
       if (h) kinds[k] = (kinds[k] || 0) + 1;
       return { a, h };
     });
+    /* THE REAL SHAPE, read off the page rather than assumed: a sent offer is
+       /pl/jobs/my-offer/<offerId>/. Matching it exactly also drops the board's own "Znajdź zlecenie"
+       nav link, which a looser /jobs/ match happily collected as a third offer. */
+    const OFFER = /^\/(pl|en)\/jobs\/my-offer\/\d+\/?$/;
+    const ALT = /^\/(pl|en)\/(offer|offers|deals?)\/\d+\/?$/;
     const seen = {}; const offers = [];
     anchors.forEach(({ a, h }) => {
-      if (!/^\/(pl|en)\/(jobs|offer|offers|deals?)\//.test(h) || seen[h]) return;
-      if (/\/(new|category)\//.test(h)) return;                     // board furniture, not an offer
+      if (!(OFFER.test(h) || ALT.test(h)) || seen[h]) return;
       seen[h] = 1;
       const card = a.closest('div,li,article,section');
       offers.push({
