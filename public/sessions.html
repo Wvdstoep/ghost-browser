@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--line:#252a34;--ink:#e8eaee;--dim:#9aa3b2;
+        --good:#3fb950;--warn:#d6a53b;--bad:#d65c5c;--accent:#3fb950}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:22px 20px 14px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:12px;align-items:baseline}
+  h1{margin:0;font-size:20px;font-weight:650;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:13px}
+  .spacer{flex:1}
+  button{font:inherit;color:var(--ink);background:#20242d;border:1px solid var(--line);
+    border-radius:7px;padding:7px 13px;cursor:pointer}
+  button:hover{border-color:#39404d}
+  button.danger{border-color:#57302f;color:#f0b3b3}
+  button.danger:hover{background:#2a1a1a}
+  button:disabled{opacity:.55;cursor:default}
+  main{padding:18px 20px 60px;max-width:1080px}
+  .note{color:var(--dim);font-size:13px;margin:0 0 16px}
+  .row{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:13px 15px;margin-bottom:10px}
+  .body{flex:1;min-width:0}
+  .prof{font-weight:600;margin:0 0 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .pill{font-size:11px;border-radius:20px;padding:2px 9px;border:1px solid var(--line);color:var(--dim)}
+  .pill.you{color:var(--good);border-color:#24502c}
+  .pill.busy{color:var(--warn);border-color:#4d3f1e}
+  .url{color:var(--dim);font-size:13px;word-break:break-all;margin:0 0 5px}
+  .meta{color:var(--dim);font-size:12px;display:flex;flex-wrap:wrap;gap:12px;font-variant-numeric:tabular-nums}
+  .empty{color:var(--dim);padding:30px 0}
+  .err{background:#2a1a1a;border:1px solid #57302f;color:#f0b3b3;padding:10px 13px;border-radius:8px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sessions</h1>
+  <span class="sub" id="sub">loading…</span>
+  <span class="spacer"></span>
+  <button id="reload">Refresh</button>
+  <button id="closeMine" class="danger">Close all mine</button>
+</header>
+<main>
+  <p class="note">Every browser session on this install. A session held by a job shows what is holding
+    it. Closing one frees its profile straight away, which is the way out of a profile that says it is busy.</p>
+  <div id="err"></div>
+  <div id="list"><div class="empty">loading…</div></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago = (ms) => { if(!ms) return '—'; const s=Math.max(0,(Date.now()-ms)/1000);
+  return s<60? Math.round(s)+'s ago' : s<3600? Math.round(s/60)+'m ago' : Math.round(s/3600)+'h ago'; };
+const left = (ms) => { if(!ms) return '—'; const s=(ms-Date.now())/1000;
+  return s<=0? 'expired' : s<3600? 'in '+Math.round(s/60)+'m' : 'in '+Math.round(s/3600)+'h'; };
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({credentials:'include'}, opts||{}));
+  if(!r.ok) throw new Error(path + ' -> ' + r.status);
+  return r.json();
+}
+function showErr(m){ $('err').innerHTML = m ? '<div class="err">'+esc(m)+'</div>' : ''; }
+
+function render(d){
+  const list = $('list');
+  const ss = d.sessions || [];
+  $('sub').textContent = ss.length + ' of ' + (d.maxConcurrent||'?') + ' · plan ' + (d.plan||'—');
+  if(!ss.length){ list.innerHTML = '<div class="empty">No open sessions.</div>'; return; }
+  list.innerHTML = ss.map(s => {
+    const job = s.job ? '<span class="pill busy">held by '+esc(s.job)+'</span>' : '';
+    const you = s.yours ? '<span class="pill you">yours</span>' : (s.owner ? '<span class="pill">'+esc(s.owner)+'</span>' : '');
+    return '<div class="row" data-id="'+esc(s.sessionId)+'">'
+      + '<div class="body">'
+        + '<p class="prof">'+esc(s.profile||'(default)')+you+job+'</p>'
+        + '<p class="url">'+esc(s.url||'')+'</p>'
+        + '<div class="meta">'
+          + '<span>id '+esc(s.sessionId)+'</span>'
+          + '<span>used '+esc(ago(s.lastUsed))+'</span>'
+          + '<span>opened '+esc(ago(s.createdAt))+'</span>'
+          + '<span>expires '+esc(left(s.expiresAt))+'</span>'
+        + '</div>'
+      + '</div>'
+      + '<button class="stopBtn danger">Stop</button>'
+    + '</div>';
+  }).join('');
+}
+
+async function load(){
+  try{ showErr(''); render(await api('/v1/sessions')); }
+  catch(e){ showErr(e.message + ' — open this page while signed in to the GB console.'); }
+}
+
+document.addEventListener('click', async (ev) => {
+  if(ev.target.id === 'reload') return load();
+  if(ev.target.id === 'closeMine'){
+    ev.target.disabled = true;
+    try{ const r = await api('/v1/sessions', {method:'DELETE'}); showErr(''); await load();
+         $('sub').textContent += ' · closed ' + (r.closed==null?'':r.closed); }
+    catch(e){ showErr(e.message); }
+    finally{ ev.target.disabled = false; }
+    return;
+  }
+  if(ev.target.classList.contains('stopBtn')){
+    const row = ev.target.closest('.row'); if(!row) return;
+    ev.target.disabled = true; ev.target.textContent = 'Stopping…';
+    try{ await api('/v1/sessions/'+encodeURIComponent(row.dataset.id), {method:'DELETE'}); await load(); }
+    catch(e){ showErr(e.message); ev.target.disabled=false; ev.target.textContent='Stop'; }
+  }
+});
+
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>
