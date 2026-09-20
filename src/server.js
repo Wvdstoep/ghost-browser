@@ -2029,13 +2029,42 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
       .filter((e) => e.required && e.offsetParent && !String(e.value || '').trim())
       .map((e) => e.name || e.id || e.type).slice(0, 10);
     const unchecked = [].slice.call(document.querySelectorAll('input[type=checkbox]'))
-      .filter((e) => e.offsetParent && e.required && !e.checked)
-      .map((e) => e.name || e.id).slice(0, 10);
+      .filter((e) => e.offsetParent && !e.checked)
+      .map((e) => e.name || e.id || '?').slice(0, 12);
+    /* THE TEN IDENTICAL "this field is required" STRINGS ARE USELESS WITHOUT FIELD NAMES.
+       useme does not mark these with the HTML required attribute, so the empty-required list came
+       back blank while validation still refused. Walking up from each control to its own wrapper
+       and reading the error inside it is what attaches a message to a NAME, which is the only
+       form of this diagnostic that can be acted on without another guess-and-deploy cycle. */
+    const inventory = [].slice.call(document.querySelectorAll('input,select,textarea'))
+      .filter((e) => e.type !== 'hidden')
+      .map((e) => {
+        let err = '';
+        let p = e.parentElement;
+        for (let i = 0; i < 3 && p && !err; i += 1) {
+          const n = p.querySelector('.error, .errors, .invalid-feedback, .help-block, [class*="error"]');
+          if (n && (n.textContent || '').trim()) err = 'ERR';
+          p = p.parentElement;
+        }
+        return [
+          e.tagName.toLowerCase(),
+          e.name || e.id || '?',
+          e.type || '',
+          e.offsetParent ? 'vis' : 'hid',
+          'len' + String(e.value == null ? '' : e.value).length,
+          e.type === 'checkbox' || e.type === 'radio' ? (e.checked ? 'on' : 'off') : '',
+          err,
+        ].filter(Boolean).join('/');
+      }).slice(0, 40);
+    /* The markdown editors are not inputs, so they never appear above. */
+    const editors = [].slice.call(document.querySelectorAll('*'))
+      .filter((e) => e.isContentEditable)
+      .map((e) => (e.tagName.toLowerCase() + '/len' + (e.innerText || '').trim().length)).slice(0, 6);
     /* #id_payment exists only on the offer FORM, so its presence means we never advanced. */
     return {
       url: location.href,
       stillOnForm: !!document.querySelector('#id_payment'),
-      errs, missing, unchecked,
+      errs, missing, unchecked, inventory, editors,
       text: (c.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400),
     };
   });
@@ -2045,8 +2074,10 @@ async function postGigOffer(wid, it, owner, text, payment, workDays, confirm) {
       note: 'the form would not advance past the offer page'
         + (after.errs.length ? ' [errors: ' + after.errs.join(' | ') + ']' : '')
         + (after.missing.length ? ' [empty required: ' + after.missing.join(', ') + ']' : '')
-        + (after.unchecked.length ? ' [unchecked required: ' + after.unchecked.join(', ') + ']' : '')
-        + ' [clicked: ' + (went.clicked || '?') + '] [page: ' + after.text.slice(0, 220) + ']' };
+        + (after.unchecked.length ? ' [unchecked: ' + after.unchecked.join(', ') + ']' : '')
+        + ' [fields: ' + (after.inventory || []).join(' ') + ']'
+        + (after.editors && after.editors.length ? ' [editors: ' + after.editors.join(' ') + ']' : '')
+        + ' [clicked: ' + (went.clicked || '?') + ']' };
   }
 
   if (!confirm) {
