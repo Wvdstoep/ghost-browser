@@ -18,11 +18,14 @@ const require = createRequire(import.meta.url);
 
 let reply = "";
 let seenUser = [];
+/* The system message carries every rule we teach the model. Untestable while the stub dropped it. */
+let seenSystem = [];
 const llmPath = require.resolve("../src/llm");
 require.cache[llmPath] = {
   id: llmPath, filename: llmPath, loaded: true, children: [], paths: [],
   exports: {
     chat: async (a) => {
+      seenSystem.push(a.messages[0].content);
       seenUser.push(a.messages[1].content);
       return { content: reply };
     },
@@ -75,7 +78,13 @@ describe("offerFor: the quote may not exceed the promise", () => {
   it("takes hoursPerDay from the owners config, not a hardcoded 8", async () => {
     reply = model("xl", 5);
     const o = await gigWatch.offerFor(gig("big"), { pricing: { hoursPerDay: 6 } });
-    expect(o.hours).toBe(30);
+    /*
+     * 7 days, not the 5 the model asked for: useme refuses work_days under 7 (measured live - 1, 2,
+     * 3 and 5 were each rejected with "Podaj poprawna liczbe dni" while 7 submitted at once), so the
+     * floor applies before hours are derived. 7 days x 6h = 42, still under the 110h xl band.
+     */
+    expect(o.workDays).toBe(7);
+    expect(o.hours).toBe(42);
   });
 });
 
@@ -111,7 +120,8 @@ describe("offerFor: a pinned term holds, and the model is told about it", () => 
   it("says nothing about a term when none is pinned", async () => {
     reply = model("large", 5);
     const o = await gigWatch.offerFor(gig("x"), { pricing: {} });
-    expect(o.workDays).toBe(5);
+    /* Unpinned means the FLOOR, not the model's number: 5 is not a window useme will accept. */
+    expect(o.workDays).toBe(7);
     expect(o.daysPinned).toBe(false);
     expect(seenUser[seenUser.length - 1]).not.toContain("TERMIN JEST JUZ USTALONY");
   });
@@ -120,5 +130,68 @@ describe("offerFor: a pinned term holds, and the model is told about it", () => 
     reply = model("xl", 3);
     const o = await gigWatch.offerFor(gig("x"), { pricing: {}, pinnedWorkDays: 30 });
     expect(o.workDays).toBe(7);
+  });
+});
+
+/*
+ * -- USEME WILL NOT TAKE A WINDOW UNDER SEVEN DAYS, AND A QUICK JOB IS NOT PRICED AS A DAY --------
+ *
+ * Measured by sending real offers. work_days of 1, 2, 3 and 5 were each refused with "Podaj poprawna
+ * liczbe dni" - the value WAS in the field and the field still errored - and 7 submitted at once.
+ * The first offer only went through because the ceiling happened to sit exactly on that floor, so
+ * nothing in the code knew the floor existed.
+ *
+ * And a client who wrote "praca przewidziana na okolo 30-45 minut" was quoted 900 zl, because the
+ * smallest band was a full day. A quote ten times the work loses the gigs that are easiest to win
+ * and reads as not having read the job.
+ */
+describe('the window useme accepts, and the price a quick job deserves', () => {
+  beforeEach(() => { reply = ""; seenUser = []; seenSystem = []; });
+
+  it('never files a window under seven days, whatever the model answers', async () => {
+    for (const d of [1, 2, 3, 5]) {
+      reply = model("tiny", d);
+      const o = await gigWatch.offerFor(gig("quick"), { pricing: {} });
+      expect(o.workDays, `model asked for ${d}`).toBe(7);
+    }
+  });
+
+  /* The whole point of the tiny band. */
+  it('a sub-hour job is a minimum engagement, not a day of work', async () => {
+    reply = model("tiny", 1);
+    const o = await gigWatch.offerFor(gig("dwie konwersje, 30-45 minut przez AnyDesk"), { pricing: {} });
+    expect(o.size).toBe("tiny");
+    expect(o.payment).toBe(200);
+  });
+
+  it('while a real day of work still prices as one', async () => {
+    reply = model("small", 7);
+    const o = await gigWatch.offerFor(gig("wgranie pliku csv"), { pricing: {} });
+    expect(o.payment).toBe(900);
+  });
+
+  /* The minimum engagement is data: a board with a different economy is a config line, not a deploy. */
+  it('and the minimum engagement is the owners to set', async () => {
+    reply = model("tiny", 1);
+    const o = await gigWatch.offerFor(gig("quick"), { pricing: { minPricePln: 350 } });
+    expect(o.payment).toBe(350);
+  });
+
+  /*
+   * THE FORM WINDOW MUST NEVER BE READ AS THE DELIVERY PROMISE. A 45-minute job that files 7 days and
+   * says nothing about timing reads as a week's wait, which loses it to whoever said "today".
+   */
+  it('tells the model the seven days are a ceiling, not when the work lands', async () => {
+    reply = model("tiny", 1);
+    await gigWatch.offerFor(gig("quick"), { pricing: {} });
+    const sys = seenSystem[seenSystem.length - 1] || "";
+    expect(sys).toContain("Formularz useme przyjmuje tylko 7 dni");
+    expect(sys).toContain("TYLKO gorna");
+  });
+
+  it('and offers the tiny band as a choice at all', async () => {
+    reply = model("tiny", 1);
+    await gigWatch.offerFor(gig("quick"), { pricing: {} });
+    expect(seenSystem[seenSystem.length - 1]).toContain('"tiny"');
   });
 });
