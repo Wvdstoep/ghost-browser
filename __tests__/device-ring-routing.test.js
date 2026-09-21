@@ -343,3 +343,53 @@ describe('the job path asks the ring, not just the watcher path', () => {
     expect(sc.signedOutAt, 'the false premise is gone').toBeUndefined();
   });
 });
+
+/*
+ * ── A REDIRECT LOOP HAPPENS IN SECONDS; REVISITING A PAGE TAKES MINUTES ──────────────────────────
+ *
+ * Caught on the live cluster, by my own probing. Checking Search Console navigated between
+ * /search-console/about and the account chooser a few times over several minutes in one reused
+ * session, and the loop sensor recorded search.google.com as Cloudflare-WALLED, evidence "loaded 6x
+ * within the last 8 navigations (2 distinct)". Search Console was then routed to the phone for a
+ * reason that did not exist — the same class of phantom as the Google penalty earlier the same day.
+ *
+ * `distinct <= 3` was meant to be the guard and cannot work: a redirect bouncing between two
+ * addresses and a session visiting two pages repeatedly are both two distinct URLs repeating. Shape
+ * cannot separate them. Time can.
+ */
+describe('a loop is told from browsing by time, not by shape', () => {
+  const at = (h, m, s) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const tight = [];
+  for (let i = 0; i < 6; i += 1) tight.push({ url: 'https://x.test/a', at: at(10, 0, i) });
+  const slow = [0, 30, 60, 120, 180, 210, 240].map((sec, i) => ({
+    url: i % 2 ? 'https://x.test/b' : 'https://x.test/a',
+    at: at(10, Math.floor(sec / 60), sec % 60),
+  }));
+
+  it('shape alone calls both of them a loop, which is the whole problem', () => {
+    expect(!!diag.loopOf(tight)).toBe(true);
+    expect(!!diag.loopOf(slow)).toBe(true);
+  });
+
+  it('six loads inside three seconds is a loop', () => {
+    expect(diag.tightRepeat(tight, 'https://x.test/a', 20)).toBe(true);
+  });
+
+  it('the same page four times across four minutes is not', () => {
+    expect(diag.tightRepeat(slow, 'https://x.test/a', 20)).toBe(false);
+  });
+
+  it('and fewer than four repeats is never a loop, however tight', () => {
+    const few = [{ url: 'https://x.test/a', at: at(10, 0, 0) }, { url: 'https://x.test/a', at: at(10, 0, 1) }];
+    expect(diag.tightRepeat(few, 'https://x.test/a', 20)).toBe(false);
+  });
+
+  /* The sensor must consult it, or the export is decoration. */
+  it('the sensor refuses to record a wall unless the repeat is tight', () => {
+    const src = readFileSync(new URL('../src/diagnostics.js', import.meta.url), 'utf8');
+    const at2 = src.indexOf('function senseLoop');
+    const body = src.slice(at2, at2 + 900);
+    expect(body).toMatch(/tightRepeat\(navigations, lp\.url, 20\)/);
+    expect(body.indexOf('tightRepeat')).toBeLessThan(body.indexOf('walls().record'));
+  });
+});

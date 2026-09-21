@@ -92,14 +92,37 @@ function senseResponse(page, r, status) {
  * `distinct` guards the obvious false positive — a pass that legitimately revisits one page while
  * moving through many others is not a loop.
  */
+/*
+ * SECONDS BETWEEN THE REPEATS, or it is not a loop.
+ *
+ * Entries carry "HH:MM:SS". Compared as seconds within the window, so a span is only wrong across
+ * midnight, where the worst outcome is not recording a wall for one night.
+ */
+function tightRepeat(navigations, url, withinSecs) {
+  const secs = [];
+  for (const n of navigations.slice(-20)) {
+    if (String(n.url || '').split('?')[0] !== url) continue;
+    const m = /^(\d\d):(\d\d):(\d\d)$/.exec(String(n.at || ''));
+    if (m) secs.push((+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]));
+  }
+  if (secs.length < 4) return false;
+  return (secs[secs.length - 1] - secs[0]) <= withinSecs;
+}
+
 function senseLoop(navigations) {
   const lp = loopOf(navigations);
   if (!lp || lp.distinct > 3) return;
+  /*
+   * THE GUARD THAT MATTERED. `distinct <= 3` does not separate a redirect bouncing between two
+   * addresses from a session that visited two pages several times over a few minutes, because both
+   * are two distinct URLs repeating. Measured: probing Search Console by hand recorded it as walled.
+   */
+  if (!tightRepeat(navigations, lp.url, 20)) return;
   if (!publicHost(lp.url)) return;
   try {
     walls().record(lp.url, {
       why: 'the page redirect-looped from the cluster, which is what a managed challenge does to a datacenter exit',
-      evidence: `${lp.url} loaded ${lp.times}x within the last ${lp.window} navigations (${lp.distinct} distinct)`,
+      evidence: `${lp.url} loaded ${lp.times}x inside 20s within the last ${lp.window} navigations (${lp.distinct} distinct)`,
       url: lp.url,
     });
   } catch { /* ignore */ }
@@ -270,4 +293,4 @@ function platformFaultOf(loadError) {
   return null;
 }
 
-module.exports = { attach, summarise, dump, clear, loopOf, smokeVerdict, platformFaultOf, challengeOf, MAX };
+module.exports = { attach, summarise, dump, clear, loopOf, tightRepeat, smokeVerdict, platformFaultOf, challengeOf, MAX };
