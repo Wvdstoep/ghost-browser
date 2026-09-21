@@ -1043,6 +1043,42 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
     if (existing) s2 = pool.get(existing.sessionId);
     if (!s2) { const o = await pool.createSession({ owner, profile: prof, takeover: true }); s2 = pool.get(o.sessionId); }
     await s2.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+
+    /*
+     * IS THERE A SESSION AT ALL? Asked first, because every other question is meaningless without
+     * one and the answer is already in hand.
+     *
+     * Measured 2026-09-21: the `google` profile held 63 google.com cookies and not one auth cookie,
+     * so it was signed out — yet the job drove on into Google's re-auth gauntlet and spent 39
+     * minutes walking /signin/challenge/pwd and then /challenge/pk, holding the very profile the
+     * owner needed in order to sign in. Search Console reported no access to the property and the
+     * dashboard raised a MANUAL ACTION flag invented from its own inability to read the page, which
+     * is the phantom penalty this codebase has produced once before.
+     *
+     * A password or passkey prompt is a WALL and never a step: signing in is the owner's act, by
+     * hand, once in the console. So we stop and say so instead of trying.
+     */
+    let googleNote = '';
+    try {
+      const chooser = require('./accountChooser');
+      const here = String(s2.page.url() || '');
+      if (/google\.com/.test(here) || /google\.com/.test(String(url))) {
+        let jar = [];
+        try { jar = await s2.page.context().cookies(); } catch (e) { jar = []; }
+        const st = chooser.googleState(here, jar, String((settingsStore.read() || {}).googleAccountEmail || ''));
+        if (st.state === 'signed-out' || st.state === 'challenge') {
+          googleNote = st.why;
+          log.warn(`[ring] ${site.label}: ${st.state} — ${st.why}`);
+          const walls = require('./siteWalls');
+          walls.record(site.site, { reason: 'signed-out', evidence: here.slice(0, 200), url: here });
+          /* Answers in the route's own shape: this is an Express handler, and a bare `return`
+             of an object would leave the caller hanging on a request that never completes. */
+          return res.json({ ok: true, surface: key, signedIn: false, reason: st.state, profile: prof,
+            proven: true, landed: here, note: st.why });
+        }
+      }
+    } catch (e) { log.warn(`[ring] ${site.label}: google state check failed (${e.message})`); }
+
     let wall = false;
     try { wall = await s2.page.evaluate(agent.loginWall); } catch (e) { wall = false; }
     /*

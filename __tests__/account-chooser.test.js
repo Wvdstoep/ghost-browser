@@ -80,3 +80,100 @@ describe('which account is configured, never inferred', () => {
     expect(decide(SIGNIN, 'owner@gmail.com').act).toBe('none');   // a wall is the wall detector's job
   });
 });
+
+/*
+ * ── A SIGNED-OUT PROFILE IS NOT A GOOGLE PENALTY, AND A RE-AUTH PROMPT IS NOT A STEP ───────────
+ *
+ * Measured 2026-09-21. The gsc.connect job spent 39 minutes walking Google's re-auth gauntlet,
+ * /signin/challenge/pwd then /signin/challenge/pk, holding the `google` profile the owner needed in
+ * order to sign in, and reporting nothing usable. The dashboard meanwhile showed "Je hebt geen
+ * toegang tot deze property" and raised a MANUAL ACTION flag, which is the phantom-penalty failure
+ * this codebase has already produced once: it could not open the manual-actions tab, so "we did not
+ * look" was rendered as an alarm and sent the owner hunting for a Google sanction.
+ *
+ * The cause sat one layer below the account chooser. That profile held 63 google.com cookies and
+ * not one auth cookie, so it was simply signed out. The owner's real session was in a different
+ * profile entirely.
+ *
+ * Both guards exist to turn a 39-minute stall into one accurate sentence, and neither may ever try
+ * to answer a password or passkey prompt: signing in is the owner's act, by hand, once.
+ */
+describe('signed out, challenged, or actually in', () => {
+  const CH_PWD = 'https://accounts.google.com/v3/signin/challenge/pwd?TL=ACv9tzFibv4YKbZh';
+  const CH_PK = 'https://accounts.google.com/v3/signin/challenge/pk?TL=ACv9tzFibv4YKbZh';
+  const INSIDE = 'https://search.google.com/search-console?resource_id=sc-domain%3Amy-app.engineer';
+  const ck = (names, domain) => names.map((n) => ({ name: n, domain: domain || '.google.com' }));
+  const LIVE = ck(['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', 'LSID']);
+
+  const { isChallenge, hasSession, googleState } = require('../src/accountChooser');
+
+  it('recognises the exact challenges the job was caught walking', () => {
+    expect(isChallenge(CH_PWD)).toBe(true);
+    expect(isChallenge(CH_PK)).toBe(true);
+    expect(isChallenge('https://accounts.google.com/v3/signin/challenge/totp')).toBe(true);
+  });
+
+  it('does not call the console or the chooser a challenge', () => {
+    expect(isChallenge(INSIDE)).toBe(false);
+    expect(isChallenge('https://accounts.google.com/v3/signin/accountchooser')).toBe(false);
+    expect(isChallenge('')).toBe(false);
+  });
+
+  /* THE MEASURED CASE: many google cookies, no auth cookie. 63 of them, and signed out. */
+  it('calls a jar with cookies but no auth cookie signed out', () => {
+    const junk = ck(['NID', 'AEC', '1P_JAR', 'CONSENT', 'OTZ', 'SEARCH_SAMESITE']);
+    const r = hasSession(junk);
+    expect(r.signedIn).toBe(false);
+    expect(r.found).toEqual([]);
+  });
+
+  it('calls a real session signed in', () => {
+    const r = hasSession(LIVE);
+    expect(r.signedIn).toBe(true);
+    expect(r.found).toContain('SAPISID');
+  });
+
+  it('ignores another site cookies named the same', () => {
+    expect(hasSession(ck(['SID', 'SAPISID'], '.example.com')).signedIn).toBe(false);
+  });
+
+  it('survives an empty or missing jar instead of throwing mid-run', () => {
+    for (const j of [[], null, undefined, [null, {}]]) expect(hasSession(j).signedIn).toBe(false);
+  });
+
+  /*
+   * THE POINT OF ALL OF IT: the sentence handed back must say a login is missing and must NOT read
+   * as a Google penalty, because that misreading already shut the whole search channel once.
+   */
+  it('blames the missing login, not Google, and says who to sign in as', () => {
+    const r = googleState(INSIDE, [], 'wesley.biab@gmail.com');
+    expect(r.state).toBe('signed-out');
+    expect(r.why).toMatch(/no Google session/i);
+    expect(r.why).toMatch(/by hand/i);
+    expect(r.why).toContain('wesley.biab@gmail.com');
+    expect(r.why).toMatch(/not a Google permission problem/i);
+  });
+
+  it('reports a challenge as a wall to be signed in by hand, never pushed through', () => {
+    const r = googleState(CH_PK, LIVE, 'wesley.biab@gmail.com');
+    expect(r.state).toBe('challenge');
+    expect(r.why).toMatch(/re-verify/i);
+    expect(r.why).toMatch(/by hand/i);
+  });
+
+  /* Signed out beats everything: there is no point naming a chooser we will never reach. */
+  it('answers signed-out first, even when the url looks like a chooser', () => {
+    expect(googleState('https://accounts.google.com/v3/signin/accountchooser', [], '').state).toBe('signed-out');
+  });
+
+  it('says plainly when it is actually inside', () => {
+    const r = googleState(INSIDE, LIVE, 'wesley.biab@gmail.com');
+    expect(r.state).toBe('in');
+    expect(r.why).toBe('');
+  });
+
+  it('still points at the chooser when signed in and asked which account', () => {
+    const r = googleState('https://accounts.google.com/v3/signin/accountchooser', LIVE, '');
+    expect(r.state).toBe('chooser');
+  });
+});

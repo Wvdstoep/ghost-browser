@@ -422,3 +422,118 @@ describe('presenting as another operating system', () => {
     await expect(presentAs(ctx, 'windows', quiet)).resolves.toBe(true);
   });
 });
+
+/*
+ * ── SHUTDOWN IS WHERE A HAND-MADE LOGIN IS SAVED OR LOST ───────────────────────────────────────
+ *
+ * Traced today. The owner signed in to Google by hand in the console. The pod was rolled three
+ * times that afternoon. Afterwards the `google` profile held 63 google.com cookies and not one auth
+ * cookie, the Search Console job sat on a password challenge, and the dashboard showed "no access
+ * to this property" plus a manual-action flag it had invented from being unable to read the page.
+ *
+ * The login was never revoked. It was never written to disk.
+ *
+ * close() is correct: closing a persistent context flushes its cookies. shutdown() was not. It
+ * closed sessions ONE AT A TIME with no timeout, against a 30 second grace period, with five or six
+ * contexts open on a loaded node. That loses sessions two ways, both silent: the serial total
+ * overruns the deadline and SIGKILL takes the remainder unflushed, or one hanging context starves
+ * every context after it in the map and unrelated profiles lose their logins.
+ *
+ * By the owner's own rule accounts are signed in by a human, once. Losing one is not a retry.
+ */
+describe('pool shutdown: one wedged context must not cost the others their cookies', () => {
+  // A context that can be told to hang forever on close, which is the case that did the damage.
+  function stubBrowser(hangFor = []) {
+    const closed = [];
+    let n = 0;
+    return {
+      closed,
+      on() {},
+      async newContext() {
+        const name = `ctx${n++}`;
+        return {
+          _name: name,
+          on() {}, addInitScript: async () => {}, route: async () => {},
+          async newPage() { return { on() {}, goto: async () => {}, url: () => 'about:blank', setDefaultTimeout() {}, setDefaultNavigationTimeout() {} }; },
+          pages: () => [],
+          async close() {
+            if (hangFor.includes(name)) return new Promise(() => {});   // never resolves
+            closed.push(name);
+          },
+        };
+      },
+      async close() { closed.push('browser'); },
+    };
+  }
+
+  /* Same injection the suite's own makePool uses: set pool.browser and stub launch(). */
+  const mk = async (browser, count) => {
+    const pool = new BrowserPool({ logger: quiet });
+    Object.assign(pool.limits, { maxContexts: 99 });
+    pool.browser = browser;
+    pool.launch = async () => browser;
+    for (let i = 0; i < count; i++) await pool.createSession({ owner: 'carla', maxConcurrent: 99 });
+    return pool;
+  };
+
+  it('closes every context when they all behave', async () => {
+    const b = stubBrowser();
+    const pool = await mk(b, 3);
+    const r = await pool.shutdown({ perCloseMs: 2000 });
+    expect(r.abandoned).toEqual([]);
+    expect(r.closed).toBe(3);
+    expect(b.closed).toContain('browser');
+  });
+
+  /*
+   * THE ONE THAT MATTERS. ctx1 never returns from close(). Serially that meant ctx2 was still open
+   * when SIGKILL arrived and its cookies were lost. Now ctx2 flushes regardless.
+   */
+  it('still flushes the other contexts when one hangs forever', async () => {
+    const b = stubBrowser(['ctx1']);
+    const pool = await mk(b, 3);
+    const r = await pool.shutdown({ perCloseMs: 300 });
+    expect(r.abandoned).toHaveLength(1);
+    expect(b.closed).toContain('ctx0');
+    expect(b.closed).toContain('ctx2');     // would have been lost under the serial loop
+    expect(b.closed).not.toContain('ctx1');
+  });
+
+  /* Parallel, so the wall clock is the slowest single close and not the sum of all of them. */
+  it('does not spend the grace period one context at a time', async () => {
+    const b = stubBrowser(['ctx0', 'ctx1', 'ctx2', 'ctx3']);
+    const pool = await mk(b, 4);
+    const t0 = Date.now();
+    await pool.shutdown({ perCloseMs: 400 });
+    const spent = Date.now() - t0;
+    /* Serial would be about 4 x 400ms. Parallel is about one 400ms bound, plus the browser bound. */
+    expect(spent).toBeLessThan(1400);
+  });
+
+  it('says out loud which contexts it abandoned, so a lost session is never a mystery', async () => {
+    const warns = [];
+    const b = stubBrowser(['ctx1']);
+    const pool = new BrowserPool({ logger: { info() {}, warn: (m) => warns.push(m) } });
+    Object.assign(pool.limits, { maxContexts: 99 });
+    pool.browser = b; pool.launch = async () => b;
+    for (let i = 0; i < 2; i++) await pool.createSession({ owner: 'carla', maxConcurrent: 99 });
+    await pool.shutdown({ perCloseMs: 250 });
+    expect(warns.join(' ')).toMatch(/would not close/i);
+    expect(warns.join(' ')).toMatch(/abandoned/i);
+  });
+
+  it('refuses a cap too small to flush anything, however it is configured', async () => {
+    const b = stubBrowser();
+    const pool = await mk(b, 1);
+    const r = await pool.shutdown({ perCloseMs: 5 });   // clamped up to 1000ms
+    expect(r.closed).toBe(1);
+  });
+
+  it('shuts down cleanly with nothing open', async () => {
+    const b = stubBrowser();
+    const pool = new BrowserPool({ logger: quiet });
+    pool.browser = b; pool.launch = async () => b;
+    const r = await pool.shutdown({ perCloseMs: 500 });
+    expect(r).toMatchObject({ closed: 0, abandoned: [] });
+  });
+});
