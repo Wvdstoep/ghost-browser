@@ -14,7 +14,23 @@ import { SITES, get, list, profileNameFor } from '../src/sites/index.js';
 
 describe('the presets', () => {
   it('covers the sites the roles actually know', () => {
-    expect(Object.keys(SITES).sort()).toEqual(['facebook', 'google', 'hn', 'indiehackers', 'linkedin', 'reddit', 'upwork', 'useme']);
+    /*
+     * `searchconsole` is a SURFACE rather than another login: it borrows the Google profile because
+     * it is the same account, and exists separately because it needs that account SIGNED IN while
+     * search on the same profile is deliberately used signed out. Without the split, learning that
+     * Search Console cannot be read would have routed web search to a phone as well.
+     */
+    expect(Object.keys(SITES).sort()).toEqual(['facebook', 'google', 'hn', 'indiehackers', 'linkedin', 'reddit', 'searchconsole', 'upwork', 'useme']);
+  });
+
+  /*
+   * A BORROWED PROFILE IS NOT A SECOND LOGIN. searchconsole must never mint its own profile, or the
+   * owner signs into Google twice and the two sessions drift.
+   */
+  it('and a surface that borrows a login does not claim one of its own', () => {
+    expect(SITES.searchconsole.profile).toBe('google');
+    expect(SITES.searchconsole.needsLogin).toBe(true);
+    expect(SITES.google.needsLogin).toBeUndefined();
   });
 
   /* This is the field the agent matches on. Every other decision here is a convenience; this one

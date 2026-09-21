@@ -104,6 +104,24 @@ const SITES = {
     defaults: { presentAs: 'windows', blockPasskeys: true, note: 'communities' },
     hint: 'Sign in with Google — this opens in your Google profile, where that login already works. A fresh isolated profile is what Google refuses.',
   },
+  /*
+   * SEARCH CONSOLE — the same Google login, the opposite requirement.
+   *
+   * It borrows the `google` profile because it is the same account, but that profile is deliberately
+   * kept SIGNED OUT for search (see the hint below it). Signed out, search works fine and Search
+   * Console shows "you do not have access to this property" — which was filed as a finding and then
+   * read as a Google penalty. So the surface declares that it needs a login, and the router treats a
+   * missing login here as a reason to run somewhere that has one.
+   */
+  searchconsole: {
+    label: 'Search Console',
+    site: 'search.google.com',
+    profile: 'google',          // borrows the Google login rather than minting a second one
+    needsLogin: true,           // unlike search, this surface says nothing at all signed out
+    start: 'https://search.google.com/search-console',
+    defaults: { presentAs: '', blockPasskeys: false, note: 'search console' },
+    hint: 'Sign in as the account that OWNS the property. Signed out, every tab here reports no access, which reads like a penalty rather than a missing login.',
+  },
   google: {
     label: 'Google',
     site: 'google.com',
@@ -233,6 +251,13 @@ function needsDevice(profileOrKey) {
   const k = String(profileOrKey || '').replace(/^p_/, '');
   const s = SITES[k] || Object.values(SITES).find((x) => x.site === k || profileNameFor(x) === k);
   if (s && s.needsDevice) return true;
+  /*
+   * A MISSING LOGIN IS THE SECOND REASON TO NEED A DEVICE, and it is per SURFACE, not per profile.
+   * The profile serving this surface may be signed out on purpose for something else it does.
+   */
+  if (s && s.needsLogin) {
+    try { if (require('../siteWalls').walled(s.site)) return true; } catch { /* ignore */ }
+  }
   /* The sensor records a HOST, so a host is what it must be asked about: a built-in's declared site,
      an owner-authored site's host, or the key itself when it already looks like one. */
   let host = (s && s.site) || '';
@@ -241,4 +266,22 @@ function needsDevice(profileOrKey) {
   if (!host) return false;
   try { return require('../siteWalls').walled(host); } catch { return false; }
 }
-module.exports = { SITES, get, list, profileNameFor, borrowsProfile, pinnedProfile, servedProfile, needsDevice };
+/** The surfaces that say nothing at all without a login — the ones a signed-out read must not file. */
+const needsLogin = (key) => {
+  const k = String(key || '').toLowerCase().replace(/^p_/, '');
+  const s = SITES[k] || Object.values(SITES).find((x) => x.site === k);
+  return !!(s && s.needsLogin);
+};
+
+/** Which declared surface a URL belongs to, longest host match first so a subdomain beats its parent. */
+const surfaceFor = (url) => {
+  let host = '';
+  try { host = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`).hostname.replace(/^www\./i, '').toLowerCase(); }
+  catch { return null; }
+  const hits = Object.entries(SITES)
+    .filter(([, v]) => v.site && (host === v.site || host.endsWith('.' + v.site)))
+    .sort((a, b) => String(b[1].site).length - String(a[1].site).length);
+  return hits.length ? { key: hits[0][0], ...hits[0][1] } : null;
+};
+
+module.exports = { SITES, get, list, profileNameFor, borrowsProfile, pinnedProfile, servedProfile, needsDevice, needsLogin, surfaceFor };

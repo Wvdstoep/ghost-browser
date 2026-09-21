@@ -91,7 +91,7 @@ function reload() { cache = null; cacheAt = 0; }
  * `why` is the sensor's one-line account and `evidence` is what it actually saw, both kept because a
  * flag that routes work away from the cluster has to be able to justify itself to whoever finds it.
  */
-function record(hostOrUrl, { why = '', evidence = '', url = '' } = {}) {
+function record(hostOrUrl, { why = '', evidence = '', url = '', reason = 'wall' } = {}) {
   const host = hostOf(hostOrUrl);
   if (!host) return null;
   const map = load();
@@ -99,6 +99,12 @@ function record(hostOrUrl, { why = '', evidence = '', url = '' } = {}) {
   map[host] = {
     host,
     walled: true,
+    /*
+     * WHY IT CANNOT RUN HERE, because the remedy differs. A `wall` is Cloudflare refusing a
+     * datacenter exit and the phone is the answer. `signed-out` is a login this profile does not
+     * have, which the owner can also simply fix — so it must not be reported as the same thing.
+     */
+    reason: String(reason || prev.reason || 'wall'),
     why: String(why || prev.why || 'the cluster could not load it'),
     evidence: String(evidence || prev.evidence || '').slice(0, 400),
     url: String(url || prev.url || '').slice(0, 300),
@@ -176,4 +182,17 @@ function forget(hostOrUrl) {
   return true;
 }
 
-module.exports = { record, clean, walled, all, forget, hostOf, reload, FILE, CLEAN_TO_CLEAR };
+/** Why this host cannot run on the cluster: 'wall', 'signed-out', or '' when it can. */
+function reasonFor(hostOrUrl) {
+  const host = hostOf(hostOrUrl);
+  if (!host) return '';
+  const map = load();
+  for (const k of Object.keys(map)) {
+    const r = map[k];
+    if (!r || !r.walled) continue;
+    if (host === k || host.endsWith('.' + k)) return String(r.reason || 'wall');
+  }
+  return '';
+}
+
+module.exports = { record, clean, walled, reasonFor, all, forget, hostOf, reload, FILE, CLEAN_TO_CLEAR };
