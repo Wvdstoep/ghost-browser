@@ -1014,6 +1014,29 @@ app.post('/v1/sessions/:id/scroll', async (req, res) => {
 app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() }));
 
 /*
+ * WHAT THE BROWSER LEARNED IT CANNOT REACH, and the way to tell it it was wrong.
+ *
+ * The ring routes a walled site to a phone and refuses to run it on the cluster at all. That is the
+ * correct rule and it is also a rule that, applied to a site flagged in error, makes work wait for a
+ * device it never needed. So the learned flags are readable, each carries the evidence that produced
+ * it, and any one of them can be forgotten.
+ */
+app.get('/v1/site-walls', authed, (_req, res) => {
+  try {
+    const walls = require('./siteWalls');
+    res.json({ walls: walls.all(), cleanToClear: walls.CLEAN_TO_CLEAR });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/v1/site-walls/:host', authed, (req, res) => {
+  try {
+    const walls = require('./siteWalls');
+    const gone = walls.forget(req.params.host);
+    res.json({ ok: true, forgotten: gone, host: String(req.params.host || '') });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/*
  * THE SITES THIS BROWSER KNOWS, and whether a login already exists for each.
  *
  * A profile used to be named by hand and labelled by hand, and the agent finds the right account BY
@@ -2793,6 +2816,68 @@ async function reconcileDrafts() {
   } catch (e) { log.error(`[reconcile-drafts] ${e.message}`); }
 }
 
+/*
+ * ── THE RING DISPATCHER — a gated pass, run on the device that holds the login ───────────────────
+ *
+ * The device is the eyes and hands; the cluster is the brain (Principle 1). So this sends the phone
+ * the same addresses the cluster pass would have opened, in the profile where the login actually
+ * lives, and brings the text back for the cluster to ingest. Nothing about identity crosses machines
+ * and no cookie is copied: the phone uses its own session, its own fingerprint and its own IP.
+ *
+ * WHAT IT DOES NOT DO YET, stated rather than implied: the LinkedIn comment DOM on mobile web does
+ * not render reliably, which is the open half of Phase 2 of the ring plan. So a pass brings back the
+ * page as the device saw it and records that honestly. Turning that text into a thread and a draft
+ * is the same cluster-side ingest as Facebook and lands the moment the reader is stable.
+ */
+async function devicePassTargets(wid, wProfile) {
+  /* Whatever the watcher was pointed at, in its own config — the same source the cluster pass uses,
+     never a second list that can disagree with it. */
+  let cfg = {};
+  try { cfg = require('./watcherFeed').getConfig(wid) || {}; } catch (e) { cfg = {}; }
+  const urls = Array.isArray(cfg.postUrls) ? cfg.postUrls.filter(Boolean) : [];
+  if (urls.length) return urls.slice(0, 5);
+  /* No explicit targets: open the site itself, which is what a profile watch reads. */
+  try { const s = sites.get(wProfile); if (s && s.start) return [s.start]; } catch (e) { /* none */ }
+  return [];
+}
+
+async function runPassOnDevice(wf, owner, dev, wProfile) {
+  const targets = await devicePassTargets(wf.id, wProfile);
+  const profile = 'p_' + wProfile;
+  const read = [];
+  if (!targets.length) {
+    log.warn(`[ring] "${wf.name}" has nothing to open — no postUrls and no start URL for ${wProfile}`);
+  }
+  for (const url of targets) {
+    try {
+      await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/navigate', body: { url, profile } }, 120000);
+      const got = await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/content', body: { profile } }, 120000);
+      const r = (got && got.result) || {};
+      const text = String(r.text || r.content || '').replace(/\s+/g, ' ').trim();
+      read.push({ url, chars: text.length, text: text.slice(0, 4000) });
+      log.info(`[ring] ${dev.name} read ${url} in ${profile} — ${text.length} chars`);
+    } catch (e) {
+      read.push({ url, chars: 0, error: e.message });
+      log.warn(`[ring] ${dev.name} could not read ${url}: ${e.message}`);
+    }
+  }
+  const okCount = read.filter((x) => x.chars > 0).length;
+  try {
+    require('./watcherFeed').setConfig(wf.id, {
+      lastPass: {
+        at: Date.now(),
+        status: okCount ? 'on-device' : 'device-read-failed',
+        device: dev.name,
+        note: okCount
+          ? `${wProfile} ran on ${dev.name}: ${okCount}/${read.length} page(s) read with the device's own login`
+          : `${wProfile} reached ${dev.name} but read nothing — see the device log`,
+        pages: read.map((x) => ({ url: x.url, chars: x.chars, error: x.error || '' })),
+      },
+    });
+  } catch (e) { /* the record is not allowed to fail the pass */ }
+  return { read, okCount };
+}
+
 async function scheduleTick() {
   const owner = consoleOwner(); if (!owner) return;
   const when = new Date();
@@ -2814,12 +2899,27 @@ async function scheduleTick() {
       // The on-device pass is dispatched by the device ring; here we only make sure the cluster never
       // attempts it, and we record whether a capable device is connected so the app can show the state.
       const dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + wProfile });
-      const status = dev ? 'on-device' : 'waiting-device';
-      const note = dev ? `${wProfile} runs on ${dev.name} (your device), not the cluster` : `${wProfile} needs your device connected — it runs there, never on the cluster`;
-      try { require('./watcherFeed').setConfig(wf.id, { lastPass: { at: Date.now(), status, note, device: dev ? dev.name : null } }); } catch (e) {}
-      log.info(`[workflow-sched] "${wf.name}" ${status} — ${note}`);
-      runningWatchers.delete(wf.id);   // we claimed the slot above; release it — the cluster does not run this
-      continue;                         // TODO on-device dispatch: hand the pass to the device ring when a device is present
+      if (!dev) {
+        /* NO DEVICE MEANS WAIT, NOT FALL BACK. The cluster never runs a gated platform — not as a
+           fallback and not "to try" (Principle 6). It waits, visibly, until the device is back. */
+        const note = `${wProfile} needs your device connected — it runs there, never on the cluster`;
+        try { require('./watcherFeed').setConfig(wf.id, { lastPass: { at: Date.now(), status: 'waiting-device', note, device: null } }); } catch (e) {}
+        log.info(`[workflow-sched] "${wf.name}" waiting-device — ${note}`);
+        runningWatchers.delete(wf.id);
+        continue;
+      }
+      /*
+       * PHASE 4 — the pass is DISPATCHED to the ring rather than skipped. The run is persisted first,
+       * exactly as the cluster-side modes do, because scheduleDue() reads the last run to decide
+       * whether a watcher is due: a pass that never records one looks like it has never run and fires
+       * again on the very next tick.
+       */
+      log.info(`[workflow-sched] "${wf.name}" → ${dev.name} (your device), not the cluster`);
+      workflows.persistRun({ id: `${wf.id}-${Date.now()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: when.toISOString(), ended_at: when.toISOString(), steps: [] });
+      runPassOnDevice(wf, owner, dev, wProfile)
+        .catch((e) => log.error(`[ring] ${wf.id}: ${e.message}`))
+        .finally(() => runningWatchers.delete(wf.id));
+      continue;
     }
     log.info(`[workflow-sched] firing "${wf.name}"`);
     /* The same hands as a hand-started run: a scheduled flow with a verify step used to die on

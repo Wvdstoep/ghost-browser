@@ -220,6 +220,25 @@ function list(existing = []) {
   return built.concat(authored);
 }
 
-/** Does this site have to run on a real device (Cloudflare-gated)? Looks up by key or served profile name. */
-function needsDevice(profileOrKey) { const k = String(profileOrKey || '').replace(/^p_/, ''); const s = SITES[k] || Object.values(SITES).find((x) => x.site === k || profileNameFor(x) === k); return !!(s && s.needsDevice); }
+/**
+ * Does this site have to run on a real device (Cloudflare-gated)? Looks up by key or served profile
+ * name.
+ *
+ * TWO SOURCES, AND THE ORDER MATTERS. The preset flag is the SEED and the OVERRIDE: a site declared
+ * gated is gated, whatever a lucky clean load might suggest. Everything else is LEARNED — the sensor
+ * in diagnostics.js records a host the cluster could not load, so a gated site nobody thought to
+ * declare still routes to the device instead of looping from the cluster forever.
+ */
+function needsDevice(profileOrKey) {
+  const k = String(profileOrKey || '').replace(/^p_/, '');
+  const s = SITES[k] || Object.values(SITES).find((x) => x.site === k || profileNameFor(x) === k);
+  if (s && s.needsDevice) return true;
+  /* The sensor records a HOST, so a host is what it must be asked about: a built-in's declared site,
+     an owner-authored site's host, or the key itself when it already looks like one. */
+  let host = (s && s.site) || '';
+  if (!host) { try { const u = userSites.get(k); if (u && u.site) host = u.site; } catch { /* none */ } }
+  if (!host && k.includes('.')) host = k;
+  if (!host) return false;
+  try { return require('../siteWalls').walled(host); } catch { return false; }
+}
 module.exports = { SITES, get, list, profileNameFor, borrowsProfile, pinnedProfile, servedProfile, needsDevice };

@@ -176,19 +176,60 @@ function mountDeviceHub(app, authed) {
     });
   });
 
-  // The operator/master enqueues a command and (by default) waits for the device's result.
-  app.post("/v1/device/:deviceId/command", authed, (req, res) => {
-    const d = dev(req.params.deviceId);
-    if (!d) return res.status(404).json({ error: "device not registered / offline" });
-    const b = req.body || {};
-    const cmd = { id: "c" + (++seq), method: b.method || "POST", path: b.path || "/v1/info", body: b.body || {} };
+  /*
+   * ENQUEUE AND AWAIT, AS FUNCTIONS RATHER THAN AS A ROUTE BODY.
+   *
+   * This logic lived only inside the HTTP handler below, so the scheduler could not run a command on
+   * a device without making an HTTP request to itself: minting an auth header and travelling through
+   * its own middleware to reach code in the same process. The route now calls these, and so does the
+   * ring dispatcher in the scheduler. One mechanism with two callers, rather than two mechanisms.
+   */
+  const enqueue = (deviceId, { method = "POST", path = "/v1/info", body = {} } = {}) => {
+    const d = dev(deviceId);
+    if (!d) throw new Error("device not registered / offline");
+    const cmd = { id: "c" + (++seq), method, path, body };
     const w = d.pollWaiters.shift();
     if (w) w.deliver(cmd); else d.queue.push(cmd);
-    if (b.wait === false) return res.json({ ok: true, id: cmd.id, queued: !w });
+    return { d, cmd, delivered: !!w };
+  };
+
+  /** Run one command on a device and resolve with its result. Rejects on timeout, never hangs. */
+  const runCommand = (deviceId, spec = {}, timeoutMs = 180000) => new Promise((resolve, reject) => {
+    let e;
+    try { e = enqueue(deviceId, spec); } catch (err) { reject(err); return; }
+    const { d, cmd } = e;
     let settled = false;
-    const timer = setTimeout(() => { if (settled) return; settled = true; d.resultWaiters.delete(cmd.id); res.status(504).json({ error: "device did not respond in time", id: cmd.id }); }, 180000);
-    d.resultWaiters.set(cmd.id, (r) => { if (settled) return; settled = true; clearTimeout(timer); res.json({ ok: true, id: cmd.id, result: r }); });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      d.resultWaiters.delete(cmd.id);
+      reject(new Error("device did not respond in time"));
+    }, timeoutMs);
+    d.resultWaiters.set(cmd.id, (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ id: cmd.id, result: r });
+    });
   });
-  return { capableDevice, deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })) };
+
+  // The operator/master enqueues a command and (by default) waits for the device's result.
+  app.post("/v1/device/:deviceId/command", authed, (req, res) => {
+    const b = req.body || {};
+    const spec = { method: b.method || "POST", path: b.path || "/v1/info", body: b.body || {} };
+    if (b.wait === false) {
+      try { const e = enqueue(req.params.deviceId, spec); return res.json({ ok: true, id: e.cmd.id, queued: !e.delivered }); }
+      catch (err) { return res.status(404).json({ error: err.message }); }
+    }
+    runCommand(req.params.deviceId, spec)
+      .then(({ id, result }) => res.json({ ok: true, id, result }))
+      .catch((err) => res.status(/not registered/.test(err.message) ? 404 : 504).json({ error: err.message }));
+  });
+  return {
+    capableDevice,
+    runCommand,
+    enqueue,
+    deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })),
+  };
 }
 module.exports = { mountDeviceHub };
