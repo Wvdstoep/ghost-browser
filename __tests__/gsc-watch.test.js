@@ -271,7 +271,7 @@ describe('the gsc mode is reachable however the watcher is fired', () => {
   });
 
   it('records the pass, so the watcher card does not read as never run', () => {
-    const fn = src.slice(src.indexOf('async function gscWatchTick'), src.indexOf('async function gscWatchTick') + 4000);
+    const fn = src.slice(src.indexOf('async function gscWatchTick'), src.indexOf('async function gscWatchTick') + 8000);
     expect(fn).toMatch(/recordRolePass\(wf, startedAt, run\)/);
   });
 
@@ -456,5 +456,30 @@ describe('findings the next pass no longer sees', () => {
     const wrote = fn.indexOf('gscWatch.feedRowsFor(');
     const retire = fn.indexOf('gscWatch.supersededRows(');
     expect(retire).toBeGreaterThan(wrote);
+  });
+});
+
+/*
+ * AND THE PASS COUNTS WHAT IT WROTE.
+ *
+ * recordRolePass counts the feed rows whose lastSeen falls inside the pass. Called straight after the
+ * flow \u2014 where the role path calls it, because there the agent's own collect has already written them
+ * \u2014 it ran before this mode had written a single row, so a pass that read twenty findings reported
+ * 0 messages on the watcher card. Which reads exactly like a pass that read nothing.
+ */
+describe('the health line the watcher card shows', () => {
+  const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
+  const fn = src.slice(src.indexOf('async function gscWatchTick'), src.indexOf('async function gscWatchTick') + 6000);
+
+  it('is recorded after the rows exist, not before', () => {
+    const wrote = fn.indexOf('feed.upsert(wf.id, row)');
+    const counted = fn.indexOf('recordRolePass(wf, startedAt, run)');
+    expect(wrote).toBeGreaterThan(-1);
+    expect(counted).toBeGreaterThan(wrote);
+  });
+
+  it('and still measures from before the walk started', () => {
+    expect(fn).toMatch(/const startedAt = Date\.now\(\);/);
+    expect(fn.indexOf('const startedAt')).toBeLessThan(fn.indexOf('workflows.drive('));
   });
 });

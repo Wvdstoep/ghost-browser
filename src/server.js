@@ -2172,7 +2172,6 @@ async function gscWatchTick(wf, owner, opts) {
   const startedAt = Date.now();
   const c = { owner, maxConcurrent: 2, watch: true };
   const run = await workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId: (opts && opts.runId) || `${wf.id}-${Date.now()}` });
-  recordRolePass(wf, startedAt, run);
 
   /* What the walk wrote down as it read, off the job itself — so a walk stopped halfway still counts. */
   const findings = gscWatch.findingsOf(run, (id) => { const j = jobs.get(id); return j ? jobs.view(j) : null; });
@@ -2230,6 +2229,15 @@ async function gscWatchTick(wf, owner, opts) {
     const { item } = feed.upsert(wf.id, st);
     feed.mark(wf.id, item.key, { title: st.title, fields: st.fields, kind: st.kind, draft: '', readOnly: true, urgency: st.urgency, handled: false });
   } catch (e) { log.warn(`[gsc-watch] ${wf.id}: status row: ${e.message}`); }
+
+  /*
+   * AND THE PASS'S OWN HEALTH LINE, LAST. recordRolePass counts the rows whose lastSeen falls inside
+   * the pass, so called any earlier it counts the rows this mode has not written yet: a pass that read
+   * twenty findings reported "0 messages", which on the watcher card reads exactly like a pass that
+   * read nothing. The role path can call it straight after the flow because there the agent's own
+   * collect has already written them.
+   */
+  recordRolePass(wf, startedAt, run);
 
   log.info(`[gsc-watch] ${wf.id}: read ${findings.length} finding(s), filed ${filed.filed || 0} to Pulse`
     + (held.latestDay ? ` — pulse holds ${held.latestDay}` : ' — pulse holds nothing')
