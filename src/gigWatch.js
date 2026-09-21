@@ -81,7 +81,17 @@ const DEFAULTS = {
      picks a size and the HOURS FOR THAT SIZE ARE OURS. Retune a band here and every future quote
      moves with it, no deploy. */
   hoursPerDay: 8,
-  hoursBySize: { small: 8, medium: 24, large: 60, xl: 110 },
+  /*
+   * `tiny` exists because a 45-minute job was quoted 900 zl: the smallest band was a full day, so
+   * every quick gig priced as one. Quick gigs are the easiest to win and the fastest to get paid
+   * for, and a quote ten times the work loses them while looking as though the job was not read.
+   * One hour here lands under the minimum below, which is the honest shape: a short remote task is
+   * billed as a minimum engagement, not as six minutes of clock time.
+   */
+  hoursBySize: { tiny: 1, small: 8, medium: 24, large: 60, xl: 110 },
+  /* Nothing is taken below this, whatever the arithmetic says. The owner set it at 200 by hand on a
+     30-45 minute AnyDesk job, which is what a minimum engagement is actually worth. */
+  minPricePln: 200,
   defaultSize: 'medium',
 };
 
@@ -292,12 +302,27 @@ const EVIDENCE = 'Buduje i utrzymuje wielodostepna platforme na Kubernetes (pona
  * that reason without signalling cheap work. The bounds below are a sanity net, not the price: they
  * only stop an absurd answer from reaching a client.
  */
-const PRICE_FLOOR_PLN = 300;
+/*
+ * A MINIMUM ENGAGEMENT, not a sanity net. At 300 a one-hour band could never produce a real quote
+ * for a quick job — it was clamped up past what such a job is worth, which is how the smallest
+ * possible offer became 900 zl. Overridable per watcher as `minPricePln`.
+ */
+const PRICE_FLOOR_PLN = 200;
 const PRICE_CEIL_PLN = 60000;
 /** Days, never weeks: the owner's promise is a few days, a week at the outside. */
 const MAX_WORK_DAYS = 7;
+/*
+ * AND A MINIMUM, BECAUSE USEME ENFORCES ONE. Measured on a live gig: work_days of 1, 2, 3 and 5
+ * were each refused with "Podaj poprawna liczbe dni" — the value was in the field and the field
+ * still errored — and 7 submitted at once. The SAP offer only worked first time because the ceiling
+ * happened to sit on that floor. The window filed is therefore 7; the OFFER TEXT carries when the
+ * work will really be done, which for a 45-minute job is the same day.
+ */
+const MIN_WORK_DAYS = 7;
 const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zlecenie do jednego rozmiaru '
-  + 'w polu `size`, dokladnie jedna z wartosci: "small", "medium", "large", "xl".\n'
+  + 'w polu `size`, dokladnie jedna z wartosci: "tiny", "small", "medium", "large", "xl".\n'
+  + '  tiny   - drobna pomoc do godziny, zwykle zdalnie przez AnyDesk lub TeamViewer (np. ustawienie '
+  + 'konwersji, jedna poprawka, jedno ustawienie w panelu)\n'
   + '  small  - male, jednoznaczne zadanie, jeden system, kilka godzin pracy (np. wgranie pliku CSV, '
   + 'drobna poprawka, prosty skrypt)\n'
   + '  medium - jedna integracja albo jasno opisany modul, jeden lub dwa systemy\n'
@@ -322,12 +347,19 @@ const PRICING_PL = 'ROZMIAR. NIE podawaj ceny ani liczby godzin. Zaklasyfikuj zl
      ASCII while the voice block demanded diacritics, so the model followed the more specific
      instruction and wrote "6850 zl". The two rules now agree. */
   + 'Po tokenie {PRICE} zawsze dopisz jednostke " zł", na przyklad "Cena pierwszego etapu to {PRICE} zł".'
-  + 'TERMIN. Szybkosc jest tu przewaga: work_days to MAKSYMALNIE 7 (kilka dni, najwyzej tydzien). '
+  /*
+   * THE FORM WINDOW IS NOT THE PROMISE. useme refuses anything under 7, so 7 is always filed. That
+   * must not stop a quick job saying it will be done today — the window is the contract's outer
+   * bound and the sentence is what the client reads.
+   */
+  + 'TERMIN. Formularz useme przyjmuje tylko 7 dni, wiec tyle zawsze wpisujemy, ale to TYLKO gorna '
+  + 'granica umowy. W tresci napisz KIEDY realnie oddasz prace: przy drobnej pomocy napisz wprost, '
+  + 'ze mozesz zrobic to dzisiaj albo w ciagu doby. Szybkosc jest tu przewaga. '
   + 'Jesli cale zlecenie realnie nie zmiesci sie w tygodniu, NIE obiecuj calosci - w tresci oferty '
   + 'zadeklaruj, ze w tym terminie oddajesz DZIALAJACA pierwsza czesc (konkretnie nazwij ktora), '
   + 'a reszte dowozisz etapami. Nigdy nie pisz o tygodniach ani miesiacach jako terminie startowym.';
 
-const clampPrice = (n) => Math.max(PRICE_FLOOR_PLN, Math.min(PRICE_CEIL_PLN, Math.round(Number(n) || 0)));
+const clampPrice = (n, floor = PRICE_FLOOR_PLN) => Math.max(Number(floor) || PRICE_FLOOR_PLN, Math.min(PRICE_CEIL_PLN, Math.round(Number(n) || 0)));
 
 /** Pull the first JSON object out of a model answer that may be wrapped in prose or fences. */
 function firstJson(text) {
@@ -375,6 +407,7 @@ async function offerFor(gig, opts) {
   const f = (gig && gig.fields) || {};
   /* Declared before the prompt, because the prompt has to carry it. */
   const pinnedDays = Math.max(0, Math.min(MAX_WORK_DAYS, Math.round(Number(o.pinnedWorkDays) || 0)));
+  const pFloor = (o.pricing || {});
   const demo = o.demoUrl && o.demoVerified ? o.demoUrl : '';
   /* Tone is the owner's, not the code's: a watcher's config may carry its own `voice`, so
      changing how offers read never needs a deploy. Falls back to VOICE_PL. */
@@ -447,8 +480,9 @@ async function offerFor(gig, opts) {
      labour while the form committed to 7 days. Capping hours at workDays * hoursPerDay is what
      makes {PRICE} the price of the commitment rather than of a scope we are not promising. */
   /* ONCE AGREED, STAY AGREED - the same rule the price already follows. */
-  const workDays = pinnedDays
-    || Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS)));
+  const dayFloor = num(p.minWorkDays, MIN_WORK_DAYS);
+  const workDays = Math.max(dayFloor, pinnedDays
+    || Math.max(1, Math.min(MAX_WORK_DAYS, Math.round(Number(j.work_days) || MAX_WORK_DAYS))));
   const perDay = num(p.hoursPerDay, DEFAULTS.hoursPerDay);
   const bandHours = num(bands[usedSize], DEFAULTS.hoursBySize[DEFAULTS.defaultSize]);
   const hours = Math.min(bandHours, workDays * perDay);
@@ -457,8 +491,9 @@ async function offerFor(gig, opts) {
   const scoped = hours < bandHours;
   /* ONCE PRICED, STAY PRICED. A gig the owner has already seen a number for keeps that number on a
      redraft, so rewriting the words can never quietly move the quote. Repricing is deliberate. */
-  const pinned = Number(o.pinnedPayment) > 0 ? clampPrice(o.pinnedPayment) : 0;
-  const payment = pinned || clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step);
+  const floor = num(p.minPricePln, DEFAULTS.minPricePln);
+  const pinned = Number(o.pinnedPayment) > 0 ? clampPrice(o.pinnedPayment, floor) : 0;
+  const payment = pinned || clampPrice(Math.round((hours * rate * (1 - disc / 100)) / step) * step, floor);
   const priced = payment > 0;
 
 

@@ -65,23 +65,27 @@ function fixtureServer() {
 }
 
 /*
- * The PACKAGE always imports — it is a dependency. The browser it drives lives in the image and
- * not in this checkout, and launching one that is absent fails with "Executable doesn't exist":
- * an environment without a browser, not a defect to report. So ask the filesystem, and skip.
+ * The PACKAGE always imports — it is a dependency. The browser it drives lives in the image and not
+ * in this checkout, so an environment without one is a skip, not a defect to report.
+ *
+ * ASK BY LAUNCHING, NOT BY LOOKING. This used to check `existsSync(chromium.executablePath())`,
+ * which answers a different question than the one that matters: installing the Chromium build on a
+ * host that lacks the shared libraries it links against put the file on disk and still died at
+ * launch with exit 127, so the guard said yes and the suite failed anyway. Its sibling
+ * postwatch-extract.test.js already probes by launching; this does the same, once, at module scope.
  */
-const browserInstalled = (() => {
-  if (!chromium) return false;
-  try { return require('fs').existsSync(chromium.executablePath()); } catch { return false; }
-})();
-const maybe = browserInstalled ? describe : describe.skip;
+let browser = null;
+if (chromium) {
+  try { browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }); }
+  catch (e) { browser = null; console.warn(`[replay.e2e] no launchable Chromium here (${String(e.message).split('\n')[0]}) — skipping; runs in the pod image / CI`); }
+}
 
-maybe('record + replay against a real browser', () => {
-  let server; let base; let browser;
+describe.skipIf(!browser)('record + replay against a real browser', () => {
+  let server; let base;
   beforeAll(async () => {
     server = fixtureServer();
     await new Promise((r) => server.listen(0, r));
     base = `http://127.0.0.1:${server.address().port}`;
-    browser = await chromium.launch({ headless: true });
   }, 60000);
   afterAll(async () => { if (browser) await browser.close(); if (server) await new Promise((r) => server.close(r)); });
 

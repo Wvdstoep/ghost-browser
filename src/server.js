@@ -2010,7 +2010,66 @@ async function gigWatchTick(wf, owner, opts) {
     live.lastUsed = Date.now();
     return live.page;
   };
-  return gigWatch.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null });
+  const swept = await gigWatch.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null });
+  /*
+   * AND DRAFT THE FRESH ONES, so the owner opens the results to words rather than to a list.
+   *
+   * A gig collects five offers in fourteen minutes here and ninety in six days, so a draft that
+   * waits for somebody to ask for it arrives after the board has moved. Narrow on purpose: a draft
+   * is a model call, so only what is fresh AND ranks above the bar earns one, a couple per sweep at
+   * most, and never something already drafted, handled or sent.
+   */
+  try { await autoDraftFresh(wf.id, cfg); } catch (e) { log.warn(`[gig-watch] ${wf.id}: auto-draft skipped (${e.message})`); }
+  return swept;
+}
+
+/** How many fresh gigs may be drafted in one sweep, and what counts as fresh. Owner-editable data. */
+async function autoDraftFresh(wid, cfg = {}) {
+  if (cfg.autoDraft === false) return 0;                       // opt out, per watcher
+  const feed = require('./watcherFeed');
+  const gigWatch = require('./gigWatch');
+  const top = Math.max(0, Math.min(5, Number(cfg.autoDraftTop == null ? 2 : cfg.autoDraftTop)));
+  const maxAge = Number(cfg.autoDraftMaxAgeDays == null ? 1 : cfg.autoDraftMaxAgeDays);
+  const bar = Number(cfg.autoDraftMinScore == null ? 0 : cfg.autoDraftMinScore);
+  if (!top) return 0;
+
+  const rows = feed.list(wid).filter((it) => {
+    const f = it.fields || {};
+    if (it.handled || it.posted || it.posting) return false;   // already dealt with
+    if (String(it.draftState || '') === 'drafted' || String(it.draft || '').trim()) return false;
+    if (f.type && f.type !== 'gig') return false;
+    const age = Number(f.ageDays);
+    if (Number.isFinite(age) && age > maxAge) return false;    // not fresh: not a money-moment
+    return Number(f.score || 0) >= bar;
+  }).sort((a, b) => Number((b.fields || {}).score || 0) - Number((a.fields || {}).score || 0));
+
+  let n = 0;
+  for (const it of rows.slice(0, top)) {
+    try {
+      /* The SAME call the draft route makes, so a drafted-on-sweep offer and a drafted-by-hand one
+         are the same object with the same price, the same pin and the same self-check. */
+      const offer = await gigWatch.offerFor(it, {
+        settings: settingsStore.read(),
+        pricing: gigWatch.configFor(wid),
+        pinnedPayment: Number((it.fields || {}).payment) || 0,
+      });
+      const fields = Object.assign({}, it.fields || {}, {
+        payment: offer.payment, workDays: offer.workDays, hours: offer.hours, priced: offer.priced,
+        size: offer.size || '', english_not_sent: offer.textEn || '',
+        voice_issues: (offer.voiceIssues || []).join(', '), scoped_quote: !!offer.scoped,
+        drafted_by: 'sweep',
+      });
+      feed.mark(wid, it.key, { draft: offer.text, fields });
+      n += 1;
+      log.info(`[gig-watch] ${wid}: drafted "${String(it.title || '').slice(0, 50)}" on the sweep`
+        + ` — ${offer.payment} PLN, ${offer.workDays} d, ${offer.size}`
+        + ((offer.voiceIssues || []).length ? ` [${offer.voiceIssues.join(', ')}]` : ''));
+    } catch (e) {
+      log.warn(`[gig-watch] ${wid}: could not draft "${String(it.title || '').slice(0, 40)}": ${e.message}`);
+    }
+  }
+  if (n) log.info(`[gig-watch] ${wid}: ${n} fresh gig(s) drafted and waiting for approval`);
+  return n;
 }
 
 /**
