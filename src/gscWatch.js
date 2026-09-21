@@ -172,6 +172,34 @@ function staleRows(items, property) {
   });
 }
 
+/*
+ * FINDINGS THIS PASS NO LONGER SEES, on the tabs it actually read.
+ *
+ * "not indexed" moves from 64 to 61 and stays one row — that case is handled by the key. The case that
+ * is not is a finding that goes AWAY: fix the noindex tag on the one page that had it, and
+ * "Uitgesloten door tag noindex = 1" is simply absent from the next read. Left alone it sits on the
+ * page for ever, saying 1, being wrong, looking exactly like the rows around it that are right.
+ *
+ * THE GUARD IS THE POINT: only tabs that produced a finding this pass. A tab that would not open, or a
+ * walk stopped before it got there, produces nothing — and reading that as "everything on this tab is
+ * gone" would wipe the last good reading, which is worse than a stale row, because a stale row at
+ * least says what it is.
+ */
+function supersededRows(items, rowsJustWritten) {
+  const wrote = new Map();                       // tab url -> the titles read on it this pass
+  for (const r of rowsJustWritten || []) {
+    if (!r || !r.url) continue;
+    if (!wrote.has(r.url)) wrote.set(r.url, new Set());
+    wrote.get(r.url).add(String(r.title || '').trim().toLowerCase());
+  }
+  return (items || []).filter((it) => {
+    if (!it || it.handled) return false;
+    const seen = wrote.get(String(it.url || ''));
+    if (!seen) return false;                     // a tab we did not read this pass: leave it alone
+    return !seen.has(String(it.title || '').trim().toLowerCase());
+  });
+}
+
 /** Up to date means Pulse holds a reading from today. Pure, so the rule is testable. */
 const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
 function upToDate(latestDay, now = new Date()) {
@@ -258,5 +286,5 @@ function duePass(cfg = {}, now = Date.now(), opts = {}) {
 
 module.exports = {
   CONSOLE_TABS, tabFor, auditGoal, jobIdsOf, findingsOf, feedRowsFor,
-  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER, urgencyFor, duePass, MIN_GAP_MS, staleRows,
+  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER, urgencyFor, duePass, MIN_GAP_MS, staleRows, supersededRows,
 };
