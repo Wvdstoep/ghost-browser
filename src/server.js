@@ -1915,7 +1915,19 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
     const days = Number(b.workDays || f0.workDays || 0) || 7;
     if (!(pay > 0)) return res.status(400).json({ error: 'no price on this gig yet - press Draft again to price it' });
     feed.mark(wid, it.key, { posting: true, postFailed: false, postRunId: gigRun, draft: text });
-    postGigOffer(wid, it, consoleOwner() || req.client.owner, text, pay, days, !!b.confirm)
+    /*
+     * APPROVE MEANS SEND. This was `!!b.confirm`, so an absent flag meant fill-and-stop — and no UI
+     * has ever sent that flag, which means the Approve button never once completed an offer. It
+     * filled the form, reached the summary, verified its own price and body, and stopped one click
+     * short while the feed recorded posted:"summary". That reads like success unless you know only
+     * "submitted" means sent, so an approved offer sat unsent and looked delivered.
+     *
+     * The approval rule is unchanged and this is not a loosening of it: a human pressing Approve is
+     * the gate, and they have pressed it. Passing confirm:false is still honoured and now means
+     * something deliberate — fill and park it for a look, without sending.
+     */
+    const confirmSend = b.confirm !== false;
+    postGigOffer(wid, it, consoleOwner() || req.client.owner, text, pay, days, confirmSend)
       .then((r) => { feed.mark(wid, it.key, { posting: false, posted: r.stage, postUrl: r.url, postNote: r.note, handled: r.stage === 'submitted' }); log.info('[gig-offer] ' + it.key + ': ' + r.stage + ' ' + r.note); })
       .catch((e) => { feed.mark(wid, it.key, { posting: false, postFailed: true, posted: 'failed: ' + e.message }); log.error('[gig-offer] ' + it.key + ': ' + e.message); });
     return res.json({ mode: 'gigs', runId: gigRun, status: 'posting', payment: pay, workDays: days });
