@@ -1057,14 +1057,25 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
      * to get in and the detector we already had says what it found.
      */
     let entered = '';
+    const tried = [];
     if (!wall && Array.isArray(site.enterBy) && site.enterBy.length) {
       for (const label of site.enterBy) {
         try {
           await s2.page.getByText(String(label), { exact: false }).first().click({ timeout: 8000 });
           entered = label;
           break;
-        } catch (e) { /* not this language, or already inside — try the next */ }
+        } catch (e) {
+          /*
+           * SAY WHY IT DID NOT WORK. The first version swallowed these, so a check that failed to
+           * enter reported enteredBy:"" and fell back to judging the landing page — with nothing
+           * anywhere to explain it. A label that is simply not on the page is expected and cheap to
+           * see; one that is there and unclickable is a real finding, and they read identically
+           * until the reason is kept.
+           */
+          tried.push(`${label}: ${String((e && e.message) || e).split('\n')[0].slice(0, 120)}`);
+        }
       }
+      if (!entered) log.warn(`[ring] ${site.label}: could not enter — ${tried.join(' | ') || 'no labels configured'}`);
       if (entered) {
         try { await s2.page.waitForLoadState('domcontentloaded', { timeout: 20000 }); } catch (e) { /* ignore */ }
         try { await s2.page.waitForTimeout(2500); } catch (e) { /* ignore */ }
@@ -1087,10 +1098,18 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
       try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
       log.warn(`[ring] ${site.label}: the "${prof}" profile is signed out — ${dev ? dev.name + ' holds this login' : 'no connected device holds this login'}`);
       return res.json({ ok: true, surface: key, signedIn: false, reason: 'signed-out', profile: prof,
-        device: dev ? dev.name : null, landed, enteredBy: entered || '', record: rec });
+        device: dev ? dev.name : null, landed, enteredBy: entered || '', entryTried: tried, record: rec });
     }
     walls.clean(site.site, { url });
-    return res.json({ ok: true, surface: key, signedIn: true, profile: prof, reason: '', landed, enteredBy: entered || '' });
+    /*
+     * signedIn:true WITH NOTHING ENTERED IS NOT A CLEAN BILL OF HEALTH. It means the detector saw no
+     * wall on a page we may never have got past, which for a surface that has an entry button is
+     * exactly the case that fooled this check once already. Reported as unproven rather than signed
+     * in, so it cannot be read as a verdict it has not earned.
+     */
+    const proven = !(Array.isArray(site.enterBy) && site.enterBy.length) || !!entered;
+    return res.json({ ok: true, surface: key, signedIn: true, proven, profile: prof, reason: '',
+      landed, enteredBy: entered || '', entryTried: tried });
   } catch (e) {
     return res.status(502).json({ error: `could not check ${site.label}: ${e.message}` });
   }
