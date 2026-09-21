@@ -610,6 +610,30 @@ class BrowserPool {
       captureDownloads(persistent, this.log);   // any Download button → the file store
       // LOGIN SYNC: the cookies the owner's device sent for this profile (see /v1/profiles/:name/cookies)
       try { const pf = path.join(dir, 'pending-cookies.json'); if (fs.existsSync(pf)) { let list = JSON.parse(fs.readFileSync(pf, 'utf8')); if (Array.isArray(list)) list = list.filter((c) => c && !/^(__cf_bm|cf_clearance|__cfruid|__cf_ob_info|lidc|AWSALB|AWSALBCORS|incap_ses|visid_incap)/i.test(String(c.name || ''))); if (Array.isArray(list) && list.length) { await persistent.addCookies(list); this.log.info?.(`[login-sync] ${safe}: ${list.length} cookie(s) from the owner's device applied`); } } } catch (e) { this.log.warn?.(`[login-sync] ${safe}: ${e.message}`); }
+      /*
+       * A LOGIN MADE BY HAND MUST SURVIVE A DEPLOY, and politely closing contexts is not enough to
+       * promise that: SIGKILL, OOM and a drained node all still lose the jar. So we keep our own
+       * snapshot (see sessionVault) and put it back when the jar has come back without a session.
+       *
+       * Measured: after three pod rolls this profile held 63 google.com cookies and not one auth
+       * cookie, so Search Console reported no access to the property and a day's audit was spent on
+       * a locked door. Nothing had been revoked. The session was simply never written down.
+       *
+       * Only what is MISSING is restored, never what the browser already has, because a live
+       * session may be a newer login than the snapshot.
+       */
+      try {
+        const vault = require('./sessionVault');
+        const snap = vault.read(safe);
+        if (snap) {
+          const jar = await persistent.cookies();
+          const plan = vault.planRestore(jar, snap);
+          if (plan.restore.length) {
+            await persistent.addCookies(plan.restore);
+            this.log.info?.(`[vault] ${safe}: ${plan.why} (${plan.restore.length} cookie(s))`);
+          }
+        }
+      } catch (e) { this.log.warn?.(`[vault] ${safe}: restore skipped (${e.message})`); }
       const page = persistent.pages()[0] || await persistent.newPage();
       const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const at = Date.now();
@@ -729,14 +753,43 @@ class BrowserPool {
     this.sessions.delete(id);
     const mine = this.perOwner.get(s.owner);
     if (mine) { mine.delete(id); if (!mine.size) this.perOwner.delete(s.owner); }
+    /* The freshest, cheapest moment to write the session down, and the one that catches a login made
+       seconds before a deploy. Bounded so a wedged context cannot make closing slower. */
+    if (s.persistent && s.profile) await this.vaultSave(s, 'close');
     try { await s.context.close(); } catch { /* already gone */ }
     this.log.info?.(`[pool] - ${id} (${why}) — ${this.sessions.size}/${this.limits.maxContexts}`);
     return true;
   }
 
   /** Idle and expired sessions, plus the memory check that decides whether to stop taking work. */
+  /*
+   * Write one session's jar down, never letting it throw into the caller and never letting a slow
+   * context hold anything up. A failed snapshot is a warning, not an error: the old snapshot stays.
+   */
+  async vaultSave(s, why) {
+    try {
+      const vault = require('./sessionVault');
+      const jar = await Promise.race([
+        s.context.cookies(),
+        new Promise((r) => setTimeout(() => r(null), 4000)),
+      ]);
+      if (!jar) return false;
+      const r = vault.save(s.profile, jar, { log: this.log });
+      if (r.saved) this.log.info?.(`[vault] ${s.profile}: session saved on ${why}`);
+      return !!r.saved;
+    } catch (e) { this.log.warn?.(`[vault] ${s.profile}: save on ${why} failed (${e.message})`); return false; }
+  }
+
   async sweep() {
     const now = Date.now();
+    /*
+     * SNAPSHOT ON THE SWEEP, which is what actually makes a login survive a deploy. Closing
+     * contexts politely only helps when SIGTERM arrives and finishes in time; a SIGKILL, an OOM or
+     * a drained node does not ask. With this the snapshot is never more than one sweep behind.
+     */
+    for (const s of [...this.sessions.values()]) {
+      if (s.persistent && s.profile) await this.vaultSave(s, 'sweep');
+    }
     for (const [id, s] of [...this.sessions]) {
       if (now - s.lastUsed > this.limits.idleMs) { this.stats.closedIdle++; await this.close(id, 'idle'); continue; }
       if (now - s.createdAt > this.limits.ttlMs) { this.stats.closedTtl++; await this.close(id, 'expired'); }
