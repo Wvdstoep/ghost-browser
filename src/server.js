@@ -1982,7 +1982,15 @@ function scheduleDue(cfg, lastMs, when) {
 /* One watcher pass at a time. A second pass (a schedule firing, or a hand-started run) that
    overlaps the first fights it for the one browser session and every follow-up draft errors on a
    busy profile. This gate makes collect finish and free the session before the follow-ups draft. */
-const runningWatchers = new Set();
+/*
+ * NOT A BARE SET. The flag was released in .finally(), which cleans up after a pass that throws but
+ * not after one whose promise never settles — and then nothing ever releases it, because the only
+ * code that would is the callback that never ran. Seen in production: a pass sat here for 114
+ * minutes on an inactive watcher, holding no session, blocking every other watcher pass, every flow
+ * run and the deployer's idle gate, because the gates below ask `.size`. See src/runningWatchers.js.
+ */
+const { RunningWatchers } = require('./runningWatchers');
+const runningWatchers = new RunningWatchers(log);
 
 /*
  * POST WATCHER PASS. A watcher whose config says mode:"posts" is not driven as a flow: the server
@@ -2846,7 +2854,16 @@ app.get('/v1/watchers/:id/health', authed, (req, res) => {
     const lp = c.lastPass || null; const running = runningWatchers.has(req.params.id);
     const sinceMin = lp && lp.endedAt ? Math.round((Date.now() - lp.endedAt) / 60000) : null;
     const stale = !!(wf && wf.active && !running && (sinceMin === null || sinceMin > 45));
-    res.json({ active: !!(wf && wf.active), running, lastPass: lp, sinceMinutes: sinceMin, stale, mode: c.mode || '' });
+    /*
+     * HOW LONG THE PASS HAS BEEN RUNNING, which this could not say before. `stale` is
+     * `active && !running && ...`, so while a flag is stuck `running` is true and staleness is
+     * false: the check was blinded by the exact state it exists to find. A pass whose recorded
+     * lastPass ENDED while it still reads running is the signature, and now it is visible.
+     */
+    const heldMs = running ? Date.now() - runningWatchers.startedAt(req.params.id) : 0;
+    res.json({ active: !!(wf && wf.active), running,
+      runningMinutes: running ? Math.round(heldMs / 60000) : null,
+      lastPass: lp, sinceMinutes: sinceMin, stale, mode: c.mode || '' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Ground truth for one thread, as the watcher's OWN session sees it (same owner, same login): every
