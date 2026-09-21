@@ -305,9 +305,41 @@ describe('the job path asks the ring, not just the watcher path', () => {
   it('the login check reuses the detector the console already uses', () => {
     expect(server).toMatch(/app\.post\('\/v1\/site-walls\/check'/);
     const at = server.indexOf("app.post('/v1/site-walls/check'");
-    const body = server.slice(at, at + 2400);
+    /* Sized to the route rather than to a guess: it grew when it learned to enter the surface. */
+    const end = server.indexOf('app.get(', at);
+    const body = server.slice(at, end > at ? end : at + 4000);
     expect(body).toMatch(/agent\.loginWall/);
     expect(body).toMatch(/reason: 'signed-out'/);
     expect(body).toMatch(/walls\.clean\(site\.site/);
+  });
+
+  /*
+   * THE LANDING PAGE IS NEVER THE ANSWER.
+   *
+   * Search Console opens on a marketing page with a Get-started button signed in OR out, so the
+   * first version of this check called that page signed-out and would have stranded the surface on
+   * a phone permanently. Pressing through is what resolves it, and only then does the detector get
+   * asked — which is why loginWall, which already knows accounts.google.com, now sees it.
+   */
+  it('and it enters the surface before it judges, rather than trusting the landing page', () => {
+    const at = server.indexOf("app.post('/v1/site-walls/check'");
+    const end = server.indexOf('app.get(', at);
+    const body = server.slice(at, end > at ? end : at + 4000);
+    expect(body).toMatch(/A LANDING PAGE IS NOT AN ANSWER/);
+    expect(body).toMatch(/site\.enterBy/);
+    /* The press comes first, then the verdict is taken again from the detector. */
+    const press = body.indexOf('site.enterBy');
+    const verdict = body.lastIndexOf('agent.loginWall');
+    expect(press).toBeLessThan(verdict);
+    /* And the address it happens to land on is reported, never used as the verdict. */
+    expect(body).not.toMatch(/signedOutAt/);
+  });
+
+  it('the surface says how to get in, in the languages it renders in', () => {
+    const sc = sites.get('searchconsole');
+    expect(Array.isArray(sc.enterBy)).toBe(true);
+    expect(sc.enterBy).toContain('Rozpocznij');
+    expect(sc.enterBy).toContain('Get started');
+    expect(sc.signedOutAt, 'the false premise is gone').toBeUndefined();
   });
 });
