@@ -2028,23 +2028,12 @@ async function autoDraftFresh(wid, cfg = {}) {
   if (cfg.autoDraft === false) return 0;                       // opt out, per watcher
   const feed = require('./watcherFeed');
   const gigWatch = require('./gigWatch');
-  const top = Math.max(0, Math.min(5, Number(cfg.autoDraftTop == null ? 2 : cfg.autoDraftTop)));
-  const maxAge = Number(cfg.autoDraftMaxAgeDays == null ? 1 : cfg.autoDraftMaxAgeDays);
-  const bar = Number(cfg.autoDraftMinScore == null ? 0 : cfg.autoDraftMinScore);
-  if (!top) return 0;
-
-  const rows = feed.list(wid).filter((it) => {
-    const f = it.fields || {};
-    if (it.handled || it.posted || it.posting) return false;   // already dealt with
-    if (String(it.draftState || '') === 'drafted' || String(it.draft || '').trim()) return false;
-    if (f.type && f.type !== 'gig') return false;
-    const age = Number(f.ageDays);
-    if (Number.isFinite(age) && age > maxAge) return false;    // not fresh: not a money-moment
-    return Number(f.score || 0) >= bar;
-  }).sort((a, b) => Number((b.fields || {}).score || 0) - Number((a.fields || {}).score || 0));
+  /* The CHOICE lives in gigWatch as a pure function, so what we spend tokens on is testable. */
+  const rows = gigWatch.pickForAutoDraft(feed.list(wid), cfg);
+  if (!rows.length) return 0;
 
   let n = 0;
-  for (const it of rows.slice(0, top)) {
+  for (const it of rows) {
     try {
       /* The SAME call the draft route makes, so a drafted-on-sweep offer and a drafted-by-hand one
          are the same object with the same price, the same pin and the same self-check. */
