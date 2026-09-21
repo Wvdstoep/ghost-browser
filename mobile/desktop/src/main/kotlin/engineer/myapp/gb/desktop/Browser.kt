@@ -127,8 +127,31 @@ private fun extractResultValue(raw: String): String {
         while (j < raw.length) {
             val c = raw[j]
             if (c == '\\' && j + 1 < raw.length) {
-                when (raw[j + 1]) { 'n' -> sb.append('\n'); 'r' -> sb.append('\r'); 't' -> sb.append('\t'); '"' -> sb.append('"'); '\\' -> sb.append('\\'); else -> sb.append(raw[j + 1]) }
-                j += 2
+                /*
+                 * \uXXXX MUST BE DECODED HERE. CDP escapes every non-ASCII character this way, and
+                 * this used to fall through to "append whatever follows the backslash", which ate
+                 * the backslash, appended the 'u', and left the four hex digits as text: a Polish
+                 * gig read "rozwu00f3j" instead of "rozwój" and a watcher was called
+                 * "Facebook u00b7 Post watcher". Display was the visible half; the dangerous half is
+                 * that an offer edited in this UI would be saved back mangled.
+                 *
+                 * Appending each escape as its own UTF-16 unit is what makes surrogate pairs work:
+                 * 😀 arrives as two escapes and reassembles into one emoji.
+                 */
+                if (raw[j + 1] == 'u' && j + 5 < raw.length) {
+                    val hex = raw.substring(j + 2, j + 6)
+                    val code = hex.toIntOrNull(16)
+                    if (code != null) { sb.append(Char(code)); j += 6 }
+                    else { sb.append(raw[j + 1]); j += 2 }     // malformed: keep it visible, do not guess
+                } else {
+                    when (raw[j + 1]) {
+                        'n' -> sb.append('\n'); 'r' -> sb.append('\r'); 't' -> sb.append('\t')
+                        'b' -> sb.append('\b'); 'f' -> sb.append('\u000C')
+                        '"' -> sb.append('"'); '\\' -> sb.append('\\'); '/' -> sb.append('/')
+                        else -> sb.append(raw[j + 1])
+                    }
+                    j += 2
+                }
             } else if (c == '"') break else { sb.append(c); j++ }
         }
         sb.toString()
