@@ -520,4 +520,38 @@ async function offerFor(gig, opts) {
 /** Back-compat: the text alone, for callers that only want a draft. */
 async function draftFor(gig, opts) { return (await offerFor(gig, opts)).text; }
 
-module.exports = { voiceIssues, tick, rank, ageDaysOf, draftFor, offerFor, configFor, compile, DEFAULTS, clampPrice, firstJson };
+/*
+ * WHICH FRESH GIGS EARN A DRAFT. Pure on purpose: a draft is a model call, so this is the function
+ * that spends money, and it must be checkable without a browser or a feed.
+ *
+ * The bar is the board's own economics. A gig here collects five offers in fourteen minutes and
+ * ninety in six days, so being late is the same as being absent — but drafting everything would
+ * spend the most on the gigs least likely to answer. Hence: fresh AND above the score bar, best
+ * first, a couple at a time, and never anything already drafted, handled or sent.
+ */
+function pickForAutoDraft(items, cfg = {}) {
+  if (cfg.autoDraft === false) return [];
+  const top = Math.max(0, Math.min(5, Number(cfg.autoDraftTop == null ? 2 : cfg.autoDraftTop)));
+  if (!top) return [];
+  const maxAge = Number(cfg.autoDraftMaxAgeDays == null ? 1 : cfg.autoDraftMaxAgeDays);
+  const bar = Number(cfg.autoDraftMinScore == null ? 0 : cfg.autoDraftMinScore);
+
+  return (items || []).filter((it) => {
+    if (!it) return false;
+    const f = it.fields || null;
+    /* Nothing to read is not a draftable gig. An unknown age still is (see below); an absent body
+       never is — it would reach the model as an offer about nothing. */
+    if (!f) return false;
+    if (!String(it.title || f.desc || f.description || '').trim()) return false;
+    if (it.handled || it.posted || it.posting) return false;              // already dealt with
+    if (String(it.draftState || '') === 'drafted') return false;
+    if (String(it.draft || '').trim()) return false;                      // has words already
+    if (f.type && f.type !== 'gig') return false;                         // replies/posts are not gigs
+    const age = Number(f.ageDays);
+    if (Number.isFinite(age) && age > maxAge) return false;               // stale is not a money-moment
+    return Number(f.score || 0) >= bar;
+  }).sort((a, b) => Number((b.fields || {}).score || 0) - Number((a.fields || {}).score || 0))
+    .slice(0, top);
+}
+
+module.exports = { pickForAutoDraft, voiceIssues, tick, rank, ageDaysOf, draftFor, offerFor, configFor, compile, DEFAULTS, clampPrice, firstJson };
