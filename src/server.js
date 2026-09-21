@@ -1058,9 +1058,21 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
      * to get in and the detector we already had says what it found.
      */
     let entered = '';
+    let sawEntry = false;      // was there an entry control at all?
     const tried = [];
     if (!wall && Array.isArray(site.enterBy) && site.enterBy.length) {
       for (const label of site.enterBy) {
+        /*
+         * COUNT BEFORE CLICKING, because "not on the page" and "there but unclickable" are different
+         * facts and a click timeout reports both identically. The first is the HEALTHY case — the
+         * entry button is gone because we are already inside — and reading it as a failure is what
+         * made a signed-in profile report proven:false with three timeouts against a button that no
+         * longer exists.
+         */
+        let n = 0;
+        try { n = await s2.page.getByText(String(label), { exact: false }).count(); } catch (e) { n = 0; }
+        if (!n) { tried.push(`${label}: not on the page`); continue; }
+        sawEntry = true;
         try {
           await s2.page.getByText(String(label), { exact: false }).first().click({ timeout: 8000 });
           entered = label;
@@ -1069,11 +1081,9 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
           /*
            * SAY WHY IT DID NOT WORK. The first version swallowed these, so a check that failed to
            * enter reported enteredBy:"" and fell back to judging the landing page — with nothing
-           * anywhere to explain it. A label that is simply not on the page is expected and cheap to
-           * see; one that is there and unclickable is a real finding, and they read identically
-           * until the reason is kept.
+           * anywhere to explain it.
            */
-          tried.push(`${label}: ${String((e && e.message) || e).split('\n')[0].slice(0, 120)}`);
+          tried.push(`${label}: on the page but ${String((e && e.message) || e).split('\n')[0].slice(0, 100)}`);
         }
       }
       if (!entered) log.warn(`[ring] ${site.label}: could not enter — ${tried.join(' | ') || 'no labels configured'}`);
@@ -1108,7 +1118,12 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
      * exactly the case that fooled this check once already. Reported as unproven rather than signed
      * in, so it cannot be read as a verdict it has not earned.
      */
-    const proven = !(Array.isArray(site.enterBy) && site.enterBy.length) || !!entered;
+    /*
+     * PROVEN MEANS WE GOT PAST THE DOOR, and there are two honest ways to have done that: we pressed
+     * the entry control, or there was no entry control to press because we were already inside. Only
+     * an entry control that WAS there and would not open leaves the verdict unproven.
+     */
+    const proven = !!entered || !sawEntry;
     return res.json({ ok: true, surface: key, signedIn: true, proven, profile: prof, reason: '',
       landed, enteredBy: entered || '', entryTried: tried });
   } catch (e) {
