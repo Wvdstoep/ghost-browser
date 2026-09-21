@@ -132,9 +132,29 @@ describe('the rows the results page shows', () => {
     expect(rows.find((r) => r.kind === 'manual_action').url).toContain('/manual-actions');
   });
 
+  /*
+   * THE FEED DOES THE SORTING, so the rank has to be in the field it sorts on. Sorting this array was
+   * not enough: the feed re-sorts by urgency and then by firstSeen, every row lands in the same
+   * millisecond, and one urgency for all of them broke the tie on insert order — reversed.
+   */
   it('leads with the finding that makes every other number irrelevant', () => {
     const rows = gsc.feedRowsFor(findings, { property: PROPERTY });
     expect(rows[0].kind).toBe('manual_action');
+  });
+
+  it('ranks by urgency, which is what the feed orders on', () => {
+    const rows = gsc.feedRowsFor(findings, { property: PROPERTY });
+    const by = Object.fromEntries(rows.map((r) => [r.kind, r.urgency]));
+    expect(by.manual_action).toBeGreaterThan(by.indexing);
+    expect(by.indexing).toBeGreaterThan(by.sitemap);
+    expect(gsc.urgencyFor('vitals')).toBe(1);
+    expect(gsc.urgencyFor('weather')).toBe(1);
+  });
+
+  /* And under the status row, which is the one line that says whether any of this is current. */
+  it('never outranks the Pulse status row', () => {
+    const top = gsc.pulseRow({ app: 'my-app.engineer', read: 1, filed: {}, held: {} }).urgency;
+    for (const r of gsc.feedRowsFor(findings, { property: PROPERTY })) expect(r.urgency).toBeLessThan(top);
   });
 
   it('says so plainly when a row had nothing beside it', () => {
@@ -312,5 +332,59 @@ describe('how often it may read Google', () => {
     expect(guard).toBeGreaterThan(-1);
     /* Before the flow is driven, or it has already cost the walk it was meant to avoid. */
     expect(guard).toBeLessThan(fn.indexOf('workflows.drive('));
+  });
+});
+
+/*
+ * REPOINTING THE PROPERTY ORPHANS EVERY ROW THE OLD ONE MADE.
+ *
+ * my-app.engineer turned out to be a DOMAIN property (sc-domain:my-app.engineer, verified by a DNS TXT
+ * record); the URL-prefix form https://my-app.engineer/ was never verified, because the site serves no
+ * verification meta tag. Pointed at the wrong form the console answered "Je hebt geen toegang tot deze
+ * property" six times and the walk filed that, correctly, as what it saw. A row is keyed on the tab it
+ * came from and that tab carries the property, so the new pass creates new rows and cannot reach the
+ * old ones: the page would show the true state of the property beside six rows denying we have access.
+ */
+describe('rows left behind by a property change', () => {
+  const OLD = 'https://my-app.engineer/';
+  const NEW = 'sc-domain:my-app.engineer';
+  const rowsFor = (prop) => gsc.feedRowsFor([
+    { kind: 'indexing', label: 'property access', value: 'Je hebt geen toegang tot deze property' },
+    { kind: 'sitemap', label: 'property access', value: 'Je hebt geen toegang tot deze property' },
+  ], { property: prop }).map((r, i) => ({ ...r, key: 'k' + i, handled: false }));
+
+  it('retires what the current property cannot be reading', () => {
+    const stale = gsc.staleRows(rowsFor(OLD), NEW);
+    expect(stale).toHaveLength(2);
+    expect(stale.every((r) => r.url.includes(encodeURIComponent(OLD)))).toBe(true);
+  });
+
+  it("leaves this property’s own rows alone", () => {
+    expect(gsc.staleRows(rowsFor(NEW), NEW)).toEqual([]);
+  });
+
+  /* The status row has no url at all, and it is the one row that must never be retired. */
+  it('never touches the status row', () => {
+    const status = { ...gsc.pulseRow({ app: 'my-app.engineer', read: 1, filed: {}, held: {} }), key: 'p', handled: false };
+    expect(gsc.staleRows([status], NEW)).toEqual([]);
+  });
+
+  it('leaves anything that is not a console tab alone', () => {
+    const other = { key: 'x', url: 'https://useme.com/pl/jobs/foo,12345/', title: 'a gig', handled: false };
+    expect(gsc.staleRows([other], NEW)).toEqual([]);
+  });
+
+  it('does not re-retire what is already handled', () => {
+    const done = rowsFor(OLD).map((r) => ({ ...r, handled: true }));
+    expect(gsc.staleRows(done, NEW)).toEqual([]);
+  });
+
+  it("is what the pass does, before it writes today’s rows", () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
+    const fn = src.slice(src.indexOf('async function gscWatchTick'));
+    const retire = fn.indexOf('gscWatch.staleRows(');
+    expect(retire).toBeGreaterThan(-1);
+    expect(retire).toBeLessThan(fn.indexOf('gscWatch.feedRowsFor('));
+    expect(fn.slice(retire - 300, retire + 300)).toMatch(/markHandled/);
   });
 });

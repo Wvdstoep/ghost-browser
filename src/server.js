@@ -2188,11 +2188,24 @@ async function gscWatchTick(wf, owner, opts) {
     ? await pulseClient.gscHealth(app)
     : { ok: false, wired: pulseClient.wired(), findings: [], latestDay: null, why: 'this watcher has no app name in its config' };
 
+  /*
+   * FIRST RETIRE WHAT WE CAN NO LONGER BE READING. A row is keyed on the tab it came from and that tab
+   * carries the property, so a watcher repointed at the real property (my-app.engineer is a DOMAIN
+   * property; the URL-prefix form was never verified) cannot reach the rows the old one made. Handled,
+   * not deleted — each was a true reading once. See gscWatch.staleRows.
+   */
+  try {
+    for (const gone of gscWatch.staleRows(feed.list(wf.id), String(cfg.property || ''))) {
+      feed.markHandled(wf.id, gone.key, true);
+      log.info(`[gsc-watch] ${wf.id}: retired "${String(gone.title).slice(0, 40)}" — read off a property this watcher no longer watches`);
+    }
+  } catch (e) { log.warn(`[gsc-watch] ${wf.id}: could not retire old rows (${e.message})`); }
+
   /* ONE ROW PER FINDING, refreshed in place: upsert only ever creates, so today's value is marked on. */
   for (const row of gscWatch.feedRowsFor(findings, { property: String(cfg.property || '') })) {
     try {
       const { item } = feed.upsert(wf.id, row);
-      feed.mark(wf.id, item.key, { title: row.title, fields: row.fields, kind: row.kind, draft: '', readOnly: true });
+      feed.mark(wf.id, item.key, { title: row.title, fields: row.fields, kind: row.kind, draft: '', readOnly: true, urgency: row.urgency });
     } catch (e) { log.warn(`[gsc-watch] ${wf.id}: ${row.title}: ${e.message}`); }
   }
   /*
