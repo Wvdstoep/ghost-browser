@@ -28,6 +28,83 @@ const push = (arr, v) => { arr.push(v); if (arr.length > MAX) arr.shift(); };
  * Start listening on a page. Idempotent per page: attaching twice would double every entry, and a
  * doubled count is worse than none when the whole point is counting repeats.
  */
+/* ── SENSING A WALL ─────────────────────────────────────────────────────────────────────────────
+ *
+ * These read what the listeners below already collect. Nothing here fetches, and nothing reads a
+ * response body: finding out whether a page was a challenge must not cost more than the page did.
+ */
+const walls = () => require('./siteWalls');
+
+/**
+ * Does this response look like a Cloudflare challenge rather than the page that was asked for?
+ *
+ * Headers only, on purpose. `cf-mitigated: challenge` is Cloudflare saying so itself; a 403 or 503
+ * served by cloudflare is the older shape of the same answer. A 403 from something that is not
+ * Cloudflare is an ordinary refusal and means nothing about where the work should run.
+ */
+function challengeOf(status, headers = {}) {
+  const h = {};
+  for (const k of Object.keys(headers || {})) h[String(k).toLowerCase()] = String(headers[k]);
+  const cfm = h['cf-mitigated'] || '';
+  if (/challenge/i.test(cfm)) return `cf-mitigated: ${cfm}`;
+  const st = Number(status);
+  const server = h.server || '';
+  if ((st === 403 || st === 503) && /cloudflare/i.test(server)) return `HTTP ${st} from server: ${server}`;
+  return null;
+}
+
+/*
+ * A host worth learning about. Our own cluster addresses, bare hostnames and IPs are not sites the
+ * ring could ever route to a phone, and flagging one would put a nonsense row in front of the owner.
+ */
+function publicHost(u) {
+  const h = walls().hostOf(u);
+  if (!h || h === 'localhost' || /^[\d.]+$/.test(h) || !h.includes('.') || /\.local$/i.test(h)) return '';
+  return h;
+}
+
+/** The main document answered. Either it was a challenge, or it is evidence the wall is gone. */
+function senseResponse(page, r, status) {
+  let main = false;
+  try { main = r.request().isNavigationRequest() && r.frame() === page.mainFrame(); } catch { main = false; }
+  if (!main) return;
+  const url = String(r.url() || '');
+  if (!publicHost(url)) return;
+  let why = null;
+  try { why = challengeOf(status, r.headers()); } catch { why = null; }
+  if (why) {
+    try {
+      walls().record(url, {
+        why: 'a Cloudflare challenge answered the page from the cluster, which a datacenter exit cannot pass',
+        evidence: why, url,
+      });
+    } catch { /* learning is never allowed to break the page */ }
+    return;
+  }
+  /* A clean main document is the only honest reason to un-learn a wall. No-ops unless flagged. */
+  if (status >= 200 && status < 300) { try { walls().clean(url, { url }); } catch { /* ignore */ } }
+}
+
+/**
+ * The other shape: no challenge page at all, just the same address again and again. That is what a
+ * managed challenge does to an exit it does not trust, and it is the symptom LinkedIn showed.
+ *
+ * `distinct` guards the obvious false positive — a pass that legitimately revisits one page while
+ * moving through many others is not a loop.
+ */
+function senseLoop(navigations) {
+  const lp = loopOf(navigations);
+  if (!lp || lp.distinct > 3) return;
+  if (!publicHost(lp.url)) return;
+  try {
+    walls().record(lp.url, {
+      why: 'the page redirect-looped from the cluster, which is what a managed challenge does to a datacenter exit',
+      evidence: `${lp.url} loaded ${lp.times}x within the last ${lp.window} navigations (${lp.distinct} distinct)`,
+      url: lp.url,
+    });
+  } catch { /* ignore */ }
+}
+
 function attach(page, session, log = console) {
   if (!page || !session || page.__diagAttached) return;
   page.__diagAttached = true;
@@ -47,13 +124,19 @@ function attach(page, session, log = console) {
     page.on('response', (r) => {
       try {
         const st = r.status();
+        /* BEFORE the early return: a clean 200 is exactly what clears a wall, and the old guard
+           dropped every response under 400 before anything could look at it. */
+        senseResponse(page, r, st);
         if (st < 400) return;                                  // only what failed
         push(d.network, { at: at(), status: st, url: String(r.url()).slice(0, 300) });
       } catch { /* ignore */ }
     });
     page.on('framenavigated', (f) => {
-      try { if (f === page.mainFrame()) push(d.navigations, { at: at(), url: String(f.url()).slice(0, 300) }); }
-      catch { /* ignore */ }
+      try {
+        if (f !== page.mainFrame()) return;
+        push(d.navigations, { at: at(), url: String(f.url()).slice(0, 300) });
+        senseLoop(d.navigations);
+      } catch { /* ignore */ }
     });
   } catch (e) { log.warn?.(`[diag] could not attach: ${e.message}`); }
 }
@@ -187,4 +270,4 @@ function platformFaultOf(loadError) {
   return null;
 }
 
-module.exports = { attach, summarise, dump, clear, loopOf, smokeVerdict, platformFaultOf, MAX };
+module.exports = { attach, summarise, dump, clear, loopOf, smokeVerdict, platformFaultOf, challengeOf, MAX };
