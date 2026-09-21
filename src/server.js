@@ -1059,6 +1059,7 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
      */
     let entered = '';
     let sawEntry = false;      // was there an entry control at all?
+    let chose = null;          // what happened at an account chooser, if one appeared
     const tried = [];
     if (!wall && Array.isArray(site.enterBy) && site.enterBy.length) {
       for (const label of site.enterBy) {
@@ -1090,6 +1091,28 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
       if (entered) {
         try { await s2.page.waitForLoadState('domcontentloaded', { timeout: 20000 }); } catch (e) { /* ignore */ }
         try { await s2.page.waitForTimeout(2500); } catch (e) { /* ignore */ }
+        /*
+         * ANSWER "WHICH ACCOUNT?" BEFORE BELIEVING THE WALL.
+         *
+         * A profile with two Google accounts lands here on an account chooser, not on the console and
+         * not on a sign-in form. The chooser is served from accounts.google.com, so loginWall calls it
+         * a wall, the audit records "no access" on the property, and that reads as a Google penalty
+         * instead of a question nobody answered. Measured: 31 minutes parked on
+         * /v3/signin/accountchooser with zero steps while the owner was signed in the whole time.
+         *
+         * So resolve it first and judge second. The account is owner-set config and is never guessed:
+         * the wrong Google account reads a stranger's console and files the numbers as ours, which is
+         * worse than no answer because it looks like data.
+         */
+        try {
+          const chooser = require('./accountChooser');
+          if (chooser.isChooser(s2.page.url())) {
+            const want = String((settingsStore.read() || {}).googleAccountEmail || '');
+            const r = await chooser.choose(s2.page, want, { log });
+            chose = r;
+            if (!r.picked) log.warn(`[ring] ${site.label}: account chooser unanswered — ${r.why}`);
+          }
+        } catch (e) { log.warn(`[ring] ${site.label}: account chooser check failed (${e.message})`); }
         try { wall = await s2.page.evaluate(agent.loginWall); } catch (e) { wall = false; }
       }
     }

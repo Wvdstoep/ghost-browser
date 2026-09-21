@@ -66,6 +66,14 @@ const DEFAULTS = {
    */
   singleBrowser: true,
   browserProfile: 'facebook',
+  /*
+   * WHICH GOOGLE ACCOUNT OWNS THE PROPERTY. A profile holding two Google accounts lands on an
+   * account chooser, which is served from accounts.google.com and so reads as "signed out" — that is
+   * how a signed-in profile produced a 31-minute stall and a "no access" verdict on Search Console.
+   * Empty on purpose: a flow must never pick a Google account for the owner, because the wrong one
+   * reads someone else's console and files the numbers as ours. Unset means report and stop.
+   */
+  googleAccountEmail: '',
 };
 
 function read() {
