@@ -90,7 +90,13 @@ async function call(name, args, opts = {}) {
     let body = null;
     try { body = JSON.parse(text); } catch { body = { error: text.slice(0, 200) }; }
     if (!r.ok) return { ok: false, wired: true, status: r.status, why: (body && body.error) || ('pulse said ' + r.status) };
-    return { ok: true, wired: true, status: r.status, body };
+    /*
+     * THE OPERATOR DOOR WRAPS ITS ANSWER: { ok, operation, effect, result }. Read flat, every call
+     * succeeds and reports nothing — zero findings from a store holding six, presented as "Pulse holds
+     * nothing yet". The envelope is kept beside it for anything that wants the operation's own words.
+     */
+    const payload = (body && typeof body === 'object' && 'result' in body) ? body.result : body;
+    return { ok: true, wired: true, status: r.status, body: payload, envelope: body };
   } catch (e) {
     /* Unreachable is not the same as refused, and the sentence should say which. */
     return { ok: false, wired: true, why: 'could not reach Pulse: ' + (e && e.message ? e.message : String(e)) };

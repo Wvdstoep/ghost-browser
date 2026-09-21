@@ -246,7 +246,8 @@ describe('the gsc mode is reachable however the watcher is fired', () => {
     expect(fn).toMatch(/require\('\.\/pulse'\)/);
     expect(fn).toMatch(/recordGscHealth\(app, findings\)/);
     /* Read back, never assumed: our own 200 is not evidence the row is in Pulse. */
-    expect(fn.slice(0, fn.indexOf('log.info'))).toMatch(/gscHealth\(app\)/);
+    /* And the read-back happens BEFORE the status row is built, or the row would report our write. */
+    expect(fn.slice(0, fn.indexOf('pulseRow('))).toMatch(/gscHealth\(app\)/);
   });
 
   it('records the pass, so the watcher card does not read as never run', () => {
@@ -262,5 +263,54 @@ describe('the gsc mode is reachable however the watcher is fired', () => {
     const branch = src.slice(at, at + 400);
     expect(branch).not.toMatch(/persistRun/);
     expect(branch).toMatch(/gscWatchTick\(wf, owner\)/);
+  });
+});
+
+/*
+ * ONCE A DAY, WHATEVER THE INTERVAL SAYS.
+ *
+ * The watcher editor on the phone and the desktop offers minute intervals, because it was written for
+ * notification watchers where every five minutes is the point. Saving a Search Console watcher from
+ * that form -- to rename it, say -- rewrites `every: 'day'` into `every: 'minute'`, and nothing
+ * downstream objects: the console then gets walked every few minutes by a model, on a signed-in
+ * account, for numbers that move once a day. The floor lives in the pass, where no edit reaches it.
+ */
+describe('how often it may read Google', () => {
+  const now = Date.parse('2026-09-21T18:00:00Z');
+  const hoursAgo = (h) => ({ lastPass: { startedAt: now - h * 3600 * 1000 } });
+
+  it('reads when it has never read', () => {
+    expect(gsc.duePass({}, now).due).toBe(true);
+    expect(gsc.duePass({ lastPass: {} }, now).due).toBe(true);
+  });
+
+  it('waits out the day even when the interval says minutes', () => {
+    const r = gsc.duePass(hoursAgo(1), now);
+    expect(r.due).toBe(false);
+    expect(r.why).toMatch(/next read in \d+ min/);
+  });
+
+  it('reads again once the day has passed', () => {
+    expect(gsc.duePass(hoursAgo(19), now).due).toBe(false);
+    expect(gsc.duePass(hoursAgo(21), now).due).toBe(true);
+  });
+
+  /* Pressing Run IS the reason to cross it: somebody is asking for a reading now. */
+  it('goes now when a person asked', () => {
+    expect(gsc.duePass(hoursAgo(1), now, { force: true }).due).toBe(true);
+  });
+
+  it('lets the gap be set as data, without a deploy', () => {
+    expect(gsc.duePass({ ...hoursAgo(2), minGapMs: 3600 * 1000 }, now).due).toBe(true);
+    expect(gsc.MIN_GAP_MS).toBe(20 * 3600 * 1000);
+  });
+
+  it('is what the pass actually checks, before it spends anything', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
+    const fn = src.slice(src.indexOf('async function gscWatchTick'));
+    const guard = fn.indexOf('gscWatch.duePass(cfg');
+    expect(guard).toBeGreaterThan(-1);
+    /* Before the flow is driven, or it has already cost the walk it was meant to avoid. */
+    expect(guard).toBeLessThan(fn.indexOf('workflows.drive('));
   });
 });
