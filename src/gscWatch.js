@@ -115,9 +115,20 @@ function findingsOf(run, getJob, opts = {}) {
   return [...byKey.values()].slice(0, cap);
 }
 
-/* Findings first by the tab they came from, so the list reads like the console rather than like the
-   order a walk happened to open things in. */
+/*
+ * WHAT MATTERS MOST, FIRST. A manual action makes every other number on the page irrelevant, so it
+ * leads; then what Google has written to us; then whether our pages are getting in, and why not.
+ *
+ * This is expressed as URGENCY because that is the field the feed sorts on. Sorting the array alone
+ * was not enough: the feed re-sorts what it holds, every row here arrives in the same millisecond, and
+ * with one urgency for all of them the tie broke on firstSeen — giving exactly the reverse of this
+ * order. The status row sits above all of it at 9.
+ */
 const KIND_ORDER = ['manual_action', 'message', 'indexing', 'sitemap', 'vitals'];
+const urgencyFor = (kind) => {
+  const at = KIND_ORDER.indexOf(String(kind || ''));
+  return at < 0 ? 1 : KIND_ORDER.length - at;        // manual_action 5 … vitals 1, unknown 1
+};
 
 /**
  * One read-only feed row per finding. The KEY the feed derives from url + title must be stable across
@@ -131,11 +142,33 @@ function feedRowsFor(findings, opts = {}) {
     const fields = { kind: f.kind, value: f.value || '(nothing shown)' };
     if (f.detail) fields.detail = f.detail;
     fields.read = 'read-only — nothing here is acted on';
-    return { title: f.label, fields, url: tab.url, kind: f.kind, draft: '', readOnly: true };
+    return { title: f.label, fields, url: tab.url, kind: f.kind, draft: '', readOnly: true, urgency: urgencyFor(f.kind) };
   });
   return rows.sort((a, b) => {
     const ai = KIND_ORDER.indexOf(a.kind); const bi = KIND_ORDER.indexOf(b.kind);
     return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || String(a.title).localeCompare(String(b.title));
+  });
+}
+
+/*
+ * ROWS THAT CAN NO LONGER BE READ. A feed row is keyed on the console tab it came from, and that tab
+ * carries the property — so changing the property (my-app.engineer turned out to be a DOMAIN property,
+ * sc-domain:my-app.engineer, where the URL-prefix form was never verified) orphans every row the old
+ * one produced. The new pass cannot reach them, and the page ends up showing the true state of the
+ * property beside six rows insisting we have no access to it.
+ *
+ * So a pass retires them: handled, not deleted. Each was a true reading of something once.
+ *
+ * Deliberately narrow. Only a row whose url is a Search Console tab for a DIFFERENT property
+ * qualifies: the status row (no url) and anything else in the feed are left alone.
+ */
+function staleRows(items, property) {
+  const mine = new Set(CONSOLE_TABS(property).map((t) => t.url));
+  return (items || []).filter((it) => {
+    if (!it || it.handled) return false;
+    const url = String(it.url || '');
+    if (!/^https:\/\/search\.google\.com\/search-console\//.test(url)) return false;
+    return !mine.has(url);
   });
 }
 
@@ -225,5 +258,5 @@ function duePass(cfg = {}, now = Date.now(), opts = {}) {
 
 module.exports = {
   CONSOLE_TABS, tabFor, auditGoal, jobIdsOf, findingsOf, feedRowsFor,
-  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER, duePass, MIN_GAP_MS,
+  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER, urgencyFor, duePass, MIN_GAP_MS, staleRows,
 };
