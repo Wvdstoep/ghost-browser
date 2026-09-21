@@ -358,8 +358,17 @@ fun approveDraftD(st: DesktopState, item: engineer.myapp.gb.shared.ResultItem, e
     val wid = st.artifactWid.value
     if (wid.isBlank() || item.feedKey.isBlank()) return@bg
     try {
-        Cluster.authed("POST", "/v1/watchers/$wid/feed/approve", JSONObject().put("key", item.feedKey).put("text", edited).toString())
-        st.log("● approved — the cluster re-checks the thread, then posts your words")
+        /*
+         * confirm=true, because PRESSING APPROVE IS THE APPROVAL.
+         *
+         * The server reads `confirm` to decide whether to press Wyslij on useme's summary page.
+         * Omitting it meant an approved gig offer filled the form, reached the summary, verified its
+         * own price and body — and stopped one click short, with the client never seeing it. The
+         * feed recorded posted:"summary", which reads like success unless you know that only
+         * "submitted" means sent. Sending stays gated on a human; this IS that human.
+         */
+        Cluster.authed("POST", "/v1/watchers/$wid/feed/approve", JSONObject().put("key", item.feedKey).put("text", edited).put("confirm", true).toString())
+        st.log("● approved — the cluster re-checks it, then sends (a gig offer goes to the summary and presses send)")
     } catch (e: Exception) { st.log("! approve: ${e.message}") }
     openWatcherResultsD(st, wid)
 }
