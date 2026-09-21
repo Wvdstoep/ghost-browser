@@ -1021,6 +1021,48 @@ app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() 
  * device it never needed. So the learned flags are readable, each carries the evidence that produced
  * it, and any one of them can be forgotten.
  */
+/*
+ * IS THE SURFACE READABLE FROM HERE? Opens the serving profile and asks the SAME detector the
+ * console's own sign-in check uses, so there is one answer to this question rather than two.
+ *
+ * Records rather than returns only, because the router reads the record: this is how a surface that
+ * needs a login and does not have one becomes a routing fact instead of a surprise mid-job.
+ */
+app.post('/v1/site-walls/check', authed, async (req, res) => {
+  const key = String((req.body && req.body.surface) || '').toLowerCase().trim();
+  const site = sites.get(key);
+  if (!site) return res.status(404).json({ error: `no surface called "${key}"` });
+  if (!site.needsLogin) return res.status(422).json({ error: `${site.label} works without a login, so there is nothing to check` });
+  const prof = profiles.safeName(site.profile || key);
+  const url = String(site.start || ('https://' + site.site));
+  const owner = req.client.owner;
+  let s2 = null;
+  try {
+    const existing = pool.listFor(owner).find((x) => x.profile === prof);
+    if (existing) s2 = pool.get(existing.sessionId);
+    if (!s2) { const o = await pool.createSession({ owner, profile: prof, takeover: true }); s2 = pool.get(o.sessionId); }
+    await s2.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    let wall = false;
+    try { wall = await s2.page.evaluate(agent.loginWall); } catch (e) { wall = false; }
+    const walls = require('./siteWalls');
+    if (wall) {
+      const rec = walls.record(site.site, {
+        reason: 'signed-out',
+        why: `${site.label} needs a signed-in session and the "${prof}" profile is signed out`,
+        evidence: `a login wall at ${url}`, url,
+      });
+      let dev = null;
+      try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
+      log.warn(`[ring] ${site.label}: the "${prof}" profile is signed out — ${dev ? dev.name + ' holds this login' : 'no connected device holds this login'}`);
+      return res.json({ ok: true, surface: key, signedIn: false, reason: 'signed-out', profile: prof, device: dev ? dev.name : null, record: rec });
+    }
+    walls.clean(site.site, { url });
+    return res.json({ ok: true, surface: key, signedIn: true, profile: prof, reason: '' });
+  } catch (e) {
+    return res.status(502).json({ error: `could not check ${site.label}: ${e.message}` });
+  }
+});
+
 app.get('/v1/site-walls', authed, (_req, res) => {
   try {
     const walls = require('./siteWalls');
@@ -2817,6 +2859,63 @@ async function reconcileDrafts() {
 }
 
 /*
+ * ── THE RING GATE — may this job run on the cluster at all? ──────────────────────────────────────
+ *
+ * Two reasons it may not, and they are different facts with different remedies:
+ *
+ *   wall         Cloudflare refuses this exit. The phone is the answer, and only the phone.
+ *   signed-out   the surface needs a login this profile does not have. The owner can sign in HERE,
+ *                or connect the device that already holds it.
+ *
+ * Learned once and cached in siteWalls, so this is not a page load per job.
+ */
+function urlsInGoal(goal) {
+  const out = [];
+  const re = /https?:\/\/[^\s"'<>)]+/g;
+  let m;
+  while ((m = re.exec(String(goal || ''))) && out.length < 40) out.push(m[0]);
+  return out;
+}
+
+/**
+ * Which declared surface this job is going to, and whether the cluster may do it.
+ *
+ * Reads the goal's own addresses: the role cannot answer this, because one profile serves surfaces
+ * with opposite requirements (the same Google login runs search, used signed out on purpose, and
+ * Search Console, which says nothing at all signed out).
+ */
+async function ringGate({ goal, owner }) {
+  let surfaces = [];
+  try {
+    const seen = new Set();
+    for (const u of urlsInGoal(goal)) {
+      const f = sites.surfaceFor(u);
+      if (f && !seen.has(f.key)) { seen.add(f.key); surfaces.push(f); }
+    }
+  } catch (e) { surfaces = []; }
+  for (const f of surfaces) {
+    let blocked = false;
+    let reason = '';
+    try {
+      if (f.needsDevice) { blocked = true; reason = 'wall'; }
+      else if (sites.needsDevice(f.key)) { blocked = true; reason = require('./siteWalls').reasonFor(f.site) || 'wall'; }
+    } catch (e) { blocked = false; }
+    if (!blocked) continue;
+    const prof = sites.profileNameFor ? (f.profile || f.key) : (f.profile || f.key);
+    let dev = null;
+    try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
+    const why = reason === 'signed-out'
+      ? `${f.label} needs a signed-in session and the "${prof}" profile here is signed out`
+        + (dev ? `. ${dev.name} holds that login — run it there, or sign in on this profile.`
+          : `. Sign in on the "${prof}" profile in Ghost Browser, or connect the device that holds it.`)
+      : `${f.label} is behind a challenge this exit cannot pass`
+        + (dev ? `. It runs on ${dev.name}, never here.` : `. Connect the device that holds this login — it never runs here.`);
+    return { blocked: true, surface: f.key, reason, profile: prof, device: dev ? dev.name : null, why };
+  }
+  return { blocked: false };
+}
+
+/*
  * ── THE RING DISPATCHER — a gated pass, run on the device that holds the login ───────────────────
  *
  * The device is the eyes and hands; the cluster is the brain (Principle 1). So this sends the phone
@@ -3099,6 +3198,20 @@ app.post('/v1/agent/jobs', authed, async (req, res) => {
     catch (e) { return res.status(400).json({ error: `that conversation endpoint is not usable: ${e.message}` }); }
   }
   if (!goal || !String(goal).trim()) return res.status(400).json({ error: 'say what the agent should do' });
+
+  /*
+   * THE CLUSTER NEVER RUNS A GATED SURFACE (Principle 6). Refused BEFORE a model is touched and
+   * before a session is claimed, because the whole cost of getting this wrong was paid downstream:
+   * the run "succeeded", reported that it had no access to the property, and that was filed as
+   * evidence about the property rather than about the browser.
+   */
+  try {
+    const gate = await ringGate({ goal, owner: req.client.owner });
+    if (gate.blocked) {
+      log.warn(`[ring] refusing a cluster job for ${gate.surface}: ${gate.why}`);
+      return res.status(409).json({ error: gate.why, needsDevice: true, surface: gate.surface, reason: gate.reason, device: gate.device });
+    }
+  } catch (e) { log.warn(`[ring] gate could not decide (${e.message}) — letting the job run`); }
 
   const cfg = settingsStore.read();
   if (!cfg.llmModel) return res.status(400).json({ error: 'no model configured — open the agent settings first' });

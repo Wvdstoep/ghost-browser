@@ -207,3 +207,107 @@ describe('enqueue-and-await is a function, not a route body', () => {
     expect(hub).toMatch(/reject\(new Error\("device did not respond in time"\)\)/);
   });
 });
+
+/*
+ * ── A MISSING LOGIN IS THE OTHER REASON TO NEED A DEVICE, AND IT IS PER SURFACE ───────────────────
+ *
+ * Search Console ran on the cluster for weeks reporting "you do not have access to this property".
+ * It was not walled and it was not broken: the Google profile serving it is signed out ON PURPOSE,
+ * because the same profile does web search and its own preset says searching signed out is
+ * preferable. Signed out, search works and Search Console says nothing at all — and that nothing was
+ * filed as findings and later read as a Google penalty.
+ *
+ * So the question is never "is this profile signed out". Answered that way, web search would be
+ * pushed onto a phone it does not need. The question is what THIS SURFACE requires.
+ */
+describe('a surface can need a login even when its profile is deliberately signed out', () => {
+  beforeEach(wipe);
+
+  it('Search Console borrows the Google login but demands one', () => {
+    const sc = sites.get('searchconsole');
+    expect(sc).toBeTruthy();
+    expect(sc.needsLogin).toBe(true);
+    expect(sc.profile).toBe('google');           // the same account, not a second login
+    expect(sites.borrowsProfile('searchconsole')).toBe(true);
+    expect(sites.needsLogin('searchconsole')).toBe(true);
+  });
+
+  it('while search on the same profile needs none', () => {
+    expect(sites.needsLogin('google')).toBe(false);
+  });
+
+  it('a url is matched to the surface it belongs to, longest host first', () => {
+    expect(sites.surfaceFor('https://search.google.com/search-console/welcome').key).toBe('searchconsole');
+    expect(sites.surfaceFor('https://www.google.com/search?q=x').key).toBe('google');
+  });
+
+  /* The whole point of deciding this per surface. */
+  it('learning that Search Console is signed out does NOT move web search to the phone', () => {
+    expect(sites.needsDevice('searchconsole')).toBe(false);
+    walls.record('search.google.com', { reason: 'signed-out', why: 'signed out' });
+    expect(sites.needsDevice('searchconsole'), 'the surface that needs the login routes').toBe(true);
+    expect(sites.needsDevice('google'), 'search must stay on the cluster').toBe(false);
+  });
+
+  /* Different facts, different remedies: a wall means the phone, signed-out can also just be fixed. */
+  it('and the reason is kept, because the remedies differ', () => {
+    walls.record('search.google.com', { reason: 'signed-out', why: 'x' });
+    expect(walls.reasonFor('search.google.com')).toBe('signed-out');
+    walls.record('linkedin.com', { reason: 'wall', why: 'y' });
+    expect(walls.reasonFor('linkedin.com')).toBe('wall');
+  });
+});
+
+describe('the job path asks the ring, not just the watcher path', () => {
+  /*
+   * needsDevice was consulted in ONE line of the codebase — the scheduler watcher branch — so a job
+   * the master dispatched asked nothing and ran on the cluster regardless.
+   */
+  it('a job is refused before a model or a session is spent', () => {
+    expect(server).toMatch(/THE CLUSTER NEVER RUNS A GATED SURFACE/);
+    /*
+     * MEASURED INSIDE THE ROUTE, not across the file. `if (!cfg.llmModel)` occurs nine times in
+     * server.js and the first is about 1700 lines above this route, so an unscoped indexOf compared
+     * the gate against a completely different handler and failed for the wrong reason. This suite
+     * already caught the same defect once in the master: a guard that can match the wrong region is
+     * not a guard.
+     */
+    const route = server.indexOf("app.post('/v1/agent/jobs'");
+    expect(route, 'the job route is still found by this anchor').toBeGreaterThan(0);
+    const body = server.slice(route, route + 6000);
+    const gate = body.indexOf('const gate = await ringGate(');
+    const model = body.indexOf('if (!cfg.llmModel)');
+    expect(gate, 'the gate is inside the job route').toBeGreaterThan(-1);
+    expect(model, 'the model check is inside the job route').toBeGreaterThan(-1);
+    /* Ordering is the point: refused BEFORE the model check, which is where the cost starts. */
+    expect(gate).toBeLessThan(model);
+  });
+
+  it('and it answers 409 with the surface, the reason and the device that holds the login', () => {
+    const at = server.indexOf('if (gate.blocked) {');
+    const body = server.slice(at, at + 420);
+    expect(body).toMatch(/needsDevice: true/);
+    expect(body).toMatch(/surface: gate\.surface/);
+    expect(body).toMatch(/reason: gate\.reason/);
+    expect(body).toMatch(/device: gate\.device/);
+  });
+
+  /*
+   * The role cannot answer this: one profile serves surfaces with opposite requirements. The goal is
+   * where the work names the addresses it is going to.
+   */
+  it('the surface comes from the addresses in the goal, not from the role', () => {
+    expect(server).toMatch(/function urlsInGoal\(goal\)/);
+    expect(server).toMatch(/Reads the goal/);
+  });
+
+  /* One detector for "are we signed in", not two that can disagree. */
+  it('the login check reuses the detector the console already uses', () => {
+    expect(server).toMatch(/app\.post\('\/v1\/site-walls\/check'/);
+    const at = server.indexOf("app.post('/v1/site-walls/check'");
+    const body = server.slice(at, at + 2400);
+    expect(body).toMatch(/agent\.loginWall/);
+    expect(body).toMatch(/reason: 'signed-out'/);
+    expect(body).toMatch(/walls\.clean\(site\.site/);
+  });
+});
