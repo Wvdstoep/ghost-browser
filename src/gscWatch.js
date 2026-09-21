@@ -199,7 +199,31 @@ function pulseRow(opts = {}) {
   };
 }
 
+/*
+ * HOW OFTEN THIS MAY READ GOOGLE, which is NOT what the watcher's interval says.
+ *
+ * The watcher editor on the phone and the desktop offers minute intervals, because it was written for
+ * notification watchers where every five minutes is the point. Saving a Search Console watcher from
+ * that form — to rename it, say — rewrites `every: 'day'` into `every: 'minute'`, and nothing
+ * downstream would object: the console would be walked every few minutes by a model, on a signed-in
+ * account, for numbers that move once a day.
+ *
+ * So the floor lives here, where no edit reaches it. A hand-started run says force and goes now.
+ */
+const MIN_GAP_MS = 20 * 3600 * 1000;
+
+function duePass(cfg = {}, now = Date.now(), opts = {}) {
+  if (opts.force) return { due: true };
+  const gap = Number(cfg.minGapMs) || MIN_GAP_MS;
+  const last = Number((cfg.lastPass || {}).startedAt) || 0;
+  if (!last) return { due: true };                       // never read — read now
+  const since = Number(now) - last;
+  if (since >= gap) return { due: true };
+  const mins = Math.max(1, Math.round((gap - since) / 60000));
+  return { due: false, why: `the console was read ${Math.round(since / 60000)} min ago; next read in ${mins} min` };
+}
+
 module.exports = {
   CONSOLE_TABS, tabFor, auditGoal, jobIdsOf, findingsOf, feedRowsFor,
-  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER,
+  pulseRow, PULSE_TITLE, upToDate, daysBehind, KIND_ORDER, duePass, MIN_GAP_MS,
 };

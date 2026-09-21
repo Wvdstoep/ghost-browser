@@ -2165,6 +2165,10 @@ async function gscWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed');
   const cfg = feed.getConfig(wf.id) || {};
   const app = String(cfg.app || '').trim();
+  /* ONCE A DAY, whatever the interval says — the watcher editor offers minutes and this is a walk
+     through six tabs of a signed-in console for numbers that move daily. See gscWatch.duePass. */
+  const due = gscWatch.duePass(cfg, Date.now(), opts || {});
+  if (!due.due) { log.info(`[gsc-watch] ${wf.id}: skipped — ${due.why}`); return 0; }
   const startedAt = Date.now();
   const c = { owner, maxConcurrent: 2, watch: true };
   const run = await workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId: (opts && opts.runId) || `${wf.id}-${Date.now()}` });

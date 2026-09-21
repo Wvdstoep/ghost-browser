@@ -22,7 +22,17 @@ const require = createRequire(import.meta.url);
 const pulse = require('../src/pulse');
 
 const WIRED = { PULSE_OPS_URL: 'http://pulse:3000', PULSE_REPORTER_KEY: 'k_reporter' };
-const ok = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+/*
+ * THE REAL DOOR'S SHAPE. POST /v1/ops/:name answers { ok, operation, effect, result } — the payload is
+ * one level down. A fake that hands the payload back flat is why a client that could not read Pulse at
+ * all passed twenty-one tests: it answered the shape I had assumed instead of the shape Pulse sends.
+ */
+const ok = (result, name = 'op') => async () => ({
+  ok: true, status: 200,
+  text: async () => JSON.stringify({ ok: true, operation: name, effect: 'read', result }),
+});
+/* A door that does NOT wrap (an older build, another service) must still be read. */
+const okFlat = (body) => async () => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
 
 describe('is Pulse connected to this browser at all', () => {
   it('needs both halves — a URL with no key is a 401 waiting to happen', () => {
@@ -190,5 +200,45 @@ describe('is Pulse up to date — read back, never assumed', () => {
     expect(pulse.upToDate('2026-09-10', now)).toBe(false);
     expect(pulse.upToDate(null, now)).toBe(false);
     expect(pulse.upToDate('', now)).toBe(false);
+  });
+});
+
+/*
+ * THE ENVELOPE. Pulse's operator door wraps every answer: { ok, operation, effect, result }. Reading
+ * it flat does not fail — it succeeds and reports nothing, which is how a store holding six findings
+ * from today came back as "Pulse holds nothing yet". These two are the cheapest guard against a
+ * confident wrong answer, and the reason the fake above mirrors the real shape.
+ */
+describe('the shape Pulse actually answers in', () => {
+  it('reads the payload out of result, not off the envelope', async () => {
+    const r = await pulse.gscHealth('my-app.engineer', {
+      env: WIRED,
+      fetch: ok({ app: 'my-app-engineer', findings: [{ kind: 'sitemap', label: 's', day: '2026-09-21' }] }, 'gsc_health'),
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.latestDay).toBe('2026-09-21');
+  });
+
+  it('counts what Pulse saved, which is also inside result', async () => {
+    const r = await pulse.recordGscHealth('my-app.engineer', [{ kind: 'indexing', label: 'indexed', value: '4' }], {
+      env: WIRED, fetch: ok({ app: 'my-app-engineer', day: '2026-09-21', saved: 1 }, 'record_gsc_health'),
+    });
+    expect(r).toMatchObject({ ok: true, filed: 1 });
+  });
+
+  it('still reads a door that answers flat', async () => {
+    const r = await pulse.gscHealth('my-app.engineer', {
+      env: WIRED, fetch: okFlat({ findings: [{ kind: 'sitemap', label: 's', day: '2026-09-20' }] }),
+    });
+    expect(r.findings).toHaveLength(1);
+    expect(r.latestDay).toBe('2026-09-20');
+  });
+
+  /* An empty result is an answer, not a parse failure: the property is simply not filed yet. */
+  it('reads an empty result as nothing held, without erroring', async () => {
+    const r = await pulse.gscHealth('my-app.engineer', { env: WIRED, fetch: ok({ app: 'x', findings: [] }, 'gsc_health') });
+    expect(r.ok).toBe(true);
+    expect(r.latestDay).toBe(null);
+    expect(r.findings).toEqual([]);
   });
 });
