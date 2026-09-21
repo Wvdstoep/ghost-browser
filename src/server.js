@@ -34,6 +34,7 @@ const workflows = require('./workflows');
 // and roles.get() return them alongside the built-ins (which always win a name collision).
 roles.useExternal(userRoles);
 const sites = require('./sites');
+const deviceThread = require('./deviceThread');   // reads a post + its comments ON the device
 const userSites = require('./userSites');
 const platforms = require('./platforms');
 const connectors = require('./connectors');
@@ -2999,14 +3000,42 @@ async function runPassOnDevice(wf, owner, dev, wProfile) {
   if (!targets.length) {
     log.warn(`[ring] "${wf.name}" has nothing to open — no postUrls and no start URL for ${wProfile}`);
   }
+  /*
+   * A THREAD, NOT A PAGE, where the people are the point.
+   *
+   * Body text proves the ring routes but cannot be ingested: the desk needs the author, who else is
+   * in the thread and their profile slugs. And on LinkedIn mobile web the comments are often not in
+   * the document until something is pressed, so a reader that only looks reports a post with no
+   * replies — which reads exactly like a post that has none. On a reply desk that silence means
+   * nothing is drafted and nobody finds out.
+   */
+  const wantsThread = (() => {
+    try { const f = sites.surfaceFor(targets[0] || ''); return !!(f && /linkedin|facebook/.test(f.key)); }
+    catch (e) { return false; }
+  })();
+
   for (const url of targets) {
     try {
-      await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/navigate', body: { url, profile } }, 120000);
-      const got = await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/content', body: { profile } }, 120000);
-      const r = (got && got.result) || {};
-      const text = String(r.text || r.content || '').replace(/\s+/g, ' ').trim();
-      read.push({ url, chars: text.length, text: text.slice(0, 4000) });
-      log.info(`[ring] ${dev.name} read ${url} in ${profile} — ${text.length} chars`);
+      if (wantsThread) {
+        const th = await deviceThread.readThread({
+          run: deviceHub.runCommand, deviceId: dev.deviceId, profile, url, log,
+        });
+        read.push({
+          url, chars: th.chars, thread: th,
+          who: th.author ? th.author.slug : '', people: (th.participants || []).length,
+          text: String(th.text || '').slice(0, 4000),
+        });
+        log.info(`[ring] ${dev.name} read a thread at ${url} — author ${th.author ? th.author.slug : '?'},`
+          + ` ${(th.participants || []).length} other(s), pressed ${th.pressed}x, ${th.chars} chars`
+          + (th.truncated ? ' (more remains)' : th.nothingToExpand ? ' (nothing to expand)' : ''));
+      } else {
+        await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/navigate', body: { url, profile } }, 120000);
+        const got = await deviceHub.runCommand(dev.deviceId, { method: 'POST', path: '/v1/content', body: { profile } }, 120000);
+        const r = (got && got.result) || {};
+        const text = String(r.text || r.content || '').replace(/\s+/g, ' ').trim();
+        read.push({ url, chars: text.length, text: text.slice(0, 4000) });
+        log.info(`[ring] ${dev.name} read ${url} in ${profile} — ${text.length} chars`);
+      }
     } catch (e) {
       read.push({ url, chars: 0, error: e.message });
       log.warn(`[ring] ${dev.name} could not read ${url}: ${e.message}`);
@@ -3022,7 +3051,14 @@ async function runPassOnDevice(wf, owner, dev, wProfile) {
         note: okCount
           ? `${wProfile} ran on ${dev.name}: ${okCount}/${read.length} page(s) read with the device's own login`
           : `${wProfile} reached ${dev.name} but read nothing — see the device log`,
-        pages: read.map((x) => ({ url: x.url, chars: x.chars, error: x.error || '' })),
+        pages: read.map((x) => ({
+          url: x.url, chars: x.chars, error: x.error || '',
+          /* Who the pass actually found, so the screen can say it without anybody opening a log. */
+          author: x.who || '', people: x.people || 0,
+          pressed: x.thread ? x.thread.pressed : 0,
+          truncated: !!(x.thread && x.thread.truncated),
+          nothingToExpand: !!(x.thread && x.thread.nothingToExpand),
+        })),
       },
     });
   } catch (e) { /* the record is not allowed to fail the pass */ }
