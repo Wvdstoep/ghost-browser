@@ -835,10 +835,43 @@ class BrowserPool {
     return safe;
   }
 
-  async shutdown() {
+  /*
+   * SHUTDOWN IS WHERE LOGINS ARE SAVED OR LOST, so it closes everything at once and bounds each one.
+   *
+   * `close()` flushes a persistent context's cookies, so a clean close is what preserves a session.
+   * This loop used to run SERIALLY with no timeout, against the pod's 30 second grace period, with
+   * five or six contexts open. That lost a hand-made Google login twice over: the serial total can
+   * exceed the deadline so SIGKILL takes the remainder unflushed, and any one hanging context
+   * starves every context after it in the map. A profile the owner signed in by hand ends up with
+   * 63 cookies and no session, and the failure is completely silent.
+   *
+   * Parallel, so the wall clock is the slowest single close rather than the sum. Bounded, so a
+   * wedged Chromium is abandoned instead of taking its neighbours' cookies with it. The cap is
+   * deliberately well under a 30 second grace period, and settable for a pod that allows more.
+   */
+  async shutdown(opts = {}) {
     clearInterval(this._sweep);
-    for (const id of [...this.sessions.keys()]) await this.close(id, 'shutdown');
-    try { await this.browser?.close(); } catch { /* already gone */ }
+    const perCloseMs = Math.max(1000, Number(opts.perCloseMs) || Number(process.env.POOL_CLOSE_MS) || 8000);
+    const ids = [...this.sessions.keys()];
+    const abandoned = [];
+    const bounded = (id) => Promise.race([
+      this.close(id, 'shutdown').then(() => null),
+      new Promise((r) => setTimeout(() => r(id), perCloseMs)),
+    ]).catch(() => id);
+
+    for (const late of await Promise.all(ids.map(bounded))) if (late) abandoned.push(late);
+    if (abandoned.length) {
+      this.log.warn?.(`[pool] ${abandoned.length} context(s) would not close in ${perCloseMs}ms and were`
+        + ` abandoned so the rest could flush: ${abandoned.join(', ')}`);
+    }
+    /* The browser itself is bounded too: hanging here would waste the same grace period. */
+    try {
+      await Promise.race([
+        Promise.resolve(this.browser?.close()),
+        new Promise((r) => setTimeout(r, perCloseMs)),
+      ]);
+    } catch { /* already gone */ }
+    return { closed: ids.length - abandoned.length, abandoned };
   }
 }
 

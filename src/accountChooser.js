@@ -103,4 +103,64 @@ async function choose(page, email, opts = {}) {
   return { picked: true, act: 'pick', email: d.email, url, after, why: d.why };
 }
 
-module.exports = { isChooser, isSignIn, decide, choose };
+/*
+ * A RE-AUTH CHALLENGE IS A WALL, NOT A STEP. Google answers a stale session with
+ * /signin/challenge/<kind> — pwd for a password, pk for a passkey, totp, dp and others. None of
+ * them may be answered by automation: a login is the owner's act, performed by hand once in the
+ * console. Measured cost of not knowing this: 39 minutes of a job walking pwd then pk, holding the
+ * profile the owner needed in order to sign in, while the dashboard showed a manual-action alarm it
+ * had invented from its own inability to read the page.
+ */
+function isChallenge(url) {
+  const u = String(url || '').toLowerCase();
+  if (!u.includes('accounts.google.com')) return false;
+  return /\/signin\/challenge(\/|\?|$)/.test(u) || u.includes('/challenge/pwd') || u.includes('/challenge/pk');
+}
+
+/*
+ * THE COOKIES THAT ARE A GOOGLE SESSION. Absent these, a profile is signed out no matter how many
+ * other google.com cookies it carries — the profile that stalled held 63 of them and none of these.
+ */
+const AUTH_COOKIES = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID', 'LSID'];
+
+/**
+ * Is this cookie jar signed in to Google? Pure, so it can be tested without a browser.
+ * Returns { signedIn, found, missing }.
+ */
+function hasSession(cookies) {
+  const names = new Set((cookies || [])
+    .filter((c) => c && /(^|\.)google\.com$/.test(String(c.domain || '').replace(/^\./, '')))
+    .map((c) => String(c.name || '')));
+  /* SAPISID or __Secure-1PSID is the pair Google actually authenticates with; SID alone can linger. */
+  const found = AUTH_COOKIES.filter((n) => names.has(n));
+  const strong = found.includes('SAPISID') || found.includes('__Secure-1PSID') || found.includes('SID');
+  return { signedIn: strong, found, missing: AUTH_COOKIES.filter((n) => !names.has(n)) };
+}
+
+/**
+ * One sentence a human can act on, for the state a Google surface is actually in.
+ * Kept separate from choose() because this decides whether to bother opening anything at all.
+ */
+function googleState(url, cookies, email) {
+  const sess = hasSession(cookies);
+  if (!sess.signedIn) {
+    return {
+      state: 'signed-out',
+      why: 'the browser profile holds no Google session (no SID/SAPISID cookie), so Search Console'
+        + ' reports no access to the property. Sign in once by hand in the console'
+        + (email ? ` as ${email}` : '') + '. This is not a Google permission problem.',
+    };
+  }
+  if (isChallenge(url)) {
+    return {
+      state: 'challenge',
+      why: 'Google is asking to re-verify this session (password or passkey) and no automation may'
+        + ' answer that. Sign in once by hand in the console'
+        + (email ? ` as ${email}` : '') + '.',
+    };
+  }
+  if (isChooser(url)) return { state: 'chooser', why: 'Google is asking which account to use' };
+  return { state: 'in', why: '' };
+}
+
+module.exports = { isChooser, isSignIn, isChallenge, hasSession, googleState, decide, choose };
