@@ -1785,6 +1785,10 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
     postWatchTick(wf, consoleOwner() || req.client.owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
     return res.json({ runId, status: 'running', mode: 'posts' });
   }
+  if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'gsc') {
+    gscWatchTick(wf, consoleOwner() || req.client.owner, { force: true, runId }).catch((e) => log.error('[gsc-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
+    return res.json({ runId, status: 'running', mode: 'gsc' });
+  }
   const startedAtM = Date.now();
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
     .then((run) => { recordRolePass(wf, startedAtM, run); return triggerFollowUps(wf, req.client.owner); })
@@ -2138,6 +2142,70 @@ async function autoDraftFresh(wid, cfg = {}) {
   }
   if (n) log.info(`[gig-watch] ${wid}: ${n} fresh gig(s) drafted and waiting for approval`);
   return n;
+}
+
+/*
+ * A SEARCH CONSOLE PASS.
+ *
+ * The master used to be the courier: it held a daily audit slot, dispatched this walk to the browser,
+ * polled the job for its findings and forwarded them to Pulse. The middle step was the single point of
+ * failure — one walk that landed on a signed-out account spent the whole slot, and Pulse went eleven
+ * days without a reading while the screen still showed the last one as though it were current.
+ *
+ * The browser is the only thing here that can see the console, so it does the whole job: the flow runs
+ * as any role watcher's does, then what it read is FILED to Pulse and written into the feed.
+ *
+ * NOTHING HERE IS ACTED ON. gsc.audit cannot press anything — no Request indexing, no Validate fix, no
+ * marking a message read — so the rows carry no draft and the cards carry no buttons. The only
+ * question this watcher answers is what the console says and whether Pulse has today's copy of it.
+ */
+async function gscWatchTick(wf, owner, opts) {
+  const gscWatch = require('./gscWatch');
+  const pulseClient = require('./pulse');
+  const feed = require('./watcherFeed');
+  const cfg = feed.getConfig(wf.id) || {};
+  const app = String(cfg.app || '').trim();
+  const startedAt = Date.now();
+  const c = { owner, maxConcurrent: 2, watch: true };
+  const run = await workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId: (opts && opts.runId) || `${wf.id}-${Date.now()}` });
+  recordRolePass(wf, startedAt, run);
+
+  /* What the walk wrote down as it read, off the job itself — so a walk stopped halfway still counts. */
+  const findings = gscWatch.findingsOf(run, (id) => { const j = jobs.get(id); return j ? jobs.view(j) : null; });
+
+  /*
+   * FILE, THEN READ BACK. Our own 200 is not evidence that Pulse holds the row, and "is Pulse up to
+   * date" is the question the results page answers — so it is answered with what Pulse gives back.
+   */
+  const filed = (app && findings.length)
+    ? await pulseClient.recordGscHealth(app, findings)
+    : { ok: false, wired: pulseClient.wired(), filed: 0, skipped: 0, why: app ? 'nothing read this pass' : 'this watcher has no app name in its config' };
+  const held = app
+    ? await pulseClient.gscHealth(app)
+    : { ok: false, wired: pulseClient.wired(), findings: [], latestDay: null, why: 'this watcher has no app name in its config' };
+
+  /* ONE ROW PER FINDING, refreshed in place: upsert only ever creates, so today's value is marked on. */
+  for (const row of gscWatch.feedRowsFor(findings, { property: String(cfg.property || '') })) {
+    try {
+      const { item } = feed.upsert(wf.id, row);
+      feed.mark(wf.id, item.key, { title: row.title, fields: row.fields, kind: row.kind, draft: '', readOnly: true });
+    } catch (e) { log.warn(`[gsc-watch] ${wf.id}: ${row.title}: ${e.message}`); }
+  }
+  /*
+   * AND THE ROW THAT SAYS WHETHER THE REST IS CURRENT, pinned above them and never left handled: it is
+   * a status line rather than a to-do, and a dismissed freshness indicator is precisely how a
+   * fortnight-old reading goes on passing for today's.
+   */
+  try {
+    const st = gscWatch.pulseRow({ app, read: findings.length, filed, held });
+    const { item } = feed.upsert(wf.id, st);
+    feed.mark(wf.id, item.key, { title: st.title, fields: st.fields, kind: st.kind, draft: '', readOnly: true, urgency: st.urgency, handled: false });
+  } catch (e) { log.warn(`[gsc-watch] ${wf.id}: status row: ${e.message}`); }
+
+  log.info(`[gsc-watch] ${wf.id}: read ${findings.length} finding(s), filed ${filed.filed || 0} to Pulse`
+    + (held.latestDay ? ` — pulse holds ${held.latestDay}` : ' — pulse holds nothing')
+    + (filed.ok ? '' : ` (${filed.why || 'not filed'})`));
+  return findings.length;
 }
 
 /**
@@ -2592,6 +2660,7 @@ function operatorContext() {
       const runId = `${wf.id}-${Date.now()}`;
       if (String((feed.getConfig(wf.id) || {}).mode) === 'replies') { replyWatchTick(wf, owner, { force: true }).catch((e) => log.error('[reply-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'gigs') { gigWatchTick(wf, owner, { force: true }).catch((e) => log.error('[gig-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
+      if (String((feed.getConfig(wf.id) || {}).mode) === 'gsc') { gscWatchTick(wf, owner, { force: true, runId }).catch((e) => log.error('[gsc-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
       else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
       return { runId, status: 'running' };
@@ -3279,6 +3348,12 @@ async function scheduleTick() {
     if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'posts') {
       workflows.persistRun({ id: `${wf.id}-${Date.now()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: when.toISOString(), ended_at: when.toISOString(), steps: [] });
       postWatchTick(wf, owner).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
+      continue;
+    }
+    /* A gsc pass DRIVES THE FLOW, so it persists its own run through drive() exactly as the plain role
+       path below does — no stub needed here, and a stub would make scheduleDue() count a pass twice. */
+    if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'gsc') {
+      gscWatchTick(wf, owner).catch((e) => log.error('[gsc-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
       continue;
     }
     const startedAtS = Date.now();

@@ -157,9 +157,10 @@ describe('every door a flow comes through gets the same steps', () => {
   it('every door that drives a flow drives it with fetch', () => {
     // A SCHEDULED flow used to be driven with runAgent alone, so one with a verify step died on
     // "this browser cannot run a verify step" — no nightly automation could ever prove itself.
-    // Six doors: the run route, the operator's run_flow tool and its runFlow context, the watcher
-    // follow-up routing, the scheduler and the boot recovery.
-    expect((serverSrc.match(/runFetch: makeRunFetch\(/g) || []).length).toBe(6);
+    // Seven doors: the run route, the operator's run_flow tool and its runFlow context, the watcher
+    // follow-up routing, the scheduler, the boot recovery, and the Search Console pass (which drives
+    // its own flow so it can read the findings off the job afterwards and file them to Pulse).
+    expect((serverSrc.match(/runFetch: makeRunFetch\(/g) || []).length).toBe(7);
     expect(serverSrc).toMatch(/function makeRunFetch\(client\) \{/);
     expect(serverSrc).toMatch(/The same hands as a hand-started run/);
   });
