@@ -388,3 +388,73 @@ describe('rows left behind by a property change', () => {
     expect(fn.slice(retire - 300, retire + 300)).toMatch(/markHandled/);
   });
 });
+
+/*
+ * A FINDING THE CONSOLE NO LONGER SHOWS.
+ *
+ * "not indexed" moving from 64 to 61 is one row updated, which the key already handles. The case with
+ * no answer until now is a finding that goes AWAY: fix the noindex tag on the one page that had it and
+ * "Uitgesloten door tag noindex = 1" is simply absent from the next read — not zero, absent. Left
+ * alone it sits on the results page for ever, saying 1, being wrong, and looking exactly like the rows
+ * around it that are right.
+ *
+ * The guard matters more than the rule: a tab that would not open produces nothing, and reading that
+ * as "everything on this tab is gone" would wipe the last good reading of it.
+ */
+describe('findings the next pass no longer sees', () => {
+  const PROPERTY = 'sc-domain:my-app.engineer';
+  const feedRow = (r, i) => ({ ...r, key: 'k' + i, handled: false });
+  const yesterday = gsc.feedRowsFor([
+    { kind: 'indexing', label: 'not indexed', value: '64' },
+    { kind: 'indexing', label: 'Uitgesloten door tag noindex', value: '1' },
+    { kind: 'sitemap', label: 'sitemap.xml', value: 'Succesvol' },
+  ], { property: PROPERTY }).map(feedRow);
+
+  it('retires the one that is gone and keeps the one that moved', () => {
+    const today = gsc.feedRowsFor([{ kind: 'indexing', label: 'not indexed', value: '61' }], { property: PROPERTY });
+    const gone = gsc.supersededRows(yesterday, today);
+    expect(gone.map((r) => r.title)).toEqual(['Uitgesloten door tag noindex']);
+  });
+
+  /* The whole reason for the guard: a tab that produced nothing this pass was not read. */
+  it('leaves every row on a tab this pass did not read', () => {
+    const today = gsc.feedRowsFor([{ kind: 'indexing', label: 'not indexed', value: '61' }], { property: PROPERTY });
+    const gone = gsc.supersededRows(yesterday, today);
+    expect(gone.map((r) => r.title)).not.toContain('sitemap.xml');
+  });
+
+  it('retires nothing at all after a pass that read nothing', () => {
+    expect(gsc.supersededRows(yesterday, [])).toEqual([]);
+    expect(gsc.supersededRows(yesterday, null)).toEqual([]);
+  });
+
+  it('never touches the status row, which no tab produces', () => {
+    const status = { ...gsc.pulseRow({ app: 'my-app.engineer', read: 1, filed: {}, held: {} }), key: 'p', handled: false };
+    const today = gsc.feedRowsFor([{ kind: 'indexing', label: 'not indexed', value: '61' }], { property: PROPERTY });
+    expect(gsc.supersededRows([status, ...yesterday], today).map((r) => r.title)).not.toContain(gsc.PULSE_TITLE);
+  });
+
+  it('does not re-retire what is already handled', () => {
+    const done = yesterday.map((r) => ({ ...r, handled: true }));
+    const today = gsc.feedRowsFor([{ kind: 'indexing', label: 'not indexed', value: '61' }], { property: PROPERTY });
+    expect(gsc.supersededRows(done, today)).toEqual([]);
+  });
+
+  /* Matching is case- and space-insensitive on the title, because the label is the console's own text
+     and it has come back with different casing between reads. */
+  it('treats the same label read again as the same row, whatever the casing', () => {
+    const today = gsc.feedRowsFor([
+      { kind: 'indexing', label: 'NOT INDEXED ', value: '61' },
+      { kind: 'indexing', label: 'Uitgesloten door tag noindex', value: '1' },
+    ], { property: PROPERTY });
+    expect(gsc.supersededRows(yesterday, today)).toEqual([]);
+  });
+
+  it('is what the pass does, after it has written today’s rows', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/server.js', import.meta.url)), 'utf8');
+    const fn = src.slice(src.indexOf('async function gscWatchTick'));
+    const wrote = fn.indexOf('gscWatch.feedRowsFor(');
+    const retire = fn.indexOf('gscWatch.supersededRows(');
+    expect(retire).toBeGreaterThan(wrote);
+  });
+});

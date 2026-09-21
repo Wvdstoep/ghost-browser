@@ -2202,12 +2202,24 @@ async function gscWatchTick(wf, owner, opts) {
   } catch (e) { log.warn(`[gsc-watch] ${wf.id}: could not retire old rows (${e.message})`); }
 
   /* ONE ROW PER FINDING, refreshed in place: upsert only ever creates, so today's value is marked on. */
-  for (const row of gscWatch.feedRowsFor(findings, { property: String(cfg.property || '') })) {
+  const rows = gscWatch.feedRowsFor(findings, { property: String(cfg.property || '') });
+  for (const row of rows) {
     try {
       const { item } = feed.upsert(wf.id, row);
       feed.mark(wf.id, item.key, { title: row.title, fields: row.fields, kind: row.kind, draft: '', readOnly: true, urgency: row.urgency });
     } catch (e) { log.warn(`[gsc-watch] ${wf.id}: ${row.title}: ${e.message}`); }
   }
+  /*
+   * AND WHAT THIS PASS NO LONGER SEES on a tab it did read — a refusal reason that has been fixed is
+   * absent from the next read, not zeroed, and would otherwise sit there stating an old number for
+   * ever. Only tabs that produced a finding count; see gscWatch.supersededRows for why that matters.
+   */
+  try {
+    for (const gone of gscWatch.supersededRows(feed.list(wf.id), rows)) {
+      feed.markHandled(wf.id, gone.key, true);
+      log.info(`[gsc-watch] ${wf.id}: retired "${String(gone.title).slice(0, 40)}" — the console no longer shows it`);
+    }
+  } catch (e) { log.warn(`[gsc-watch] ${wf.id}: could not retire what is gone (${e.message})`); }
   /*
    * AND THE ROW THAT SAYS WHETHER THE REST IS CURRENT, pinned above them and never left handled: it is
    * a status line rather than a to-do, and a dismissed freshness indicator is precisely how a
