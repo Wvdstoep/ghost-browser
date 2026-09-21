@@ -1044,20 +1044,53 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
     await s2.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     let wall = false;
     try { wall = await s2.page.evaluate(agent.loginWall); } catch (e) { wall = false; }
+    /*
+     * A LANDING PAGE IS NOT AN ANSWER, so enter the surface before judging.
+     *
+     * Search Console opens on its own marketing page with a Get-started button, signed in OR out —
+     * no login form, not the accounts host, not a /login path. loginWall therefore reported a
+     * healthy session for a profile that was signed out, and the landing address cannot stand in
+     * for the answer either, because it is the same address in both states.
+     *
+     * Pressing the entry button resolves it: signed in it opens the console, signed out it
+     * redirects to accounts.google.com, which loginWall already recognises. So the surface says how
+     * to get in and the detector we already had says what it found.
+     */
+    let entered = '';
+    if (!wall && Array.isArray(site.enterBy) && site.enterBy.length) {
+      for (const label of site.enterBy) {
+        try {
+          await s2.page.getByText(String(label), { exact: false }).first().click({ timeout: 8000 });
+          entered = label;
+          break;
+        } catch (e) { /* not this language, or already inside — try the next */ }
+      }
+      if (entered) {
+        try { await s2.page.waitForLoadState('domcontentloaded', { timeout: 20000 }); } catch (e) { /* ignore */ }
+        try { await s2.page.waitForTimeout(2500); } catch (e) { /* ignore */ }
+        try { wall = await s2.page.evaluate(agent.loginWall); } catch (e) { wall = false; }
+      }
+    }
+    let landed = '';
+    try { landed = String(s2.page.url() || ''); } catch (e) { landed = ''; }
     const walls = require('./siteWalls');
     if (wall) {
       const rec = walls.record(site.site, {
         reason: 'signed-out',
         why: `${site.label} needs a signed-in session and the "${prof}" profile is signed out`,
-        evidence: `a login wall at ${url}`, url,
+        evidence: entered
+          ? `pressed "${entered}" at ${url} and landed on ${landed}`
+          : `a login wall at ${landed || url}`,
+        url,
       });
       let dev = null;
       try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
       log.warn(`[ring] ${site.label}: the "${prof}" profile is signed out — ${dev ? dev.name + ' holds this login' : 'no connected device holds this login'}`);
-      return res.json({ ok: true, surface: key, signedIn: false, reason: 'signed-out', profile: prof, device: dev ? dev.name : null, record: rec });
+      return res.json({ ok: true, surface: key, signedIn: false, reason: 'signed-out', profile: prof,
+        device: dev ? dev.name : null, landed, enteredBy: entered || '', record: rec });
     }
     walls.clean(site.site, { url });
-    return res.json({ ok: true, surface: key, signedIn: true, profile: prof, reason: '' });
+    return res.json({ ok: true, surface: key, signedIn: true, profile: prof, reason: '', landed, enteredBy: entered || '' });
   } catch (e) {
     return res.status(502).json({ error: `could not check ${site.label}: ${e.message}` });
   }

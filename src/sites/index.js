@@ -119,6 +119,19 @@ const SITES = {
     profile: 'google',          // borrows the Google login rather than minting a second one
     needsLogin: true,           // unlike search, this surface says nothing at all signed out
     start: 'https://search.google.com/search-console',
+    /*
+     * HOW TO ENTER, because the entry page answers nothing.
+     *
+     * Search Console opens on /search-console/about, a marketing page with a Get-started button,
+     * and it does that whether or not there is a session — so the landing address is NOT a
+     * signed-out signal, and treating it as one flags the surface every time. Pressing the button
+     * is what resolves it: signed in it opens the console, signed out it redirects to
+     * accounts.google.com, which the general detector already recognises.
+     *
+     * The label is listed in the languages this console renders in. It is matched loosely, so the
+     * first one that exists on the page wins.
+     */
+    enterBy: ['Rozpocznij', 'Get started', 'Start now'],
     defaults: { presentAs: '', blockPasskeys: false, note: 'search console' },
     hint: 'Sign in as the account that OWNS the property. Signed out, every tab here reports no access, which reads like a penalty rather than a missing login.',
   },
