@@ -62,7 +62,7 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
    THE FILE ENGINE — how a file reaches the owner, on every site (an image tool, CapCut, a PDF, an
    export): the browser captures (1) every real download, (2) every file a page opens in a new tab,
    (3) what the walk takes out with download_image (the picture at its own resolution — never a
-   resized one unless a site slot asks for it) or download_file (any linked file, by index or url).
+   resized one unless a site slot asks for it) or download_link (any linked file, by index or url; download_file takes the file a page just GENERATED and hands back an asset id).
    Your job is to make sure ONE of those happened (gb_files_recent shows a new file with a real name
    and size — a screenshot is not the file), then gb_file_show it: the chat shows an image inline, any
    other file as a card; the app saves the file to the device by itself when the owner asked for it.
