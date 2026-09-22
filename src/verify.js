@@ -162,6 +162,43 @@ function actWasApproved(job) {
   return UNKNOWN(`${props.length} proposal(s) still undecided`);
 }
 
+/**
+ * THE AUTOMATION THIS JOB BELONGED TO — DID IT FINISH?
+ *
+ * The profiles volume has two stores and the labeller only knew about one. /profiles/jobs holds
+ * 2,223 agent walks; /profiles/workflow-runs holds 1,837 automation runs, and THAT is the better
+ * corpus: 1,570 of them completed `done`, because an automation runs a route somebody already
+ * proved rather than exploring.
+ *
+ * 964 jobs carry a runId and every one of them matches a run record. 885 belong to a run that
+ * finished — and 666 of those jobs were sitting in silver while the confirmation lay in the other
+ * drawer. Joining the two is the single biggest label improvement available, and it costs a lookup.
+ *
+ * HOW STRONG IS THIS SIGNAL, HONESTLY? Weaker than a person approving an act, stronger than the
+ * agent's own report. A run reaching `done` means every later node — a filter, a condition, a
+ * follow-up — consumed this job's output and did not break on it. A second system depended on the
+ * work and carried on. That is corroboration from outside the model, which is the bar for gold.
+ *
+ * With one refusal: a job the OWNER stopped stays out of it. A flow that carried on regardless does
+ * not turn an interruption into a judgement, and owner-stopped is the one state that is neither
+ * rewarded nor punished anywhere in this file.
+ */
+function automationRunCompleted(job, { runs } = {}) {
+  const runId = job && job.runId;
+  if (!runId) return UNKNOWN('this job did not come from an automation');
+  if (typeof runs !== 'function') return UNKNOWN('no workflow-run store to check against');
+  if (steps(job).some((s) => s.kind === 'end' && /stopped by you/i.test(textOf(s)))) {
+    return UNKNOWN('the owner stopped this one — the flow carrying on is not a verdict on it');
+  }
+  let run = null;
+  try { run = runs(String(runId)); } catch (e) { return UNKNOWN(`could not read the run: ${e.message}`); }
+  if (!run) return UNKNOWN(`no run record for ${runId}`);
+  const st = String(run.status || '').toLowerCase();
+  if (st === 'done') return PASS(`the automation "${run.name || runId}" completed with this job in it`, `run ${runId} done`);
+  if (st === 'error') return FAIL(`the automation "${run.name || runId}" ended in error`, String(run.error || '').slice(0, 120));
+  return UNKNOWN(`the automation is ${st || 'in an unknown state'}`);
+}
+
 /** Did it actually write anything down? Findings are an artefact; a summary is not. */
 function resultsWereWritten(job) {
   const buckets = ['leads', 'opportunities', 'gigs', 'replies', 'reach', 'keywords'];
@@ -172,6 +209,7 @@ function resultsWereWritten(job) {
 
 const VERIFIERS = {
   actWasApproved,
+  automationRunCompleted,
   recordingCompleted,
   fileWasProduced,
   typedTextLanded,
@@ -179,16 +217,68 @@ const VERIFIERS = {
 };
 
 /** Which verifiers, when they pass, are external truth rather than a good sign. */
-const EXTERNAL = new Set(['actWasApproved', 'recordingCompleted', 'fileWasProduced', 'typedTextLanded']);
+const EXTERNAL = new Set(['actWasApproved', 'automationRunCompleted', 'recordingCompleted', 'fileWasProduced', 'typedTextLanded']);
+
+/**
+ * WAS THIS THE AGENT'S DOING AT ALL?
+ *
+ * MEASURED BEFORE BEING BUILT, and the measurement is the whole argument. Of 707 jobs that the
+ * tiering called bronze, exactly 22 were the agent's own decisions:
+ *
+ *     267  the owner pressed Stop
+ *     165  no report at all, nothing to judge either way
+ *     118  stale running — a pod roll cut it off mid-flight
+ *      69  "every model key is out of allowance" — it ran out of credit
+ *      42  the model or its API died
+ *      20  the browser closed under it
+ *       3  other infrastructure deaths
+ *     ───
+ *      22  a verifier actually FAILED, or it wandered into the step budget
+ *
+ * So punishing "bronze" would be ninety-seven percent punishing cancellations, deploys and an empty
+ * account. A model trained that way learns the one lesson available: attempt less, finish sooner,
+ * never take on anything long. That is worse than no training at all, and it would be invisible —
+ * the loss would fall and the agent would quietly become useless.
+ *
+ * Hence a fourth outcome. `void` is neither reward nor punishment: excluded from the set entirely,
+ * because it is evidence about the infrastructure and about the owner's attention, not about the
+ * policy. The asymmetry is deliberate and it runs both ways — reward needs evidence, punishment
+ * needs evidence, and the ABSENCE of evidence is void rather than blame.
+ */
+function voidOf(job) {
+  const all = steps(job);
+  const txt = all.map((s) => textOf(s)).join(' \n ');
+  const report = String((job && job.report) || '');
+  const err = String((job && job.error) || '');
+  const both = `${report} ${err} ${txt}`;
+
+  if (/stopped by you/i.test(txt)) return { isVoid: true, reason: 'the owner stopped it' };
+  if (job && job.status === 'running') return { isVoid: true, reason: 'still marked running — cut off by a deploy' };
+  if (/out of allowance|no model key|every model key/i.test(both)) return { isVoid: true, reason: 'it ran out of model credit' };
+  if (/model stopped answering|returned 5\d\d|rate limit|429|was rejected \(401\)|Unauthorized/i.test(both)) {
+    return { isVoid: true, reason: 'the model or its API failed' };
+  }
+  if (/Target page, context or browser has been closed|browser has been closed|context destroyed|session it was waiting for/i.test(both)) {
+    return { isVoid: true, reason: 'the browser died under it' };
+  }
+  /* No report, no error, nothing verified: there is nothing here to learn from in either
+     direction. Counting it as a failure is guessing, and guessing about blame is the expensive
+     kind — 165 of the 707 sat in exactly this state. */
+  if (!report && !err) return { isVoid: true, reason: 'it ended without a report and without an error — nothing to judge' };
+
+  return { isVoid: false, reason: '' };
+}
 
 /**
  * THE LABEL, AND ITS REASONS.
  *
  *   gold    an external check passed. Train on these without hesitation.
- *   silver  nothing external could be checked, but it wrote a report, wrote rows and did not error.
- *           Usable with weight, never as the bulk of a training set.
- *   bronze  it errored, was cut short, or a verifier actively FAILED. Useful as a negative, and as a
- *           positive never — the corpus is 71% stopped jobs, so this is most of it.
+ *   silver  nothing external could be checked, but it wrote a report and did not error. Usable with
+ *           weight, never as the bulk of a training set.
+ *   bronze  IT DID SOMETHING WRONG, and there is evidence: a verifier failed, or it wandered into
+ *           the step budget without concluding. Only these are worth punishing — 22 of 2,222.
+ *   void    an interruption, a deploy, an empty account, a dead browser. Neither rewarded nor
+ *           punished, and kept out of the set entirely. See voidOf.
  *
  * A FAILED verifier is decisive: a job that claimed a file and produced none is bronze no matter how
  * good its report reads. That asymmetry is the whole point of checking.
@@ -201,28 +291,50 @@ function outcomeOf(job, deps = {}) {
   const failed = Object.entries(checks).filter(([, r]) => r.ok === false);
   const passedExternal = Object.entries(checks).filter(([n, r]) => r.ok === true && EXTERNAL.has(n));
 
-  const errored = !!(job && job.error);
   const report = String((job && job.report) || '').trim();
-  const cutShort = /step (limit|budget)|model stopped answering|could not be reopened/i.test(report);
+  const wandered = /step (limit|budget)/i.test(report);
+  const voided = voidOf(job);
 
-  let tier = 'bronze';
-  const why = [];
+  /*
+   * Order matters, and this is the one ordering decision in the file. A FAILED verifier outranks a
+   * void reason: a job that claimed a file, produced none, and was then cancelled still told us
+   * something true about its policy. Everything else that is void stays void.
+   */
   if (failed.length) {
-    why.push(...failed.map(([n, r]) => `${n}: ${r.why}`));
-  } else if (passedExternal.length) {
-    tier = 'gold';
-    why.push(...passedExternal.map(([n, r]) => `${n}: ${r.why}`));
-  } else if (!errored && !cutShort && report && checks.resultsWereWritten.ok === true) {
-    tier = 'silver';
-    why.push('a report, rows written, and nothing external to check');
-  } else if (!errored && !cutShort && report) {
-    tier = 'silver';
-    why.push('a report and no error, but nothing external to check');
-  } else {
-    why.push(errored ? `errored: ${String(job.error).slice(0, 120)}` : cutShort ? 'cut short' : 'no report and nothing verified');
+    return {
+      tier: 'bronze', why: failed.map(([n, r]) => `${n}: ${r.why}`), checks,
+      external: [], failures: failed.map(([n]) => n),
+    };
   }
-
-  return { tier, why, checks, external: passedExternal.map(([n]) => n), failures: failed.map(([n]) => n) };
+  /*
+   * GOLD OUTRANKS VOID, and getting this the wrong way round cost 295 gold jobs on the first try.
+   *
+   * An owner stopping a run does not un-happen the verified thing the agent did before they
+   * pressed it: the message landed, the file appeared. Those turns are good examples and the
+   * interruption says nothing about them. Void is for a job with NOTHING verified and no fault
+   * of its own.
+   */
+  if (passedExternal.length) {
+    return {
+      tier: 'gold', why: passedExternal.map(([n, r]) => `${n}: ${r.why}`), checks,
+      external: passedExternal.map(([n]) => n), failures: [],
+      /* Gold, and still says how it ended: a verified job that was cut off afterwards is worth
+         learning from AND worth knowing was cut off. */
+      ...(voided.isVoid ? { endedBy: voided.reason } : {}),
+    };
+  }
+  if (voided.isVoid) {
+    return { tier: 'void', why: [voided.reason], checks, external: [], failures: [], voidReason: voided.reason };
+  }
+  if (wandered) {
+    /* It was asked to conclude and did not. That IS a policy failure, and one of the few worth
+       punishing: the lesson "stop and report" is exactly what a small model needs taught. */
+    return { tier: 'bronze', why: ['it ran into the step budget without concluding'], checks, external: [], failures: ['wandered'] };
+  }
+  if (report) {
+    return { tier: 'silver', why: ['a report and no error, but nothing external to check'], checks, external: [], failures: [] };
+  }
+  return { tier: 'void', why: ['nothing to judge'], checks, external: [], failures: [], voidReason: 'nothing to judge' };
 }
 
-module.exports = { outcomeOf, VERIFIERS, EXTERNAL, UNKNOWN, PASS, FAIL };
+module.exports = { outcomeOf, voidOf, VERIFIERS, EXTERNAL, UNKNOWN, PASS, FAIL };

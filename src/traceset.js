@@ -135,21 +135,41 @@ function build(jobs, deps = {}, opts = {}) {
   const keepTiers = new Set(opts.keepTiers || ['gold', 'silver']);
 
   const labelled = [];
-  const tiers = { gold: 0, silver: 0, bronze: 0 };
+  const tiers = { gold: 0, silver: 0, bronze: 0, void: 0 };
   const caught = {};
+  const voidReasons = {};
   for (const job of (jobs || [])) {
     if (!job || !job.id) continue;
     const o = outcomeOf(job, deps);
     tiers[o.tier] = (tiers[o.tier] || 0) + 1;
     for (const f of o.failures) caught[f] = (caught[f] || 0) + 1;
+    if (o.tier === 'void') voidReasons[o.voidReason || 'unknown'] = (voidReasons[o.voidReason || 'unknown'] || 0) + 1;
     labelled.push({ job, outcome: o });
   }
 
   /* Split by JOB, deterministically, before any turn is produced. */
   const train = [];
   const evalSet = [];
+  const reject = [];
   const perRole = {};
   for (const { job, outcome } of labelled) {
+    /*
+     * VOID IS DROPPED ON THE FLOOR, in both directions.
+     *
+     * 950 of 2,223 jobs are void: 579 the owner stopped, 208 that ran out of model credit, 184 with
+     * nothing to judge, 153 cut off by a deploy, 92 where the model's API died, 29 where the
+     * browser closed. None of that is a decision the agent made. Rewarding it teaches nothing and
+     * punishing it teaches the one lesson available — attempt less, finish sooner, never take on
+     * anything long — which would be invisible in the loss and fatal in use.
+     *
+     * The credit ones also stop existing the moment the model runs on the ring: there is no
+     * allowance to exhaust. They are an artefact of today's cloud LLM, not evidence about a policy.
+     */
+    if (outcome.tier === 'void') continue;
+
+    /* Punished, and kept SEPARATE from the positives. See below for why not simply negative SFT. */
+    if (outcome.tier === 'bronze') { reject.push({ job, outcome }); continue; }
+
     if (!keepTiers.has(outcome.tier)) continue;
     const role = String(job.role || 'general');
     perRole[role] = (perRole[role] || 0) + 1;
@@ -159,10 +179,12 @@ function build(jobs, deps = {}, opts = {}) {
 
   const toTurns = (rows) => rows.flatMap(({ job, outcome }) => turnsOf(job, opts).map((t) => ({
     ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
+    ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
   })));
 
   const trainTurns = toTurns(train);
   const evalTurns = toTurns(evalSet);
+  const rejectTurns = toTurns(reject);
 
   return {
     manifest: {
@@ -172,8 +194,10 @@ function build(jobs, deps = {}, opts = {}) {
       /* What the verifiers CAUGHT — a claim the job's own record contradicts. The most useful
          number in here, and the reason to keep adding verifiers. */
       claimsCaught: caught,
-      kept: { train: train.length, eval: evalSet.length },
-      turns: { train: trainTurns.length, eval: evalTurns.length },
+      /* And what was excluded as nobody's fault, so the exclusion is auditable rather than silent. */
+      voidReasons,
+      kept: { train: train.length, eval: evalSet.length, reject: reject.length },
+      turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length },
       perRoleCap,
       evalFraction,
       keptTiers: [...keepTiers],
@@ -181,6 +205,20 @@ function build(jobs, deps = {}, opts = {}) {
     },
     train: trainTurns,
     eval: evalTurns,
+    /*
+     * HOW FAILURE IS PUNISHED, AND WHY NOT AS NEGATIVE SFT.
+     *
+     * Supervised fine-tuning with a negative weight is unstable and pushes probability mass
+     * nowhere in particular. The working method for a set shaped like this one is preference
+     * optimisation, and specifically the unpaired kind (KTO): a pile of desirable examples and a
+     * pile of undesirable ones, with no requirement that they pair up — which is exactly what 379
+     * gold and 116 bronze are, since almost no bronze job has a gold twin doing the same task.
+     *
+     * So these are emitted as their own file, marked with WHICH check failed, and never mixed into
+     * the positives. 116 is a small pile, and that is the honest state: the corpus contains very
+     * little genuine misbehaviour once interruptions are removed.
+     */
+    reject: rejectTurns,
   };
 }
 
