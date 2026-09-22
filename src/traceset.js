@@ -19,6 +19,8 @@
  */
 'use strict';
 
+const localPrompt = require('./localPrompt');
+
 const { outcomeOf } = require('./verify');
 
 /* ── redaction ──────────────────────────────────────────────────────────────────────────────── */
@@ -124,7 +126,7 @@ function threwRightAfter(steps, i) {
   return false;
 }
 
-function turnsOf(job, { maxObs = 600, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
+function turnsOf(job, { maxObs = 600, maxMarks = 2000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
@@ -135,7 +137,16 @@ function turnsOf(job, { maxObs = 600, maxHistory = 6, keepThrown = false, onDrop
     if (!s) continue;
     if (OBSERVE.has(s.kind)) {
       const t = scrubText(String(s.text || s.detail || '')).slice(0, maxObs);
-      if (t) history.push({ kind: s.kind, text: t, url: s.url ? scrubText(String(s.url)).slice(0, 300) : undefined });
+      /*
+       * THE NUMBERED LIST TRAVELS WITH THE OBSERVATION.
+       *
+       * Without it a turn whose answer is `click [13]` carries no information from which 13 could
+       * follow, and training on it teaches the model to invent an index. Only looks recorded since
+       * this was added carry marks; older jobs simply have none, which is the honest state and is
+       * why the set is worth rebuilding as fresh runs land.
+       */
+      const marks = s.marks ? scrubText(String(s.marks)).slice(0, maxMarks) : undefined;
+      if (t) history.push({ kind: s.kind, text: t, marks, url: s.url ? scrubText(String(s.url)).slice(0, 300) : undefined });
       if (history.length > maxHistory) history.shift();
       continue;
     }
@@ -284,7 +295,11 @@ function build(jobs, deps = {}, opts = {}) {
          * the completion matches. "find three suppliers" and "find complaints about X" both opening
          * with the same search are two lessons, not one, and collapsing them discards real variety.
          */
-        const key = `${t.goal}|${t.role}|${t.action.tool}|${JSON.stringify(t.action.args)}|${(t.observed[t.observed.length - 1] || {}).text || ''}`;
+        /* The marks belong in the key: two `click [3]` turns with the same goal on two different
+           pages are two different decisions, and collapsing them keeps whichever came first while
+           silently discarding the other page entirely. */
+        const lastObs = t.observed[t.observed.length - 1] || {};
+        const key = `${t.goal}|${t.role}|${t.action.tool}|${JSON.stringify(t.action.args)}|${lastObs.text || ''}|${lastObs.marks || ''}`;
         if (seenTurn.has(key)) { dropped['an identical decision in an identical situation'] = (dropped['an identical decision in an identical situation'] || 0) + 1; return false; }
         seenTurn.add(key);
       }
@@ -349,12 +364,40 @@ function build(jobs, deps = {}, opts = {}) {
   };
 }
 
-/** One JSONL line per turn, in the chat shape a tool-use fine-tune expects. */
-function toJsonl(turns) {
+/**
+ * One JSONL line per turn, in the chat shape a tool-use fine-tune expects.
+ *
+ * THE PROMPT IS NOT WRITTEN HERE. It comes from localPrompt.js, the same file the local model is
+ * served with, because the alternative has already cost one round: the first set built by this
+ * function carried a hundred-character system prompt with no tool catalogue, while the live agent
+ * sends the whole catalogue on every call. A model trained on one prompt and served another
+ * underperforms its own evaluation for reasons that are almost impossible to find afterwards.
+ *
+ * `tools` is passed IN rather than required here. agent.js is the other end of this system and
+ * requiring it from the builder makes a cycle; handing the catalogue in also lets a test build a
+ * set without loading the entire agent.
+ */
+function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}) {
+  /* Built once per role rather than once per turn: the catalogue is identical for every turn of a
+     role and there are tens of thousands of turns. */
+  const cache = new Map();
+  const forRole = (role) => {
+    if (!toolsFor) return tools;
+    if (!cache.has(role)) cache.set(role, toolsFor(role) || tools);
+    return cache.get(role);
+  };
   return turns.map((t) => JSON.stringify({
     messages: [
-      { role: 'system', content: `You are Ghost Browser working as ${t.role}${t.site ? ` in the ${t.site} profile` : ''}. Answer with one tool call.` },
-      { role: 'user', content: `GOAL: ${t.goal}\n\nSEEN SO FAR:\n${t.observed.map((o) => `- ${o.kind}: ${o.text}`).join('\n') || '- nothing yet'}` },
+      /*
+       * THE ROLE'S OWN TOOLS, NOT EVERY TOOL.
+       *
+       * The live agent calls roles.toolsFor(role, TOOLS) and a role sees only what it may reach for
+       * — a specialist is handed twenty-six tools, not sixty-six. Training on the full catalogue
+       * would be the same train-and-serve mismatch as omitting it, one layer down, and it teaches
+       * the model to consider tools that will not be on offer when it runs.
+       */
+      { role: 'system', content: localPrompt.systemFor({ role: t.role, site: t.site, tools: forRole(t.role), playbook: playbookFor ? playbookFor(t.role) : '' }) },
+      { role: 'user', content: localPrompt.userFor({ goal: t.goal, observed: t.observed }) },
       { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: t.action.args }) },
     ],
     meta: { jobId: t.jobId, tier: t.tier, verified: t.verified, role: t.role, at: t.at },

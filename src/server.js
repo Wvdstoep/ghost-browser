@@ -1551,6 +1551,91 @@ app.put('/v1/profiles/:name/settings', authed, async (req, res) => {
  */
 
 /* The specialists a conversation can be given, so a UI never has to know their names. */
+/* ── THE TRAINING PIPELINE, AS SOMETHING YOU CAN LOOK AT ──────────────────────────────────────
+ *
+ * An unattended nightly loop with no surface is indistinguishable from a broken one: the model
+ * either improves or it does not, and nobody finds out which for weeks. So three questions and
+ * nothing else — what has been collected, what each round did, and what is serving now.
+ *
+ * The training itself never happens here. This node is the controller and has no CPU to spare; a
+ * round runs on whichever connected device says it can train.
+ */
+const training = require('./training');
+const corpusLib = require('./corpus');
+
+app.get('/v1/training/state', authed, (_req, res) => {
+  try {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const base = process.env.PROFILE_DIR || '/profiles';
+
+    /*
+     * The corpus is TALLIED, not re-read. There are 2,240 job files and 284 MB of them, and this is
+     * a screen somebody leaves open; parsing the lot on every poll would make looking at the
+     * pipeline the most expensive thing the node does.
+     */
+    const corpus = corpusLib.tally({
+      dir: jobs.DIR,
+      cacheFile: pathx.join(base, 'training', 'corpus-cache.json'),
+      /*
+       * The same judgement the set builder uses, for every job that ran before verdicts were stored
+       * on the job itself — which is nearly all of them. Without it this screen reports an empty
+       * corpus over a real one, while the training set built from the same directory counts 1,147
+       * gold. It costs one evaluation per job, once, because the answer is then cached.
+       */
+      judge: (j) => require('./verify').outcomeOf(j, {
+        files: () => fileAssets.list(),
+        recordings: () => { try { return [...recorder.list()]; } catch (e) { return []; } },
+        runs: (id) => workflows.readRun(id),
+      }),
+    });
+
+    let manifest = null;
+    try { manifest = JSON.parse(fsx.readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8')); }
+    catch (e) { manifest = null; }
+
+    /* Which connected devices could take a round, read off what they advertise — the same way every
+       other kind of work is routed, so it is whichever laptop is on rather than a named one. */
+    let trainers = [];
+    try {
+      trainers = (deviceHub.deviceList() || [])
+        .filter((d) => d.caps && (d.caps.trainer || (d.caps.features || []).includes('train_round')))
+        .map((d) => ({ name: d.name || d.deviceId, deviceId: d.deviceId, online: !!d.online }));
+    } catch (e) { trainers = []; }
+
+    res.json(training.state({ corpus, manifest, trainers }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** A device taking a round, and reporting in while it works so an hour is never a silent hour. */
+app.post('/v1/training/rounds', authed, (req, res) => {
+  try { res.status(201).json(training.startRound(req.body || {})); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/training/rounds/:id/note', authed, (req, res) => {
+  const r = training.noteRound(req.params.id, (req.body || {}).line);
+  if (!r) return res.status(404).json({ error: 'no such round' });
+  res.json({ ok: true });
+});
+app.post('/v1/training/rounds/:id/end', authed, (req, res) => {
+  const r = training.endRound(req.params.id, req.body || {});
+  if (!r) return res.status(404).json({ error: 'no such round' });
+  res.json(r);
+});
+
+/**
+ * PROMOTION IS NEVER AUTOMATIC ON A ROUND FINISHING.
+ *
+ * A round that ended is not a round that won. training.promote refuses anything that did not beat
+ * its own baseline on the frozen evaluation split, so a worse adapter cannot reach production on
+ * the strength of being the most recent thing to finish.
+ */
+app.post('/v1/training/rounds/:id/promote', authed, (req, res) => {
+  const r = training.promote(req.params.id);
+  if (r.error) return res.status(400).json(r);
+  res.json(r);
+});
+
 app.get('/v1/agent/roles', authed, (_req, res) => res.json({ roles: roles.list() }));
 
 /*
