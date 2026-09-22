@@ -39,6 +39,29 @@ const userRoles = require('./userRoles');
  */
 const { siteKey, roleChoice } = require('./profileRole');
 const roleDevices = require('./roleDevices');
+
+/*
+ * THE WORK GETS CHECKED WHEN IT FINISHES, not only when somebody builds a training set.
+ *
+ * Wired here because this is the only place that has all three stores in scope: the captured files,
+ * the recorder, and the workflow runs. jobs.js stores jobs and knows about none of them, which is
+ * why the checker is handed in rather than imported there. It sits above those requires on
+ * purpose: the closure only runs when a job finishes, long after this module is evaluated, and
+ * putting it here keeps it next to the jobs store it belongs to.
+ *
+ * Two things come out of it. The verdict lands on the job, so every finished job carries a tier
+ * rather than waiting for a sweep over 2,223 records with ageing evidence. And when a verifier
+ * contradicts the report, the job says so — an agent that claims an export it never produced is
+ * worse than one that admits it failed, because nobody finds out until they go looking for the file.
+ */
+jobs.setVerifier((job) => {
+  const { outcomeOf } = require('./verify');
+  return outcomeOf(job, {
+    files: () => fileAssets.list(),
+    recordings: () => ((typeof recorder !== 'undefined' && recorder) ? [...recorder.list()] : []),
+    runs: (id) => workflows.readRun(id),
+  });
+});
 const roleEngine = require('./roleEngine');
 
 /** This install's profile-to-role answer, with the stores wired in. See profileRole.js. */
