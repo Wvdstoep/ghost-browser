@@ -1645,10 +1645,16 @@ app.get('/v1/agent/roles/:id', authed, (req, res) => {
    */
   const { requireWords, runsOnWords } = require('./requireWords');
   const need = r.require && typeof r.require === 'object' ? r.require : null;
+  /*
+   * THE RING IS PER OWNER, and every device registers under the console account. Asking as a key
+   * owner answered "no devices are connected" with two online and one of them an exact match — a
+   * read door that is right for the app and confidently wrong for anything else is worse than no
+   * answer. This file already uses consoleOwner() || req.client.owner in exactly these places.
+   */
   const words = requireWords(need);
   let runsOn = null;
   if (need) {
-    try { runsOn = runsOnWords(deviceHub.routeDevice(req.client.owner, need)); }
+    try { runsOn = runsOnWords(deviceHub.routeDevice(consoleOwner() || req.client.owner, need)); }
     catch (e) { runsOn = { device: null, ready: [], candidates: [], summary: `Could not ask the device ring: ${e.message}` }; }
   }
   /*
@@ -1663,7 +1669,7 @@ app.get('/v1/agent/roles/:id', authed, (req, res) => {
     const w = requireWords(v.require);
     let on = null;
     if (v.require) {
-      try { on = runsOnWords(deviceHub.routeDevice(req.client.owner, v.require)); }
+      try { on = runsOnWords(deviceHub.routeDevice(consoleOwner() || req.client.owner, v.require)); }
       catch (e) { on = { device: null, ready: [], candidates: [], summary: `Could not ask the device ring: ${e.message}` }; }
     }
     return {
