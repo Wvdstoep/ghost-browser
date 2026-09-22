@@ -25,22 +25,24 @@ class DesktopNode(
     @Volatile var registered = false; private set
 
     /*
-     * ONLY WHAT AgentD ACTUALLY HANDLES.
+     * EXACTLY WHAT THIS FILE'S OWN DISPATCH HANDLES — read off the `when` below, nothing borrowed.
      *
-     * This advertised cdp = true plus click_xy, drag, upload_file and download. AgentD handles none
-     * of those four, and it has no CDP input at all — JCEF gives us a browser, not a DevTools input
-     * domain. Because it claimed cdp, the ring would pick THIS node for a CapCut edit in preference
-     * to the Electron node that can really drag, and the run would fail on the drop.
+     * The list is the contract the ring believes, so it is kept beside the dispatch it describes.
+     * Add a "/v1/x" branch below, add "x" here; never the other way round. An advertisement the ring
+     * believes is worse than silence, because it sends work here that cannot be done instead of to a
+     * device that can.
      *
-     * cdp is false, and the feature list is exactly the set of commands in AgentD's dispatch. When a
-     * command is added there, add its name here — never the other way round.
+     * cdp is FALSE, and that is not modesty. dragXY below is a press → move → release on the
+     * compositor, which is the right mechanism for a canvas (a CapCut timeline) and the wrong one for
+     * an HTML5-draggable element: those need Input.setInterceptDrags, which only the Electron node
+     * has. So cdp stays the flag that distinguishes the two, and a role needing a true HTML5 drop can
+     * require it.
      */
     private val caps = JSONObject()
         .put("platform", "desktop").put("cdp", false).put("model", false).put("realIp", true)
         .put("features", listOf(
-            "browser_read", "browser_posts", "browser_navigate", "browser_click",
-            "browser_click_text", "browser_type", "browser_scroll",
-            "list_workflows", "run_workflow", "list_devices", "list_platforms"))
+            "navigate", "info", "analyze", "content", "click_text", "click", "type", "scroll",
+            "screenshot", "eval", "click_xy", "drag", "upload_file"))
         .toString()
 
     fun start() { Thread({ runLoop() }, "gb-desktop-node").apply { isDaemon = true }.start() }
