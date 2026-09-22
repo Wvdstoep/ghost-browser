@@ -250,9 +250,9 @@ isolated per-profile sessions, an on-device or **cluster** agent (no key needed 
 platform profiles, and the automations engine. So the backend can run a hunt — or a full **CapCut** edit
 — on whichever node you pick: phone (mobile identity) or laptop (desktop identity).
 
-Installer (primary): [mobile/desktop/dist/GhostBrowser-Setup-1.0.17.exe](mobile/desktop/dist/GhostBrowser-Setup-1.0.17.exe)
+Installer (primary): [mobile/desktop/dist/Ghost Browser-1.0.26.msi](mobile/desktop/dist/Ghost%20Browser-1.0.26.msi)
 — **updates in place** (no manual uninstall) and opens after install. Unsigned — SmartScreen: *More info →
-Run anyway*. Build from source: `./gradlew :desktop:packageExe` in [`mobile/`](mobile/).
+Run anyway*. Build from source: `./gradlew :desktop:packageMsi` in [`mobile/`](mobile/).
 
 Legacy fallback (Electron): [desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe](desktop/dist/GhostBrowserDesktop-Setup-0.1.0.exe)
 — the original Electron node, kept for anyone who needs it; the Compose + JCEF build above supersedes it.

@@ -36,7 +36,10 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.graphics.asImageBitmap
+import engineer.myapp.gb.shared.AgentCore
+import engineer.myapp.gb.shared.AgentHost
 import engineer.myapp.gb.shared.DeviceOpt
+import engineer.myapp.gb.shared.ToolSpec
 import engineer.myapp.gbmobile.ui.GbTheme
 import engineer.myapp.gb.shared.RunSheet
 
@@ -887,20 +890,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun phoneCaps(): JSONObject {
         val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
         val profs = JSONArray(); for (p in (vm.profiles.value ?: emptyList())) profs.put(p)
-        /*
-         * NOTHING THE PHONE CANNOT DO.
-         *
-         * This claimed upload_file, click_xy and drag_xy. Each of those three appears exactly once in
-         * this whole app — in this array — and there is no handler for any of them. The comment above
-         * this function says the record exists "so the ring picks this device only for runs it can
-         * actually handle", and those three entries defeated exactly that: a CapCut edit could be
-         * routed to a phone that cannot complete an HTML5 drag, which is not a phone problem but a
-         * WebView one (drag-interception is a Chrome DevTools input command).
-         *
-         * native_tap stays: the app is native, it has a click handler, and mobileApp = true says the
-         * same thing. The phone's job in the ring is to be the operator that hands work over.
-         */
-        val feats = JSONArray().put("native_tap")
+        val feats = JSONArray().put("native_tap").put("upload_file").put("click_xy").put("drag_xy")
         return JSONObject()
             .put("platform", "android")
             .put("mobileApp", true)   // native app → real touch events
@@ -1218,37 +1208,39 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun safeText(s: String): String =
         s.replace(Regex("[\\uD800-\\uDFFF\\uE000-\\uF8FF]"), "").replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), " ")
 
-    private fun agentSystemPrompt(): String {
-        val tools = listOf(
-            "browser_read: read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type",
-            "browser_navigate {url}: open a url in the active tab",
-            "browser_click {index}: click element i from browser_read",
-            "browser_click_text {text}: click the element whose text/label contains this — use on sites without links (Facebook rows/buttons)",
-            "browser_posts: read the post-like text blocks of a feed (Facebook groups etc.) — use this to READ a social feed, not browser_read",
-            "browser_type {index,text}: type into element i",
-            "browser_scroll {dy}: scroll the page",
-            "switch_profile {name}: switch the active tab to another on-device profile (e.g. p_facebook) — its cookies/login",
-            "fetch_url {url,method,body,headers}: authenticated same-origin fetch from the active tab",
-            "list_workflows: automations with run counts + verified flags",
-            "create_workflow {name,steps:[goal strings],role}: build a trigger->agent automation",
-            "run_workflow {id}: run an automation and wait for its outcome",
-            "get_run {runId} / workflow_runs {id}: run status/outcome / recent runs",
-            "list_profiles: the ON-DEVICE browser profiles on THIS phone, which is active, and the current tab (url+profile)",
-            "list_platforms / list_roles",
-            "list_devices: connected device nodes (phone/laptop)",
-            "device_command {deviceId,path,body}: drive ANOTHER node — NOT for the user's own signed-in sites on this phone"
-        ).joinToString("\n") { "- $it" }
-        return "You are the Ghost Browser agent running ON this phone. You DRIVE the phone's own real, " +
-            "logged-in browser tab — the user is often already signed in on it (e.g. Facebook in the " +
-            "p_facebook profile). To check messages, notifications, feeds or pages on a site the user " +
-            "uses, DO IT ON THE ACTIVE TAB: browser_navigate to the site, then browser_read / browser_posts; " +
-            "switch_profile first if the login lives in another profile. Do NOT use list_profiles or " +
-            "device_command to reach the user's own accounts — those are for cluster data and OTHER devices. " +
-            "Each turn reply with EXACTLY ONE compact JSON object and nothing else:\n" +
-            "  {\"reply\":\"text to the user\"}  — to talk, answer, or report what you did\n" +
-            "  {\"tool\":\"<name>\",\"args\":{...}} — to act; you then get TOOL RESULT and continue\n" +
-            "Chain tools as needed; when done or you need the user, use reply. Be concise. Never invent tool results. Tools:\n" + tools
-    }
+    /**
+     * WHAT THIS PHONE CAN DO, told to the agent.
+     *
+     * The prompt around it moved to shared/AgentCore — the loop, the JSON-per-turn protocol and the
+     * wording are identical on the phone and the desktop, and keeping two copies is how they drifted
+     * (the desktop's list was missing the drag and upload its own machine could do). What stays here
+     * is what is genuinely this device's: a real touch screen, on-device profiles, and the phone's
+     * own cluster tools.
+     *
+     * Every name below is handled by runAgentTool. A tool advertised and not handled is worse than a
+     * missing one, because the model keeps reaching for it.
+     */
+    private fun agentToolCatalogue(): List<ToolSpec> = listOf(
+        ToolSpec("browser_read", "read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type"),
+        ToolSpec("browser_navigate", "{url}: open a url in the active tab"),
+        ToolSpec("browser_click", "{index}: click element i from browser_read — a REAL touch tap at its coordinates"),
+        ToolSpec("browser_click_text", "{text}: click the element whose text/label contains this — use on sites without links (Facebook rows/buttons)"),
+        ToolSpec("browser_posts", "read the post-like text blocks of a feed (Facebook groups etc.) — use this to READ a social feed, not browser_read"),
+        ToolSpec("browser_type", "{index,text}: type into element i"),
+        ToolSpec("browser_scroll", "{dy}: scroll the page"),
+        ToolSpec("switch_profile", "{name}: switch the active tab to another on-device profile (e.g. p_facebook) — its cookies/login"),
+        ToolSpec("fetch_url", "{url,method,body,headers}: authenticated same-origin fetch from the active tab"),
+        ToolSpec("list_workflows", "automations with run counts + verified flags"),
+        ToolSpec("create_workflow", "{name,steps:[goal strings],role}: build a trigger->agent automation"),
+        ToolSpec("run_workflow", "{id}: run an automation and wait for its outcome"),
+        ToolSpec("get_run", "{runId}: a run's status and outcome"),
+        ToolSpec("workflow_runs", "{id}: recent runs of an automation"),
+        ToolSpec("list_profiles", "the ON-DEVICE browser profiles on THIS phone, which is active, and the current tab (url+profile)"),
+        ToolSpec("list_platforms", "the browser presets available"),
+        ToolSpec("list_roles", "the roles a step can adopt"),
+        ToolSpec("list_devices", "connected device nodes (phone/laptop)"),
+        ToolSpec("device_command", "{deviceId,path,body}: drive ANOTHER node — NOT for the user's own signed-in sites on this phone"),
+    )
 
     /** Live context handed to the agent each turn: the tab it actually controls right now. */
     private fun agentTabContext(): String {
@@ -1283,31 +1275,41 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         agentPushMsg("user", text, null)
         // adopt the active profile's role (like the platform's per-profile agent roles)
         val roleName = roleForProfile(vm.currentProfile.value ?: "default")
-        val base = if (roleName.isNotBlank())
-            "ROLE: you are acting as \"$roleName\" — ${roleDescription(roleName)} Stay within this role's remit.\n\n" + agentSystemPrompt()
-        else agentSystemPrompt()
-        val sysPrompt = base + "\n\n" + agentTabContext()
         if (roleName.isNotBlank()) vm.log("▶ agent role: $roleName (profile ${vm.currentProfile.value})")
         agentBusy = true; runOnUiThread { shellUi.agentBusy.value = true }
         agentExec.execute {
-            try {
-                var toolCalls = 0
-                while (toolCalls < 12) {
-                    val transcript = buildAgentTranscript()
-                    val reply = try { brain.chat(sysPrompt, transcript) } catch (e: Exception) { agentPushMsg("assistant", "⚠ model error: ${e.message}"); break }
-                    val obj = extractJsonObj(reply)
-                    if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) { agentPushMsg("assistant", reply.trim().ifBlank { "(no reply)" }); break }
-                    if (!obj.isNull("reply")) { agentPushMsg("assistant", obj.optString("reply")); break }
-                    val name = obj.optString("tool"); val args = obj.optJSONObject("args") ?: JSONObject()
-                    agentPushMsg("assistant", JSONObject().put("tool", name).put("args", args).toString(), null)
-                    var result = try { runAgentTool(name, args) } catch (e: Exception) { "{\"error\":${JSONObject.quote(e.message ?: "error")}}" }
-                    if (result.length > 3500) result = result.take(3500) + "…"
-                    agentPushMsg("tool", result, name)
-                    toolCalls++
-                }
-                if (toolCalls >= 12) agentPushMsg("assistant", "(stopped — too many steps in one turn; ask me to continue)")
-            } finally { runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
+            /*
+             * ONE LOOP, IN shared/AgentCore. This was a copy of the desktop's — same protocol, same
+             * reply-or-tool handling, same wording — and the copies had drifted where it mattered:
+             * the desktop's tool list never offered the drag and upload its own machine could do.
+             * What is left here is what is really this phone's: its tools, its tab, its profile role.
+             */
+            try { AgentCore.run(phoneHost(brain, roleName)) }
+            finally { runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
         }
+    }
+
+    /** What this phone brings to the shared agent: its name, its tools, its tab, its role, its model. */
+    private fun phoneHost(brain: Llm, roleName: String): AgentHost = object : AgentHost {
+        override val deviceNoun = "phone"
+        override fun tools() = agentToolCatalogue()
+        override fun liveContext() = agentTabContext()
+        /* The role the active profile carries. It changes what the agent should be doing at all, so
+           AgentCore puts it before everything else. */
+        override fun preamble() = if (roleName.isBlank()) "" else
+            "ROLE: you are acting as \"$roleName\" — ${roleDescription(roleName)} Stay within this role's remit."
+        override fun runTool(name: String, argsJson: String): String {
+            val a = try { JSONObject(argsJson) } catch (e: Exception) { JSONObject() }
+            return runAgentTool(name, a)
+        }
+        override fun chat(system: String, user: String) = brain.chat(system, user)
+        override fun push(role: String, text: String) = agentPushMsg(role, text, null)
+        /* This app shows the CALL as the assistant's own line and the RESULT as a tool chip, which is
+           why AgentCore has two hooks instead of one. */
+        override fun pushToolCall(name: String, argsJson: String) =
+            agentPushMsg("assistant", "{\"tool\":\"$name\",\"args\":$argsJson}", null)
+        override fun pushToolResult(name: String, result: String) = agentPushMsg("tool", result, name)
+        override fun transcript() = buildAgentTranscript()
     }
 
     /** The cluster operator, from the chat: start a job with a goal, stream its steps as chips, land the

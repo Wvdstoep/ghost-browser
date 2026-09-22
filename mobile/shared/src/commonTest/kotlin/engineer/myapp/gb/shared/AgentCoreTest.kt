@@ -87,13 +87,16 @@ class AgentCoreTest {
     ) : AgentHost {
         val said = mutableListOf<String>()
         val ran = mutableListOf<Pair<String, String>>()
+        val calls = mutableListOf<Pair<String, String>>()
+        val results = mutableListOf<String>()
         var prompts = 0
         override fun tools() = toolTable
         override fun liveContext() = "CURRENT TAB: about:blank"
         override fun runTool(name: String, argsJson: String): String { ran += name to argsJson; return "{\"ok\":true}" }
         override fun chat(system: String, user: String): String { prompts++; return replies.removeAt(0) }
         override fun push(role: String, text: String) { said += "$role:$text" }
-        override fun pushTool(name: String, text: String) {}
+        override fun pushToolCall(name: String, argsJson: String) { calls += name to argsJson }
+        override fun pushToolResult(name: String, result: String) { results += name }
         override fun transcript() = "…"
     }
 
@@ -132,6 +135,40 @@ class AgentCoreTest {
         AgentCore.run(h)
         assertEquals(1, h.prompts)                       // asked once, not in a loop
         assertEquals(listOf("assistant:I am not going to answer in JSON."), h.said)
+    }
+
+    @Test
+    fun aCallIsShownBeforeItsResult() {
+        // Two separate hooks because the apps render them differently; a single one would have made
+        // the phone show a tool call the way it shows a result.
+        val h = FakeHost("phone", mutableListOf(
+            "{\"tool\":\"browser_read\",\"args\":{\"a\":1}}",
+            "{\"reply\":\"ok\"}",
+        ))
+        AgentCore.run(h)
+        assertEquals(listOf("browser_read" to "{\"a\":1}"), h.calls)
+        assertEquals(listOf("browser_read"), h.results)
+    }
+
+    @Test
+    fun aPreambleLeadsThePrompt() {
+        // The phone adopts a role per browser profile, and that changes what the agent should be
+        // doing at all — so it goes first, before the standard wording.
+        val h = object : AgentHost {
+            override val deviceNoun = "phone"
+            override fun tools() = listOf(ToolSpec("browser_read", "read"))
+            override fun liveContext() = "CURRENT TAB: x"
+            override fun preamble() = "ROLE: you are acting as \"facebook.scout\"."
+            override fun runTool(name: String, argsJson: String) = "{}"
+            override fun chat(system: String, user: String) = "{}"
+            override fun push(role: String, text: String) {}
+            override fun pushToolCall(name: String, argsJson: String) {}
+            override fun pushToolResult(name: String, result: String) {}
+            override fun transcript() = ""
+        }
+        val p = AgentCore.systemPrompt(h)
+        assertTrue(p.startsWith("ROLE: you are acting as"))
+        assertTrue(p.contains("running ON this phone"))
     }
 
     // ── the prompt is built from the device, which is the whole point ─────────────────────────────

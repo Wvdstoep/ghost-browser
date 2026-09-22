@@ -45,7 +45,7 @@ compose.desktop {
             // TLS/DNS/HTTP that JCEF uses at runtime but bytecode analysis misses.
             modules("java.instrument", "java.sql", "jdk.unsupported", "java.naming", "jdk.crypto.ec", "java.net.http", "jdk.zipfs")
             packageName = "Ghost Browser"
-            packageVersion = "1.0.25"     // bump each release so the MSI upgrades in place (no manual uninstall)
+            packageVersion = "1.0.26"     // bump each release so the MSI upgrades in place (no manual uninstall)
             description = "Ghost Browser — one codebase, phone + desktop"
             vendor = "my-app.engineer"
             windows {
