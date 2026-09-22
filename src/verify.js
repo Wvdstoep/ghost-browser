@@ -31,23 +31,71 @@ const textOf = (s) => String((s && (s.text || s.detail)) || '');
 const ms = (v) => { const t = Date.parse(v || ''); return Number.isFinite(t) ? t : 0; };
 
 /**
- * IT SAID IT TYPED SOMETHING — IS THAT TEXT ON THE PAGE AFTERWARDS?
+ * IT SAID IT TYPED SOMETHING — DID IT LAND?
  *
- * The cheapest real verifier there is, and it needs nothing but the job's own record: a `type` call
- * carries the text in its arguments, and every later read carries what the page said. If the text it
- * typed is not in any subsequent read, it did not land — a disabled field, a dialog in the way, a
- * React input that rejected a synthetic keystroke. All three happen.
+ * REWRITTEN AFTER READING FIFTY OF ITS OWN FAILURES BY HAND, and 47 of the 50 were this verifier
+ * being blind rather than the agent lying. The first version looked for the typed text in a later
+ * `read`, `open` or `look` step, and concluded 1,320 times that nothing had landed.
+ *
+ * The receipt was sitting one step away the whole time. After a type call the platform writes a
+ * `type`-KIND step that echoes what went in:
+ *
+ *     [tool:type] type([5] "I build and deploy custom web applications…")
+ *     [type]      typed into [5] "about_me_en": I build and deploy custom web applications…
+ *
+ * That second line is the confirmation, and it was never read. A pasted field says
+ * `pasted 317 chars into [30]` instead, which carries no text but is still the platform saying it
+ * went in. An `acted` step does the same for a message that was sent rather than typed.
+ *
+ * So there are now three outcomes instead of two, and the third is the one that was missing:
+ *
+ *   PASS      a receipt, or the text visible on the page afterwards.
+ *   FAIL      an `error` step on the type itself — "Element [9] not found in last analysis",
+ *             "keyboard.type: Target page, context or browser has been closed". Two of the fifty.
+ *   UNKNOWN   the run was stopped before anything could confirm it. One of the fifty, and calling
+ *             that a failure is how an owner pressing Stop becomes training signal.
+ *
+ * The needle is 30 characters because the receipt itself is truncated in the record; matching more
+ * than the receipt holds would fail on every long message, which is most of them.
  */
 function typedTextLanded(job) {
-  const typed = toolSteps(job).filter((s) => /type/i.test(s.tool) && s.args && typeof s.args.text === 'string' && s.args.text.trim().length >= 8);
+  const all = steps(job);
+  const typed = toolSteps(job).filter((s) => /type|paste/i.test(s.tool) && s.args
+    && typeof s.args.text === 'string' && s.args.text.trim().length >= 8);
   if (!typed.length) return UNKNOWN('this job never typed anything worth checking');
+
+  const interrupted = all.some((s) => s.kind === 'end' && /stopped by you/i.test(textOf(s)));
+  let confirmed = 0;
+  const unconfirmed = [];
+
   for (const t of typed) {
-    const needle = t.args.text.trim().slice(0, 40).toLowerCase();
-    const later = steps(job).filter((s) => (s.n || 0) > (t.n || 0) && ['read', 'open', 'look'].includes(s.kind));
-    const seen = later.some((s) => textOf(s).toLowerCase().includes(needle));
-    if (!seen) return FAIL(`typed text was never seen on the page afterwards`, needle.slice(0, 60));
+    const needle = t.args.text.trim().slice(0, 30).toLowerCase();
+    const later = all.filter((s) => (s.n || 0) > (t.n || 0));
+
+    /* An error on the type itself, right after it: the keystroke never happened. */
+    const err = later.slice(0, 3).find((s) => s.kind === 'error' && /type|keyboard/i.test(textOf(s)));
+    if (err) return FAIL('the type itself errored', textOf(err).slice(0, 120));
+
+    /* The platform's own receipt, within a few steps. */
+    const receipt = later.slice(0, 4).find((s) => {
+      if (!['type', 'acted', 'act'].includes(s.kind)) return false;
+      const tx = textOf(s).toLowerCase();
+      return tx.includes(needle) || /pasted\s+\d+\s+chars/i.test(tx);
+    });
+    if (receipt) { confirmed++; continue; }
+
+    /* Or the text simply visible on a later read. */
+    if (later.some((s) => ['read', 'open', 'look'].includes(s.kind) && textOf(s).toLowerCase().includes(needle))) {
+      confirmed++; continue;
+    }
+    unconfirmed.push(needle.slice(0, 40));
   }
-  return PASS('every typed text appeared in a later read', typed.length + ' typed');
+
+  if (!unconfirmed.length) return PASS(`all ${confirmed} typed value(s) confirmed by the record`, `${confirmed} typed`);
+  /* Interrupted runs are inconclusive, not failures — the owner pressing Stop is not the agent
+     lying, and treating it as one turns every cancelled job into a negative example. */
+  if (interrupted) return UNKNOWN(`${unconfirmed.length} typed value(s) unconfirmed, but the run was stopped`);
+  return FAIL(`${unconfirmed.length} typed value(s) never confirmed by any receipt or later read`, unconfirmed.slice(0, 2).join(' | '));
 }
 
 /**
