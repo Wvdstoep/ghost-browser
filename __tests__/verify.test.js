@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { outcomeOf, VERIFIERS } from '../src/verify.js';
 
-const { typedTextLanded, fileWasProduced, actWasApproved, recordingCompleted } = VERIFIERS;
+const { typedTextLanded, fileWasProduced, actWasApproved, recordingCompleted, automationRunCompleted } = VERIFIERS;
 
 const job = (steps, over = {}) => ({
   id: 'j-1', role: 'useme.proposal', goal: 'write a proposal', report: 'done',
@@ -171,14 +171,118 @@ describe('the tier, and the asymmetry that makes checking worth anything', () =>
     expect(outcomeOf(j, {}).tier).toBe('silver');
   });
 
-  it('an errored job is bronze whatever it wrote', () => {
+  it('an INFRASTRUCTURE error is void, not bronze — it is no policy of the agent', () => {
+    /* "context destroyed" is the browser dying under the agent. Punishing that teaches it to fear
+       long tasks. Of 2,223 jobs, 950 are void for reasons like this one. */
     const j = job([{ n: 1, kind: 'tool', tool: 'look', args: {} }], { report: 'All good!', error: 'context destroyed' });
-    expect(outcomeOf(j, {}).tier).toBe('bronze');
+    const out = outcomeOf(j, {});
+    expect(out.tier).toBe('void');
+    expect(out.voidReason).toMatch(/browser died/);
+  });
+
+  it('running out of model credit is void, and stops existing once the model runs on the ring', () => {
+    const j = job([{ n: 1, kind: 'tool', tool: 'look', args: {} }], { error: 'every model key is out of allowance for today' });
+    expect(outcomeOf(j, {}).tier).toBe('void');
+  });
+
+  it('the owner pressing Stop is void, never a negative example', () => {
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'look', args: {} },
+      { n: 2, kind: 'end', text: 'stopped by you' },
+    ], { report: '' });
+    expect(outcomeOf(j, {}).tier).toBe('void');
+  });
+
+  it('but a verified success that was THEN stopped stays gold', () => {
+    /* Getting this the wrong way round cost 295 gold jobs on the first attempt: an interruption does
+       not un-happen what the agent verifiably did before it. */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'type', args: { text: 'a confirmed sentence of some length' } },
+      { n: 2, kind: 'type', text: 'typed into [3] "field": a confirmed sentence of some length' },
+      { n: 3, kind: 'end', text: 'stopped by you' },
+    ], { report: '' });
+    const out = outcomeOf(j, {});
+    expect(out.tier).toBe('gold');
+    expect(out.endedBy).toMatch(/stopped/);
+  });
+
+  it('wandering into the step budget IS punished — that is a policy failure', () => {
+    const j = job([{ n: 1, kind: 'tool', tool: 'look', args: {} }], { report: 'Paused at the 40-step limit — 0 leads so far.' });
+    const out = outcomeOf(j, {});
+    expect(out.tier).toBe('bronze');
+    expect(out.failures).toContain('wandered');
+  });
+
+  it('a failed verifier outranks even a void reason, because it still says something true', () => {
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'download_url', args: {} },
+      { n: 2, kind: 'end', text: 'stopped by you' },
+    ], { report: 'Exported it.' });
+    expect(outcomeOf(j, { files: () => [] }).tier).toBe('bronze');
   });
 
   it('a verifier that throws does not take the label down with it', () => {
     const j = job([{ n: 1, kind: 'tool', tool: 'download_url', args: {} }]);
     const out = outcomeOf(j, { files: () => { throw new Error('store offline'); } });
     expect(['bronze', 'silver']).toContain(out.tier);
+  });
+});
+
+/*
+ * THE OTHER DRAWER.
+ *
+ * /profiles/jobs held 2,223 agent walks and the labeller knew about it. /profiles/workflow-runs held
+ * 1,837 automation runs and it did not — and that is the better corpus, because an automation runs a
+ * route somebody already proved: 1,570 of the 1,837 completed.
+ *
+ * 964 jobs carry a runId, every one matches a run record, and 885 belong to a run that finished.
+ * Joining the two moved gold from 379 to 1,147. One lookup.
+ */
+describe('the automation a job belonged to', () => {
+  const withRun = (runId, run, extraSteps = []) => job(
+    [{ n: 1, kind: 'tool', tool: 'look', args: {} }, ...extraSteps],
+    { runId, report: 'had a look' },
+  );
+  const store = (run) => ({ runs: () => run });
+
+  it('a completed automation is external corroboration, so it mints gold', () => {
+    /* Weaker than a person approving, stronger than the agent reporting: a later node consumed
+       this job's output and the run carried on. */
+    const r = automationRunCompleted(withRun('r-1', null), store({ id: 'r-1', status: 'done', name: 'facebook notify' }));
+    expect(r.ok).toBe(true);
+    expect(outcomeOf(withRun('r-1', null), store({ id: 'r-1', status: 'done' })).tier).toBe('gold');
+  });
+
+  it('an automation that ended in error is punished', () => {
+    const r = automationRunCompleted(withRun('r-2', null), store({ id: 'r-2', status: 'error', error: 'node 3 threw' }));
+    expect(r.ok).toBe(false);
+    expect(outcomeOf(withRun('r-2', null), store({ id: 'r-2', status: 'error' })).tier).toBe('bronze');
+  });
+
+  it('an interrupted automation says nothing either way', () => {
+    expect(automationRunCompleted(withRun('r-3', null), store({ id: 'r-3', status: 'interrupted' })).ok).toBeNull();
+  });
+
+  it('REFUSES to read a completed flow as a verdict on a job the owner stopped', () => {
+    /* A flow carrying on regardless does not turn an interruption into a judgement, and
+       owner-stopped is the one state that is neither rewarded nor punished anywhere here. */
+    const j = withRun('r-4', null, [{ n: 2, kind: 'end', text: 'stopped by you' }]);
+    expect(automationRunCompleted(j, store({ id: 'r-4', status: 'done' })).ok).toBeNull();
+    expect(outcomeOf(j, store({ id: 'r-4', status: 'done' })).tier).toBe('void');
+  });
+
+  it('is unknown for a walk that never came from an automation', () => {
+    expect(automationRunCompleted(job([]), store({ status: 'done' })).ok).toBeNull();
+  });
+
+  it('is unknown when the run store is missing or has no record', () => {
+    expect(automationRunCompleted(withRun('r-5', null), {}).ok).toBeNull();
+    expect(automationRunCompleted(withRun('r-5', null), { runs: () => null }).ok).toBeNull();
+  });
+
+  it('does not take the label down when the run store throws', () => {
+    const j = withRun('r-6', null);
+    expect(automationRunCompleted(j, { runs: () => { throw new Error('volume gone'); } }).ok).toBeNull();
+    expect(['silver', 'void']).toContain(outcomeOf(j, { runs: () => { throw new Error('volume gone'); } }).tier);
   });
 });
