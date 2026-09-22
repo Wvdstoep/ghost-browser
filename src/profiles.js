@@ -156,6 +156,22 @@ function write(name, input) {
   return merged;
 }
 
+/**
+ * IS THERE A SAVED LOGIN IN HERE?
+ *
+ * Deliberately NOT called "signed in". A profile is a cookie jar, and whether the cookie is still
+ * accepted by the site is only knowable by opening it — the platform registry's `signedIn` means
+ * something else entirely ("a profile exists for that site"), and borrowing that word here would
+ * state as fact something nothing has checked. A stored cookie database is a fact.
+ */
+function hasLogin(name) {
+  const dir = dirFor(name);
+  for (const rel of ['Default/Cookies', 'Cookies', 'Default/Network/Cookies', 'Network/Cookies']) {
+    try { if (fs.statSync(path.join(dir, rel)).size > 0) return true; } catch { /* not this layout */ }
+  }
+  return false;
+}
+
 /** What the UI may see. The proxy password never leaves the server. */
 function redacted(name) {
   const s = read(name);
@@ -200,4 +216,4 @@ function launchProxy(setting, tailscaleSocks, { routeAll = false } = {}) {
   return setting;
 }
 
-module.exports = { read, write, normalize, redacted, launchProxy, dirFor, safeName, DEFAULTS, FILE };
+module.exports = { read, write, normalize, redacted, launchProxy, dirFor, safeName, hasLogin, DEFAULTS, FILE };

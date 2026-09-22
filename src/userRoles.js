@@ -122,6 +122,16 @@ function save(role, paletteNames) {
     /* Kept through an edit. Without this, opening the role in the console and saving it would drop
        the requirement out of the DATA — worse than not reading it, because then it is gone. */
     require: normRequire(role.require),
+    /*
+     * ONE ROLE, ONE METHOD PER DEVICE — see src/roleDevices.js.
+     *
+     * A single `require` squashed together two different statements: what the work needs, and how
+     * this kind of machine does it. That is what made capcut-video-editor desktop-only by
+     * omission. Validated here so a saved role cannot carry a variant the ring could not route,
+     * and carried through every projection below — because `require` itself was once dropped by a
+     * projection and the device gate silently never fired.
+     */
+    devices: require('./roleDevices').normDevices(role.devices, normRequire),
     source: String(role.source || (existing && existing.source) || 'user').slice(0, 80),
     author: String(role.author || (existing && existing.author) || '').slice(0, 120),
     createdAt: (existing && existing.createdAt) || new Date().toISOString(),
@@ -177,6 +187,9 @@ function getRole(id) {
     /* The reason a projection is dangerous: this was missing, so a role that says it needs a
        drag-capable device was handed to the caller as a role with no requirements at all. */
     require: normRequire(r.require),
+    /* And the same trap one layer out: a role may state a method PER DEVICE, and a projection that
+       drops it hands back a role that looks device-agnostic while the router still has to choose. */
+    devices: require('./roleDevices').normDevices(r.devices, normRequire),
   };
 }
 
@@ -192,6 +205,7 @@ function listRoles() {
     tools: r.tools === undefined ? null : r.tools,
     /* So a picker can say "this one runs on your desktop, not in the cloud" before it is chosen. */
     require: normRequire(r.require),
+    devices: require('./roleDevices').normDevices(r.devices, normRequire),
   }));
 }
 

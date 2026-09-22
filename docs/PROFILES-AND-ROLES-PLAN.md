@@ -9,8 +9,9 @@ Status board (keep current; it is the hand-off between sessions):
 | Phase | Name | State | Proof it is done |
 |---|---|---|---|
 | 1 | The choice is stored, not guessed | **DONE** (2026-09-22) — `defaultRole` on the profile record; `src/profileRole.js` is the one answer (chosen > site > none, with the source and a rotted choice reported), read by the settings door and by `startWalk`; `PUT /v1/profiles/:name/settings` refuses a role that does not exist and returns the valid ids; 22 tests | A profile named `work-video` with `defaultRole: capcut-video-editor` gets that role though no name matches; an unconfigured profile still gets its site specialist; a renamed role is reported as `missing` instead of degrading in silence |
-| 2 | Profiles is its own surface | planned | Profiles opens from the main navigation, not from inside Settings, on phone, desktop and web from the same `shared/` code; every profile shows login state, its role, which device holds it and what runs on it; **clicking a profile still opens it in a new tab** |
-| 3 | Read before you choose | planned | The role picker shows, for each role, its full playbook text, its site, its tools and its device requirement — before selection, in the picker, not after saving |
+| 2 | Profiles is its own surface | **DONE** (2026-09-22) — `shared/ProfilesScreen.kt`, a Profiles item in the nav on phone and desktop, one call (`GET /v1/profiles/overview`) instead of N+1, and the phone's local role map migrated up to the server on first load | Profiles opens in one tap from the main navigation on phone and desktop from one code path; each card shows whether a login is saved, its role and the role's source, which device holds it, how many automations run on it and where it exits; **pressing a profile still opens it in a new tab** |
+| 3 | Read before you choose | **DONE** (2026-09-22) — the picker reads `GET /v1/agent/roles/:id`, which no longer drops `require` (the same projection bug that stopped the device gate firing) and now also writes the requirement in words (`src/requireWords.js`) and answers who can run it from the router itself | Open a profile, read a role in full including its whole playbook, see "This role needs a desktop browser it can drive directly, and must be able to click an exact point, drag something across the page and choose a file to upload" and which of your devices satisfies that, then set it |
+| 3b | A method per device | **DONE** (2026-09-22) — `src/roleDevices.js`: a role may carry a `devices` section (`desktop`/`android`/`cluster`), each with its own requirement and its own method. Routing tries every variant, so the phone stops being excluded by omission; the hand-over carries the base playbook plus **only** the variant for the device that took the job | A role with a desktop and a phone method runs on whichever is connected; the desktop receives the desktop method and never the phone one; with neither connected the refusal names every way that was tried. 19 tests |
 | 4 | Full management | planned | Create, rename, duplicate and delete a profile; set its site, note, exit and timezone; see and clear its login; see which automations use it — all from the Profiles surface, no Settings detour |
 | 5 | The engine picks the role | planned | A task arriving with no role named gets the right specialist from the profile, the addresses in the goal and the roles' own `site`/`require` — the choice is shown, its reason is shown, and a person can override it before it runs |
 
@@ -22,6 +23,9 @@ Status board (keep current; it is the hand-off between sessions):
 4. **Deriving stays as the fallback, never as the mechanism.** With no stored choice, the site match still applies — a profile someone never configured should still get its specialist rather than `general`.
 5. **The engine always shows its work.** "Using `capcut-video-editor` because this profile's site is capcut.com" is the sentence that was missing both times this went wrong. Every automatic pick is visible and overridable before it runs.
 6. **Do not lose what works.** Clicking a profile opens it in a new tab. That is the one part of the current UI that is right, and it survives every phase here.
+7. **One requirement is two statements squashed together.** What the WORK needs and how THIS KIND of machine does it are different facts. Keeping them apart is what stops a role being desktop-only by omission, and it is why a role may state a method per device.
+8. **A device is told only the method that applies to it.** "Drag the clip onto the timeline" and "long-press the clip, then drag with your finger" are both correct and only one is correct here. Sending both is how an agent starts guessing.
+9. **Never claim what nothing has checked.** A profile shows "login saved", not "signed in": a profile is a cookie jar, and whether the site still accepts that cookie is only knowable by opening it. The same rule put the requirement wording on the server and left an untaught capability printed as its own name rather than described.
 
 ## What exists today, verified
 
@@ -72,6 +76,31 @@ Then **Set as this profile's role**, which writes Phase 1's field. The list grow
 
 **Proof.** From the Profiles surface: open a profile, read `capcut-video-editor` in full including its device requirement, see that the desktop satisfies it and the cluster does not, set it, and see it on the card with source "chosen".
 
+## Phase 3b — A method per device
+
+**Why.** A role stated ONE requirement, and that quietly decided which machine could ever run it. `capcut-video-editor` asks for a desktop browser it can drag in, so a phone was excluded *by omission* rather than by anything anyone decided — even where a phone could do the same work by long-pressing and dragging with a finger. And a single playbook cannot hold both methods without contradicting itself, so an agent handed the whole thing has to work out which half applies to the machine it is standing on. That is guessing, and guessing is what cost seventy steps on a video editor.
+
+**Build.** `src/roleDevices.js`. A role may carry `devices`, keyed by the device kinds the ring itself knows:
+
+```json
+"devices": {
+  "desktop": { "require": { "cdp": true, "features": ["drag", "upload_file"] },
+               "method": "Drag the clip from the library onto the timeline." },
+  "android": { "require": { "mobileApp": true, "features": ["native_tap"] },
+               "method": "Long-press the clip, then drag it down with your finger." }
+}
+```
+
+- a variant's `platform` comes from its KEY and is never read from its body, because a contradiction there would route phone work to a desktop;
+- an empty stanza is dropped rather than becoming a requirement nobody wrote (`{"desktop":{}}` used to narrow a role to desktop-only);
+- device variants are tried BEFORE the role's general requirement, which stays as a last resort so nothing that works today changes;
+- the hand-over sends the base playbook plus that one variant's method, headed "ON THIS DEVICE (your desktop) — this is the method that applies here, and the only one";
+- a refusal names every way that was tried, per device, instead of a bare "no device".
+
+**What still needs filling in.** The schema is live and `capcut-video-editor` has not been given a phone method, deliberately: a phone was tested against CapCut and could not do it, so writing one would be fiction. The method text per device is knowledge from the tested flow, not something to invent.
+
+**Proof.** A role with a desktop and a phone method runs on whichever is connected; the desktop gets the desktop method and never the phone one; with neither connected the refusal names both. 19 tests, including the empty-stanza narrowing and a router that throws instead of answering.
+
 ## Phase 4 — Full management
 
 **Why.** Everything a person needs to do with a logged-in identity is currently scattered or missing, so the answer to "which account is this and what is it doing" is a code read.
@@ -90,7 +119,7 @@ Then **Set as this profile's role**, which writes Phase 1's field. The list grow
 3. the addresses in the goal, matched to roles by `siteKey` (the `ringGate` precedent: what the goal names is stronger evidence than what the profile usually is — a goal naming capcut.com in the `google` profile wants the CapCut specialist);
 4. the site match on the profile (today's rule);
 5. `general`, and say so plainly, as a fallback rather than a silent default.
-Then fold the chosen role's `require` with `deviceNeedForProfile` — as `startWalk` already does — and route, refusing with the reason when no device satisfies it. The decision and its reason travel with the job and appear in the chat before the work starts, overridable there.
+Then choose the role's variant a real device can satisfy (Phase 3b) and route, refusing with every way that was tried when none can. The decision and its reason travel with the job and appear in the chat before the work starts, overridable there.
 
 **Proof.** "Make a viral short from that recording" in the phone's chat, with no role named, is handed to the desktop as `capcut-video-editor` with the playbook ahead of the goal; the chat says which role and why before it starts; naming a different role overrides it; and with no capable device connected the answer is a refusal with the reason, never an attempt on the cluster.
 

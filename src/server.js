@@ -38,6 +38,7 @@ const userRoles = require('./userRoles');
  * by every door and by the UI, and testable without a browser.
  */
 const { siteKey, roleChoice } = require('./profileRole');
+const roleDevices = require('./roleDevices');
 
 /** This install's profile-to-role answer, with the stores wired in. See profileRole.js. */
 const roleChoiceFor = (name) => roleChoice(name, { profiles, roles });
@@ -1356,6 +1357,63 @@ app.delete('/v1/profiles/:name', authed, async (req, res) => {
  * fighting a browser on Amsterdam time arriving from a Finnish datacentre, which is a mismatch no
  * amount of fingerprint patching hides.
  */
+/**
+ * EVERYTHING THE PROFILES SCREEN SHOWS, IN ONE ANSWER.
+ *
+ * Without this a client walks N+1 doors for one screen: the profile list, then each profile's
+ * settings, then the roles, then the workflows to count what runs where, then the ring to see which
+ * device holds which login. Five sources, four of them per-profile, and every client re-deriving
+ * the same joins — which is precisely how the phone ended up keeping the role in its OWN
+ * preferences and nothing else ever knew about it.
+ *
+ * `hasLogin` is not "signed in": see profiles.hasLogin. This says a cookie store exists, which is
+ * a fact, rather than that the site still accepts it, which nothing here has checked.
+ */
+app.get('/v1/profiles/overview', authed, (req, res) => {
+  try {
+    const live = new Set(pool.listAll().map((s) => s.profile).filter(Boolean));
+    /* Which device holds which login, read off what the devices themselves advertise. */
+    const holders = new Map();
+    try {
+      for (const d of (deviceHub.deviceList() || [])) {
+        if (!d.online) continue;
+        for (const p of ((d.caps && d.caps.profiles) || [])) if (!holders.has(p)) holders.set(p, d.name);
+      }
+    } catch (e) { /* the ring is optional for this screen */ }
+    /* Automations counted off the flow definitions (nodes[].profile), so the number is the truth
+       rather than a note that can go stale. */
+    const counts = new Map();
+    try {
+      for (const wf of (workflows.all() || [])) {
+        const seen = new Set();
+        for (const n of ((wf.nodes) || [])) {
+          const p = n && n.profile;
+          if (!p || seen.has(p)) continue;
+          seen.add(p);
+          counts.set(p, (counts.get(p) || 0) + 1);
+        }
+      }
+    } catch (e) { /* no flows yet */ }
+
+    const out = pool.listProfilesDetailed().map((p) => {
+      const choice = roleChoiceFor(p.name);
+      const exit = p.proxy === 'tailscale' ? 'through your tailnet'
+        : p.proxy === 'direct' ? 'from this server'
+        : (p.proxy && p.proxy.server) ? 'through a proxy you set' : '';
+      return {
+        name: p.name, site: p.site || '', note: p.note || '', exit,
+        hasLogin: profiles.hasLogin(p.name),
+        live: live.has(p.name),
+        role: choice.role, roleSource: choice.source, missingRole: choice.missing || '',
+        suggestedRole: choice.suggested || '',
+        device: holders.get(p.name) || holders.get(`p_${p.name}`) || '',
+        automations: counts.get(p.name) || 0,
+      };
+    });
+    res.json({ profiles: out, roles: (roles.list() || []).map((r) => r.name) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/v1/profiles/:name/settings', authed, (req, res) => {
   const choice = roleChoiceFor(req.params.name);
   res.json({ ...profiles.redacted(req.params.name), roleChoice: choice, suggestedRole: choice.suggested || null });
@@ -1518,7 +1576,54 @@ app.get('/v1/agent/roles/:id', authed, (req, res) => {
   const canonical = roles.canonical(key);
   if (key !== 'general' && canonical === 'general') return res.status(404).json({ error: 'No such role.' });
   const r = roles.get(key);
-  res.json({ name: canonical, builtin: !!roles.ROLES[canonical], site: r.site || null, group: r.group || null, label: r.label, description: r.description, tools: r.tools === undefined ? null : r.tools, prompt: r.prompt || '' });
+  /*
+   * WHERE THIS ROLE CAN RUN, ON THE DOOR THAT EXISTS TO BE READ BEFORE CHOOSING.
+   *
+   * This projection left out `require` — the one field that says where the work can happen. It is
+   * the same class of mistake as getRole dropping it (which is why the device gate never fired),
+   * and worse here: this is the endpoint a person reads to decide whether a role is the right
+   * specialist for their profile, and it was silent about the only thing that can make it
+   * impossible. `requireWords` puts it in words a person chooses by, and `runsOn` answers it from
+   * the router's own matcher rather than from a second opinion.
+   */
+  const { requireWords, runsOnWords } = require('./requireWords');
+  const need = r.require && typeof r.require === 'object' ? r.require : null;
+  const words = requireWords(need);
+  let runsOn = null;
+  if (need) {
+    try { runsOn = runsOnWords(deviceHub.routeDevice(req.client.owner, need)); }
+    catch (e) { runsOn = { device: null, ready: [], candidates: [], summary: `Could not ask the device ring: ${e.message}` }; }
+  }
+  /*
+   * EVERY WAY THIS ROLE CAN BE RUN, AND WHICH ONE CAN RUN TODAY.
+   *
+   * A role may carry a method per device. For someone choosing, that is the interesting part —
+   * "on your desktop, drag it onto the timeline; on your phone, long-press and drag with your
+   * finger" — together with which of those a device you actually own can do, because that is what
+   * decides whether this is the right specialist for this profile.
+   */
+  const variantWords = roleDevices.variantsOf(r).map((v) => {
+    const w = requireWords(v.require);
+    let on = null;
+    if (v.require) {
+      try { on = runsOnWords(deviceHub.routeDevice(req.client.owner, v.require)); }
+      catch (e) { on = { device: null, ready: [], candidates: [], summary: `Could not ask the device ring: ${e.message}` }; }
+    }
+    return {
+      kind: v.kind,
+      where: roleDevices.KIND_WORDS[v.kind] || 'any device',
+      require: v.require || null,
+      requireWords: w.sentence,
+      method: v.method || '',
+      note: v.note || '',
+      ready: v.require ? !!(on && on.device) : true,
+      runsOn: on ? on.summary : 'Runs anywhere — the cluster browser is enough for this one.',
+    };
+  });
+  res.json({ name: canonical, builtin: !!roles.ROLES[canonical], site: r.site || null, group: r.group || null,
+    label: r.label, description: r.description, tools: r.tools === undefined ? null : r.tools, prompt: r.prompt || '',
+    require: need, requireWords: words.sentence, requireNeeds: words.needs, runsOn,
+    devices: r.devices || null, variants: variantWords });
 });
 
 /*
@@ -2950,25 +3055,62 @@ function operatorContext() {
         }
       }
 
-      const walkNeed = foldNeed(
-        foldNeed({}, (roles.get(walkRole) || {}).require),
-        deviceNeedForProfile(wantProfile) || {},
-      );
-      if (Object.keys(walkNeed).length) {
-        const r = deviceHub.routeDevice(owner, walkNeed);
-        if (!r.deviceId) {
-          log.info(`[assistant] walk in ${wantProfile} needs a device — ${r.reason}`);
-          return { error: `work in "${wantProfile}" runs on a device, not on the cluster: ${r.reason}`, need: walkNeed };
+      /*
+       * WHICH WAY OF DOING THIS WORK FITS A DEVICE YOU ACTUALLY HAVE.
+       *
+       * A role used to state ONE requirement, and that quietly decided which machine could ever
+       * run it: capcut-video-editor asks for cdp + click_xy + drag + upload_file, so the phone was
+       * excluded by omission, though a phone could do the same job by long-pressing and dragging
+       * with a finger. A role may now state a method PER DEVICE (src/roleDevices.js), and this
+       * picks the first variant a real device satisfies.
+       *
+       * And the half that matters more: the hand-over carries the base playbook plus THAT
+       * variant's method and nothing else. "Drag the clip onto the timeline" and "long-press the
+       * clip, then drag with your finger" are both correct, and only one of them is correct HERE.
+       * Sending both is how an agent starts guessing, and guessing is what cost seventy steps.
+       */
+      const roleRec = roles.get(walkRole) || {};
+      const variants = roleDevices.variantsOf(roleRec);
+      let walkNeed = null; let route = null; let variant = null;
+
+      if (variants.some((v) => v.require)) {
+        const pick = roleDevices.chooseVariant(roleRec, (n) => deviceHub.routeDevice(owner, n));
+        if (!pick.variant) {
+          /* Every way this role states was tried, and each is named: a bare "no device" gives a
+             person nothing to act on. */
+          const why = roleDevices.whyNothingFits(pick.tried);
+          log.info(`[assistant] walk in ${wantProfile} as ${walkRole} has no device — ${why}`);
+          return { error: `"${walkRole}" runs on a device, not on the cluster: ${why}`, tried: pick.tried };
         }
+        variant = pick.variant; route = pick.route; walkNeed = pick.variant.require;
+      } else {
+        /*
+         * The role says nothing about devices. Then what do the roles that know this PROFILE's
+         * site say? This is the case the assistant hits constantly: a walk asked for in the chat
+         * with no role named at all.
+         */
+        const pn = deviceNeedForProfile(wantProfile);
+        if (pn && Object.keys(pn).length) {
+          route = deviceHub.routeDevice(owner, pn);
+          if (!route.deviceId) {
+            log.info(`[assistant] walk in ${wantProfile} needs a device — ${route.reason}`);
+            return { error: `work in "${wantProfile}" runs on a device, not on the cluster: ${route.reason}`, need: pn };
+          }
+          walkNeed = pn;
+        }
+        variant = variants.find((v) => !v.require) || { kind: 'any', method: '' };
+      }
+
+      if (walkNeed && route && route.deviceId) {
         /*
          * THE PLAYBOOK TRAVELS WITH THE JOB.
          *
          * /v1/run_goal carries a goal and nothing else, so the device's own agent would start with
-         * its own prompt and none of the role's method — blind, which is how the first two attempts
-         * at this went. Until the node takes a separate `system` field, the role's playbook leads the
-         * goal text. It is the method, so it belongs in front of the task either way.
+         * its own prompt and none of the role's method — blind, which is how the first two
+         * attempts at this went. Until the node takes a separate `system` field, the playbook leads
+         * the goal text. It is the method, so it belongs in front of the task either way.
          */
-        const playbook = String((roles.get(walkRole) || {}).prompt || '').trim();
+        const playbook = roleDevices.playbookFor(roleRec, variant);
         const handed = playbook ? `${playbook}
 
 — — —
@@ -2976,14 +3118,14 @@ function operatorContext() {
 THE JOB:
 ${g}` : g;
         try {
-          await deviceHub.runCommand(r.deviceId, { path: '/v1/run_goal', body: { goal: handed, role: walkRole } }, 60000);
-          log.info(`[assistant] walk handed to ${r.name} as ${walkRole} (${Object.keys(walkNeed).join(',')}) — ${g.slice(0, 80)}`);
-          return { device: r.name, deviceId: r.deviceId, role: walkRole, status: 'running on your device', need: walkNeed };
+          await deviceHub.runCommand(route.deviceId, { path: '/v1/run_goal', body: { goal: handed, role: walkRole } }, 60000);
+          log.info(`[assistant] walk handed to ${route.name} as ${walkRole} (${variant.kind}: ${Object.keys(walkNeed).join(',')}) — ${g.slice(0, 80)}`);
+          return { device: route.name, deviceId: route.deviceId, role: walkRole, variant: variant.kind,
+            status: 'running on your device', need: walkNeed };
         } catch (e) {
-          return { error: `${r.name} could not take the job: ${e.message}`, need: walkNeed };
+          return { error: `${route.name} could not take the job: ${e.message}`, need: walkNeed };
         }
       }
-
       const s = await sessionFor(wantProfile);
       if (s.job) {
         const held = jobs.get(s.job);
