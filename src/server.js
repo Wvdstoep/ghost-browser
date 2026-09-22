@@ -3244,6 +3244,34 @@ app.post('/v1/operator/jobs/:id/stop', authed, (req, res) => { const r = operato
 // Which watcher passes hold the browser right now. NOT owner-scoped on purpose: the deploy gate asks
 // with the master's key and sessions are per owner, so it rolled the pod straight through a crawl.
 app.get('/v1/watchers/busy', authed, (req, res) => res.json({ running: [...runningWatchers], recording: (typeof recorder !== 'undefined' && recorder) ? recorder.running() : [], recordingRemote: (typeof recorder !== 'undefined' && recorder) ? recorder.runningRemote() : [] }));
+/*
+ * WHO IS HOLDING THE BROWSER, AND WHICH OF THEM SHOULD STOP A DEPLOY.
+ *
+ * The auto-deployer must not roll the pod under a live walk. It used to work that out itself, by
+ * adding up three separate endpoints, and it got it wrong in the one direction that costs: a
+ * session whose job record had aged out read as "someone is in their browser" and blocked every
+ * roll until the pool's two-hour TTL closed it. See src/deployReadiness.js for the three failures.
+ *
+ * One question, answered where the facts are, with the reasons attached. Reading it also reaps the
+ * watcher run-flags (RunningWatchers reaps on every read), so asking makes the answer truer.
+ */
+app.get('/v1/deploy/readiness', authed, (_req, res) => {
+  try {
+    const { readiness, explain } = require('./deployReadiness');
+    const titles = new Map((assistant.list() || []).map((c) => [c.id, c.title]));
+    const snap = {
+      sessions: pool.listAll().map((s) => ({ ...s, job: heldBy(s.sessionId) })),
+      watchers: [...runningWatchers],
+      recordings: (typeof recorder !== 'undefined' && recorder)
+        ? [...(recorder.running() || []), ...(recorder.runningRemote() || [])] : [],
+      chats: [...(assistant.live || new Map()).entries()].map(([id, run]) => ({
+        id, title: titles.get(id) || id, startedAt: (run && run.startedAt) || 0,
+      })),
+    };
+    const r = readiness(snap);
+    res.json({ ...r, explain: explain(r) });
+  } catch (e) { res.status(500).json({ error: e.message, busy: 1, blocking: [{ kind: 'error', why: e.message, blocking: true }] }); }
+});
 // A watcher's health: its last pass, whether one is running now, and whether it has gone quiet.
 app.get('/v1/watchers/:id/health', authed, (req, res) => {
   try {
