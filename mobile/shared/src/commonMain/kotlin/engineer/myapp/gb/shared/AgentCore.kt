@@ -42,6 +42,13 @@ interface AgentHost {
     /** The live situation this turn: the tab it controls, the profile it is in. */
     fun liveContext(): String
 
+    /**
+     * Anything that goes BEFORE the standard prompt. The phone adopts a role per browser profile
+     * ("you are acting as <role>"), which changes what the agent should be doing at all, so it leads;
+     * the desktop has none and returns "".
+     */
+    fun preamble(): String = ""
+
     /** Run one tool and return its result as a JSON string. `argsJson` is the raw object text. */
     fun runTool(name: String, argsJson: String): String
 
@@ -51,8 +58,13 @@ interface AgentHost {
     /** Show a message in the device's own chat. */
     fun push(role: String, text: String)
 
-    /** Show a tool call or its result in the device's own chat. */
-    fun pushTool(name: String, text: String)
+    /**
+     * A tool being CALLED, and its RESULT — two methods rather than one, because the two apps already
+     * render them differently (the phone shows the call as the assistant's own line and the result as
+     * a tool chip). One method used for both would have forced one of them to change how it looks.
+     */
+    fun pushToolCall(name: String, argsJson: String)
+    fun pushToolResult(name: String, result: String)
 
     /** The conversation so far, as the model should see it. */
     fun transcript(): String
@@ -74,7 +86,9 @@ object AgentCore {
      */
     fun systemPrompt(host: AgentHost): String {
         val tools = host.tools().joinToString("\n") { "- ${it.name}: ${it.help}" }
-        return "You are the Ghost Browser agent running ON this ${host.deviceNoun}. You DRIVE this " +
+        val lead = host.preamble().trim().let { if (it.isEmpty()) "" else it + "\n\n" }
+        return lead +
+            "You are the Ghost Browser agent running ON this ${host.deviceNoun}. You DRIVE this " +
             "${host.deviceNoun}'s own real, logged-in browser tab — the user is often already signed in on " +
             "it. To check messages, notifications, feeds or pages on a site the user uses, DO IT ON THE " +
             "ACTIVE TAB: browser_navigate to the site, then browser_read / browser_posts. Do NOT reach the " +
@@ -112,11 +126,11 @@ object AgentCore {
             if (name.isNullOrBlank()) { host.push("assistant", reply.trim().ifBlank { "(no reply)" }); return }
 
             val args = objectField(obj, "args") ?: "{}"
-            host.pushTool(name, "{\"tool\":\"$name\",\"args\":$args}")
+            host.pushToolCall(name, args)
             var result = try { host.runTool(name, args) }
             catch (e: Exception) { "{\"error\":\"${escape(e.message ?: "error")}\"}" }
             if (result.length > 3500) result = result.take(3500) + "…"
-            host.pushTool(name, result)
+            host.pushToolResult(name, result)
             turns++
         }
         host.push("assistant", "(stopped after $maxTurns steps — ask me to continue)")

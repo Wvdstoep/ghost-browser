@@ -160,7 +160,10 @@ object Agent {
                    else chatCluster(system, user)
         }
         override fun push(role: String, text: String) = this@Agent.push(st, role, text)
-        override fun pushTool(name: String, text: String) = this@Agent.pushTool(st, name, text)
+        // This app shows a call and its result the same way, as two tool chips.
+        override fun pushToolCall(name: String, argsJson: String) =
+            this@Agent.pushTool(st, name, "{\"tool\":\"$name\",\"args\":$argsJson}")
+        override fun pushToolResult(name: String, result: String) = this@Agent.pushTool(st, name, result)
         override fun transcript() = this@Agent.transcript(st)
     }
 
