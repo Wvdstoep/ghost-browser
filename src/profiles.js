@@ -71,6 +71,23 @@ const DEFAULTS = {
    * fighting a checkpoint. See presentAs() in pool.js for why this cannot be a user-agent string.
    */
   presentAs: '',
+  /*
+   * WELKE ROL DIT PROFIEL GEBRUIKT — de keuze, niet een gok.
+   *
+   * THE ROLE OF THIS PROFILE, CHOSEN RATHER THAN GUESSED.
+   *
+   * Until now a profile's role was worked out by comparing NAMES: the phone matched the profile
+   * name against the role names. That holds until someone renames either side, or names a profile
+   * the way a person actually would ("work-video"), and then the pairing is gone with no error and
+   * no trace — the agent quietly becomes a generalist with no playbook. It happened twice to the
+   * same CapCut walk, which then spent 70 steps working out a video editor from scratch.
+   *
+   * Empty still means "work it out from the site", so a profile nobody configured keeps getting its
+   * specialist. The difference is that a deliberate choice can now be recorded, read back, and
+   * changed. Validated here for SHAPE only — whether the id names a real role is the server's
+   * business, because this module must not learn about the role store.
+   */
+  defaultRole: '',
 };
 
 const safeName = (name) => String(name || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || 'default';
@@ -99,6 +116,9 @@ function normalize(input = {}) {
   // Stored bare (facebook.com), because it is shown to a person and read by a model, not fetched.
   if (typeof input.site === 'string') out.site = input.site.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').slice(0, 120);
   if (typeof input.note === 'string') out.note = input.note.trim().slice(0, 300);
+  /* Same character class as a role id. '' is a real value here: it CLEARS the choice and
+     goes back to working it out from the site, so it must not be treated as "unchanged". */
+  if (typeof input.defaultRole === 'string') out.defaultRole = input.defaultRole.trim().replace(/[^a-z0-9._-]/gi, '').slice(0, 60);
   // A closed set, because each value needs a matching set of Client Hints to go with it — a free
   // string here would produce a browser that disagrees with itself, which is worse than Linux.
   if (input.presentAs === '' || input.presentAs === null) out.presentAs = '';

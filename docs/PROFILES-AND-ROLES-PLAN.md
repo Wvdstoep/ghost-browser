@@ -8,7 +8,7 @@ Status board (keep current; it is the hand-off between sessions):
 
 | Phase | Name | State | Proof it is done |
 |---|---|---|---|
-| 1 | The choice is stored, not guessed | planned | `profile.json` carries `defaultRole`; `PUT /v1/profiles/:name/settings` accepts it and refuses a role that does not exist; a profile named nothing like its role still gets that role; renaming a role does not silently unpair it |
+| 1 | The choice is stored, not guessed | **DONE** (2026-09-22) — `defaultRole` on the profile record; `src/profileRole.js` is the one answer (chosen > site > none, with the source and a rotted choice reported), read by the settings door and by `startWalk`; `PUT /v1/profiles/:name/settings` refuses a role that does not exist and returns the valid ids; 22 tests | A profile named `work-video` with `defaultRole: capcut-video-editor` gets that role though no name matches; an unconfigured profile still gets its site specialist; a renamed role is reported as `missing` instead of degrading in silence |
 | 2 | Profiles is its own surface | planned | Profiles opens from the main navigation, not from inside Settings, on phone, desktop and web from the same `shared/` code; every profile shows login state, its role, which device holds it and what runs on it; **clicking a profile still opens it in a new tab** |
 | 3 | Read before you choose | planned | The role picker shows, for each role, its full playbook text, its site, its tools and its device requirement — before selection, in the picker, not after saving |
 | 4 | Full management | planned | Create, rename, duplicate and delete a profile; set its site, note, exit and timezone; see and clear its login; see which automations use it — all from the Profiles surface, no Settings detour |

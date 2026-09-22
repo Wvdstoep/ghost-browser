@@ -261,3 +261,45 @@ describe('what a profile says it is running on', () => {
     expect(saved).toMatchObject({ site: 'linkedin.com', presentAs: 'windows', proxy: 'tailscale' });
   });
 });
+
+/*
+ * THE ROLE THIS PROFILE USES.
+ *
+ * It was worked out by comparing NAMES — the phone matched the profile name against the role names.
+ * That holds right up until someone renames either side, or names a profile the way a person
+ * actually would, and then the pairing is gone with no error: the agent becomes a generalist with
+ * no playbook. It happened twice to the same CapCut walk, which then spent 70 steps working out a
+ * video editor from scratch. A field can be read back and changed; a name match cannot.
+ */
+describe('the role a profile uses', () => {
+  it('is empty by default, which means "work it out from the site"', () => {
+    expect(profiles.read('p').defaultRole).toBe('');
+  });
+
+  it('is stored, so a profile named nothing like its role still gets it', () => {
+    profiles.write('p', { defaultRole: 'capcut-video-editor' });
+    expect(profiles.read('p').defaultRole).toBe('capcut-video-editor');
+  });
+
+  it('survives writing other settings, the way a chosen extension survives a preference change', () => {
+    profiles.write('p', { defaultRole: 'capcut-video-editor' });
+    profiles.write('p', { timezone: 'Europe/Amsterdam' });
+    expect(profiles.read('p').defaultRole).toBe('capcut-video-editor');
+  });
+
+  it('can be cleared back to the site match — an empty string is a real value, not "unchanged"', () => {
+    profiles.write('p', { defaultRole: 'capcut-video-editor' });
+    profiles.write('p', { defaultRole: '' });
+    expect(profiles.read('p').defaultRole).toBe('');
+  });
+
+  it('keeps only what could be a role id, so a path or a script cannot arrive through it', () => {
+    expect(profiles.normalize({ defaultRole: '../../etc/passwd' }).defaultRole).toBe('....etcpasswd');
+    expect(profiles.normalize({ defaultRole: '<script>x</script>' }).defaultRole).toBe('scriptxscript');
+  });
+
+  it('ignores a non-string rather than storing it', () => {
+    expect(profiles.normalize({ defaultRole: 7 }).defaultRole).toBeUndefined();
+    expect(profiles.normalize({ defaultRole: null }).defaultRole).toBeUndefined();
+  });
+});

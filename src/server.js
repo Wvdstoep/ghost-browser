@@ -29,6 +29,18 @@ const { makeSink, makeConversation } = require('./sink');
 const sso = require('./sso');
 const roles = require('./roles');
 const userRoles = require('./userRoles');
+/*
+ * siteKey and the profile's role choice live in src/profileRole.js, not here.
+ *
+ * There are three doors into a run — this workflow route, the assistant's walk, and the hand-over
+ * to a device — and a rule that sits in one of them is not in the other two. That is exactly how
+ * the CapCut request came in through the chat and missed the device requirement. One module, read
+ * by every door and by the UI, and testable without a browser.
+ */
+const { siteKey, roleChoice } = require('./profileRole');
+
+/** This install's profile-to-role answer, with the stores wired in. See profileRole.js. */
+const roleChoiceFor = (name) => roleChoice(name, { profiles, roles });
 const workflows = require('./workflows');
 // Roles a person authored live in a JSON store on the profiles volume; register it so roles.list()
 // and roles.get() return them alongside the built-ins (which always win a name collision).
@@ -1345,11 +1357,26 @@ app.delete('/v1/profiles/:name', authed, async (req, res) => {
  * amount of fingerprint patching hides.
  */
 app.get('/v1/profiles/:name/settings', authed, (req, res) => {
-  res.json(profiles.redacted(req.params.name));
+  const choice = roleChoiceFor(req.params.name);
+  res.json({ ...profiles.redacted(req.params.name), roleChoice: choice, suggestedRole: choice.suggested || null });
 });
 
 app.put('/v1/profiles/:name/settings', authed, async (req, res) => {
   try {
+    /*
+     * A ROLE THAT DOES NOT EXIST IS WORSE THAN NO ROLE.
+     *
+     * No role means the site match applies and the walk still gets its specialist. A typo'd or
+     * renamed id means the profile looks configured, reports a role, and behaves as a generalist —
+     * exactly the failure this field exists to end. So it is refused here, with the valid ids, at
+     * the only moment a person is looking at the screen they typed it on. '' is allowed: that is
+     * how the choice is cleared.
+     */
+    const want = (req.body || {}).defaultRole;
+    if (typeof want === 'string' && want.trim() && !roles.get(want.trim())) {
+      return res.status(400).json({ error: `no role called "${want.trim()}"`,
+        roles: (roles.list() || []).map((r) => r.name) });
+    }
     const saved = profiles.write(req.params.name, req.body || {});
     /*
      * Most of these settings — timezone, locale, the proxy — are fixed when the browser context is
@@ -1635,17 +1662,6 @@ function makeRunScript(client) {
   };
 }
 
-/**
- * A profile name and a role's site reduced to the same word: "p_capcut", "capcut.com" and
- * "www.capcut.com" all become "capcut".
- *
- * The www strip is not cosmetic: without it "www.capcut.com" keyed as "www", which matches nothing
- * it should and would put every www-prefixed site under one word.
- */
-function siteKey(s) {
-  return String(s || '').toLowerCase().replace(/^p_/, '').replace(/^www\./, '')
-    .split('.')[0].replace(/[^a-z0-9]/g, '');
-}
 
 /** Fold one role's `require` into an accumulating requirement. */
 function foldNeed(into, req) {
@@ -2923,8 +2939,15 @@ function operatorContext() {
        */
       let walkRole = roles.canonical(role || '');
       if (!role || walkRole === 'general') {
-        const own = (roles.list() || []).find((x) => siteKey(x.site) === siteKey(wantProfile));
-        if (own) { walkRole = roles.canonical(own.name); log.info(`[assistant] walk in ${wantProfile} adopts role ${walkRole}`); }
+        /* The profile's own answer, stored choice first and the site match behind it — one place,
+           so the chat door and a UI can never disagree about which role a profile uses. */
+        const choice = roleChoiceFor(wantProfile);
+        if (choice.role !== 'general') {
+          walkRole = choice.role;
+          log.info(`[assistant] walk in ${wantProfile} adopts role ${walkRole} (${choice.source})`);
+        } else if (choice.missing) {
+          log.warn(`[assistant] ${wantProfile} names role "${choice.missing}", which does not exist — running general`);
+        }
       }
 
       const walkNeed = foldNeed(
