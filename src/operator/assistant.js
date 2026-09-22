@@ -72,6 +72,21 @@ function briefOf(name, text) {
       case 'gb_roles': return Array.isArray(v) ? `${v.length} roles` : '';
       case 'gb_platforms': return Array.isArray(v) ? `${v.length} platforms` : '';
       case 'gb_runs_recent': return Array.isArray(v) ? `${v.length} recent runs` : '';
+      /*
+       * WHAT THE DEVICE IS DOING, IN THE CHAT WHERE THE QUESTION WAS ASKED.
+       *
+       * The owner asks on the phone and the work runs on the desktop, so this step IS the progress
+       * as far as they are concerned. Showing the last line rather than a count: "5 lines" says
+       * nothing, "click_xy {x:..}" says the editor is being driven.
+       */
+      case 'gb_device_log': {
+        if (!v) return '';
+        if (v.error) return String(v.error).slice(0, 120);
+        const ls = Array.isArray(v.lines) ? v.lines : [];
+        const last = ls.length ? String(ls[ls.length - 1]).slice(0, 90) : '';
+        const where = v.device ? v.device + (v.online ? '' : ' (offline)') : 'the device';
+        return last ? where + ' · ' + last : where + ' · nothing reported yet';
+      }
       case 'gb_logs': return `${s.split('\n').length} log lines`;
       case 'gb_look': return v ? `${v.title || v.url || 'page'}${n(v.controls) ? ` · ${v.controls.length} controls` : ''}` : '';
       case 'gb_walk': return v && v.jobId ? `browsing in ${v.profile || 'the browser'}` : '';

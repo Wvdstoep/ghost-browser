@@ -110,6 +110,13 @@ function registerOperatorTools(reg, ctx) {
 
   // ── browsing (the assistant's hands in the owner's logged-in profiles) ──
   R('gb_walk', 'BROWSE for the owner: start the browser agent in a logged-in profile with a precise goal (read-only unless the owner asked for an act — an act becomes a proposal the owner approves in the app). Returns a jobId at once; the walk takes 1–10 minutes — wait with gb_walk_wait. Refused while a watcher pass holds the browser.', obj({ goal: { type: 'string', description: 'exactly what to find/read/do, and what to report back' }, profile: { type: 'string', description: 'e.g. facebook, linkedin (gb_platforms lists them)' }, role: { type: 'string', description: 'optional role name to play' }, maxSteps: { type: 'number', description: 'default 40' }, maxPages: { type: 'number', description: 'default 12' } }, ['goal', 'profile']), async ({ goal, profile, role, maxSteps, maxPages }) => ctx.startWalk ? ctx.startWalk({ goal, profile, role, maxSteps, maxPages }) : { error: 'browsing is not wired on this server' }, { repeatable: true });
+  /* A walk handed to a device has NO cluster job: gb_walk_wait cannot see it, and asking it to
+     produced "no such job" and then a second hand-over of the same goal. This is the handle. */
+  R('gb_device_log', 'WHAT ONE OF THE OWNER\'S DEVICES IS DOING right now. Use this after a gb_walk that answered '
+    + '"running on your device" — that walk has NO jobId and gb_walk_wait cannot see it. Call it every '
+    + 'minute or so while the device works, and pass `after` with the previous `next` to get only what is new.',
+    obj({ device: { type: 'string', description: 'the device name the hand-over reported, e.g. WojMagEmi' }, after: { type: 'number' } }, ['device']),
+    async ({ device, after }) => ctx.deviceProgress ? ctx.deviceProgress(device, after) : { error: 'not wired' }, { repeatable: true });
   R('gb_files_recent', 'FILES the browser captured from a page\'s Download button (images, videos, documents) — newest first. After a walk that created something and downloaded it, this is where it is.', obj({ kind: { type: 'string', description: 'image | video | audio | file' }, limit: { type: 'number' } }), async ({ kind, limit }) => ctx.filesRecent ? ctx.filesRecent(kind, limit) : { error: 'not wired' }, { repeatable: true });
   R('gb_file_show', 'SHOW a captured file to the owner in the chat (an image appears under this step, with a save button on their device). Use it right after the walk downloaded the result.', obj({ id: { type: 'string' } }, ['id']), async ({ id }) => ctx.fileShow ? ctx.fileShow(id) : { error: 'not wired' });
   /* THE RECORDER (docs/RECORDER-PLAN.md): screen recording with sound, any length, in a browser of its own — the
