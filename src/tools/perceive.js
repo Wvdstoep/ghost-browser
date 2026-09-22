@@ -108,7 +108,24 @@ module.exports = {
   /** Every clickable thing, numbered. The numbers are only valid until the page changes. */
   async look(ctx) {
     const an = await ctx.freshAnalysis();
-    ctx.step('look', `${an.title || an.url} — ${an.elementCount} things to click${an.modal ? ' (inside the open dialog)' : ''}`, { url: an.url });
+    /*
+     * THE NUMBERED LIST GOES INTO THE RECORD, NOT JUST TO THE MODEL.
+     *
+     * Without this the step reads "2 things to click" and nothing else, so every `click [13]` in the
+     * history is a decision whose entire justification was thrown away when the run ended. Training
+     * on that teaches a model to guess an index out of nothing — which is the stale-index failure we
+     * are trying to remove, taught deliberately.
+     *
+     * Stored on EVERY look, including the unchanged-page case below where the live transcript says
+     * "the numbers above are still valid". The model has them in its transcript; a single turn
+     * replayed later does not, and the turn is the unit training sees.
+     *
+     * Capped, because this is written to disk for every look of every job and the jobs directory is
+     * already 284 MB. Two thousand characters is roughly thirty elements, which covers the thing
+     * that was actually clicked in almost every case.
+     */
+    ctx.step('look', `${an.title || an.url} — ${an.elementCount} things to click${an.modal ? ' (inside the open dialog)' : ''}`,
+      { url: an.url, marks: String(an.summary || '').slice(0, 2000) });
     /* Sixty element lines, resent every step, was most of the bill. If the page has not moved since
        the last look, say so in one line instead of repeating all of it. */
     const fingerprint = `${an.url}|${an.summary}`;
