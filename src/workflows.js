@@ -710,9 +710,71 @@ function outcomeOf(steps = []) {
   return 'none';
 }
 
+/*
+ * HOW OFTEN A SCHEDULED FLOW IS MEANT TO FIRE, and how long it may be silent before that silence is
+ * news. A single 45-minute threshold was right while every watcher ran every few minutes; the Search
+ * Console watcher reads once a day, and on that rule its card said STALE for twenty-three hours out of
+ * twenty-four while working perfectly. A warning that is always on teaches the owner to ignore the
+ * field, and then the watcher that HAS gone quiet looks just like the one that has not.
+ *
+ * One interval plus half of one as grace. The 45-minute floor stays, so nothing that was accurate
+ * before becomes twitchy: a 15-minute watcher is still stale at 45 minutes, an hourly one at 90, a
+ * daily one at 36 hours.
+ */
+const UNIT_MS = { minute: 60e3, hour: 3600e3, day: 24 * 3600e3 };
+const STALE_FLOOR_MS = 45 * 60e3;
+
+/*
+ * IS THIS SCHEDULE DUE? Interval units the scheduler understands, as data: adding one is a line here,
+ * never a per-schedule change. `lastMs` is when the last run STARTED, which the run record carries.
+ */
+const SCHED_UNIT_MS = { minute: 60e3, hour: 3600e3 };
+function scheduleDue(cfg, lastMs, when = new Date()) {
+  if (!cfg) return false;
+  if (cfg.every === 'day') {
+    const [hh, mm] = String(cfg.at || '08:00').split(':').map((x) => parseInt(x, 10) || 0);
+    /*
+     * AT OR AFTER ITS TIME, not exactly on it. The scheduler ticks once a minute, so an exact-minute
+     * match is ONE chance a day - missed whenever another pass holds the browser at that minute (four
+     * watchers here run every 10 to 20 minutes), whenever the pod rolls through it, or whenever a tick
+     * lands a second late. The property then goes unread for the day, silently, while the card still
+     * shows the previous reading as the newest there is.
+     *
+     * The 22-hour gap keeps this a window and not a loop: one pass a day, late if need be.
+     */
+    const target = new Date(when.getTime());
+    target.setHours(hh, mm, 0, 0);
+    return when.getTime() >= target.getTime() && (when.getTime() - lastMs) > 22 * 3600e3;
+  }
+  const ms = SCHED_UNIT_MS[cfg.every];
+  if (ms) { const n = Math.max(1, Number(cfg.n) || 1); return (when.getTime() - lastMs) >= n * ms; }
+  return false;
+}
+
+function intervalMs(trigger) {
+  const t = trigger && typeof trigger === 'object' ? trigger : {};
+  if (String(t.type || '') !== 'schedule') return 0;
+  const unit = UNIT_MS[String(t.every || '')];
+  if (!unit) return 0;
+  /* `every: 'day'` carries an `at` time rather than an n, and n is meaningless there. */
+  return String(t.every) === 'day' ? unit : Math.max(1, Number(t.n) || 1) * unit;
+}
+
+function triggerOf(wf) {
+  const nodes = (wf && Array.isArray(wf.nodes)) ? wf.nodes : [];
+  const node = nodes.find((n) => n && n.type === 'trigger' && n.trigger);
+  return (node && node.trigger) || (wf && wf.trigger) || null;
+}
+
+function staleAfterMs(wf) {
+  const every = intervalMs(triggerOf(wf));
+  return Math.max(STALE_FLOOR_MS, Math.round(every * 1.5));
+}
+
 module.exports = {
   DIR, RUNDIR, NODE_TYPES, FILTER_OPS, slug, outcomeOf,
   read, all, validate, save, remove, exportPack, importPack,
   order, template, resolveNode, getPath, filterMatch, condMatch, drive, seedFromStep,
   persistRun, readRun, runsFor, latestOutcomes, interruptedRuns, recoverRuns,
+  intervalMs, triggerOf, staleAfterMs, STALE_FLOOR_MS, scheduleDue,
 };

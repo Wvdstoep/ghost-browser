@@ -2041,19 +2041,13 @@ app.post('/v1/watchers/:id/feed/deny', authed, (req, res) => {
  * Runs as the single console owner (there is only one), on that owner's profiles.
  */
 const consoleOwner = () => { try { const a = accounts.load(); return a && a.username; } catch { return null; } };
-// Interval units the scheduler understands. The interval VALUE (n + unit) is data set on the
-// automation; this map is the only code — adding a new unit is one line, never a per-schedule change.
-const SCHED_UNIT_MS = { minute: 60e3, hour: 3600e3 };
-function scheduleDue(cfg, lastMs, when) {
-  if (!cfg) return false;
-  if (cfg.every === 'day') {
-    const [hh, mm] = String(cfg.at || '08:00').split(':').map((x) => parseInt(x, 10) || 0);
-    return when.getHours() === hh && when.getMinutes() === mm && (Date.now() - lastMs) > 22 * 3600e3;
-  }
-  const ms = SCHED_UNIT_MS[cfg.every];
-  if (ms) { const n = Math.max(1, Number(cfg.n) || 1); return (Date.now() - lastMs) >= n * ms; }
-  return false;
-}
+/*
+ * WHEN A WATCHER IS DUE lives in workflows.js, with the other two rules that read the same trigger
+ * (how often it fires, and how long silence means something). It moved there to be testable: at module
+ * scope here, unexported, the only thing a test could do was match its source with a regex, and a
+ * regex is perfectly happy with a date rule that is wrong.
+ */
+const scheduleDue = (cfg, lastMs, when) => workflows.scheduleDue(cfg, lastMs, when);
 /* One watcher pass at a time. A second pass (a schedule firing, or a hand-started run) that
    overlaps the first fights it for the one browser session and every follow-up draft errors on a
    busy profile. This gate makes collect finish and free the session before the follow-ups draft. */
@@ -3030,7 +3024,9 @@ app.get('/v1/watchers/:id/health', authed, (req, res) => {
     const feed = require('./watcherFeed'); const c = feed.getConfig(req.params.id) || {}; const wf = workflows.read(req.params.id);
     const lp = c.lastPass || null; const running = runningWatchers.has(req.params.id);
     const sinceMin = lp && lp.endedAt ? Math.round((Date.now() - lp.endedAt) / 60000) : null;
-    const stale = !!(wf && wf.active && !running && (sinceMin === null || sinceMin > 45));
+    /* Against its OWN schedule: a daily watcher is not stale an hour after it read. See staleAfterMs. */
+    const staleAfterMin = Math.round(workflows.staleAfterMs(wf) / 60000);
+    const stale = !!(wf && wf.active && !running && (sinceMin === null || sinceMin > staleAfterMin));
     /*
      * HOW LONG THE PASS HAS BEEN RUNNING, which this could not say before. `stale` is
      * `active && !running && ...`, so while a flag is stuck `running` is true and staleness is
@@ -3040,7 +3036,7 @@ app.get('/v1/watchers/:id/health', authed, (req, res) => {
     const heldMs = running ? Date.now() - runningWatchers.startedAt(req.params.id) : 0;
     res.json({ active: !!(wf && wf.active), running,
       runningMinutes: running ? Math.round(heldMs / 60000) : null,
-      lastPass: lp, sinceMinutes: sinceMin, stale, mode: c.mode || '' });
+      lastPass: lp, sinceMinutes: sinceMin, stale, staleAfterMinutes: staleAfterMin, mode: c.mode || '' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 // Ground truth for one thread, as the watcher's OWN session sees it (same owner, same login): every
