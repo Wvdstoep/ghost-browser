@@ -3074,6 +3074,29 @@ function operatorContext() {
       if (!out.shown && !out.error) out.shown = 'file';   // not a picture: the chat shows a file card with Save (the app fetches saveUrl)
       return out;
     },
+    /**
+     * WHAT THE DEVICE IS DOING — the handle a handed-over walk never had.
+     *
+     * The hub keeps a log per device; nothing could read it from here, so a walk that went to the
+     * desktop became invisible the moment it left. By NAME as well as by id, because the name is
+     * what the hand-over reports and what the owner calls it.
+     */
+    deviceProgress: (device, after) => {
+      const want = String(device || '').trim().toLowerCase();
+      const all = deviceHub.deviceList() || [];
+      const d = all.find((x) => String(x.deviceId).toLowerCase() === want)
+        || all.find((x) => String(x.name || '').toLowerCase() === want);
+      if (!d) {
+        return { error: `no device called "${device}"`, devices: all.map((x) => ({ name: x.name, online: x.online })) };
+      }
+      const lines = deviceHub.deviceLog(d.deviceId, Number(after) || 0);
+      return {
+        device: d.name, online: d.online, next: lines.next,
+        lines: (lines.lines || []).map((l) => (typeof l === 'string' ? l : (l.line != null ? l.line : JSON.stringify(l)))),
+        note: (lines.lines || []).length ? undefined
+          : 'the device has reported nothing yet — it may still be starting, or its app may be an older build that does not report progress',
+      };
+    },
     stopWalk: async (id) => { const j = jobs.get(String(id || '')); if (!j) return { error: 'no such walk' }; if (!assistantWalks.has(j.id)) return { error: 'not a walk of yours' }; try { await jobs.stop(j); } catch (e) { /* ending */ } return { ok: true, id: j.id, status: j.status }; },
     /* When the turn ends, its walks end with it. */
     stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
@@ -3186,8 +3209,22 @@ ${g}` : g;
         try {
           await deviceHub.runCommand(route.deviceId, { path: '/v1/run_goal', body: { goal: handed, role: walkRole } }, 60000);
           log.info(`[assistant] walk handed to ${route.name} as ${walkRole} (${variant.kind}: ${Object.keys(walkNeed).join(',')}) — ${g.slice(0, 80)}`);
+          /*
+           * NO jobId, ON PURPOSE — AND SAY SO.
+           *
+           * There is no cluster job: the work runs on the device's own agent. Seen live, the
+           * assistant took the only identifier in this answer, called gb_walk_wait("WojMagEmi"),
+           * got "no such job", and went round the log reader in a loop before handing the same
+           * goal over a second time. A response that leaves the caller nothing to do is a response
+           * that invites it to invent something.
+           */
           return { device: route.name, deviceId: route.deviceId, role: walkRole, variant: variant.kind,
-            status: 'running on your device', need: walkNeed,
+            status: 'running on your device', need: walkNeed, jobId: null,
+            noClusterJob: true,
+            watchWith: `gb_device_log with device "${route.name}"`,
+            note: `This is running on ${route.name}, not on the cluster, so there is NO jobId and `
+              + 'nothing for gb_walk_wait to wait on. Watch it with gb_device_log, and tell the owner '
+              + 'it is working on their desktop.',
             /* So the chat can say which specialist it used and why, before anything happens. */
             roleReason: roleEngine.explainChoice(decision), roleSource: decision.source,
             roleAlternatives: decision.alternatives };

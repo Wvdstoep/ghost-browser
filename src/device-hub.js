@@ -154,13 +154,50 @@ function mountDeviceHub(app, authed) {
   });
 
   // The device streams its activity-log lines here (one {line} or many {lines:[]}).
+  /*
+   * WHAT THE RING IS WORKING ON, ACROSS EVERY DEVICE.
+   *
+   * One UI, two devices, one engine: the owner asks on the phone and the job may run on the
+   * desktop, so "what is happening" cannot be a thing each device only knows about itself. The
+   * hub is where both meet, so the answer lives here and every app reads the same one.
+   *
+   * Set when a goal is dispatched (not when a device chooses to mention it), cleared when the
+   * device reports it finished or when the entry ages out — a device that dies mid-job must not
+   * leave the UI claiming work forever.
+   */
+  const work = new Map();   // deviceId -> { goal, role, at }
+  const WORK_TTL_MS = 45 * 60 * 1000;
+  const ringWork = () => {
+    const now = Date.now();
+    const out = [];
+    for (const [id, w] of [...work.entries()]) {
+      if (now - w.at > WORK_TTL_MS) { work.delete(id); continue; }
+      const d = devices.get(id);
+      if (!d) { work.delete(id); continue; }
+      out.push({
+        deviceId: id, name: d.name, online: (now - d.lastSeen) < 40000,
+        goal: w.goal, role: w.role, startedAt: w.at,
+        minutes: Math.round((now - w.at) / 60000),
+        lines: (d.log || []).map((e) => (e && e.line != null ? e.line : String(e))),
+        next: d.logSeq || 0,
+      });
+    }
+    return out;
+  };
+
   app.post("/v1/device/log", authed, (req, res) => {
     const b = req.body || {};
     const d = dev(b.deviceId);
     if (!d) return res.status(404).json({ error: "no device" });
     d.lastSeen = Date.now();
-    if (Array.isArray(b.lines)) b.lines.forEach((l) => pushLog(d, l));
-    else if (b.line != null) pushLog(d, b.line);
+    const note = (l) => {
+      pushLog(d, l);
+      /* The node marks the end of a handed-over job with a leading block. Reading it here means the
+         UI stops saying "working" the moment the device says it is done, rather than on a timer. */
+      if (typeof l === 'string' && l.trim().startsWith('■')) work.delete(String(b.deviceId));
+    };
+    if (Array.isArray(b.lines)) b.lines.forEach(note);
+    else if (b.line != null) note(b.line);
     res.json({ ok: true, next: d.logSeq });
   });
 
@@ -209,6 +246,16 @@ function mountDeviceHub(app, authed) {
   };
 
   // The operator/master reads a device's recent log; ?after=<n> returns only newer lines.
+  /*
+   * ONE UI, TWO DEVICES, ONE ENGINE.
+   *
+   * Ask on the phone and the job may run on the desktop; ask on the desktop and it may run on the
+   * phone. "What is happening" therefore cannot be something each device only knows about itself,
+   * and it was: a handed-over walk was invisible to the app that asked for it AND to the console.
+   * This is the one answer all three surfaces read.
+   */
+  app.get("/v1/ring/work", authed, (_req, res) => res.json({ working: ringWork() }));
+
   app.get("/v1/device/:deviceId/log", authed, (req, res) => {
     const d = dev(req.params.deviceId);
     if (!d) return res.status(404).json({ error: "no device" });
@@ -232,6 +279,16 @@ function mountDeviceHub(app, authed) {
     const d = dev(deviceId);
     if (!d) throw new Error("device not registered / offline");
     const cmd = { id: "c" + (++seq), method, path, body };
+    /*
+     * A HANDED-OVER JOB IS RECORDED AT DISPATCH, not when the device mentions it.
+     *
+     * The other way round leaves the UI blank for however long the device takes to say its first
+     * word — and an older app that never reports at all would look like nothing was ever sent,
+     * which is exactly the state that had the assistant hand the same goal over twice.
+     */
+    if (path === '/v1/run_goal') {
+      work.set(String(deviceId), { goal: String((body && body.goal) || ''), role: String((body && body.role) || ''), at: Date.now() });
+    }
     const w = d.pollWaiters.shift();
     if (w) w.deliver(cmd); else d.queue.push(cmd);
     return { d, cmd, delivered: !!w };
@@ -275,6 +332,20 @@ function mountDeviceHub(app, authed) {
     runCommand,
     enqueue,
     deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })),
+    /*
+     * WHAT A DEVICE HAS BEEN SAYING — the same log GET /v1/device/:id/log serves, as a function.
+     *
+     * A walk handed to a device has no cluster job, so the assistant had nothing to watch: it
+     * called gb_walk_wait with the device NAME, got "no such job", and handed the same goal over a
+     * second time. The log was already here and only reachable over HTTP.
+     */
+    ringWork,
+    deviceLog: (deviceId, after = 0) => {
+      const d = devices.get(String(deviceId || ''));
+      if (!d) return { lines: [], next: 0 };
+      const n = parseInt(after, 10) || 0;
+      return { next: d.logSeq || 0, lines: (d.log || []).filter((e) => e.n > n) };
+    },
   };
 }
 module.exports = { mountDeviceHub, missesFor };
