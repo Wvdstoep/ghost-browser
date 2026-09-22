@@ -1684,8 +1684,47 @@ async function handOverToDevice(route, wf, input, runId) {
     inp.path = body.path;
     log.info(`[ring] ${route.name}: recording is at ${body.path} (${body.bytes || 0} bytes)`);
   }
-  await deviceHub.runCommand(route.deviceId, { path: '/v1/run_flow', body: { id: wf.id, input: inp, runId } }, 60000);
+  /*
+   * IN THE LANGUAGE OF THE NODE THAT STAYS.
+   *
+   * This only spoke /v1/run_flow, a path on the Electron node. Electron is being retired and the
+   * Kotlin/JCEF node is the one that stays — and it has no local flow runner, nor does it need one:
+   * it has an agent, and that agent has the tools (click_xy, drag, upload_file). What it needs is the
+   * GOAL, already filled in.
+   *
+   * The cluster fills it in, because the cluster is the only side holding both the flow and the
+   * input. Templating on the device would mean the same logic living twice, which is exactly how the
+   * routing rules drifted apart.
+   */
+  const goal = ((wf.nodes || [])
+    .filter((n) => n.type === 'agent' && n.goal)
+    .map((n) => fillInput(n.goal, inp))
+    .join('\n\n')).trim();
+
+  const can = (f) => ((route.caps && route.caps.features) || []).includes(f);
+  if (can('run_goal') && goal) {
+    await deviceHub.runCommand(route.deviceId, { path: '/v1/run_goal', body: { goal, runId } }, 60000);
+  } else if (can('run_flow')) {
+    await deviceHub.runCommand(route.deviceId, { path: '/v1/run_flow', body: { id: wf.id, input: inp, runId } }, 60000);
+  } else {
+    throw new Error(`${route.name} cannot be handed a job: it advertises neither run_goal nor run_flow`);
+  }
   log.info(`[ring] "${wf.name}" is running on ${route.name}`);
+}
+
+/**
+ * {{input.x}} filled from the run's input, the same way the cluster's own engine does it.
+ *
+ * An unknown key is left standing rather than replaced with "undefined": a goal that still shows
+ * {{input.path}} tells you what was missing, where the word undefined would send the agent looking
+ * for a file by that name — which is precisely how a CapCut walk spent its budget once already.
+ */
+function fillInput(text, input) {
+  return String(text || '').replace(/\{\{\s*input\.([\w.]+)\s*\}\}/g, (m, key) => {
+    let v = input || {};
+    for (const part of String(key).split('.')) v = (v == null ? undefined : v[part]);
+    return v == null ? m : String(v);
+  });
 }
 
 function makeRunAgent(client) {
