@@ -71,6 +71,8 @@ ${tabs.map((t, i) => `${i + 1}. ${t.label}\n   ${t.url}`).join('\n')}
 
 At each one: call read_table for the numbers, and read for anything the table does not carry. Then call save_gsc_health once per finding, with the label and value EXACTLY as the page shows them — never rounded, never translated, never summarised into one. A page that says nothing is a finding too: record that it was clean.
 
+ON THE PAGES TAB, GO ONE STEP DEEPER. Every "why pages are not indexed" reason is clickable and shows the actual URLs behind it. Click each reason, read that list, and record it with save_gsc_health again — same label and value, plus pages. A count is not fixable and an address is: "blocked by robots.txt = 9" has been sitting in our feed for days saying nothing anybody can act on. Start with the reasons that are ours to fix (404, robots.txt, noindex, redirect), then the others.
+
 If an address does not open, or shows a screen you do not recognise, say which one and move to the next. Six tabs read is a whole audit; five tabs and a search for the sixth is neither.
 
 You are not here for the Performance numbers — another walk reads those. You are here for whether our pages are getting in at all, and what Google says is stopping them.`;
@@ -105,10 +107,26 @@ function findingsOf(run, getJob, opts = {}) {
       const kind = String(f.kind || '').trim();
       const label = String(f.label || '').trim();
       if (!kind || !label) continue;
-      byKey.set(kind + '|' + label.toLowerCase(), {
+      /*
+       * LAST WINS, BEHALVE VOOR DE ADRESSEN. Een tweede lezing van dezelfde rij hoort het nieuwe
+       * aantal te geven, maar mag de adressen niet kwijtraken die de eerste lezing wel had: de
+       * reden-rij en de URL's erachter komen uit twee verschillende calls.
+       */
+      const key = kind + '|' + label.toLowerCase();
+      const had = byKey.get(key);
+      const pages = Array.isArray(f.pages) ? f.pages.filter(Boolean).map(String) : [];
+      /*
+       * En hetzelfde geldt voor value en detail: een latere lezing mag een veld bijwerken, niet
+       * leegmaken. De tweede call draagt de adressen en herhaalt de bron-kolom niet, want die stond
+       * er al - waarna last-wins een echte detail met een lege overschreef.
+       */
+      const value = String(f.value == null ? '' : f.value).trim();
+      const detail = String(f.detail || '').trim();
+      byKey.set(key, {
         kind, label,
-        value: String(f.value == null ? '' : f.value).trim(),
-        detail: String(f.detail || '').trim(),
+        value: value || (had ? had.value : ''),
+        detail: detail || (had ? had.detail : ''),
+        pages: [...new Set([...((had && had.pages) || []), ...pages])],
       });
     }
   }
@@ -141,6 +159,19 @@ function feedRowsFor(findings, opts = {}) {
     const tab = tabFor(f.kind, property);
     const fields = { kind: f.kind, value: f.value || '(nothing shown)' };
     if (f.detail) fields.detail = f.detail;
+    /*
+     * DE ADRESSEN IN DE REGEL ZELF. Hier stond alleen het aantal, en dat is precies het probleem
+     * waar deze watcher voor bestaat: "Geblokkeerd door robots.txt = 9" vertelt je dat er negen
+     * pagina's zijn en niet welke. Ze staan in de fields en niet in de titel, want de titel is de
+     * sleutel van de regel: verandert die, dan is het een nieuwe regel en vult de pagina zich met
+     * geschiedenis.
+     */
+    const pages = Array.isArray(f.pages) ? f.pages : [];
+    if (pages.length) {
+      fields.pages = String(pages.length);
+      pages.slice(0, 25).forEach((u, i) => { fields[`page ${i + 1}`] = u; });
+      if (pages.length > 25) fields['and more'] = `${pages.length - 25} further addresses not listed here`;
+    }
     fields.read = 'read-only — nothing here is acted on';
     return { title: f.label, fields, url: tab.url, kind: f.kind, draft: '', readOnly: true, urgency: urgencyFor(f.kind) };
   });

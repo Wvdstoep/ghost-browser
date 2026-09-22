@@ -40,10 +40,34 @@
       .catch(function (e) { GBHost.ctl('pollerr', String(e)); setTimeout(loop, 3000); });
   }
 
+  /*
+   * WHAT THIS NODE CAN DO, SAID OUT LOUD.
+   *
+   * This registered with only { deviceId, name }, so the hub filled in normCaps({}) — cdp false, no
+   * features, no platform. This is the node with real CDP input: click_xy, drag_xy with
+   * Input.setInterceptDrags (so an HTML5 drag onto a CapCut timeline actually drops), run_steps to
+   * batch a sequence, upload_file straight into a page input. It is the only node that has ever
+   * completed a CapCut edit — and to /v1/device/route it looked like a device that can do nothing.
+   *
+   * Every name below is a tool that exists in renderer.js. Nothing is claimed that is not handled:
+   * an advertisement the ring believes is worse than silence, because the ring then sends work here
+   * that cannot be done, instead of to a device that can.
+   */
+  var CAPS = {
+    platform: 'desktop',
+    cdp: true,            // real Chrome DevTools input: drag-interception, self-saving downloads
+    realIp: true,         // the laptop's own home connection
+    features: [
+      'click_xy', 'drag_xy', 'run_steps', 'upload_file', 'download_url', 'run_flow', 'browser_read',
+      'browser_navigate', 'browser_click', 'browser_click_text', 'browser_type',
+      'browser_scroll', 'downloads', 'open_tab', 'fetch_url'
+    ]
+  };
+
   function reg() {
     fetch('/v1/device/register', {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId: DEV, name: NAME })
+      body: JSON.stringify({ deviceId: DEV, name: NAME, caps: CAPS })
     }).then(function (r) {
       if (r.ok) { GBHost.ctl('registered', DEV); loop(); }
       else { GBHost.ctl('regfail', String(r.status)); setTimeout(reg, 4000); }

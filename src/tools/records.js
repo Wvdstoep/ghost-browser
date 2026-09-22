@@ -107,11 +107,19 @@ module.exports = {
    * Recorded one at a time so a walk that is stopped halfway still delivers what it read.
    */
   async save_gsc_health(ctx, a) {
-    const r = ctx.addGscHealth({ kind: a.kind, label: a.label, value: a.value, detail: a.detail });
-    if (r) ctx.step('note', `Search Console — ${r.kind}: ${r.label}${r.value ? ` = ${r.value}` : ''}`);
+    const r = ctx.addGscHealth({ kind: a.kind, label: a.label, value: a.value, detail: a.detail, pages: a.pages });
+    const n = r && r.pages ? r.pages.length : 0;
+    if (r) ctx.step('note', `Search Console — ${r.kind}: ${r.label}${r.value ? ` = ${r.value}` : ''}${n ? ` (${n} adres${n === 1 ? '' : 'sen'})` : ''}`);
+    /*
+     * The observation says whether the ADDRESSES arrived, not just the row. A reason row without
+     * them is half a finding: "9 pages blocked" is not something anybody can fix, and the walk is
+     * the only thing that can still go and look.
+     */
     ctx.observe(r
-      ? `Recorded (${r.kind}). Carry on with the next tab the goal lists; do not re-read this one.`
-      : 'Nothing recorded — either it had no kind, or that exact finding is already down. Move to the next tab.');
+      ? (n
+        ? `Recorded (${r.kind}) with ${n} address${n === 1 ? '' : 'es'}. Go BACK to the reasons list and open the next reason.`
+        : `Recorded (${r.kind}). ${a.kind === 'indexing' && /\d/.test(String(a.value || '')) ? 'Now OPEN this row and read the example URLs behind it, then call this again with the same label and value plus pages.' : 'Carry on with the next tab the goal lists; do not re-read this one.'}`)
+      : 'Nothing recorded — either it had no kind, or that exact finding is already down WITH the same addresses. Move on.');
   },
 
   /**

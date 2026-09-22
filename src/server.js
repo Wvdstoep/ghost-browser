@@ -1635,6 +1635,59 @@ function makeRunScript(client) {
   };
 }
 
+/**
+ * WHAT THIS FLOW NEEDS FROM A DEVICE, read off its roles.
+ *
+ * The union over the flow's agent steps, because one step needing a real drag makes the whole flow a
+ * device flow: handing half of it to a node and half to the cluster would split the browser session
+ * the edit lives in. Returns null for an ordinary flow, which is nearly all of them.
+ */
+function deviceNeedOf(wf) {
+  const need = {};
+  for (const n of ((wf && wf.nodes) || [])) {
+    if (n.type !== 'agent' || !n.role) continue;
+    const req = (roles.get(n.role) || {}).require;
+    if (!req || typeof req !== 'object') continue;
+    for (const k of ['cdp', 'mobileApp', 'model', 'realIp']) if (req[k]) need[k] = true;
+    if (req.platform) need.platform = req.platform;
+    if (Array.isArray(req.features) && req.features.length) {
+      need.features = [...new Set([...(need.features || []), ...req.features])];
+    }
+  }
+  return Object.keys(need).length ? need : null;
+}
+
+/**
+ * HAND THE FLOW TO THE DEVICE, with its footage.
+ *
+ * The flow wants a local path ({{input.path}}) and the recording lives on the cluster's volume, so a
+ * recordingId is turned into a ticketed address the device fetches to its own disk; the path that
+ * comes back becomes the flow's input. Without this the device would be handed the literal text
+ * {{input.path}} and go looking for a file of that name.
+ *
+ * The run_flow call is acknowledged immediately on purpose: a CapCut edit takes many minutes and the
+ * device journals its own run to the shared history (POST /v1/device-runs), which is where it is read.
+ */
+async function handOverToDevice(route, wf, input, runId) {
+  const inp = { ...(input || {}) };
+  if (inp.recordingId && !inp.path) {
+    let tk = null;
+    try { tk = recorder.ticket(inp.recordingId); } catch (e) { tk = null; }
+    if (!tk) throw new Error(`no such recording: ${inp.recordingId}`);
+    const url = `/v1/recordings/${encodeURIComponent(inp.recordingId)}/mp4?t=${encodeURIComponent(tk.t)}`;
+    log.info(`[ring] ${route.name}: fetching recording ${inp.recordingId}`);
+    const got = await deviceHub.runCommand(route.deviceId,
+      { path: '/v1/download_url', body: { url, name: `${inp.recordingId}.mp4` } }, 25 * 60 * 1000);
+    let body = null;
+    try { body = typeof got.body === 'string' ? JSON.parse(got.body) : (got.body || got); } catch (e) { body = got; }
+    if (!body || !body.path) throw new Error(`the device could not fetch the recording: ${(body && body.error) || 'no path returned'}`);
+    inp.path = body.path;
+    log.info(`[ring] ${route.name}: recording is at ${body.path} (${body.bytes || 0} bytes)`);
+  }
+  await deviceHub.runCommand(route.deviceId, { path: '/v1/run_flow', body: { id: wf.id, input: inp, runId } }, 60000);
+  log.info(`[ring] "${wf.name}" is running on ${route.name}`);
+}
+
 function makeRunAgent(client) {
   // An automation pipeline is the owner's OWN work, not interactive multi-session use, so it is not
   // throttled by the small per-plan concurrency limit — the worker's MAX_CONTEXTS is the real cap. A
@@ -1789,6 +1842,30 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
     gscWatchTick(wf, consoleOwner() || req.client.owner, { force: true, runId }).catch((e) => log.error('[gsc-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id));
     return res.json({ runId, status: 'running', mode: 'gsc' });
   }
+  /*
+   * A FLOW WHOSE ROLE NEEDS A DEVICE IS HANDED OVER, NOT ATTEMPTED HERE.
+   *
+   * The CapCut edit is the case this exists for. Its role needs CDP drag-interception, which the
+   * cluster's browser does not have — it can load the editor and then cannot drop a clip on the
+   * timeline. Driven here anyway, a run spends its whole budget looking at the page and reports on
+   * the editor instead of producing a video, which is exactly what happened on 22/09.
+   *
+   * So: the role states its requirement (data), the ring finds a device that meets it, and the whole
+   * flow goes there. No capable device means a refusal WITH the reason, never a cluster attempt —
+   * the same rule the Cloudflare-gated platforms already follow.
+   */
+  const devNeed = deviceNeedOf(wf);
+  if (devNeed) {
+    const r = deviceHub.routeDevice(req.client.owner, devNeed);
+    if (!r.deviceId) {
+      runningWatchers.delete(wf.id);
+      log.info(`[workflow] "${wf.name}" needs a device — ${r.reason}`);
+      return res.status(409).json({ error: `"${wf.name}" runs on a device, not on the cluster`, reason: r.reason, need: devNeed, candidates: r.candidates });
+    }
+    handOverToDevice(r, wf, input, runId).catch((e) => log.error(`[ring] hand-over of "${wf.name}": ${e.message}`));
+    return res.json({ runId, status: 'dispatched', device: r.name, deviceId: r.deviceId, need: devNeed });
+  }
+
   const startedAtM = Date.now();
   workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
     .then((run) => { recordRolePass(wf, startedAtM, run); return triggerFollowUps(wf, req.client.owner); })

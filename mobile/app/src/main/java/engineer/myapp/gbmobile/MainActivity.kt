@@ -887,7 +887,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun phoneCaps(): JSONObject {
         val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
         val profs = JSONArray(); for (p in (vm.profiles.value ?: emptyList())) profs.put(p)
-        val feats = JSONArray().put("native_tap").put("upload_file").put("click_xy").put("drag_xy")
+        /*
+         * NOTHING THE PHONE CANNOT DO.
+         *
+         * This claimed upload_file, click_xy and drag_xy. Each of those three appears exactly once in
+         * this whole app — in this array — and there is no handler for any of them. The comment above
+         * this function says the record exists "so the ring picks this device only for runs it can
+         * actually handle", and those three entries defeated exactly that: a CapCut edit could be
+         * routed to a phone that cannot complete an HTML5 drag, which is not a phone problem but a
+         * WebView one (drag-interception is a Chrome DevTools input command).
+         *
+         * native_tap stays: the app is native, it has a click handler, and mobileApp = true says the
+         * same thing. The phone's job in the ring is to be the operator that hands work over.
+         */
+        val feats = JSONArray().put("native_tap")
         return JSONObject()
             .put("platform", "android")
             .put("mobileApp", true)   // native app → real touch events

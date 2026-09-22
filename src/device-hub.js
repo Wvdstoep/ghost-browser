@@ -6,6 +6,28 @@
  * deviceId is the device's own secret token, so knowing it is what targets a specific device.
  * In-memory (single GB instance), which is all this needs.
  */
+/*
+ * WHAT A DEVICE IS MISSING FOR A JOB — the one predicate, at module scope so both the route and the
+ * in-process picker use it and so a test can reach it.
+ *
+ * It used to exist twice: /v1/device/route checked need.features, and capableDevice (whose own
+ * comment said it mirrored the route) did not. The scheduler goes through capableDevice, so a run
+ * that required a named primitive could be handed to a device without it — silently, because a
+ * missing feature looks exactly like a device that simply has fewer of them.
+ *
+ * Returns the list of unmet requirements: empty means this device can do the job.
+ */
+function missesFor(caps, need) {
+  const c = caps || {};
+  const n = need || {};
+  const m = [];
+  for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (n[k] && !c[k]) m.push(k);
+  if (n.platform && c.platform !== n.platform) m.push("platform:" + n.platform);
+  if (n.profile && !(c.profiles || []).includes(n.profile)) m.push("profile:" + n.profile);
+  for (const f of (n.features || [])) if (!(c.features || []).includes(f)) m.push("feature:" + f);
+  return m;
+}
+
 function mountDeviceHub(app, authed) {
   const devices = new Map(); // id -> {name, owner, queue:[], pollWaiters:[], resultWaiters:Map, lastSeen, log:[], logSeq}
   let seq = 0;
@@ -79,14 +101,7 @@ function mountDeviceHub(app, authed) {
       .filter(({ d }) => d.owner === owner && (now - d.lastSeen) < 40000)
       .map(({ id, d }) => ({ id, name: d.name, caps: d.caps || normCaps({}), lastSeen: d.lastSeen }));
 
-    const misses = (c) => {
-      const m = [];
-      for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (need[k] && !c.caps[k]) m.push(k);
-      if (need.platform && c.caps.platform !== need.platform) m.push("platform:" + need.platform);
-      if (need.profile && !(c.caps.profiles || []).includes(need.profile)) m.push("profile:" + need.profile);
-      for (const f of (need.features || [])) if (!(c.caps.features || []).includes(f)) m.push("feature:" + f);
-      return m;
-    };
+    const misses = (c) => missesFor(c.caps, need);
     const score = (c) => {
       let s = 0;
       if (prefer.profile && (c.caps.profiles || []).includes(prefer.profile)) s += 3;
@@ -151,17 +166,46 @@ function mountDeviceHub(app, authed) {
 
   // In-process API for the scheduler: is there an online device of this owner that can run a job with
   // these requirements? Mirrors /v1/device/route's scoring. Returns {deviceId,name,caps} or null.
-  const capableDevice = (owner, need = {}) => {
+  const onlineOf = (owner) => {
     const now = Date.now();
-    const online = [...devices.entries()].filter(([, d]) => d.owner === owner && (now - d.lastSeen) < 40000).map(([id, d]) => ({ id, name: d.name, caps: d.caps || normCaps({}) }));
-    const ok = (c) => {
-      for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (need[k] && !c.caps[k]) return false;
-      if (need.platform && c.caps.platform !== need.platform) return false;
-      if (need.profile && !(c.caps.profiles || []).includes(need.profile)) return false;
-      return true;
+    return [...devices.entries()]
+      .filter(([, d]) => d.owner === owner && (now - d.lastSeen) < 40000)
+      .map(([id, d]) => ({ id, name: d.name, caps: d.caps || normCaps({}) }));
+  };
+
+  /*
+   * WHO CAN DO IT, AND IF NOBODY — WHY NOT.
+   *
+   * capableDevice returns a device or null, which is right for work that may fall back to the cluster
+   * (a residential exit is nice to have). It is wrong for work the cluster physically cannot do: a
+   * CapCut edit needs CDP drag-interception, and "nothing qualified, use the cluster" is how a run
+   * ends up in a web editor it cannot drag in, spending its whole budget and reporting on the page.
+   *
+   * So routeDevice hands back the reason too. A caller with a hard requirement refuses with something
+   * a person can act on ("bring the desktop node online") instead of starting work that cannot finish.
+   */
+  const routeDevice = (owner, need = {}) => {
+    const online = onlineOf(owner);
+    const candidates = online.map((c) => ({ deviceId: c.id, name: c.name, caps: c.caps, misses: missesFor(c.caps, need) }));
+    const pick = candidates.find((c) => c.misses.length === 0) || null;
+    if (pick) return { deviceId: pick.deviceId, name: pick.name, caps: pick.caps, candidates, reason: `matched ${pick.name}` };
+    const wanted = [
+      ...["mobileApp", "cdp", "model", "realIp"].filter((k) => need[k]),
+      ...(need.platform ? ["platform:" + need.platform] : []),
+      ...(need.profile ? ["profile:" + need.profile] : []),
+      ...(need.features || []).map((f) => "feature:" + f),
+    ];
+    return {
+      deviceId: null, name: null, caps: null, candidates,
+      reason: online.length
+        ? `no online device has ${wanted.join(", ") || "the requirements"} — ${candidates.map((c) => `${c.name} lacks ${c.misses.join("/")}`).join("; ")}`
+        : `no devices are online, and ${wanted.join(", ") || "these requirements"} cannot be met by the cluster`,
     };
-    const pick = online.find(ok) || null;
-    return pick ? { deviceId: pick.id, name: pick.name, caps: pick.caps } : null;
+  };
+
+  const capableDevice = (owner, need = {}) => {
+    const r = routeDevice(owner, need);
+    return r.deviceId ? { deviceId: r.deviceId, name: r.name, caps: r.caps } : null;
   };
 
   // The operator/master reads a device's recent log; ?after=<n> returns only newer lines.
@@ -227,9 +271,10 @@ function mountDeviceHub(app, authed) {
   });
   return {
     capableDevice,
+    routeDevice,
     runCommand,
     enqueue,
     deviceList: () => [...devices.entries()].map(([id, d]) => ({ deviceId: id, name: d.name, owner: d.owner, online: (Date.now() - d.lastSeen) < 40000, caps: d.caps })),
   };
 }
-module.exports = { mountDeviceHub };
+module.exports = { mountDeviceHub, missesFor };
