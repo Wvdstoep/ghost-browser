@@ -85,7 +85,16 @@ private fun runApp() = application {
             val (ep, key, model) = Agent.load()
             state.endpoint.value = ep; state.apiKey.value = key; state.model.value = model
             withContext(Dispatchers.IO) { Thread.sleep(1500) }
-            DesktopNode({ Tabs.activeBrowser() }, deviceId(), hostName(), gbJs) { line -> println(line); state.log(line) }.start()
+            /*
+             * The node's runGoal IS the on-device agent. When the ring hands this machine a job — a
+             * CapCut edit, say — the goal arrives already filled in and Agent.send works it with THIS
+             * browser's own tools (click_xy, drag, upload_file). The alternative was the cluster
+             * driving every click over the wire, and an edit is hundreds of them.
+             */
+            DesktopNode(
+                { Tabs.activeBrowser() }, deviceId(), hostName(), gbJs,
+                { goal -> Agent.send(state, Tabs.activeBrowser(), goal) },
+            ) { line -> println(line); state.log(line) }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
     }
 
