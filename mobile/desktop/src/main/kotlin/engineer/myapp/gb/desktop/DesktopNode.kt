@@ -96,17 +96,24 @@ class DesktopNode(
             "/v1/click" -> gb("JSON.stringify(window.__gb.click(${body.optInt("index", -1)}))").ifBlank { "{}" }
             "/v1/type" -> gb("JSON.stringify(window.__gb.type(${body.optInt("index", -1)},${jsonStr(body.optString("text"))}))").ifBlank { "{}" }
             "/v1/scroll" -> gb("JSON.stringify(window.__gb.scroll(${body.optInt("dy", 600)}))").ifBlank { "{}" }
-            "/v1/screenshot" -> {
-                val shot = Cef.cdp(main, "Page.captureScreenshot", "{\"format\":\"png\"}")
-                val data = try { JSONObject(shot).optString("data") } catch (e: Exception) { "" }
-                if (data.isBlank()) "{\"error\":\"screenshot failed\"}" else "{\"png_base64\":${jsonStr(data)}}"
-            }
+            "/v1/screenshot" -> Hands.screenshot(main)
             "/v1/eval" -> Cef.evalJs(main, gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()").ifBlank { "{}" }
             "/v1/info_device" -> "{\"platform\":\"desktop\",\"name\":${jsonStr(deviceName)}}"
-            "/v1/click_xy" -> { mouseClick(body.optDouble("x", 0.0), body.optDouble("y", 0.0)); "{\"ok\":true}" }
-            "/v1/drag" -> dragXY(body)
-            "/v1/upload_file" -> uploadFile(body.optString("path"), body.optInt("nth", 0))
-            "/v1/download_url" -> downloadUrl(body)
+            /*
+             * These four live in Hands, shared with the on-device agent. They used to be private
+             * here, which meant only the ring could use them: the agent in front of this very
+             * browser was never offered a drag or an upload, so a CapCut edit handed to this machine
+             * could not be carried out by the thing standing closest to it.
+             */
+            "/v1/click_xy" -> Hands.clickXy(main, body.optDouble("x", 0.0), body.optDouble("y", 0.0))
+            "/v1/drag" -> Hands.drag(
+                main,
+                body.optDouble("fromX", body.optDouble("x1", 0.0)), body.optDouble("fromY", body.optDouble("y1", 0.0)),
+                body.optDouble("toX", body.optDouble("x2", 0.0)), body.optDouble("toY", body.optDouble("y2", 0.0)),
+                body.optInt("steps", 14), body.optLong("holdMs", 60L),
+            )
+            "/v1/upload_file" -> Hands.uploadFile(main, body.optString("path"), body.optInt("nth", 0))
+            "/v1/download_url" -> Hands.downloadUrl(body.optString("url"), body.optString("name"), log)
             "/v1/run_goal" -> {
                 /*
                  * Acknowledged at once, deliberately. A CapCut edit is minutes of work and the poll
@@ -121,71 +128,11 @@ class DesktopNode(
         }
     }
 
-    /* ── S8.3 CapCut-critical primitives (CDP Input + DOM) ───────────────────────────────────── */
-
-    private fun mouseEvent(type: String, x: Double, y: Double, buttons: Int = 1) {
-        Cef.cdp(main, "Input.dispatchMouseEvent",
-            "{\"type\":\"$type\",\"x\":$x,\"y\":$y,\"button\":\"left\",\"buttons\":$buttons,\"clickCount\":1}")
-    }
-
-    private fun mouseClick(x: Double, y: Double) {
-        Cef.cdp(main, "Input.dispatchMouseEvent", "{\"type\":\"mouseMoved\",\"x\":$x,\"y\":$y}")
-        mouseEvent("mousePressed", x, y); Thread.sleep(40); mouseEvent("mouseReleased", x, y, 0)
-    }
-
-    /** Press → move (several steps) → release: real drag on a canvas (CapCut timeline/box). */
-    private fun dragXY(b: JSONObject): String {
-        val fx = b.optDouble("fromX", b.optDouble("x1", 0.0)); val fy = b.optDouble("fromY", b.optDouble("y1", 0.0))
-        val tx = b.optDouble("toX", b.optDouble("x2", 0.0)); val ty = b.optDouble("toY", b.optDouble("y2", 0.0))
-        mouseEvent("mouseMoved", fx, fy, 0); mouseEvent("mousePressed", fx, fy); Thread.sleep(60)
-        val steps = 14
-        for (i in 1..steps) { val x = fx + (tx - fx) * i / steps; val y = fy + (ty - fy) * i / steps; mouseEvent("mouseMoved", x, y, 1); Thread.sleep(25) }
-        Thread.sleep(60); mouseEvent("mouseReleased", tx, ty, 0)
-        return "{\"ok\":true}"
-    }
-
-    /** Set a file input's file via CDP DOM (no OS file dialog) — the upload primitive. */
-    private fun uploadFile(path: String, nth: Int): String {
-        if (path.isBlank()) return "{\"error\":\"path required\"}"
-        return try {
-            val rootId = JSONObject(Cef.cdp(main, "DOM.getDocument", "{\"depth\":0}")).optJSONObject("root")?.optInt("nodeId") ?: return "{\"error\":\"no document\"}"
-            val q = JSONObject(Cef.cdp(main, "DOM.querySelectorAll", "{\"nodeId\":$rootId,\"selector\":\"input[type=file]\"}")).optJSONArray("nodeIds") ?: JSONArray()
-            if (q.length() == 0) return "{\"error\":\"no file input found\"}"
-            val nid = q.optInt(nth.coerceIn(0, q.length() - 1))
-            Cef.cdp(main, "DOM.setFileInputFiles", "{\"files\":[${jsonStr(path)}],\"nodeId\":$nid}")
-            "{\"ok\":true,\"input\":$nid}"
-        } catch (e: Exception) { "{\"error\":${jsonStr(e.message ?: "upload failed")}}" }
-    }
-
-    /**
-     * A URL onto THIS machine, returning the local path — the step that lets footage held by the
-     * cluster be edited here.
-     *
-     * uploadFile needs a real path (DOM.setFileInputFiles takes a filename), and a platform recording
-     * lives on the cluster's volume. So the cluster mints a ticketed address and this saves it beside
-     * the user's downloads. Streamed, not buffered: these are videos, and holding 120 MB in memory to
-     * write it out again is how an edit dies halfway through its import.
-     *
-     * Relative paths are resolved against the cluster origin the control channel already talks to, so
-     * the cluster never has to know its own public address.
+    /*
+     * The CapCut-critical primitives moved to Hands.kt, so the on-device agent can use the same ones
+     * this node does. They were private here, and that is precisely why the agent's tool list stopped
+     * at click/type/scroll while the machine underneath could drag and upload.
      */
-    private fun downloadUrl(b: JSONObject): String {
-        val raw = b.optString("url").trim()
-        if (raw.isBlank()) return "{\"error\":\"url required\"}"
-        val url = if (raw.startsWith("http://") || raw.startsWith("https://")) raw
-                  else Cluster.clusterUrl.trimEnd('/') + (if (raw.startsWith("/")) raw else "/$raw")
-        val safe = b.optString("name").ifBlank { "gb-" + System.currentTimeMillis() + ".bin" }
-            .replace(Regex("[^\\w .-]+"), "_").take(80)
-        return try {
-            val dir = java.io.File(System.getProperty("user.home"), "Downloads/gb").apply { mkdirs() }
-            val file = java.io.File(dir, safe)
-            val conn = java.net.URI(url).toURL().openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 30000; conn.readTimeout = 20 * 60 * 1000
-            conn.inputStream.use { input -> java.io.FileOutputStream(file).use { out -> input.copyTo(out, 1 shl 16) } }
-            if (file.length() == 0L) "{\"error\":\"saved nothing\"}"
-            else { log("⬇ saved ${file.name} (${file.length() / 1048576} MB)"); "{\"path\":${jsonStr(file.absolutePath)},\"bytes\":${file.length()}}" }
-        } catch (e: Exception) { "{\"error\":${jsonStr(e.message ?: "download failed")}}" }
-    }
 
     /** Wait for lazy content to settle (Facebook etc. fire load on a skeleton). Best-effort. */
     private fun waitSettle(maxMs: Int) {

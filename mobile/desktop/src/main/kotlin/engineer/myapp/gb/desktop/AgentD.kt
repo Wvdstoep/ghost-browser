@@ -1,6 +1,9 @@
 package engineer.myapp.gb.desktop
 
+import engineer.myapp.gb.shared.AgentCore
+import engineer.myapp.gb.shared.AgentHost
 import engineer.myapp.gb.shared.ChatMsg
+import engineer.myapp.gb.shared.ToolSpec
 import org.cef.browser.CefBrowser
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,26 +29,36 @@ object Agent {
         cfg.parentFile?.mkdirs(); cfg.outputStream().use { p.store(it, "gb agent") }
     } catch (e: Exception) {}
 
-    private fun systemPrompt(main: CefBrowser?): String {
-        val tools = listOf(
-            "browser_read: read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type",
-            "browser_navigate {url}: open a url in the active tab",
-            "browser_click {index}: click element i from browser_read",
-            "browser_click_text {text}: click the element whose text/label contains this",
-            "browser_posts: read the post-like text blocks of a feed (Facebook groups etc.)",
-            "browser_type {index,text}: type into element i",
-            "browser_scroll {dy}: scroll the page",
-            "list_workflows / run_workflow {id}: your automations",
-            "list_devices / list_platforms",
-        ).joinToString("\n") { "- $it" }
-        val url = try { main?.url ?: "" } catch (e: Exception) { "" }
-        return "You are the Ghost Browser agent running ON this desktop. You DRIVE the machine's own real, " +
-            "logged-in Chromium tab. To check the user's accounts/pages, act on the ACTIVE TAB (browser_navigate " +
-            "then browser_read/browser_posts). Reply each turn with EXACTLY ONE compact JSON object:\n" +
-            "  {\"reply\":\"text\"}  — to talk/answer/report\n" +
-            "  {\"tool\":\"<name>\",\"args\":{...}} — to act; you then get TOOL RESULT and continue\n" +
-            "Be concise. Never invent tool results. CURRENT TAB: ${url.ifBlank { "(home)" }}\nTools:\n" + tools
-    }
+    /**
+     * WHAT THIS MACHINE CAN DO, told to the agent.
+     *
+     * This list used to stop at click/type/scroll while the machine underneath could click at a
+     * coordinate, drag, and put a local file into a page input — those lived privately inside
+     * DesktopNode, reachable only by the ring. So a CapCut edit handed to this desktop could not be
+     * performed by the agent sitting in front of the very browser that could do it. They are in
+     * Hands now, and they are offered here.
+     *
+     * The order matters a little: a canvas app is driven by looking and then pointing, so screenshot
+     * and click_xy are described in terms of each other.
+     */
+    private fun toolCatalogue(): List<ToolSpec> = listOf(
+        ToolSpec("browser_read", "read the active tab {url,title,elements:[{i,tag,type,text}],text} — use before click/type"),
+        ToolSpec("browser_navigate", "{url}: open a url in the active tab"),
+        ToolSpec("browser_click", "{index}: click element i from browser_read"),
+        ToolSpec("browser_click_text", "{text}: click the element whose text/label contains this"),
+        ToolSpec("browser_posts", "read the post-like text blocks of a feed (Facebook groups etc.)"),
+        ToolSpec("browser_type", "{index,text}: type into element i"),
+        ToolSpec("browser_scroll", "{dy}: scroll the page"),
+        ToolSpec("screenshot", "a picture of the tab, base64 PNG — the ONLY way to see a canvas (a video timeline, a crop box), and what you aim click_xy and drag at"),
+        ToolSpec("click_xy", "{x,y}: click at a point in DEVICE PIXELS as the screenshot shows them — for canvases and toolbars that browser_read cannot see"),
+        ToolSpec("drag", "{fromX,fromY,toX,toY}: press, move and release — drags a clip onto a timeline, trims an edge, moves a box. Real pointer input, so it works on a canvas"),
+        ToolSpec("upload_file", "{path}: put a LOCAL file into the page's file input (open the page's upload control first). No file dialog is involved"),
+        ToolSpec("download_url", "{url,name}: save a url onto this machine and get back its local path — use it to fetch footage before upload_file"),
+        ToolSpec("list_workflows", "your automations"),
+        ToolSpec("run_workflow", "{id}: run an automation"),
+        ToolSpec("list_devices", "connected device nodes"),
+        ToolSpec("list_platforms", "the browser profiles/presets"),
+    )
 
     /** THE OPERATOR on the cluster: "/op <goal>" starts an engineer-grade job inside Ghost Browser (reads
      *  what the browser did, changes the smallest wrong thing, runs and proves it); its steps stream into
@@ -112,25 +125,43 @@ object Agent {
         push(st, "user", text)
         st.agentBusy.value = true
         thread(isDaemon = true) {
-            try {
-                val sys = systemPrompt(main)
-                var turns = 0
-                while (turns < 12) {
-                    val reply = try { if (custom) chat(ep, st.apiKey.value, st.model.value, sys, transcript(st)) else chatCluster(sys, transcript(st)) }
-                    catch (e: Exception) { push(st, "assistant", "⚠ model error: ${e.message}"); break }
-                    val obj = extractJson(reply)
-                    if (obj == null || (obj.isNull("reply") && !obj.has("tool"))) { push(st, "assistant", reply.trim().ifBlank { "(no reply)" }); break }
-                    if (!obj.isNull("reply")) { push(st, "assistant", obj.optString("reply")); break }
-                    val name = obj.optString("tool"); val args = obj.optJSONObject("args") ?: JSONObject()
-                    pushTool(st, name, JSONObject().put("tool", name).put("args", args).toString())
-                    var result = try { runTool(name, args, main, st) } catch (e: Exception) { "{\"error\":${jsonStr(e.message ?: "error")}}" }
-                    if (result.length > 3500) result = result.take(3500) + "…"
-                    pushTool(st, name, result)
-                    turns++
-                }
-                if (turns >= 12) push(st, "assistant", "(stopped — too many steps; ask me to continue)")
-            } finally { st.agentBusy.value = false }
+            /*
+             * ONE LOOP, IN shared/. This was a copy of the phone's: same JSON-per-turn protocol, same
+             * reply-or-tool handling, same turn budget — and the two had already drifted, most visibly
+             * in the tool list. AgentCore holds the loop; what a device brings is declared below, and
+             * nothing else differs.
+             *
+             * The budget is AgentCore's 24 rather than the old 12: a video edit is a dozen actions
+             * before anything is even on the timeline, and stopping at 12 was why a real edit ended in
+             * a report about the editor.
+             */
+            try { AgentCore.run(desktopHost(st, main)) }
+            finally { st.agentBusy.value = false }
         }
+    }
+
+    /** What this desktop brings to the shared agent: its name, its tools, its tab, its model. */
+    private fun desktopHost(st: DesktopState, main: CefBrowser?): AgentHost = object : AgentHost {
+        override val deviceNoun = "desktop"
+        override fun tools() = toolCatalogue()
+        override fun liveContext(): String {
+            val url = try { main?.url ?: "" } catch (e: Exception) { "" }
+            return "CURRENT TAB: ${url.ifBlank { "(home)" }} — a real Chromium tab on this machine, " +
+                "probably already signed in."
+        }
+        override fun runTool(name: String, argsJson: String): String {
+            val a = try { JSONObject(argsJson) } catch (e: Exception) { JSONObject() }
+            return this@Agent.runTool(name, a, main, st)
+        }
+        override fun chat(system: String, user: String): String {
+            val ep = st.endpoint.value.trim()
+            val custom = ep.isNotBlank() && st.apiKey.value.isNotBlank() && !ep.contains("ollama.com")
+            return if (custom) this@Agent.chat(ep, st.apiKey.value, st.model.value, system, user)
+                   else chatCluster(system, user)
+        }
+        override fun push(role: String, text: String) = this@Agent.push(st, role, text)
+        override fun pushTool(name: String, text: String) = this@Agent.pushTool(st, name, text)
+        override fun transcript() = this@Agent.transcript(st)
     }
 
     /** Chat via the cluster's configured LLM (no key on this machine) over the control channel. */
@@ -167,6 +198,21 @@ object Agent {
             "browser_click_text" -> gb("JSON.stringify(window.__gb.clickText(${jsonStr(a.optString("text"))},${a.optInt("nth", 0)}))").ifBlank { "{}" }
             "browser_type" -> gb("JSON.stringify(window.__gb.type(${a.optInt("index", -1)},${jsonStr(a.optString("text"))}))").ifBlank { "{}" }
             "browser_scroll" -> gb("JSON.stringify(window.__gb.scroll(${a.optInt("dy", 600)}))").ifBlank { "{}" }
+            /*
+             * The same hands the ring drives this machine with. Offering them to the agent is the
+             * point of Hands.kt: the agent in front of the browser can now do what the cluster could
+             * already ask for remotely — see a canvas, point at it, drag on it, and import a file.
+             */
+            "screenshot" -> Hands.screenshot(m)
+            "click_xy" -> Hands.clickXy(m, a.optDouble("x", 0.0), a.optDouble("y", 0.0))
+            "drag" -> Hands.drag(
+                m,
+                a.optDouble("fromX", a.optDouble("x1", 0.0)), a.optDouble("fromY", a.optDouble("y1", 0.0)),
+                a.optDouble("toX", a.optDouble("x2", 0.0)), a.optDouble("toY", a.optDouble("y2", 0.0)),
+                a.optInt("steps", 14), a.optLong("holdMs", 60L),
+            )
+            "upload_file" -> Hands.uploadFile(m, a.optString("path"), a.optInt("nth", 0))
+            "download_url" -> Hands.downloadUrl(a.optString("url"), a.optString("name")) { st.log(it) }
             "list_workflows" -> Cluster.authed("GET", "/v1/workflows", null)
             "run_workflow" -> Cluster.authed("POST", "/v1/workflows/${a.optString("id")}/run", "{}")
             "list_devices" -> Cluster.authed("GET", "/v1/device/list", null)
