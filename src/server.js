@@ -39,6 +39,7 @@ const userRoles = require('./userRoles');
  */
 const { siteKey, roleChoice } = require('./profileRole');
 const roleDevices = require('./roleDevices');
+const roleEngine = require('./roleEngine');
 
 /** This install's profile-to-role answer, with the stores wired in. See profileRole.js. */
 const roleChoiceFor = (name) => roleChoice(name, { profiles, roles });
@@ -3098,18 +3099,21 @@ function operatorContext() {
        * export that is not a file until its last Download is pressed). Adopting it is free and it is
        * the difference between a walk that knows the site and one that discovers it again.
        */
-      let walkRole = roles.canonical(role || '');
-      if (!role || walkRole === 'general') {
-        /* The profile's own answer, stored choice first and the site match behind it — one place,
-           so the chat door and a UI can never disagree about which role a profile uses. */
-        const choice = roleChoiceFor(wantProfile);
-        if (choice.role !== 'general') {
-          walkRole = choice.role;
-          log.info(`[assistant] walk in ${wantProfile} adopts role ${walkRole} (${choice.source})`);
-        } else if (choice.missing) {
-          log.warn(`[assistant] ${wantProfile} names role "${choice.missing}", which does not exist — running general`);
-        }
-      }
+      /*
+       * WHICH SPECIALIST THIS TASK NEEDS — not which one this profile usually uses.
+       *
+       * This door took the PROFILE's role, which answers "what does this login usually do". The
+       * question here is what THIS task needs, and that is the question the chat asks constantly:
+       * a request arrives with no role, ran as general, opened a video editor with no playbook and
+       * died after seventy steps. src/roleEngine.js decides it from the named role, the profile's
+       * stored choice, the addresses in the goal and the profile's site, in that order.
+       *
+       * THE REASON TRAVELS WITH THE ANSWER, into the log and back to the caller. "Why did it run
+       * as general?" was unanswerable twice, and that is the thing this is here to end.
+       */
+      const decision = roleEngine.roleForTask({ goal: g, profile: wantProfile, named: role }, { profiles, roles });
+      const walkRole = decision.role;
+      log.info(`[assistant] walk in ${wantProfile}: ${roleEngine.explainChoice(decision)}`);
 
       /*
        * WHICH WAY OF DOING THIS WORK FITS A DEVICE YOU ACTUALLY HAVE.
@@ -3177,7 +3181,10 @@ ${g}` : g;
           await deviceHub.runCommand(route.deviceId, { path: '/v1/run_goal', body: { goal: handed, role: walkRole } }, 60000);
           log.info(`[assistant] walk handed to ${route.name} as ${walkRole} (${variant.kind}: ${Object.keys(walkNeed).join(',')}) — ${g.slice(0, 80)}`);
           return { device: route.name, deviceId: route.deviceId, role: walkRole, variant: variant.kind,
-            status: 'running on your device', need: walkNeed };
+            status: 'running on your device', need: walkNeed,
+            /* So the chat can say which specialist it used and why, before anything happens. */
+            roleReason: roleEngine.explainChoice(decision), roleSource: decision.source,
+            roleAlternatives: decision.alternatives };
         } catch (e) {
           return { error: `${route.name} could not take the job: ${e.message}`, need: walkNeed };
         }
