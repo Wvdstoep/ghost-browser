@@ -104,7 +104,27 @@ function mislabelled(turn) {
  * because a page's full text is thousands of tokens of noise around one decision, and a training set
  * made of page dumps teaches a model to read rather than to act.
  */
-function turnsOf(job, { maxObs = 600, maxHistory = 6 } = {}) {
+/**
+ * DID THIS VERY CALL THROW?
+ *
+ * A tool that fails journals an `error` step naming itself within a step or two — `open: page.goto:
+ * net::ERR_HTTP_RESPONSE_CODE_FAILURE at https://www.reddit.com/...`. That makes the failure
+ * attributable to the exact call rather than to the job, which is what lets the turn be dropped
+ * without throwing away its neighbours.
+ */
+function threwRightAfter(steps, i) {
+  const s = steps[i];
+  if (!s || !s.tool) return false;
+  const named = new RegExp(`^${String(s.tool).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`);
+  for (let k = i + 1; k < Math.min(i + 3, steps.length); k++) {
+    const n = steps[k];
+    if (!n) continue;
+    if (n.kind === 'error' && named.test(String(n.text || n.detail || ''))) return true;
+  }
+  return false;
+}
+
+function turnsOf(job, { maxObs = 600, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
@@ -120,6 +140,24 @@ function turnsOf(job, { maxObs = 600, maxHistory = 6 } = {}) {
       continue;
     }
     if (s.kind !== 'tool' || !s.tool) continue;
+    /*
+     * A CALL THAT FAILED IS NOT AN EXAMPLE. 1,471 of 72,673 recorded calls throw, and over a
+     * thousand of those are a navigation to a host that refuses this machine. Teaching a model to
+     * make a call that cannot work is worse than teaching it nothing — and the failure is
+     * attributable to this exact call, so the turn goes and its neighbours stay.
+     *
+     * The narrow rule matters: 8,555 calls mention reddit.com and most are
+     * `google({query:"site:reddit.com …"})`, which works perfectly. Searching ABOUT a site is not
+     * navigating TO it, and a filter on the hostname would have discarded thousands of good turns.
+     */
+    const thrown = threwRightAfter(steps, steps.indexOf(s));
+    if (thrown && !keepThrown) {
+      /* Reported, not merely skipped. The pre-flight gate checks that no single exclusion ate the
+         data, and an exclusion that does not report is one the gate cannot see — which is exactly
+         the blind spot this filter was creating while claiming to be the important one. */
+      if (onDrop) onDrop('the call itself threw');
+      continue;
+    }
     /* The decision itself. Arguments scrubbed, because a `type` call's text is often a real
        message to a real person and sometimes a credential somebody pasted. */
     out.push({
@@ -129,6 +167,10 @@ function turnsOf(job, { maxObs = 600, maxHistory = 6 } = {}) {
       observed: history.slice(),
       action: { tool: String(s.tool), args: scrubValue(s.args || {}) },
       at: s.n || out.length + 1,
+      /* Whether this is the job's OPENING move, which the step number cannot tell you: step 1 is
+         the goal, so a first tool call usually sits at step 2. A turn with nothing observed is
+         normally unusable — except this one, where having seen nothing is the whole situation. */
+      first: out.length === 0,
     });
   }
   return out;
@@ -203,12 +245,54 @@ function build(jobs, deps = {}, opts = {}) {
 
   /* Why each dropped turn was dropped, so the exclusion can be checked rather than trusted. */
   const dropped = {};
-  const toTurns = (rows) => rows.flatMap(({ job, outcome }) => turnsOf(job, opts)
+  /*
+   * TWO MORE FILTERS, AND BOTH ARE ABOUT WEIGHT RATHER THAN CORRECTNESS.
+   *
+   * DEDUPE: 292 notification sweeps produce thousands of turns that differ only in a timestamp.
+   * They add weight without adding information and they crowd out a role with twenty jobs.
+   * Identity is (role, tool, arguments, the last thing seen) — the same decision in the same
+   * situation, however many times it was recorded.
+   *
+   * PER-TOOL CAP: measured rather than assumed, and it turned out mild. `open` is 16.7% of calls
+   * and `look` 10.4% — no tool dominates, so this trims a tail rather than rescuing a skew. It is
+   * here because the distribution is a property of what was RUN, not of what is worth learning, and
+   * a fleet that spends a month on one site would skew it hard.
+   */
+  const seenTurn = new Set();
+  const perTool = {};
+  const toolCap = opts.toolCap == null ? 4000 : opts.toolCap;
+
+  const note = (why) => { dropped[why] = (dropped[why] || 0) + 1; };
+  const toTurns = (rows, { dedupe = true, cap = true } = {}) => rows.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, onDrop: note })
     .filter((t) => {
       const why = mislabelled(t);
-      if (!why) return true;
-      dropped[why] = (dropped[why] || 0) + 1;
-      return false;
+      if (why) { dropped[why] = (dropped[why] || 0) + 1; return false; }
+      /*
+       * A decision taken with nothing seen is not reproducible — it is a guess that got recorded.
+       * The opening move is the exception and it is the most informative turn there is: what do you
+       * reach for when you know nothing yet. Keyed on the turn, not the step number, because step 1
+       * is the goal and the first call sits at step 2 — which made the first version of this filter
+       * discard every job's first decision.
+       */
+      if (!t.observed.length && !t.first) { dropped['nothing had been observed yet'] = (dropped['nothing had been observed yet'] || 0) + 1; return false; }
+      if (dedupe) {
+        /*
+         * THE KEY IS THE TRAINING EXAMPLE ITSELF: goal, role, what was last seen, and the call.
+         *
+         * The goal was missing at first, and that made this quietly too aggressive — the goal is
+         * part of the PROMPT, so two turns under different goals are different examples even when
+         * the completion matches. "find three suppliers" and "find complaints about X" both opening
+         * with the same search are two lessons, not one, and collapsing them discards real variety.
+         */
+        const key = `${t.goal}|${t.role}|${t.action.tool}|${JSON.stringify(t.action.args)}|${(t.observed[t.observed.length - 1] || {}).text || ''}`;
+        if (seenTurn.has(key)) { dropped['an identical decision in an identical situation'] = (dropped['an identical decision in an identical situation'] || 0) + 1; return false; }
+        seenTurn.add(key);
+      }
+      if (cap) {
+        perTool[t.action.tool] = (perTool[t.action.tool] || 0) + 1;
+        if (perTool[t.action.tool] > toolCap) { dropped[`more than ${toolCap} examples of one tool`] = (dropped[`more than ${toolCap} examples of one tool`] || 0) + 1; return false; }
+      }
+      return true;
     })
     .map((t) => ({
       ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
@@ -217,7 +301,14 @@ function build(jobs, deps = {}, opts = {}) {
 
   const trainTurns = toTurns(train);
   const evalTurns = toTurns(evalSet);
-  const rejectTurns = toTurns(reject);
+  /*
+   * The reject pile is the one place a failed call BELONGS: it is the example of what not to do.
+   * Kept undeduped and uncapped too — there are only 152 such jobs and every one is scarce.
+   */
+  const rejectTurns = reject.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, keepThrown: true }).map((t) => ({
+    ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
+    ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
+  })));
 
   return {
     manifest: {
@@ -234,6 +325,7 @@ function build(jobs, deps = {}, opts = {}) {
       kept: { train: train.length, eval: evalSet.length, reject: reject.length },
       turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length },
       perRoleCap,
+      toolCap,
       evalFraction,
       keptTiers: [...keepTiers],
       roles: Object.fromEntries(Object.entries(perRole).sort((a, b) => b[1] - a[1]).slice(0, 40)),

@@ -134,7 +134,7 @@ describe('the label comes from verifiers, never from the report', () => {
 describe('the evaluation split is cut by job, before any turn exists', () => {
   it('never puts two turns from the same job on both sides', () => {
     const jobs = [];
-    for (let i = 0; i < 60; i++) jobs.push(job({ id: `j-${i}`, proposals: [{ state: 'approved' }] }));
+    for (let i = 0; i < 60; i++) jobs.push(job({ id: `j-${i}`, goal: `find suppliers batch ${i}`, proposals: [{ state: 'approved' }] }));
     const out = build(jobs, {}, { evalFraction: 0.3 });
     const trainJobs = new Set(out.train.map((t) => t.jobId));
     const evalJobs = new Set(out.eval.map((t) => t.jobId));
@@ -143,15 +143,17 @@ describe('the evaluation split is cut by job, before any turn exists', () => {
 
   it('is deterministic, so a rebuild does not quietly move the exam', () => {
     const jobs = [];
-    for (let i = 0; i < 40; i++) jobs.push(job({ id: `j-${i}`, proposals: [{ state: 'approved' }] }));
+    for (let i = 0; i < 40; i++) jobs.push(job({ id: `j-${i}`, goal: `find suppliers batch ${i}`, proposals: [{ state: 'approved' }] }));
     const a = build(jobs, {}, { evalFraction: 0.25 }).eval.map((t) => t.jobId);
     const b = build(jobs, {}, { evalFraction: 0.25 }).eval.map((t) => t.jobId);
     expect(a).toEqual(b);
   });
 
   it('actually holds some back', () => {
+    /* Distinct goals, because real jobs have them — and the dedupe key includes the goal, so a
+        fixture of byte-identical jobs collapses to one turn and measures nothing. */
     const jobs = [];
-    for (let i = 0; i < 80; i++) jobs.push(job({ id: `j-${i}`, proposals: [{ state: 'approved' }] }));
+    for (let i = 0; i < 80; i++) jobs.push(job({ id: `j-${i}`, goal: `find suppliers batch ${i}`, proposals: [{ state: 'approved' }] }));
     const out = build(jobs, {}, { evalFraction: 0.2 });
     expect(out.eval.length).toBeGreaterThan(0);
     expect(out.train.length).toBeGreaterThan(out.eval.length);
@@ -161,8 +163,8 @@ describe('the evaluation split is cut by job, before any turn exists', () => {
 describe('no single role is allowed to drown the rest', () => {
   it('caps per role, because 292 notification sweeps against 84 screenshots is not a balance', () => {
     const jobs = [];
-    for (let i = 0; i < 200; i++) jobs.push(job({ id: `loud-${i}`, role: 'facebook-notification-watch', proposals: [{ state: 'approved' }] }));
-    for (let i = 0; i < 20; i++) jobs.push(job({ id: `quiet-${i}`, role: 'learn.shot', proposals: [{ state: 'approved' }] }));
+    for (let i = 0; i < 200; i++) jobs.push(job({ id: `loud-${i}`, goal: `sweep notifications ${i}`, role: 'facebook-notification-watch', proposals: [{ state: 'approved' }] }));
+    for (let i = 0; i < 20; i++) jobs.push(job({ id: `quiet-${i}`, goal: `take a shot ${i}`, role: 'learn.shot', proposals: [{ state: 'approved' }] }));
     const out = build(jobs, {}, { perRoleCap: 30, evalFraction: 0 });
     const byRole = {};
     out.train.forEach((t) => { byRole[t.role] = (byRole[t.role] || 0) + 1; });
