@@ -73,6 +73,30 @@ function scrubValue(v, depth = 0) {
 const OBSERVE = new Set(['read', 'open', 'look', 'click', 'scroll', 'note', 'blocked']);
 
 /**
+ * MISLABELLED TURNS — the model asked for one thing and a different thing ran.
+ *
+ * `download_file` was two tools under one name until 22 September 2026. The handler that actually
+ * ran took whatever the page had GENERATED; the description the model was sometimes shown promised
+ * a LINKED file fetched by `url` or by the index of a link, and that handler ignores `url`
+ * completely. So a recorded call carrying a `url` is a turn where the intent and the effect do not
+ * match, and after the rename that argument belongs to a different tool entirely.
+ *
+ * Such a turn teaches two wrong things at once: the wrong tool name for the intent, and an argument
+ * that has no effect. Dropped — and counted, because a silent exclusion is one nobody can audit.
+ *
+ * Deliberately narrow. A `download_file` call with an `index` or no arguments did exactly what its
+ * live handler does, so those stay: 14 authored roles depend on that behaviour and every one of
+ * them is a media role that wants it.
+ */
+function mislabelled(turn) {
+  const a = (turn && turn.action) || {};
+  if (a.tool === 'download_file' && a.args && a.args.url) {
+    return 'download_file carrying a url — that argument was ignored and now belongs to download_link';
+  }
+  return null;
+}
+
+/**
  * ONE JOB BECOMES A SEQUENCE OF DECISIONS.
  *
  * A turn is: everything observed so far, and the tool call the agent made next. That is exactly the
@@ -177,10 +201,19 @@ function build(jobs, deps = {}, opts = {}) {
     (hash(job.id) < evalFraction ? evalSet : train).push({ job, outcome });
   }
 
-  const toTurns = (rows) => rows.flatMap(({ job, outcome }) => turnsOf(job, opts).map((t) => ({
-    ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
-    ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
-  })));
+  /* Why each dropped turn was dropped, so the exclusion can be checked rather than trusted. */
+  const dropped = {};
+  const toTurns = (rows) => rows.flatMap(({ job, outcome }) => turnsOf(job, opts)
+    .filter((t) => {
+      const why = mislabelled(t);
+      if (!why) return true;
+      dropped[why] = (dropped[why] || 0) + 1;
+      return false;
+    })
+    .map((t) => ({
+      ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
+      ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
+    })));
 
   const trainTurns = toTurns(train);
   const evalTurns = toTurns(evalSet);
@@ -196,6 +229,8 @@ function build(jobs, deps = {}, opts = {}) {
       claimsCaught: caught,
       /* And what was excluded as nobody's fault, so the exclusion is auditable rather than silent. */
       voidReasons,
+      /* Turns thrown away because the call and its effect disagreed. See mislabelled(). */
+      droppedTurns: dropped,
       kept: { train: train.length, eval: evalSet.length, reject: reject.length },
       turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length },
       perRoleCap,
@@ -234,4 +269,4 @@ function toJsonl(turns) {
   })).join('\n');
 }
 
-module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, DROP_FIELDS, SCRUBS };
+module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, DROP_FIELDS, SCRUBS };
