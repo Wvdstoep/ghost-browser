@@ -58,7 +58,10 @@
     cdp: true,            // real Chrome DevTools input: drag-interception, self-saving downloads
     realIp: true,         // the laptop's own home connection
     features: [
-      'click_xy', 'drag_xy', 'run_steps', 'upload_file', 'download_url', 'run_flow', 'browser_read',
+      // drag AND drag_xy: this node has both paths, and `drag` is the name the other desktop node
+      // uses for the same capability. A requirement should be able to say "can really drag" without
+      // naming one implementation's transport.
+      'click_xy', 'drag', 'drag_xy', 'run_steps', 'upload_file', 'download_url', 'run_flow', 'browser_read',
       'browser_navigate', 'browser_click', 'browser_click_text', 'browser_type',
       'browser_scroll', 'downloads', 'open_tab', 'fetch_url'
     ]
