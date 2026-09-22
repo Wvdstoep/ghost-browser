@@ -119,6 +119,9 @@ function save(role, paletteNames) {
     description: String(role.description || '').trim().slice(0, 400),
     tools: (role.tools === null || role.tools === undefined) ? null : role.tools.slice(0, 80),
     prompt: String(role.prompt).trim().slice(0, 20000),
+    /* Kept through an edit. Without this, opening the role in the console and saving it would drop
+       the requirement out of the DATA — worse than not reading it, because then it is gone. */
+    require: normRequire(role.require),
     source: String(role.source || (existing && existing.source) || 'user').slice(0, 80),
     author: String(role.author || (existing && existing.author) || '').slice(0, 120),
     createdAt: (existing && existing.createdAt) || new Date().toISOString(),
@@ -140,6 +143,27 @@ function remove(id) {
  * By id, in the exact shape the agent reads a built-in role in (site/group/label/description/tools/
  * prompt) — so a user role runs through agent.js on the identical path, with nothing special-cased.
  */
+/*
+ * WHAT A ROLE NEEDS FROM THE MACHINE IT RUNS ON.
+ *
+ * A role can say it cannot run just anywhere: capcut-video-editor needs CDP drag-interception,
+ * because the cluster's browser can load the editor and then cannot drop a clip on a timeline. The
+ * ring reads this (see missesFor in device-hub.js) and hands the flow to a device that qualifies, or
+ * refuses with a reason instead of starting work that cannot finish.
+ *
+ * Normalised to the flags the ring actually knows, so a typo in the data cannot become a requirement
+ * no device could ever meet — which would look exactly like "no device is online".
+ */
+function normRequire(r) {
+  if (!r || typeof r !== 'object') return null;
+  const out = {};
+  for (const k of ['cdp', 'mobileApp', 'model', 'realIp']) if (r[k]) out[k] = true;
+  if (r.platform && ['android', 'desktop', 'cluster'].includes(String(r.platform))) out.platform = String(r.platform);
+  const feats = Array.isArray(r.features) ? [...new Set(r.features.map((f) => String(f).slice(0, 40)))].slice(0, 20) : [];
+  if (feats.length) out.features = feats;
+  return Object.keys(out).length ? out : null;
+}
+
 function getRole(id) {
   const r = read(id);
   if (!r) return null;
@@ -150,6 +174,9 @@ function getRole(id) {
     description: r.description,
     tools: r.tools === undefined ? null : r.tools,
     prompt: r.prompt || '',
+    /* The reason a projection is dangerous: this was missing, so a role that says it needs a
+       drag-capable device was handed to the caller as a role with no requirements at all. */
+    require: normRequire(r.require),
   };
 }
 
@@ -163,6 +190,8 @@ function listRoles() {
     group: r.group || 'Yours',
     source: r.source || 'user',
     tools: r.tools === undefined ? null : r.tools,
+    /* So a picker can say "this one runs on your desktop, not in the cloud" before it is chosen. */
+    require: normRequire(r.require),
   }));
 }
 
@@ -248,5 +277,5 @@ function coerceDraft(text, paletteNames) {
 
 module.exports = {
   DIR, slug, read, all, validate, save, remove,
-  getRole, listRoles, exportPack, importPack, coerceDraft, BASICS,
+  getRole, listRoles, exportPack, importPack, coerceDraft, normRequire, BASICS,
 };
