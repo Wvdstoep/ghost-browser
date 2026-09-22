@@ -24,9 +24,23 @@ class DesktopNode(
     @Volatile private var stopped = false
     @Volatile var registered = false; private set
 
+    /*
+     * ONLY WHAT AgentD ACTUALLY HANDLES.
+     *
+     * This advertised cdp = true plus click_xy, drag, upload_file and download. AgentD handles none
+     * of those four, and it has no CDP input at all — JCEF gives us a browser, not a DevTools input
+     * domain. Because it claimed cdp, the ring would pick THIS node for a CapCut edit in preference
+     * to the Electron node that can really drag, and the run would fail on the drop.
+     *
+     * cdp is false, and the feature list is exactly the set of commands in AgentD's dispatch. When a
+     * command is added there, add its name here — never the other way round.
+     */
     private val caps = JSONObject()
-        .put("platform", "desktop").put("cdp", true).put("model", false).put("realIp", false)
-        .put("features", listOf("navigate", "click", "click_text", "type", "scroll", "screenshot", "eval", "click_xy", "drag", "upload_file", "download"))
+        .put("platform", "desktop").put("cdp", false).put("model", false).put("realIp", true)
+        .put("features", listOf(
+            "browser_read", "browser_posts", "browser_navigate", "browser_click",
+            "browser_click_text", "browser_type", "browser_scroll",
+            "list_workflows", "run_workflow", "list_devices", "list_platforms"))
         .toString()
 
     fun start() { Thread({ runLoop() }, "gb-desktop-node").apply { isDaemon = true }.start() }

@@ -336,6 +336,18 @@ function addSearch(j, row) {
  * Findings accumulate: one call per thing seen, so a walk can report a message, three indexing
  * reasons and a sitemap without holding them all to the end and losing the lot if it is stopped.
  */
+/* The addresses behind a row, cleaned: real http(s) URLs, deduped, order kept, bounded. */
+function cleanPages(pages) {
+  const out = [];
+  for (const p of Array.isArray(pages) ? pages : []) {
+    const u = String(p || '').trim();
+    if (!/^https?:\/\//i.test(u)) continue;            // a row label or a count is not an address
+    if (u.length > 500) continue;
+    if (!out.includes(u)) out.push(u);
+  }
+  return out.slice(0, 200);
+}
+
 function addGscHealth(j, row) {
   if (!row || !row.kind) return null;
   const r = {
@@ -343,11 +355,29 @@ function addGscHealth(j, row) {
     label: String(row.label || '').slice(0, 200),
     value: String(row.value ?? '').slice(0, 200),
     detail: String(row.detail || '').slice(0, 600),
+    pages: cleanPages(row.pages),
     at: new Date().toISOString(),
   };
   j.gscHealth = j.gscHealth || [];
-  /* The same finding twice is the same finding — a walk that re-reads a tab must not double it. */
-  if (j.gscHealth.some((x) => x.kind === r.kind && x.label === r.label && x.value === r.value)) return null;
+  /*
+   * The same finding twice is the same finding — a walk that re-reads a tab must not double it.
+   *
+   * BUT A REPEAT THAT CARRIES ADDRESSES IS NOT A REPEAT. The walk records the reason row first
+   * ("blocked by robots.txt = 9"), then opens it and reads the nine URLs behind it. That second call
+   * has the same kind, label and value, so this check threw it away — and the addresses, which are
+   * the only part anybody can act on, were silently lost. So: merge them in and hand the row back.
+   */
+  const already = j.gscHealth.find((x) => x.kind === r.kind && x.label === r.label && x.value === r.value);
+  if (already) {
+    const merged = cleanPages([...(already.pages || []), ...r.pages]);
+    if (merged.length <= (already.pages || []).length) return null;   // nothing new: a true repeat
+    already.pages = merged;
+    already.at = r.at;
+    if (r.detail && !already.detail) already.detail = r.detail;
+    bus.emit(j.id, { type: 'gsc_health', jobId: j.id });
+    persist(j);
+    return already;
+  }
   j.gscHealth.push(r);
   bus.emit(j.id, { type: 'gsc_health', jobId: j.id });
   persist(j);

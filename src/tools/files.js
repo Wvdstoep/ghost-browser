@@ -8,8 +8,10 @@
  * the same asset the CapCut session uploads. That cross-session hand-off is the whole point — it is
  * what lets a storyboard's scenes flow site → site into one finished video.
  */
+const { recordingAsset, RECORDINGS_DIR } = require('../recordings');
 const fileAssets = require('../fileAssets');
 const { confirmUploadDialog, resizeImageBytes, SPEC } = require('./uihelpers');
+
 
 // Fetch a URL's bytes INSIDE the logged-in page, so the session's entitlement (a generator's, a
 // stock site's) applies and nothing but a reference crosses. Returns { mime, bytes } or null.
@@ -70,8 +72,24 @@ module.exports = {
 
   /** Put a STORED file (by asset id) onto the current page's file input — image or video. */
   async upload_file(ctx, a) {
-    const asset = fileAssets.get(a.assetId || a.id);
-    if (!asset) { ctx.observe(`No stored file with id "${a.assetId || a.id}". Download it first with download_file (or check the id from the earlier step).`); return; }
+    /*
+     * A PLATFORM RECORDING IS NOT A FILE ASSET, and that is why a real recording could not be edited.
+     *
+     * start_recording/stop_recording store their clip in fileAssets, which is what this tool reads.
+     * The recorder that the PLATFORM spawns writes somewhere else entirely — /recordings/<id>/final.mp4
+     * on its own volume — so a 4-minute, 122 MB recording the owner could see in the console had no
+     * route into CapCut at all. The agent was not being dense; it had no tool that could reach it.
+     *
+     * So a recordingId is accepted alongside an assetId. Nothing is copied into the asset store: the
+     * bytes are read at upload time and handed to the page's file input, exactly as an asset's are.
+     */
+    const asset = a.recordingId ? recordingAsset(a.recordingId) : fileAssets.get(a.assetId || a.id);
+    if (!asset) {
+      ctx.observe(a.recordingId
+        ? `No recording "${a.recordingId}" with a finished video. Recordings live in ${RECORDINGS_DIR}/<id>/final.mp4 — check the id the console showed, and that it says "done" rather than still encoding.`
+        : `No stored file with id "${a.assetId || a.id}". Download it first with download_file (or check the id from the earlier step).`);
+      return;
+    }
     const page = ctx.page();
     let input = null;
     try { const all = await page.$$('input[type=file]'); input = all.length ? all[all.length - 1] : null; } catch { /* none */ }
@@ -128,3 +146,4 @@ module.exports = {
     }
   },
 };
+

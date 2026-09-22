@@ -942,6 +942,13 @@ Record each finding with save_gsc_health AS YOU READ IT — one call per finding
 3. PAGE INDEXING ("Indexeren" → "Pagina's"). Record kind "indexing":
    - the count of indexed pages (label "indexed") and not-indexed pages (label "not indexed"), with the numbers as values;
    - then EVERY row under "Why pages aren't indexed" / "Waarom pagina's niet worden geïndexeerd" — the reason as the label, the page count as the value, and the source column as the detail. These reasons are the whole point of this walk: they say why our pages are not appearing.
+   - AND THEN THE ADDRESSES BEHIND EACH REASON, which is the part that makes this fixable. "Blocked by robots.txt = 9" says nine pages are blocked and not WHICH nine, and nobody can fix a number. Each reason row is clickable and opens a table of example URLs. For every reason, in turn:
+       a. CLICK the reason row.
+       b. read_table the list of URLs it shows. It is usually headed "Examples" / "Voorbeelden".
+       c. call save_gsc_health AGAIN with the SAME kind, label and value as the row, plus pages = the full addresses you just read. Copy them exactly; never shorten a URL and never invent the part you cannot see.
+       d. go BACK to the reasons list (the browser's back step) and open the next reason.
+     Do the reasons that are OURS to fix first, because those turn straight into work: not found (404), blocked by robots.txt, excluded by a noindex tag, redirect. Then the rest. If a reason opens no list, or the list is empty, record the row without pages and move on — that is an answer too.
+     Twelve reasons deep with twenty-five URLs each is plenty; this is a sample to act on, not an export.
    - If it says the data is still being processed ("Gegevens worden verwerkt"), record that as label "status" with that as the value, and move on. That IS the answer on a days-old property, and it is worth knowing rather than guessing.
 4. SITEMAPS ("Sitemaps"). For each submitted sitemap record kind "sitemap": the sitemap path as the label, its status as the value ("Success" / "Geslaagd", or the error), and the discovered-URL count as the detail. If none is submitted at all, record label "none submitted" — that is a real and fixable finding.
 5. CORE WEB VITALS ("Site-vitaliteit"), if the section has data. Record kind "vitals" with the verdict per device ("Good"/"Goed", "Needs improvement", counts of poor URLs). If it says there is not enough data, record that and move on.

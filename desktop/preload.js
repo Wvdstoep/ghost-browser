@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('GBAPI', {
   dragCdp: (webContentsId, o) => ipcRenderer.invoke('gb-drag', Object.assign({ webContentsId }, o)),
   // Downloads the node saved itself (newest first): {file,url,bytes,total,state}.
   downloads: () => ipcRenderer.invoke('gb-downloads'),
+  // Save a URL to a local file and hand back its path — how footage from the cluster gets here so
+  // uploadFile (which needs a real path) can import it into a web editor.
+  fetchFile: (o) => ipcRenderer.invoke('gb-fetch-file', o),
   onDownload: (fn) => ipcRenderer.on('gb-download', (_e, rec) => fn(rec)),
   // Window control (maximize for a full driving viewport).
   winCmd: (action) => ipcRenderer.invoke('gb-win', { action }),

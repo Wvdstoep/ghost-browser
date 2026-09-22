@@ -224,6 +224,32 @@ async function execPath(wv, path, body) {
       wv.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: cc })
       out = JSON.stringify({ ok: true, x, y })
     }
+    else if (path === '/v1/download_url') {
+      // Fetch a URL onto THIS device and return the local path, so /v1/upload_file can import it.
+      // The cluster uses this to hand over a recording: it mints a ticketed mp4 address and we save it.
+      // The cluster does not know its own public address, but this node does: its API WebView is
+      // pinned to the GB origin. So a relative path is resolved here, and the ticket in the query
+      // string is the authorisation — no cookie has to travel into the main process.
+      let u = String(body.url || '')
+      if (u && !/^https?:\/\//i.test(u)) {
+        let origin = ''
+        try { ensureApi(); await apiReady; origin = (await ex(apiWv, 'location.origin')) || '' } catch (e) { origin = '' }
+        origin = String(origin).replace(/^"|"$/g, '')
+        u = origin ? origin.replace(/\/$/, '') + (u.startsWith('/') ? u : '/' + u) : u
+      }
+      out = JSON.stringify(await G.fetchFile({ url: u, name: body.name || '', headers: body.headers || {} }))
+    }
+    else if (path === '/v1/run_flow') {
+      // Run a stored automation HERE, with input — the ring's way of saying "this one is yours".
+      // Fire and acknowledge: a CapCut edit takes many minutes and the poll must not be held open.
+      const fid = String(body.id || body.flowId || '')
+      if (!fid) out = JSON.stringify({ error: 'flow id required' })
+      else {
+        const wf = flowsArr().find((w) => w.id === fid)
+        runFlowHere(fid, (wf && wf.name) || fid, body.input || {})
+        out = JSON.stringify({ started: fid, input: Object.keys(body.input || {}) })
+      }
+    }
     else if (path === '/v1/downloads') {
       // What this node downloaded (newest first) - an export is only real once it is a file here.
       out = JSON.stringify({ downloads: await G.downloads() })
@@ -455,13 +481,29 @@ let flowHereBusy = false
 // Run a flow LOCALLY on this desktop: CODE opens the flow's profile + site (the agent never navigates),
 // then runs each agent node's goal via the headless loop, and journals the run to the SHARED history
 // (POST /v1/device-runs) so it shows up everywhere — same shape as a phone on-device run (S1).
-async function runFlowHere(id, name) {
+/*
+ * INPUT, SUBSTITUTED — without this a templated flow runs with its placeholders intact.
+ *
+ * The CapCut automation's goal says "Edit the screen recording at {{input.path}}", and this ran the
+ * goal verbatim: the agent was handed the literal text {{input.path}} and went looking for a file of
+ * that name. The cluster's own engine substitutes; the local runner did not, so the same flow behaved
+ * differently depending on where it ran, which is the worst kind of difference.
+ */
+function fillTemplate(text, input) {
+  return String(text || '').replace(/\{\{\s*input\.([\w.]+)\s*\}\}/g, (m, key) => {
+    let v = input || {}
+    for (const part of String(key).split('.')) v = (v == null ? undefined : v[part])
+    return v == null ? m : String(v)      // an unknown key stays visible rather than becoming "undefined"
+  })
+}
+
+async function runFlowHere(id, name, input) {
   if (flowHereBusy) { log('· a local run is already going'); return }
   const wf = flowsArr().find((w) => w.id === id); if (!wf) { log('! flow not loaded — Load automations first'); return }
   if (!agCfg().endpoint) { log('! set a model endpoint first (Agent settings) to run on this device'); return }
   const nodes = (wf.nodes || []).filter((n) => n.type === 'agent')
   const profile = (nodes[0] && nodes[0].profile) || ''
-  const goals = nodes.map((n) => ({ goal: n.goal || '', role: n.role || '' })).filter((g) => g.goal)
+  const goals = nodes.map((n) => ({ goal: fillTemplate(n.goal || '', input), role: n.role || '' })).filter((g) => g.goal)
   if (!goals.length) { log('! this flow has no agent steps'); return }
   const site = /facebook/i.test(profile) ? 'https://www.facebook.com/' : /messenger/i.test(profile) ? 'https://www.facebook.com/messages/' : /linkedin/i.test(profile) ? 'https://www.linkedin.com/feed/' : /instagram/i.test(profile) ? 'https://www.instagram.com/' : ''
   let host = ''; try { host = site ? new URL(site).host : '' } catch (e) {}

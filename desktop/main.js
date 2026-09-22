@@ -153,6 +153,39 @@ function hookDownloads(ses) {
 app.on('session-created', hookDownloads)
 ipcMain.handle('gb-downloads', () => downloadsSeen)
 
+/*
+ * A URL INTO A LOCAL FILE — the step that lets footage from the cluster be edited here.
+ *
+ * /v1/upload_file attaches a local PATH to a page input, and the automation's {{input.path}} is
+ * exactly that. But a platform recording lives on the cluster's volume, not on this laptop, so
+ * there was no way to get from "the owner has a recording" to "this node can import it". The
+ * cluster mints a ticketed address (POST /v1/recordings/:id/ticket → /v1/recordings/<id>/mp4?t=…)
+ * and this saves it next to the other downloads, then hands back the path.
+ *
+ * Streamed to disk rather than buffered: these are videos, and a 122 MB recording held in memory
+ * in the main process is how an editor session dies halfway through an import.
+ */
+ipcMain.handle('gb-fetch-file', async (_e, a) => {
+  const url = String((a && a.url) || '')
+  if (!/^https?:\/\//i.test(url)) return { error: 'a http(s) url is required' }
+  const dir = path.join(app.getPath('downloads'), 'gb')
+  try { fs.mkdirSync(dir, { recursive: true }) } catch (e) {}
+  const safe = String((a && a.name) || '').replace(/[^\w .-]+/g, '_').slice(0, 80)
+  const file = path.join(dir, safe || ('gb-' + Date.now() + '.bin'))
+  const lib = url.startsWith('https:') ? require('https') : require('http')
+  return await new Promise((resolve) => {
+    const req = lib.get(url, { headers: (a && a.headers) || {} }, (res) => {
+      if (res.statusCode && res.statusCode >= 400) { res.resume(); resolve({ error: 'http ' + res.statusCode }); return }
+      const out = fs.createWriteStream(file)
+      res.pipe(out)
+      out.on('finish', () => { out.close(() => { let bytes = 0; try { bytes = fs.statSync(file).size } catch (e) {} resolve(bytes ? { path: file, bytes } : { error: 'saved nothing' }) }) })
+      out.on('error', (e) => resolve({ error: String(e) }))
+    })
+    req.on('error', (e) => resolve({ error: String(e) }))
+    req.setTimeout(20 * 60 * 1000, () => { try { req.destroy() } catch (e) {} resolve({ error: 'timed out' }) })
+  })
+})
+
 // Ollama / OpenAI-compatible chat, run in the main process so the on-device agent avoids browser CORS.
 ipcMain.handle('llm', async (_e, a) => {
   try {
