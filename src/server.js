@@ -1636,6 +1636,53 @@ function makeRunScript(client) {
 }
 
 /**
+ * A profile name and a role's site reduced to the same word: "p_capcut", "capcut.com" and
+ * "www.capcut.com" all become "capcut".
+ *
+ * The www strip is not cosmetic: without it "www.capcut.com" keyed as "www", which matches nothing
+ * it should and would put every www-prefixed site under one word.
+ */
+function siteKey(s) {
+  return String(s || '').toLowerCase().replace(/^p_/, '').replace(/^www\./, '')
+    .split('.')[0].replace(/[^a-z0-9]/g, '');
+}
+
+/** Fold one role's `require` into an accumulating requirement. */
+function foldNeed(into, req) {
+  if (!req || typeof req !== 'object') return into;
+  for (const k of ['cdp', 'mobileApp', 'model', 'realIp']) if (req[k]) into[k] = true;
+  if (req.platform) into.platform = req.platform;
+  if (Array.isArray(req.features) && req.features.length) {
+    into.features = [...new Set([...(into.features || []), ...req.features])];
+  }
+  return into;
+}
+
+/**
+ * WHAT WORKING IN THIS PROFILE NEEDS FROM A DEVICE.
+ *
+ * The assistant starts a walk with a profile and usually no role at all ("general"), so a
+ * requirement carried only by a role would never be seen — which is exactly how a CapCut edit asked
+ * for in the phone's chat ended up on the cluster, opening the editor and then unable to drag
+ * anything onto the timeline.
+ *
+ * The profile is always known, and the role that knows that site already states what the work needs
+ * (capcut-video-editor: site capcut.com, require click_xy/drag/upload_file). So the requirement is
+ * read from the roles belonging to this profile's site. No second list to keep in step: the role that
+ * knows the work stays the one place that says what the work needs.
+ */
+function deviceNeedForProfile(profile) {
+  const key = siteKey(profile);
+  if (!key) return null;
+  const need = {};
+  for (const row of (roles.list() || [])) {
+    if (siteKey(row.site) !== key) continue;
+    foldNeed(need, (roles.get(row.name) || {}).require);
+  }
+  return Object.keys(need).length ? need : null;
+}
+
+/**
  * WHAT THIS FLOW NEEDS FROM A DEVICE, read off its roles.
  *
  * The union over the flow's agent steps, because one step needing a real drag makes the whole flow a
@@ -1646,13 +1693,11 @@ function deviceNeedOf(wf) {
   const need = {};
   for (const n of ((wf && wf.nodes) || [])) {
     if (n.type !== 'agent' || !n.role) continue;
-    const req = (roles.get(n.role) || {}).require;
-    if (!req || typeof req !== 'object') continue;
-    for (const k of ['cdp', 'mobileApp', 'model', 'realIp']) if (req[k]) need[k] = true;
-    if (req.platform) need.platform = req.platform;
-    if (Array.isArray(req.features) && req.features.length) {
-      need.features = [...new Set([...(need.features || []), ...req.features])];
-    }
+    foldNeed(need, (roles.get(n.role) || {}).require);
+  }
+  /* A flow's profile counts too: a step with no role still works in that browser. */
+  for (const n of ((wf && wf.nodes) || [])) {
+    if (n.type === 'agent' && n.profile) foldNeed(need, deviceNeedForProfile(n.profile) || {});
   }
   return Object.keys(need).length ? need : null;
 }
@@ -2853,7 +2898,70 @@ function operatorContext() {
     startWalk: async ({ goal, profile, role, maxSteps, maxPages }) => {
       const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
       const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
-      const s = await sessionFor(profiles.safeName(profile || cfg.browserProfile || 'facebook'));
+      /*
+       * A WALK THAT NEEDS A DEVICE IS HANDED OVER, NOT ATTEMPTED HERE.
+       *
+       * This is the door the phone's chat uses, and it was the one still missing. A CapCut edit asked
+       * for there ran on the cluster with role "general", opened the editor, and could not drag a clip
+       * onto the timeline — the cluster has no pointer. The requirement comes from the profile (see
+       * deviceNeedForProfile), because a walk usually has no role to carry it.
+       *
+       * No capable device is a refusal WITH the reason, so the assistant can say what is needed
+       * instead of reporting a walk that could never have finished.
+       */
+      const wantProfile = profiles.safeName(profile || cfg.browserProfile || 'facebook');
+
+      /*
+       * THE PROFILE'S OWN SPECIALIST, WHEN THE CALLER NAMED NONE.
+       *
+       * The assistant asked for this walk with no role, so it ran as "general" — and a general walk
+       * in the capcut profile is an agent with no playbook, working out a video editor from scratch.
+       * The role for that site exists and carries the method (every trap the editor has: a caption
+       * that overflows a 9:16 frame, "Add heading" doing nothing while a text clip is selected, an
+       * export that is not a file until its last Download is pressed). Adopting it is free and it is
+       * the difference between a walk that knows the site and one that discovers it again.
+       */
+      let walkRole = roles.canonical(role || '');
+      if (!role || walkRole === 'general') {
+        const own = (roles.list() || []).find((x) => siteKey(x.site) === siteKey(wantProfile));
+        if (own) { walkRole = roles.canonical(own.name); log.info(`[assistant] walk in ${wantProfile} adopts role ${walkRole}`); }
+      }
+
+      const walkNeed = foldNeed(
+        foldNeed({}, (roles.get(walkRole) || {}).require),
+        deviceNeedForProfile(wantProfile) || {},
+      );
+      if (Object.keys(walkNeed).length) {
+        const r = deviceHub.routeDevice(owner, walkNeed);
+        if (!r.deviceId) {
+          log.info(`[assistant] walk in ${wantProfile} needs a device — ${r.reason}`);
+          return { error: `work in "${wantProfile}" runs on a device, not on the cluster: ${r.reason}`, need: walkNeed };
+        }
+        /*
+         * THE PLAYBOOK TRAVELS WITH THE JOB.
+         *
+         * /v1/run_goal carries a goal and nothing else, so the device's own agent would start with
+         * its own prompt and none of the role's method — blind, which is how the first two attempts
+         * at this went. Until the node takes a separate `system` field, the role's playbook leads the
+         * goal text. It is the method, so it belongs in front of the task either way.
+         */
+        const playbook = String((roles.get(walkRole) || {}).prompt || '').trim();
+        const handed = playbook ? `${playbook}
+
+— — —
+
+THE JOB:
+${g}` : g;
+        try {
+          await deviceHub.runCommand(r.deviceId, { path: '/v1/run_goal', body: { goal: handed, role: walkRole } }, 60000);
+          log.info(`[assistant] walk handed to ${r.name} as ${walkRole} (${Object.keys(walkNeed).join(',')}) — ${g.slice(0, 80)}`);
+          return { device: r.name, deviceId: r.deviceId, role: walkRole, status: 'running on your device', need: walkNeed };
+        } catch (e) {
+          return { error: `${r.name} could not take the job: ${e.message}`, need: walkNeed };
+        }
+      }
+
+      const s = await sessionFor(wantProfile);
       if (s.job) {
         const held = jobs.get(s.job);
         if (held && ['running', 'idle'].includes(held.status)) {
@@ -2870,7 +2978,9 @@ function operatorContext() {
       }
       const job = jobs.create({ owner, goal: g.slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
         maxSteps: Math.min(120, Math.max(0, Math.round(Number(maxSteps) || 40))), maxPages: Math.min(60, Math.max(0, Math.round(Number(maxPages) || 12))) });
-      s.job = job.id; job.role = roles.canonical(role || 'general');
+      /* The adopted role, not "general": a walk in a profile whose specialist exists should run as
+         that specialist even when it stays on the cluster. */
+      s.job = job.id; job.role = walkRole || roles.canonical(role || 'general');
       assistantWalks.add(job.id); myWalks.add(job.id);
       const switchProfile = async (name) => { const ss = await sessionFor(profiles.safeName(name)); ss.job = job.id; return ss; };
       agent.run({ job, session: s, settings: cfg, switchProfile, sink: null, convo: null, role: job.role, ownOrigin: null, unattended: true, log })
