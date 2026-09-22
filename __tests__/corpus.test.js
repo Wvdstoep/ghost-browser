@@ -140,6 +140,45 @@ describe('what counts towards the next round', () => {
   });
 });
 
+describe('jobs that predate stored verdicts', () => {
+  it('JUDGES A JOB THAT CARRIES NO VERDICT, rather than reporting an empty corpus', () => {
+    /* Verdicts are written onto a job when it finishes, so only runs from after the verifiers
+       shipped carry one — which is almost none of the 2,240. Reading `job.verdict` alone reported
+       a corpus of zero while the training set built from the same directory counted 1,147 gold:
+       two screens, one directory, opposite answers. */
+    write('a', null);
+    const t = tally({ dir: jobs, cacheFile: cache, judge: () => ({ tier: 'gold' }) });
+    expect(t.tiers.gold).toBe(1);
+    expect(t.unjudged).toBe(0);
+  });
+
+  it('prefers the verdict the job already carries over judging it again', () => {
+    /* The verdict was decided once, against evidence that existed at the time. Re-deriving it later
+       from a store that has since changed is how a run's history quietly rewrites itself. */
+    write('a', 'silver');
+    const t = tally({ dir: jobs, cacheFile: cache, judge: () => ({ tier: 'gold' }) });
+    expect(t.tiers).toEqual({ gold: 0, silver: 1, bronze: 0, void: 0 });
+  });
+
+  it('counts a job as unjudged when the judge throws, instead of losing the whole tally', () => {
+    write('a', null);
+    write('b', 'gold');
+    const t = tally({ dir: jobs, cacheFile: cache, judge: () => { throw new Error('no store'); } });
+    expect(t.unjudged).toBe(1);
+    expect(t.tiers.gold).toBe(1);
+  });
+
+  it('throws away a cache written by an older build rather than trusting it', () => {
+    /* A cache entry saying "read, no verdict" is never revisited, because each file is compared
+       against its own mtime. Without a version, the run that introduced the judge would have kept
+       reporting zeroes for ever over a directory full of gold. */
+    write('a', null);
+    fs.writeFileSync(cache, JSON.stringify({ v: 2, ids: { a: { m: Date.now() + 9e6, tier: null, at: '' } } }));
+    const t = tally({ dir: jobs, cacheFile: cache, judge: () => ({ tier: 'gold' }) });
+    expect(t.tiers.gold).toBe(1);
+  });
+});
+
 describe('the verdict a job carries', () => {
   it('ignores a tier nobody defined', () => {
     expect(verdictOf({ verdict: { tier: 'platinum' } })).toBe(null);

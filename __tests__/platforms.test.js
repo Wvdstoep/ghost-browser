@@ -698,7 +698,18 @@ describe('every list a tool can fill survives the trip to disk', () => {
     /* `j.x = j.x || []` is how each of these begins — the store's own way of saying "a list". */
     const lists = [...new Set([...src.matchAll(/j\.(\w+) = j\.\1 \|\| \[\];/g)].map((m) => m[1]))];
     expect(lists.length).toBeGreaterThan(4);
-    const view = src.slice(src.indexOf('const persistable'), src.indexOf('const persistable') + 1800);
+    /*
+     * To the END of the object, not a fixed number of characters.
+     *
+     * This used to slice 1,800 characters and call it persistable. Adding a comment inside the
+     * object then pushed the last fields out of that window, and the guard reported lists as
+     * lost that were sitting right there — which teaches you to distrust the guard, on the one
+     * test written because a silently dropped field cost six audit findings.
+     */
+    const NL = String.fromCharCode(10);
+    const body = src.slice(src.indexOf('const persistable'));
+    const stop = body.indexOf(NL + '});');
+    const view = stop > 0 ? body.slice(0, stop) : body;
     const missing = lists.filter((k) => !view.includes(`${k}:`));
     expect(missing, `these lists are written to the job but never returned: ${missing.join(', ')}`).toEqual([]);
   });
