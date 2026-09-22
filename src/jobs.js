@@ -196,13 +196,61 @@ function switchedSession(j, { sessionId, profile }) {
   return j;
 }
 
+/*
+ * WHO CHECKS THE WORK, INJECTED RATHER THAN IMPORTED.
+ *
+ * The verdict needs the file store, the recorder and the workflow-run store to answer "is the file
+ * there, did the recording finish, did the automation complete". This module knows about none of
+ * them and should not: it stores jobs. So the server, which has all three in scope, hands the
+ * checker in once at boot and jobs.js only calls it.
+ */
+let verifier = null;
+function setVerifier(fn) { verifier = typeof fn === 'function' ? fn : null; }
+
+/**
+ * THE VERDICT IS TAKEN WHEN THE EVIDENCE IS FRESH.
+ *
+ * Labelling the whole store afterwards works, and it is how the first 1,147 were found — but
+ * evidence ages. A captured file gets cleaned up, a recording is deleted, a workflow run rolls out
+ * of its window. Checked here, at the moment of finishing, the answer is taken while all three are
+ * still true.
+ *
+ * And the half that is worth it even if nothing is ever trained: an agent that reports an export it
+ * never produced is worse than one that admits failure, because nobody finds out until they look
+ * for the file. When a verifier contradicts the report, this says so out loud.
+ */
+function judge(j) {
+  if (!verifier) return null;
+  let v = null;
+  try { v = verifier(j); } catch (e) { return null; }
+  if (!v) return null;
+  j.verdict = {
+    tier: v.tier,
+    why: v.why,
+    external: v.external,
+    failures: v.failures,
+    ...(v.voidReason ? { voidReason: v.voidReason } : {}),
+    ...(v.endedBy ? { endedBy: v.endedBy } : {}),
+    at: now(),
+  };
+  if (v.failures && v.failures.length) {
+    /* Not a warning about the job — a warning about the REPORT. The work may have been fine; what
+       is wrong is that it claimed something the record contradicts. */
+    step(j, 'blocked', `checked: ${v.why.join('; ')}`.slice(0, 600));
+  }
+  return j.verdict;
+}
+
 function finish(j, status, detail) {
   if (isOver(j)) return j;
   j.status = status;
   j.endedAt = status === 'idle' ? null : now();
   if (status === 'failed') j.error = String(detail || 'failed').slice(0, 600);
   step(j, status === 'idle' ? 'done' : 'end', detail || status);
-  bus.emit(j.id, { type: 'status', jobId: j.id, status, error: j.error });
+  /* After the end step, so the verdict sees the finished record — including the end itself, which
+     is how "the owner stopped it" becomes void rather than a failure. */
+  const verdict = judge(j);
+  bus.emit(j.id, { type: 'status', jobId: j.id, status, error: j.error, verdict });
   persist(j);
   return j;
 }
@@ -453,4 +501,4 @@ function storeData(j, key, value) {
   return j.data;
 }
 
-module.exports = { create, step, setReport, isOver, switchedSession, addLead, addResult, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
+module.exports = { create, step, setReport, setVerifier, judge, isOver, switchedSession, addLead, addResult, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
