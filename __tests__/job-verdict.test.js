@@ -112,3 +112,41 @@ describe('the checker is injected, and nothing depends on it being there', () =>
     expect(Array.isArray(j.verdict.why)).toBe(true);
   });
 });
+
+describe('the verdict has to survive being written to disk', () => {
+  /*
+   * THE GAP EVERY TEST ABOVE LEFT OPEN.
+   *
+   * They all assert on `j.verdict` — the object in memory — and they all passed while all 2,228
+   * jobs on the cluster carried `verdict: null`. judge() set the field, the bus carried it, and the
+   * persisted shape did not name it, so nothing ever reached the file.
+   *
+   * Nothing raised. The only symptom was a training set labelled from whatever evidence still
+   * existed weeks later, which means gold decaying into silver as the files that proved it are
+   * cleaned up. A test that never leaves memory cannot see that.
+   */
+  it('writes the verdict into the job file, not just onto the object', () => {
+    jobs.setVerifier((job) => outcomeOf(job, {}));
+    const j = newJob();
+    jobs.setReport(j, 'Read the page and reported what it said.');
+    jobs.finish(j, 'idle', 'done');
+    expect(j.verdict).toBeTruthy();
+
+    const onDisk = JSON.parse(fs.readFileSync(path.join(jobs.DIR, `${j.id}.json`), 'utf8'));
+    expect(onDisk.verdict).toBeTruthy();
+    expect(onDisk.verdict.tier).toBe(j.verdict.tier);
+    /* The reasoning travels with it, so a tier can be argued with later rather than merely trusted. */
+    expect(Array.isArray(onDisk.verdict.why)).toBe(true);
+  });
+
+  it('writes null rather than omitting the field when nothing judged it', () => {
+    /* Absent and "judged as nothing" must not look the same to a reader: one means the verifier had
+       no opinion, the other means this job predates verdicts entirely. */
+    jobs.setVerifier(null);
+    const j = newJob();
+    jobs.finish(j, 'idle', 'done');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(jobs.DIR, `${j.id}.json`), 'utf8'));
+    expect(onDisk).toHaveProperty('verdict');
+    expect(onDisk.verdict).toBe(null);
+  });
+});

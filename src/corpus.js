@@ -53,10 +53,27 @@ const writeJson = (p, v) => {
  * verifiers, against evidence that existed at the time; deriving it a second time from a different
  * place is how two parts of a system come to disagree about whether a run worked.
  */
-function verdictOf(job) {
+function verdictOf(job, judge = null) {
   const v = job && job.verdict;
-  if (!v || !TIERS.includes(v.tier)) return null;
-  return { tier: v.tier, at: v.at || job.endedAt || job.createdAt || '' };
+  if (v && TIERS.includes(v.tier)) return { tier: v.tier, at: v.at || job.endedAt || job.createdAt || '' };
+
+  /*
+   * A JOB THAT PREDATES THE VERIFIER STILL HAS AN ANSWER — IT JUST WAS NEVER ASKED.
+   *
+   * Verdicts are written onto a job when it finishes, so only jobs that ran after the verifiers
+   * shipped carry one. Every older job — which is nearly all 2,240 of them — has none, and reading
+   * `job.verdict` alone would report a corpus of zero while the training set built from the same
+   * directory counts 1,147 gold. Two screens, same data, opposite answers.
+   *
+   * So when a job carries no verdict, judge it here with the same function the set builder uses. It
+   * costs one evaluation per job, once, because the answer is then cached like any other.
+   */
+  if (!judge || !job) return null;
+  try {
+    const o = judge(job);
+    if (!o || !TIERS.includes(o.tier)) return null;
+    return { tier: o.tier, at: job.endedAt || job.createdAt || '' };
+  } catch { return null; }
 }
 
 /**
@@ -65,9 +82,13 @@ function verdictOf(job) {
  * `slice` bounds the parsing; when more files are waiting the answer says `pending`, which is the
  * screen's cue that the number is still climbing and not yet the whole truth.
  */
-function tally({ dir, cacheFile, slice = SLICE } = {}) {
-  const cache = readJson(cacheFile, null) || { v: 2, ids: {} };
-  if (cache.v !== 2 || !cache.ids) { cache.v = 2; cache.ids = {}; }
+function tally({ dir, cacheFile, slice = SLICE, judge = null } = {}) {
+  /* Bump this whenever what is STORED per job changes meaning. A cache written by an older build
+     is not merely stale, it is confidently wrong: entries recorded as "read, no verdict" are never
+     revisited, because each file is compared against its own mtime. Version 3 is the arrival of the
+     judge below, which gives the thousands of jobs that predate stored verdicts a tier at last. */
+  const cache = readJson(cacheFile, null) || { v: 3, ids: {} };
+  if (cache.v !== 3 || !cache.ids) { cache.v = 3; cache.ids = {}; }
 
   let names = [];
   try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); }
@@ -100,7 +121,7 @@ function tally({ dir, cacheFile, slice = SLICE } = {}) {
 
   for (const { id, f, m } of take) {
     const job = readJson(path.join(dir, f), null);
-    const v = job ? verdictOf(job) : null;
+    const v = job ? verdictOf(job, judge) : null;
     /* `tier: null` means read and not judged — distinct from an absent entry, which means never
        read. Collapsing the two would make every unjudged job look like unread backlog for ever. */
     cache.ids[id] = { m, tier: (v && v.tier) || null, at: (v && v.at) || '' };

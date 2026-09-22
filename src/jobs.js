@@ -42,6 +42,20 @@ const persistable = (j) => ({
   workflowId: j.workflowId || null, runId: j.runId || null, nodeId: j.nodeId || null,
   sessionId: j.sessionId, status: j.status, createdAt: j.createdAt, endedAt: j.endedAt || null,
   /*
+   * THE VERDICT, WHICH FOR 2,228 JOBS WAS COMPUTED AND THEN THROWN AWAY HERE.
+   *
+   * judge() takes it at the moment of finishing precisely because evidence ages — a captured file
+   * is cleaned up, a recording deleted, a workflow run rolls out of its window. It set j.verdict,
+   * the bus carried it to anything watching, and then this shape did not name the field, so nothing
+   * reached disk. Every reader afterwards re-judged the job against whatever evidence still
+   * happened to exist, which means gold decays into silver as the file it was proved by disappears.
+   *
+   * The training set is labelled from these, so the defect does not show as an error anywhere: it
+   * shows as a model trained on quietly downgraded examples. Same failure as gscHealth above, one
+   * field over, which is why that story is worth keeping in view.
+   */
+  verdict: j.verdict || null,
+  /*
    * EVERY LIST A TOOL CAN FILL BELONGS HERE, and one that was missed is invisible rather than empty.
    *
    * A Search Console audit called save_gsc_health six times. addGscHealth pushed all six onto the
