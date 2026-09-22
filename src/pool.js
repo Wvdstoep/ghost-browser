@@ -874,13 +874,101 @@ class BrowserPool {
    * browser writing into a folder that no longer exists, and the failure surfaces minutes later
    * somewhere unrelated.
    */
-  async removeProfile(name) {
-    const safe = profiles.safeName(name);
+  /**
+   * NOTHING MAY TOUCH A PROFILE DIRECTORY WHILE A BROWSER IS IN IT.
+   *
+   * removeProfile learned this first: pulling a profile directory out from under a running Chromium
+   * leaves the browser writing into a folder that no longer exists, and the failure surfaces minutes
+   * later somewhere unrelated. Renaming, duplicating and clearing a login are the same act on the
+   * same directory, so they share the same refusal instead of each remembering it.
+   */
+  _refuseIfOpen(safe, what) {
     for (const s of this.sessions.values()) {
       if (s.profile === safe) {
-        throw Object.assign(new Error(`"${safe}" is open — close that session first`), { status: 409 });
+        throw Object.assign(new Error(`"${safe}" is open — close that session first, then ${what}`), { status: 409 });
       }
     }
+  }
+
+  /**
+   * A profile born on purpose rather than as a side effect.
+   *
+   * Until now a profile appeared the first time a session opened one, which means the only way to
+   * create a second identity for a site was to open a browser and hope. It is a directory with a
+   * settings file; saying so explicitly is what lets a person plan one.
+   */
+  createProfile(name, settings = {}) {
+    const safe = profiles.safeName(name);
+    const dir = profiles.dirFor(safe);
+    if (fs.existsSync(dir)) throw Object.assign(new Error(`"${safe}" already exists`), { status: 409 });
+    fs.mkdirSync(dir, { recursive: true });
+    profiles.write(safe, settings);
+    this.log.info?.(`[pool] created the profile "${safe}"`);
+    return safe;
+  }
+
+  /** Rename a login, keeping its cookies and its settings. */
+  renameProfile(from, to) {
+    const a = profiles.safeName(from);
+    const b = profiles.safeName(to);
+    if (a === b) return a;
+    this._refuseIfOpen(a, 'rename it');
+    const src = profiles.dirFor(a);
+    const dst = profiles.dirFor(b);
+    if (!fs.existsSync(src)) throw Object.assign(new Error('no such profile'), { status: 404 });
+    if (fs.existsSync(dst)) throw Object.assign(new Error(`"${b}" already exists`), { status: 409 });
+    fs.renameSync(src, dst);
+    this.log.info?.(`[pool] renamed the profile "${a}" to "${b}"`);
+    return b;
+  }
+
+  /**
+   * A SECOND IDENTITY ON THE SAME SITE — settings, deliberately WITHOUT the cookies.
+   *
+   * Copying the cookie store would produce two profiles believing they are the same account, which
+   * is the fastest way to get both of them locked out: the same session token arriving from two
+   * browsers is exactly what a risk engine is looking for. So a duplicate inherits the timezone,
+   * the locale, the exit and the role, and then somebody signs into it once by hand.
+   */
+  duplicateProfile(from, to) {
+    const a = profiles.safeName(from);
+    const b = profiles.safeName(to);
+    const src = profiles.dirFor(a);
+    if (!fs.existsSync(src)) throw Object.assign(new Error('no such profile'), { status: 404 });
+    if (fs.existsSync(profiles.dirFor(b))) throw Object.assign(new Error(`"${b}" already exists`), { status: 409 });
+    const cfg = profiles.read(a);
+    /* Not the note: it described the original ("my business page"), and carrying it over would
+       label a brand-new empty profile as something it is not. */
+    const { note, ...carried } = cfg;
+    this.createProfile(b, carried);
+    this.log.info?.(`[pool] duplicated "${a}" as "${b}" — settings only, no cookies`);
+    return b;
+  }
+
+  /**
+   * Sign a profile out without throwing it away.
+   *
+   * Deleting the profile to get rid of a bad login also deletes its timezone, its exit and its
+   * role, and those took thought. The cookie stores are the login; everything else is the identity.
+   */
+  clearProfileLogin(name) {
+    const safe = profiles.safeName(name);
+    this._refuseIfOpen(safe, 'clear its login');
+    const dir = profiles.dirFor(safe);
+    if (!fs.existsSync(dir)) throw Object.assign(new Error('no such profile'), { status: 404 });
+    let gone = 0;
+    for (const rel of ['Default/Cookies', 'Cookies', 'Default/Network/Cookies', 'Network/Cookies']) {
+      for (const suffix of ['', '-journal', '-wal', '-shm']) {
+        try { fs.unlinkSync(path.join(dir, rel + suffix)); gone++; } catch { /* not this layout */ }
+      }
+    }
+    this.log.warn?.(`[pool] cleared the login in "${safe}" (${gone} file(s)) — its settings are untouched`);
+    return { profile: safe, cleared: gone };
+  }
+
+  async removeProfile(name) {
+    const safe = profiles.safeName(name);
+    this._refuseIfOpen(safe, 'delete it');
     const dir = profiles.dirFor(safe);
     if (!fs.existsSync(dir)) throw Object.assign(new Error('no such profile'), { status: 404 });
     fs.rmSync(dir, { recursive: true, force: true });

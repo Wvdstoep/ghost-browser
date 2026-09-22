@@ -1025,7 +1025,63 @@ app.post('/v1/sessions/:id/scroll', async (req, res) => {
 });
 
 /** The profiles that exist on disk — the logins built up so far. */
-app.get('/v1/profiles', (_req, res) => res.json({ profiles: pool.listProfiles() }));
+/*
+ * The profiles that exist on disk — the logins built up so far.
+ *
+ * `authed` was missing, and this names every logged-in identity on the install: bare account names
+ * and customer ids to anybody who asked. The console reaches it same-origin with its SSO cookie and
+ * `authed` accepts a cookie as readily as a key, so nothing that used it loses access.
+ */
+app.get('/v1/profiles', authed, (_req, res) => res.json({ profiles: pool.listProfiles() }));
+
+/* ── Managing a login, not just using one ───────────────────────────────────────────────────────
+ * Creating, renaming, duplicating and signing out were things only a session could do by accident:
+ * a profile appeared the first time one was opened, and the only way to be rid of a bad login was
+ * to delete the profile, taking its timezone, its exit and its role with it. Each of these refuses
+ * while a session holds the profile — see pool._refuseIfOpen for why that is not a nicety.
+ */
+app.post('/v1/profiles', authed, (req, res) => {
+  try {
+    const b = req.body || {};
+    const name = pool.createProfile(b.name, profiles.normalize(b));
+    res.status(201).json({ created: name, ...profiles.redacted(name) });
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+app.post('/v1/profiles/:name/rename', authed, (req, res) => {
+  try { res.json({ renamed: pool.renameProfile(req.params.name, (req.body || {}).to) }); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+app.post('/v1/profiles/:name/duplicate', authed, (req, res) => {
+  try {
+    const name = pool.duplicateProfile(req.params.name, (req.body || {}).to);
+    res.status(201).json({ created: name, note: 'settings only — sign into it once by hand' });
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+app.post('/v1/profiles/:name/clear-login', authed, (req, res) => {
+  try { res.json(pool.clearProfileLogin(req.params.name)); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+/**
+ * WHICH AUTOMATIONS ACT THROUGH THIS LOGIN.
+ *
+ * Read off the flow definitions (nodes[].profile), so the list is the truth rather than a note that
+ * can go stale — and so deleting a profile is an informed act instead of a surprise next Tuesday.
+ */
+app.get('/v1/profiles/:name/automations', authed, (req, res) => {
+  try {
+    const want = profiles.safeName(req.params.name);
+    const out = [];
+    for (const wf of (workflows.all() || [])) {
+      const steps = ((wf.nodes) || []).filter((n) => n && n.profile === want).length;
+      if (steps) out.push({ id: wf.id, name: wf.name || wf.id, steps, active: !!wf.active });
+    }
+    res.json({ profile: want, automations: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 /*
  * WHAT THE BROWSER LEARNED IT CANNOT REACH, and the way to tell it it was wrong.
