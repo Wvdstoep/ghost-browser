@@ -1569,7 +1569,7 @@ const TOOL_GROUPS = [
   { group: 'Conversations', names: roles.CONVERSATION },
   { group: 'Finding things', names: ['sweep', 'google', 'dig'] },
   { group: 'Saving what it finds', names: ['save_lead', 'save_gig', 'save_reply', 'save_reach', 'save_keywords', 'save_search', 'save_gsc_token', 'save_opportunity'] },
-  { group: 'Images', names: ['make_brand_image', 'upload_image', 'download_image', 'download_file'] },
+  { group: 'Images', names: ['make_brand_image', 'upload_image', 'download_image', 'download_file', 'download_link'] },
   { group: 'Your voice', names: ['remember_about_me', 'save_my_writing', 'describe_my_voice'] },
   { group: 'Diagnostics', names: ['diagnostics'] },
 ];

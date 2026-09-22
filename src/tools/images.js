@@ -307,7 +307,20 @@ module.exports = {
      (so the site's entitlement applies) and stored with its real name. index = a numbered link the look
      showed; url = a direct address. Falls back to the browser's own request when the page's fetch is
      refused (cross-origin). */
-  async download_file(ctx, a) {
+  /*
+   * A LINKED FILE, BY URL OR BY THE INDEX OF A LINK.
+   *
+   * Renamed from `download_file`, which it shared with tools/files.js — and lost, because
+   * tools/index.js merges `files` after `images` and the later one wins. So every careful thing in
+   * here has been unreachable: resolving a relative address, fetching in-page with the session's
+   * cookies, falling back to page.request, a real filename out of content-disposition, and the
+   * guard below that sniffs the bytes and refuses a gated download rather than storing a paywall
+   * page as a song.
+   *
+   * Meanwhile the model was sometimes shown THIS tool's description and got the other handler,
+   * which ignores `url` entirely. Ask for the PDF behind link 12, get the last image on the page.
+   */
+  async download_link(ctx, a) {
     const fileEngine = require('../fileEngine');
     const page = ctx.page();
     let url = String(a.url || '').trim();
