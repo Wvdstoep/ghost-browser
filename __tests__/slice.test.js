@@ -14,9 +14,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { draw, progress, reset, toolOf, jobOf } from '../src/slice.js';
+import { draw, exam, progress, reset, toolOf, jobOf } from '../src/slice.js';
 
 let dir, file;
+
+/* Built rather than written: an escaped newline has been mangled by a patch four
+   times now, and a literal newline inside a string literal is a parse error that
+   looks nothing like its cause. */
+const EOL = String.fromCharCode(10);
 
 /* A set shaped like the real one: `open` and `read` dominate, `finish` is rare. */
 const line = (tool, tier, n) => JSON.stringify({
@@ -44,6 +49,60 @@ afterEach(() => {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ }
 });
 
+describe('the exam is a sample of the split, not the top of it', () => {
+  /*
+   * The scoring turns were the FIRST N rows of eval.jsonl. The split is cut by job, so the rows
+   * arrive job by job and the first 150 are a few whole jobs. Measured on the real set of
+   * 2026-09-23: 39.3% of the exam was `dig`, and `open` — 15% of what a round trains on — never
+   * appeared. A round could correct its entire tool distribution and be marked on one tool.
+   */
+  const evalFile = () => {
+    /* Ordered by job, the way the builder writes it: every `open` first, then every `read`. */
+    const rows = [];
+    for (let i = 0; i < 120; i++) rows.push(line('open', 'gold', i));
+    for (let i = 0; i < 60; i++) rows.push(line('read', 'gold', 1000 + i));
+    for (let i = 0; i < 30; i++) rows.push(line('look', 'gold', 2000 + i));
+    for (let i = 0; i < 6; i++) rows.push(line('finish', 'gold', 3000 + i));
+    const p = path.join(dir, 'eval.jsonl');
+    fs.writeFileSync(p, rows.join(EOL));
+    return p;
+  };
+
+  it('DOES NOT hand back one tool because it came first in the file', () => {
+    const p = evalFile();
+    const first = fs.readFileSync(p, 'utf8').split(EOL).slice(0, 40);
+    expect(new Set(first.map(toolOf)).size).toBe(1);        // the defect: 40 rows, one tool
+    const e = exam({ file: p, want: 40 });
+    expect(Object.keys(e.tools).length).toBeGreaterThan(2); // the fix: the split's own variety
+  });
+
+  it('gives every tool in the split a place on the paper', () => {
+    const e = exam({ file: evalFile(), want: 40 });
+    for (const tl of ['open', 'read', 'look', 'finish']) expect(e.tools[tl]).toBeGreaterThan(0);
+  });
+
+  it('caps the loudest tool, so no single one can be most of the marks', () => {
+    const e = exam({ file: evalFile(), want: 40 });
+    const worst = Math.max(...Object.values(e.tools));
+    expect(worst).toBeLessThanOrEqual(Math.max(4, Math.floor(40 * 0.15)));
+  });
+
+  it('is the SAME paper every time, or two rounds are not comparable', () => {
+    const p = evalFile();
+    expect(exam({ file: p, want: 40 }).jsonl).toBe(exam({ file: p, want: 40 }).jsonl);
+  });
+
+  it('asks for no more than exists', () => {
+    const e = exam({ file: evalFile(), want: 5000 });
+    expect(e.count).toBe(216);
+  });
+
+  it('survives an empty split without pretending it set a paper', () => {
+    const p = path.join(dir, 'empty.jsonl');
+    fs.writeFileSync(p, '');
+    expect(exam({ file: p, want: 40 }).count).toBe(0);
+  });
+});
 describe('drawing a slice', () => {
   it('reads the tool off the raw line without parsing the whole set', () => {
     expect(toolOf(line('finish', 'gold', 1))).toBe('finish');

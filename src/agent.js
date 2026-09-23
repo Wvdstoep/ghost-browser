@@ -737,7 +737,7 @@ function describeProfiles(current) {
   } catch { return ''; }
 }
 
-function systemPrompt({ goal, companyContext, meContext, profileList, autoAct, role, playbookContext }) {
+function systemPrompt({ goal, plan, companyContext, meContext, profileList, autoAct, role, playbookContext }) {
   const site = (role && role.site) || 'facebook';
   const findExamples = site === 'linkedin'
     ? [
@@ -899,7 +899,13 @@ ${playbookContext}
 ` : ''}
 THE JOB
 ${goal}
+${plan ? `
+HOW THE ASSISTANT SUGGESTS GETTING THERE
+A plan, not an order. It was written without seeing the page, so where it disagrees with what is
+actually on screen, the screen wins — and a url in here may not exist.
 
+${plan}
+` : ''}
 Work in small steps: look, decide, do one thing, look again. Call finish when you are done or truly
 stuck.`;
 }
@@ -1049,7 +1055,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   let book = site ? playbook.asContext(site) : '';
 
   const messages = [{ role: 'system', content: systemPrompt({
-    goal: job.goal, companyContext: ctx, meContext: me.asContext(), profileList,
+    goal: job.goal, plan: job.plan || '', companyContext: ctx, meContext: me.asContext(), profileList,
     autoAct: settings.autoAct, role: theRole, playbookContext: book,
   }) }];
   if (book) jobsStore.step(job, 'note', `starting from what has worked before on ${site}`);
@@ -1081,7 +1087,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
     /* The instructions travel with the role, so the system message is rewritten in place — the
        transcript keeps its shape and the model simply finds itself better briefed. */
     messages[0] = { role: 'system', content: systemPrompt({
-      goal: job.goal, companyContext: ctx, meContext: me.asContext(), profileList,
+      goal: job.goal, plan: job.plan || '', companyContext: ctx, meContext: me.asContext(), profileList,
       autoAct: settings.autoAct, role: theRole, playbookContext: book,
     }) };
     job.role = theRole.name;
@@ -1347,6 +1353,10 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   let wrappingUp = false;   // asked to conclude; no new lines of enquiry from here
   try {
     jobsStore.step(job, 'you', job.goal);
+    /* The plan goes in the record too, right after what was asked. A reader six weeks from now
+       needs to see what the walk was told, and the set builder reads it as the first thing the
+       run had seen — which is true, and is what the small model will be given as well. */
+    if (job.plan) jobsStore.step(job, 'note', `the assistant suggested: ${String(job.plan).slice(0, 1200)}`);
 
     /*
      * ROUTE-CARD FAST PATH. Before walking the UI, ask what the browser has already learned for this

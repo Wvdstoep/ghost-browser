@@ -37,6 +37,9 @@ const id = () => `j-${Date.now().toString(36)}-${Math.random().toString(36).slic
  */
 const persistable = (j) => ({
   id: j.id, owner: j.owner, goal: j.goal, companyId: j.companyId, profile: j.profile,
+  /* The assistant's plan, when a person's own words are the goal. Named here on purpose: the
+     verdict was computed and dropped for 2,228 jobs because this shape did not name it. */
+  plan: j.plan || null,
   // Which automation run this job belongs to, so an approval shows under ITS flow's results and not
   // every flow's — a workflow step's job carries its run and workflow ids; a one-off job carries none.
   workflowId: j.workflowId || null, runId: j.runId || null, nodeId: j.nodeId || null,

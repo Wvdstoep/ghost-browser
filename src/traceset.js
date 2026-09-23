@@ -278,11 +278,26 @@ function build(jobs, deps = {}, opts = {}) {
    * a fleet that spends a month on one site would skew it hard.
    */
   const seenTurn = new Set();
-  const perTool = {};
+  /*
+   * THE PER-TOOL CAP GETS ITS OWN BUDGET PER SET, AND THAT IS NOT A DETAIL.
+   *
+   * This counter used to be declared once here and shared by the training pass and the
+   * evaluation pass. Training is built first, so it spent the whole quota, and then every
+   * matching turn in the EXAM was thrown out as "more than 4000 examples of one tool".
+   *
+   * Measured on the set of 2026-09-23: `open` is 15% of the training set and the most common
+   * real action there is, and the evaluation split contained ZERO of it — 0 turns out of 3,057,
+   * with 1,518 dropped to that rule. The exam held 30 tools against training's 49. So the model
+   * was never once scored on the thing it does most, and no sampler downstream could put it back
+   * because it was gone before the exam was drawn.
+   *
+   * The cap exists to stop one tool dominating the training WEIGHT. Charging the exam for what
+   * training already spent was never the intent and is not defensible.
+   */
   const toolCap = opts.toolCap == null ? 4000 : opts.toolCap;
 
   const note = (why) => { dropped[why] = (dropped[why] || 0) + 1; };
-  const toTurns = (rows, { dedupe = true, cap = true } = {}) => rows.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, onDrop: note })
+  const toTurns = (rows, { dedupe = true, cap = true, perTool = {} } = {}) => rows.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, onDrop: note })
     .filter((t) => {
       const why = mislabelled(t);
       if (why) { dropped[why] = (dropped[why] || 0) + 1; return false; }

@@ -168,6 +168,36 @@ describe('a click by number needs the list the number came from', () => {
     expect(kept.some((x) => x.action.tool === 'open')).toBe(true);
   });
 });
+describe('the exam does not pay for what training spent', () => {
+  /*
+   * The per-tool cap counter was shared between the training pass and the evaluation pass, and
+   * training is built first. Measured on the real set of 2026-09-23: `open` is 15% of training
+   * and the most common action there is, and the eval split held ZERO of it — 0 of 3,057 turns,
+   * 1,518 dropped to that rule, 30 tools on the exam against 49 in training. The model was never
+   * scored on the thing it does most.
+   */
+  it('still scores a tool that training used its whole quota of', () => {
+    const jobs = [];
+    for (let i = 0; i < 40; i++) {
+      jobs.push(job({
+        id: `j-${i}`, proposals: [{ pid: `p${i}`, state: 'approved' }],
+        goal: `open a lot of pages ${i}`,
+        steps: [
+          { n: 1, kind: 'you', text: `open a lot of pages ${i}` },
+          { n: 2, kind: 'tool', tool: 'open', args: { url: `https://a${i}.example` } },
+          { n: 3, kind: 'read', text: `page ${i}` },
+          { n: 4, kind: 'tool', tool: 'open', args: { url: `https://b${i}.example` } },
+          { n: 5, kind: 'read', text: `other ${i}` },
+        ],
+      }));
+    }
+    /* A cap low enough that the training pass exhausts it outright. */
+    const out = build(jobs, {}, { toolCap: 2 });
+    expect(out.train.filter((x) => x.action.tool === 'open').length).toBe(2);
+    expect(out.eval.length).toBeGreaterThan(0);
+    expect(out.eval.some((x) => x.action.tool === 'open')).toBe(true);
+  });
+});
 describe('the evaluation split is cut by job, before any turn exists', () => {
   it('never puts two turns from the same job on both sides', () => {
     const jobs = [];
