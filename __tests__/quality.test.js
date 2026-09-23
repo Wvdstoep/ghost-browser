@@ -59,16 +59,40 @@ describe('the four things that make a run worth less', () => {
     expect(q.refused).toBe(true);
   });
 
-  it('STALLING — looking and reading without ever deciding', () => {
-    /* The loop records this itself. 347 runs hit it; those turns are the model visibly stuck. */
+  it('does NOT punish a single nudge, because that is the guard working', () => {
+    /*
+     * The loop nudges after four observe-only calls in a row and journals one line per streak.
+     * `scroll` counts as observe-only, so look -> scroll -> look -> scroll trips it - which is
+     * simply how anyone reads a long listing page.
+     *
+     * Measured on the run that first exercised choose_option: 17 run_script calls, 3 looks, a
+     * correct answer in 31 calls, graded untidy for scrolling a Marktplaats page twice. Over 2,313
+     * runs, 599 carry the line and 320 carry exactly one; treating one as a stall cost 37 runs
+     * their `best` grade and 77 their `clean`, against a `best` population of 82.
+     */
     const q = qualityOf({
       steps: [...goodRun.steps.slice(0, 5),
         said(6, 'blocked', '4 looks/reads in a row with no action — forcing an action'),
         call(7, 'finish', {})],
     });
-    expect(q.clean).toBe(false);
-    expect(q.stalled).toBe(true);
+    expect(q.nudges).toBe(1);
+    expect(q.stalled).toBe(false);
+    expect(q.clean).toBe(true);
   });
+
+  it('STALLING — nudged again and again, which is a run going in circles', () => {
+    const q = qualityOf({
+      steps: [...goodRun.steps.slice(0, 5),
+        said(6, 'blocked', '4 looks/reads in a row with no action — forcing an action'),
+        call(7, 'look'),
+        said(8, 'blocked', '4 looks/reads in a row with no action — forcing an action'),
+        call(9, 'finish', {})],
+    });
+    expect(q.nudges).toBe(2);
+    expect(q.stalled).toBe(true);
+    expect(q.clean).toBe(false);
+  });
+
 
   it('REPEATING ITSELF — it did not read the answer to the first call', () => {
     const steps = [said(1, 'you', 'g')];

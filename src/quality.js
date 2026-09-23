@@ -49,7 +49,28 @@ function qualityOf(job) {
   const steps = stepsOf(job);
   const calls = steps.filter((s) => s && s.kind === 'tool');
 
-  const stalled = steps.some((s) => STALL.test(textOf(s)));
+  /*
+   * ONE NUDGE IS THE GUARD WORKING, NOT THE RUN FAILING.
+   *
+   * This counted a single `looks/reads in a row with no action` line as a stall. That line is the
+   * loop's own nudge: it fires once per streak of four observe-only calls and pushes the agent to
+   * commit. Usually it works and the run carries straight on.
+   *
+   * It also fires on look -> scroll -> look -> scroll, which is simply how anyone reads a long
+   * listing page — `scroll` counts as observe-only, so two pairs trip it. Measured on the run that
+   * first exercised choose_option: 17 run_script calls, 3 looks, a correct answer in 31 calls, and
+   * it was graded untidy for scrolling a Marktplaats page twice. That is the most efficient shape
+   * we have, and the grader was demoting it.
+   *
+   * Measured over 2,313 runs: 599 carry the line, and 320 of those carry exactly ONE — of which
+   * 152 are otherwise spotless. Counting one nudge as a stall cost 37 runs their `best` grade and
+   * 77 their `clean`, against a `best` population of 82. The tail is where the real thing lives:
+   * runs with two, three, eleven nudges are circling and should be marked.
+   *
+   * So the threshold is TWO. The runtime guard is untouched — it is doing its job.
+   */
+  const nudges = steps.filter((s) => STALL.test(textOf(s))).length;
+  const stalled = nudges >= 2;
   const refused = steps.some((s) => REFUSED.test(textOf(s)));
   const finished = calls.some((s) => s.tool === 'finish');
 
@@ -64,7 +85,7 @@ function qualityOf(job) {
   const marks = [];
   if (!finished) marks.push('never finished on its own');
   if (refused) marks.push('asked for a tool its role does not carry');
-  if (stalled) marks.push('looked or read repeatedly without deciding');
+  if (stalled) marks.push(`looked or read without deciding ${nudges} times`);
   if (repeats > 2) marks.push(`repeated the same call ${repeats} times`);
 
   return {
@@ -72,6 +93,7 @@ function qualityOf(job) {
     finished,
     refused,
     stalled,
+    nudges,
     repeats,
     calls: calls.length,
     marks,

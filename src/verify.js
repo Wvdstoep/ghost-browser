@@ -367,6 +367,15 @@ const externalWhen = (name, res) =>
  * policy. The asymmetry is deliberate and it runs both ways — reward needs evidence, punishment
  * needs evidence, and the ABSENCE of evidence is void rather than blame.
  */
+/*
+ * A REPORT THAT ADMITS THE JOB WAS NOT DONE.
+ *
+ * Deliberately narrow, and the narrowness is the whole point. "I could not find any leads" is a
+ * perfectly good OUTCOME - there were none. "I was unable to complete the query" is a statement
+ * that the work did not happen. Only the second kind belongs here, so this matches admissions about
+ * COMPLETING the task and never about what was found.
+ */
+const ADMITS_FAILURE = /(?:unable|not able) to (?:complete|finish|carry out|perform|do) |could not (?:complete|finish|carry out|perform) |failed to (?:complete|finish|carry out) |did not manage to /i;
 function voidOf(job) {
   const all = steps(job);
   const txt = all.map((s) => textOf(s)).join(' \n ');
@@ -398,7 +407,7 @@ function voidOf(job) {
   if (stopAt >= 0 && !finishedBeforeTheStop) return { isVoid: true, reason: 'the owner stopped it' };
   if (job && job.status === 'running') return { isVoid: true, reason: 'still marked running — cut off by a deploy' };
   if (/out of allowance|no model key|every model key/i.test(both)) return { isVoid: true, reason: 'it ran out of model credit' };
-  if (/model stopped answering|returned 5\d\d|rate limit|429|was rejected \(401\)|Unauthorized/i.test(both)) {
+  if (/model stopped answering|returned 5\d\d|rate limit|(?:^|[^0-9])429(?:[^0-9]|$)|was rejected \(401\)|Unauthorized/i.test(both)) {
     return { isVoid: true, reason: 'the model or its API failed' };
   }
   if (/Target page, context or browser has been closed|browser has been closed|context destroyed|session it was waiting for/i.test(both)) {
@@ -457,6 +466,29 @@ function outcomeOf(job, deps = {}) {
    * interruption says nothing about them. Void is for a job with NOTHING verified and no fault
    * of its own.
    */
+  /*
+   * IT SAID SO ITSELF: NO GOLD FOR A RUN THAT REPORTS IT DID NOT DO THE JOB.
+   *
+   * The verifiers ask whether something outside the agent confirmed an ACTION, and typedTextLanded
+   * confirms a keystroke. Measured on a live chain: a run reported "I was unable to complete the NS
+   * journey planner query" after 60 calls, a refused tool and a stall - and graded GOLD, because
+   * six things it typed had landed on the page. The run beside it that actually produced the answer
+   * in 11 clean calls graded `clean`, which the sampler draws AFTER gold. The order was: failed and
+   * flailing first, succeeded cleanly third.
+   *
+   * A confirmed keystroke is evidence about the keyboard, not about the goal. When the agent's own
+   * account says the job was not done, there is no success to tier - and no lie to punish either,
+   * because it told the truth. That is void: excluded from the set, blamed for nothing. The same
+   * asymmetry as everywhere else in this file - reward needs evidence, punishment needs evidence,
+   * and an absence is neither.
+   */
+  if (passedExternal.length && ADMITS_FAILURE.test(report)) {
+    return {
+      tier: 'void', why: ['it reported that it could not complete the job'], checks,
+      external: passedExternal.map(([n]) => n), failures: [],
+      voidReason: 'it reported that it could not complete the job',
+    };
+  }
   if (passedExternal.length) {
     return {
       tier: 'gold', why: passedExternal.map(([n, r]) => `${n}: ${r.why}`), checks,
