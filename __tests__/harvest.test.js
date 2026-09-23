@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { decide, vet, gapsFrom, askFor, take, push, stop, setOn, state, CAP_PER_HOUR, QUEUE_MAX } from '../src/harvest.js';
+import { decide, vet, gapsFrom, askFor, take, push, stop, setOn, state, busyFrom, WALK_SILENT_MS, CAP_PER_HOUR, QUEUE_MAX } from '../src/harvest.js';
 
 let dir;
 beforeEach(() => {
@@ -24,6 +24,52 @@ afterEach(() => {
 
 const good = 'Find the ten cheapest second hand bakfiets listings on marktplaats.nl and record each one with its price and link';
 
+describe('a walk only holds the browser while it is alive', () => {
+  /*
+   * The collector's first version asked only whether any job had status 'running'. Measured within
+   * minutes of shipping: 160 jobs carried that status on this install and the oldest had carried it
+   * for twenty-eight days, because a pod roll cuts a walk off and nothing writes it an ending. The
+   * toggle was on, seven prompts were queued, and it never dispatched once.
+   *
+   * The training scheduler had already solved this in decide(), with a comment saying why. Same
+   * rule here, and tested, so the next person to write a busy-check finds it rather than repeating
+   * it a third time.
+   */
+  const at = (ms) => new Date(ms).toISOString();
+  const now = Date.UTC(2026, 8, 23, 15, 0, 0);
+
+  it('is busy while a running walk is still taking steps', () => {
+    const live = [{ status: 'running', createdAt: at(now - 600000), steps: [{ at: at(now - 30000) }] }];
+    expect(busyFrom(live, now)).toBe(true);
+  });
+
+  it('is NOT busy for a walk cut off by a deploy weeks ago', () => {
+    const stale = [{ status: 'running', createdAt: at(now - 28 * 86400000), steps: [{ at: at(now - 28 * 86400000) }] }];
+    expect(busyFrom(stale, now)).toBe(false);
+  });
+
+  it('is not held by a hundred and sixty stale ones, which is the case that broke it', () => {
+    const many = Array.from({ length: 160 }, (_, i) => ({
+      status: 'running', createdAt: at(now - (i + 1) * 3600000), steps: [{ at: at(now - (i + 1) * 3600000) }],
+    }));
+    expect(busyFrom(many, now)).toBe(false);
+    /* One live walk among them still holds it. */
+    expect(busyFrom([...many, { status: 'running', createdAt: at(now), steps: [{ at: at(now - 1000) }] }], now)).toBe(true);
+  });
+
+  it('falls back to when the job was created, for one that has taken no step yet', () => {
+    expect(busyFrom([{ status: 'running', createdAt: at(now - 5000), steps: [] }], now)).toBe(true);
+    expect(busyFrom([{ status: 'running', createdAt: at(now - WALK_SILENT_MS - 1000), steps: [] }], now)).toBe(false);
+  });
+
+  it('treats a job with no timestamp at all as not alive, because guessing brings the bug back', () => {
+    expect(busyFrom([{ status: 'running' }], now)).toBe(false);
+  });
+
+  it('ignores anything that is not running', () => {
+    expect(busyFrom([{ status: 'idle', createdAt: at(now), steps: [{ at: at(now) }] }], now)).toBe(false);
+  });
+});
 describe('what it refuses, in code rather than in an instruction', () => {
   /*
    * The generator is TOLD to produce read-and-record work. It will sometimes produce "post a reply"
@@ -122,6 +168,28 @@ describe('what it aims at is measured, not imagined', () => {
     expect(gaps[0].examples).toBe(0);
   });
 
+  it('NEVER goes after a credential or an outward act, whatever its count', () => {
+    /*
+     * gapsFrom reads the live catalogue so a new tool is a target on its first day. That default is
+     * right and it put this on screen, as something the loop was aiming at, on its first real batch:
+     *
+     *     save_totp_secret (0)   act (0)
+     *
+     * A two-factor secret and the approval-gated outward action. A count of zero is not an argument
+     * for exercising either, and "it had no examples" is exactly the reasoning that would have had
+     * a scheduler collecting authenticator codes overnight.
+     */
+    const known = ['look', 'save_totp_secret', 'totp_code', 'act', 'use_my_profile', 'start_recording', 'save_gsc_token', 'record_reply'];
+    const gaps = gapsFrom({ perTool: {}, known, floor: 200 });
+    expect(gaps.map((g) => g.tool)).toEqual(['look']);
+  });
+
+  it('keeps going after the ones it is actually for', () => {
+    /* Browsing, reading, and recording what was found. That is the whole of the job. */
+    const known = ['type', 'choose_option', 'read_table', 'switch_tab', 'make_document', 'save_lead'];
+    const gaps = gapsFrom({ perTool: {}, known, floor: 200 });
+    expect(gaps).toHaveLength(6);
+  });
   it('reads the live catalogue, so a tool shipped next month is a gap on its first day', () => {
     const gaps = gapsFrom({ perTool: {}, known: ['brand_new_tool'], floor: 1 });
     expect(gaps).toEqual([{ tool: 'brand_new_tool', examples: 0 }]);

@@ -107,6 +107,44 @@ function setOn(v) {
   return save(s).on;
 }
 
+/*
+ * TOOLS THE COLLECTOR MUST NEVER GO AFTER, however empty their column is.
+ *
+ * gapsFrom reads the live catalogue so a tool shipped next month becomes a target on its first day.
+ * That is the right default and it produced this on its first real batch, on screen, as something
+ * the loop was aiming at:
+ *
+ *     save_totp_secret (0)   act (0)
+ *
+ * The first is a two-factor secret. The second is the approval-gated outward action. A count of zero
+ * is not an argument for exercising either, and "it had no examples" is exactly the reasoning that
+ * would have had a scheduler collecting authenticator codes overnight.
+ *
+ * So the gap list is narrowed by KIND rather than by name-matching, and the four kinds are:
+ *
+ *   CREDENTIALS.       Anything touching a secret or a token. Never, by anything unattended.
+ *   OUTWARD ACTS.      act, and replying — the things that cannot be unsaid.
+ *   THE OWNER'S OWN.   Their voice, their writing, their conversations, their profiles, their
+ *                      knowledge base. Unattended work has no business writing to any of it.
+ *   SPENDING.          Recording video and generating images cost real infrastructure per run, and
+ *                      a loop is the wrong place to discover that.
+ *
+ * Everything left is browsing, reading, and recording what was found - which is the whole of what
+ * this engine is for.
+ */
+const NEVER_CHASE = new Set([
+  // credentials
+  'save_totp_secret', 'totp_code', 'save_gsc_token', 'save_gsc_health',
+  // outward acts
+  'act', 'record_reply', 'save_reply', 'upload_file', 'upload_image', 'paste_image',
+  // the owner's own identity and memory
+  'use_my_profile', 'use_profile', 'describe_my_voice', 'remember_about_me', 'save_my_writing',
+  'remember_conversation', 'managed_conversations', 'conversation', 'waiting_on', 'whose_is_this',
+  'knowledge_store', 'save_gig', 'save_reach',
+  // things that spend real infrastructure per call
+  'start_recording', 'stop_recording', 'make_brand_image',
+]);
+
 /**
  * WHAT THE CORPUS IS SHORT OF, as a list a person can read and a model can act on.
  *
@@ -121,6 +159,8 @@ function gapsFrom({ perTool = {}, known = [], floor = 200 } = {}) {
   const counted = new Map(Object.entries(perTool));
   const rows = [];
   for (const name of known) {
+    /* A count of zero is not an argument for handling a two-factor secret. See NEVER_CHASE. */
+    if (NEVER_CHASE.has(name)) continue;
     const n = Number(counted.get(name) || 0);
     if (n < floor) rows.push({ tool: name, examples: n });
   }
@@ -205,6 +245,36 @@ function vet(lines, { history = [] } = {}) {
   return { kept, rejected };
 }
 
+/*
+ * BUSY MEANS RUNNING AND ALIVE, AND THE DIFFERENCE IS THE WHOLE FUNCTION.
+ *
+ * The collector's first version asked only whether any job had status 'running'. Measured within
+ * minutes of shipping it: 160 jobs carried that status and the oldest had carried it for
+ * twenty-eight days. A pod roll cuts a walk off mid-flight and nothing ever writes an ending for it,
+ * so the status simply stays. The collector saw a permanently busy browser and never dispatched a
+ * single run — the toggle was on, seven prompts were queued, and nothing happened.
+ *
+ * The training scheduler had already solved this, in decide(), with a comment explaining why: three
+ * rounds died with SIGSEGV, and without a staleness window the first would have blocked every round
+ * after it for ever while the screen read "training". This is that rule, applied to walks.
+ *
+ * A job carrying no timestamp at all counts as NOT alive. Guessing the other way is how the original
+ * bug comes back, and the cost of being wrong is asymmetric: a collector that waits when it should
+ * run loses a few minutes, a collector that runs on a busy browser fights the owner for it.
+ */
+const WALK_SILENT_MS = 10 * 60 * 1000;
+
+function busyFrom(all, now = Date.now(), silentMs = WALK_SILENT_MS) {
+  for (const j of all || []) {
+    if (!j || j.status !== 'running') continue;
+    const steps = j.steps && j.steps.length ? j.steps : null;
+    const stamp = (steps && steps[steps.length - 1] && steps[steps.length - 1].at) || j.createdAt || '';
+    const last = Date.parse(stamp) || 0;
+    if (last && now - last < silentMs) return true;
+  }
+  return false;
+}
+
 /**
  * WHETHER TO START A RUN RIGHT NOW. A pure function of what is known, so it is testable and so the
  * screen and the loop can never disagree about the reason.
@@ -273,6 +343,6 @@ function state({ busy = false, capPerHour = CAP_PER_HOUR, now = Date.now() } = {
 }
 
 module.exports = {
-  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load,
-  CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE,
+  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, WALK_SILENT_MS,
+  CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE,
 };
