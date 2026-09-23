@@ -1821,9 +1821,20 @@ setInterval(() => {
  */
 const harvest = require('./harvest');
 
-/** One browser, one walk. Anything running at all is a reason to wait. */
+/**
+ * One browser, one walk - but only a walk that is actually ALIVE holds it.
+ *
+ * This used to ask jobs.listAll() for anything with status 'running'. 160 jobs carry that status
+ * on this install and the oldest has carried it for twenty-eight days, because a pod roll cuts a
+ * walk off and nothing writes it an ending. The collector saw a permanently busy browser and never
+ * dispatched once: the toggle was on, seven prompts were queued, and nothing happened.
+ *
+ * The rule lives in harvest.busyFrom, where it is tested. It reads the store directly rather than
+ * listAll, which summarises steps to a COUNT - so the last step's timestamp, the only evidence of
+ * life there is, is not in the rows listAll returns.
+ */
 function browserBusy() {
-  try { return jobs.listAll().some((j) => j && j.status === 'running'); } catch (e) { return false; }
+  try { return harvest.busyFrom(jobs.jobs.values()); } catch (e) { return false; }
 }
 
 /*
