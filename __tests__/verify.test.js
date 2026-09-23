@@ -218,6 +218,42 @@ describe('the tier, and the asymmetry that makes checking worth anything', () =>
     ], { report: 'Got partway.' });
     expect(outcomeOf(j, {}).tier).toBe('void');
   });
+  it('credits a document the browser printed, not only one it downloaded', () => {
+    /*
+     * The claim was read off the TOOL NAME and matched download/upload_file/export, so a run that
+     * composed a real PDF with make_document could never be confirmed. Measured on the first walk
+     * the collector ever dispatched: it wrote amsterdam-rotterdam-the-hague-comparison.pdf at
+     * 49,694 bytes, eleven clean calls, and graded silver with the file sitting in the store.
+     *
+     * craft.js writes a download-kind step only AFTER the bytes exist, so that step is the
+     * browser's own receipt and is what this keys on.
+     */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'make_document', args: {} },
+      { n: 2, kind: 'download', text: 'made cities.pdf (49694 bytes) as asset a1' },
+    ], { report: 'I compared the three cities and produced a document.' });
+    /* Inside the job's own window, which is what fileWasProduced checks - a file from a week later
+       proves nothing about this run. */
+    const files = () => [{ at: '2026-09-01T10:03:00.000Z', name: 'cities.pdf', size: 49694 }];
+    const out = outcomeOf(j, { files });
+    expect(out.tier).toBe('gold');
+    expect(out.external).toContain('fileWasProduced');
+  });
+
+  it('does NOT accuse a run whose document failed to print', () => {
+    /*
+     * The asymmetry is the point. A make_document that could not print observes an error and writes
+     * no receipt, so there is no claim to check and the run stays silver. A tool that broke is not a
+     * run that lied, and inventing that accusation is worse than missing the catch.
+     */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'make_document', args: {} },
+      { n: 2, kind: 'read', text: 'The document could not be printed. Check the HTML is valid.' },
+    ], { report: 'I could not produce the document, so here are the figures instead.' });
+    const out = outcomeOf(j, { files: () => [] });
+    expect(out.tier).not.toBe('bronze');
+    expect(out.checks.fileWasProduced.ok).not.toBe(false);
+  });
   it('a run that said so itself is not gold, however many keystrokes landed', () => {
     /*
      * A confirmed keystroke is evidence about the keyboard, not about the goal. Measured on a live

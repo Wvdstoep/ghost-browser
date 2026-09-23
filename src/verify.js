@@ -106,7 +106,23 @@ function typedTextLanded(job) {
  * zero-byte export is exactly what a half-finished download leaves behind.
  */
 function fileWasProduced(job, { files } = {}) {
-  const claimed = toolSteps(job).some((s) => /download|upload_file|export/i.test(s.tool))
+  /*
+   * A download STEP is the browser's own receipt, and it is the one thing here that cannot be
+   * written by a confident sentence.
+   *
+   * The claim used to be read off the TOOL NAME, matching download/upload_file/export.
+   * make_document matches none of them, so a run that composed a real PDF could never be
+   * confirmed. Measured on the first walk the collector ever dispatched: it wrote
+   * amsterdam-rotterdam-the-hague-comparison.pdf at 49,694 bytes and graded silver with the file
+   * sitting in the store, because the verifier was reading the wrong half of the record.
+   *
+   * Keyed on the STEP rather than the call, and that asymmetry is the whole point: craft.js writes
+   * this step only after the bytes exist. A make_document that failed to print observes an error
+   * and writes no step, so it stays UNKNOWN and silver instead of becoming a FAIL. A tool that
+   * broke is not a run that lied, and inventing that accusation is worse than missing the catch.
+   */
+  const claimed = steps(job).some((s) => s && s.kind === 'download')
+    || toolSteps(job).some((s) => /download|upload_file|export/i.test(s.tool))
     || /download(ed)?|export(ed)?|saved the (file|video|mp4)/i.test(String(job.report || ''));
   if (!claimed) return UNKNOWN('this job never claimed a file');
   if (typeof files !== 'function') return UNKNOWN('no file store to check against');
