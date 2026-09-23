@@ -46,6 +46,24 @@ function mountDeviceHub(app, authed) {
       realIp: !!c.realIp,         // has a residential/stealth exit IP
       profiles: arr(c.profiles),  // browser profiles held locally
       features: arr(c.features),  // named primitives, e.g. upload_file, drag_xy, native_tap
+
+      /*
+       * CAN THIS MACHINE TRAIN, AND IF NOT, WHAT IS IT MISSING.
+       *
+       * A whitelist is the right shape here — a device must not be able to invent capabilities — but
+       * what it does not know it drops in silence. The desktop reported `trainer`, its free space and
+       * a list of what it still needed; the cluster received only `features` and the machine looked
+       * mute while it was in fact talking. Anything a device says that the ring routes on has to be
+       * named here, deliberately, which is exactly why the list is a whitelist.
+       *
+       * `trainerMissing` is for a person, never for the scheduler: routing happens on `trainer`
+       * alone, and the sentences exist so "why is nothing happening" has an answer on screen.
+       */
+      trainer: !!c.trainer,                                  // ready to take a round right now
+      trainerFreeGb: Math.max(0, Math.min(99999, Number(c.trainerFreeGb) || 0)),
+      trainerHome: String(c.trainerHome || '').slice(0, 200),
+      trainerCanSetUp: !!c.trainerCanSetUp,                  // not ready, but could be made ready
+      trainerMissing: arr(c.trainerMissing).map((s) => String(s).slice(0, 160)).slice(0, 8),
     };
   };
 
