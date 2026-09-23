@@ -1771,7 +1771,23 @@ async function dispatchRound({ force = false } = {}) {
   try {
     await deviceHub.runCommand(dev.deviceId, {
       path: '/v1/train_round',
-      body: { base: dev.base || '', hours: Number(process.env.TRAIN_HOURS || 0) || 6 },
+      /*
+       * TWELVE HOURS, NOT SIX, AND THE ROUND THAT PROVED IT SAID SO ITSELF.
+       *
+       * The first round to run this path end to end finished with the line "trained on 229 turns
+       * in 361 min - the time budget ran out", and its loss was still falling: -0.96 per 100 turns
+       * over its last twelve reports against -0.14 across the whole round. It ended on its lowest
+       * figure of the night. Nothing had converged; the clock simply stopped it.
+       *
+       * 229 turns is 13% of a 1,800-turn slice and about 1% of the corpus. At the measured rate,
+       * roughly 0.6 turns a minute on a CPU, twelve hours reaches something near 430 - still only a
+       * quarter of one slice, which is why coverage-driven chaining exists and why this is a
+       * budget rather than a fix.
+       *
+       * Still an env var, because a machine that has to close its lid at midnight needs a shorter
+       * one and that is a property of the machine, not of the method.
+       */
+      body: { base: dev.base || '', hours: Number(process.env.TRAIN_HOURS || 0) || 12 },
     }, 30000);
     log.info(`training: handed a round to ${dev.device} — ${plan.why}`);
     return { run: true, why: plan.why, device: dev.device, forced: !!force };
