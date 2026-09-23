@@ -1869,22 +1869,58 @@ async function refillPrompts(want) {
   refillingPrompts = true;
   try {
     const cfg = settingsStore.read();
-    const key = cfg.llmKey || String(cfg.llmKeys || '').split(/[\s,]+/).filter(Boolean)[0] || null;
     if (!cfg.llmModel) return { asked: false, why: 'no model is configured' };
     const known = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
     const gaps = harvest.gapsFrom({ perTool: toolCountsFromSet(), known });
     const s = harvest.load();
-    const reply = await llm.chat({
-      host: cfg.llmHost, model: cfg.llmModel, key,
-      messages: harvest.askFor({ gaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) }),
-      timeoutMs: 90000,
-    });
-    const lines = String((reply && reply.content) || '').split(String.fromCharCode(10));
-    const { kept, rejected } = harvest.vet(lines, { history: s.history || [] });
-    const queued = harvest.push(kept, gaps.slice(0, 8).map((g) => `${g.tool} (${g.examples})`));
-    log.info(`[harvest] asked for prompts: ${kept.length} kept, ${rejected.length} refused, ${queued} queued`);
-    for (const r of rejected.slice(0, 4)) log.info(`[harvest] refused — ${r.why}: ${r.prompt}`);
-    return { asked: true, kept: kept.length, rejected, queued, aiming: gaps.slice(0, 8) };
+    const messages = harvest.askFor({ gaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) });
+
+    /*
+     * THE BACKUP KEY, HERE TOO.
+     *
+     * The first version took cfg.llmKey or the first of llmKeys and called llm.chat with it. The
+     * WALKS were fine — they go through startWalk into askWithRetry, which has rung the keyring
+     * primary-first since the day a single weekly allowance took the whole factory offline. But
+     * asking for prompts went straight to llm.chat, which has no ring.
+     *
+     * So on the day the primary runs out, the walks carry on with the backup and the prompts stop
+     * arriving. The queue drains, decide() answers "nothing queued", and the collector sits
+     * switched ON doing nothing at all — no error on the screen, because nothing failed except a
+     * refill nobody was watching. A silent stall is the worst of the shapes this could take.
+     *
+     * Eight lines rather than a shared helper: askWithRetry sends the full 67-tool catalogue with
+     * every call, which is wrong for a request that wants prose back, and keyring.js is explicitly
+     * written to be used directly like this.
+     */
+    const { makeKeyring, isSpent } = require('./keyring');
+    const ring = makeKeyring([cfg.llmKey, ...String(cfg.llmKeys || '').split(',')]);
+    let key = ring.current();
+    for (let attempt = 0; attempt < Math.max(1, ring.size); attempt++) {
+      let reply;
+      try {
+        reply = await llm.chat({ host: cfg.llmHost, model: cfg.llmModel, key, messages, timeoutMs: 90000 });
+      } catch (e) {
+        if (!isSpent(e)) throw e;
+        const next = ring.spend(key, e.message);
+        if (next && next !== key) {
+          key = next;
+          log.info('[harvest] that account is out of allowance for this period — asking with the next key');
+          continue;
+        }
+        /* Every key is spent. Switching off with the reason on the record beats a loop that keeps
+           asking an empty account and quietly stops collecting. */
+        harvest.stop('every model key is out of allowance');
+        log.warn('[harvest] every key is out of allowance — collecting switched off');
+        return { asked: false, why: 'every model key is out of allowance' };
+      }
+      const lines = String((reply && reply.content) || '').split(String.fromCharCode(10));
+      const { kept, rejected } = harvest.vet(lines, { history: s.history || [] });
+      const queued = harvest.push(kept, gaps.slice(0, 8).map((g) => `${g.tool} (${g.examples})`));
+      log.info(`[harvest] asked for prompts: ${kept.length} kept, ${rejected.length} refused, ${queued} queued`);
+      for (const r of rejected.slice(0, 4)) log.info(`[harvest] refused — ${r.why}: ${r.prompt}`);
+      return { asked: true, kept: kept.length, rejected, queued, aiming: gaps.slice(0, 8) };
+    }
+    return { asked: false, why: 'no key answered' };
   } catch (e) {
     log.warn(`[harvest] could not get prompts — ${e.message}`);
     return { asked: false, why: e.message };
