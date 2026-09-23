@@ -200,11 +200,118 @@ function automationRunCompleted(job, { runs } = {}) {
 }
 
 /** Did it actually write anything down? Findings are an artefact; a summary is not. */
+/*
+ * EVERY LIST A TOOL CAN FILL, READ OFF THE JOB ITSELF.
+ *
+ * This used to be six names kept by hand, and it had fallen behind the tools: `results`,
+ * `searchQueries` and `gscHealth` were missing, so a run that saved five businesses with `collect`
+ * reported "nothing was written" and was filed as silver. The rows were right there.
+ *
+ * Deriving it means a tool added next month counts on the day it ships, with nobody remembering to
+ * edit a list — which is the same failure that lost six audit findings when `gscHealth` was missing
+ * from the persisted shape.
+ *
+ * `steps`, `proposals` and `inbox` are the job's own machinery, not things a tool produced, so they
+ * are named out. Everything else that is an array of rows is evidence.
+ */
+const NOT_RESULTS = new Set(['steps', 'proposals', 'inbox', 'lines']);
+
+function bucketsOf(job) {
+  const out = [];
+  for (const [k, v] of Object.entries(job || {})) {
+    if (NOT_RESULTS.has(k) || !Array.isArray(v) || !v.length) continue;
+    out.push([k, v.length]);
+  }
+  return out;
+}
+
+/**
+ * How many rows the REPORT says it produced, when it says so at all.
+ *
+ * Only a claim with a number attached can be checked, which is the point: "I saved five plumbers"
+ * is checkable and "I saved some plumbers" is not, and pretending otherwise would invent failures.
+ */
+function claimedCount(report) {
+  const r = String(report || '');
+  /*
+   * ANCHORED ON THE VERB, NOT THE NOUN.
+   *
+   * The first attempt listed nouns — leads, places, rows — and missed "saved five plumbers" because
+   * reports use whatever word the task was about. The noun is unbounded; the verb is not, and only
+   * a handful of verbs actually mean "I wrote this down".
+   *
+   * Deliberately narrow: "found three suppliers" is NOT a claim to have stored three, and treating
+   * it as one would mark good runs as liars and poison the reject pile with them. A missed catch
+   * costs one signal; a false catch teaches the model that correct behaviour is wrong.
+   */
+  /*
+   * WRITTEN AS REGEX LITERALS ON PURPOSE.
+   *
+   * The first version built these with `new RegExp` inside a template literal, where \b is a
+   * backspace character and \s and \d are just the letters s and d. It compiled, it ran, it matched
+   * nothing, and every claim sailed through unchecked. A literal cannot be mis-escaped.
+   */
+  const DIGITS = /\b(?:saved|stored|recorded|logged|added|kept|wrote down)\s+(?:a\s+total\s+of\s+)?(\d{1,3})\b/gi;
+  const WORDS = /\b(?:saved|stored|recorded|logged|added|kept|wrote down)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b/gi;
+  const spelled = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  let best = 0;
+  let m;
+  while ((m = DIGITS.exec(r))) best = Math.max(best, Number(m[1]) || 0);
+  while ((m = WORDS.exec(r))) best = Math.max(best, spelled[m[1].toLowerCase()] || 0);
+
+  /* A run that says it saved NOTHING is not claiming rows; zero is not a claim to check. */
+  return best;
+}
+
+
+/**
+ * ROWS A TOOL WROTE — and whether they match what the run said it did.
+ *
+ * Two different strengths, deliberately kept apart:
+ *
+ *   A CHECKED CLAIM is external truth. The report said five and five rows exist: the agent could not
+ *     have produced those rows by writing prose, so something outside its own account agrees.
+ *   ROWS WITH NO CLAIM are a good sign and nothing more. They prove the agent ACTED, not that the
+ *     action was right — five saved leads may be five bad leads, and calling that gold would fill
+ *     the top tier with work nobody checked.
+ *
+ * And it can now FAIL, which is the half that was missing entirely. A run claiming five leads that
+ * wrote none used to pass through as an ordinary silver success. That contradiction is the scarcest
+ * and most useful thing in the whole corpus.
+ */
 function resultsWereWritten(job) {
-  const buckets = ['leads', 'opportunities', 'gigs', 'replies', 'reach', 'keywords'];
-  const counts = buckets.map((k) => [k, Array.isArray(job && job[k]) ? job[k].length : 0]).filter(([, n]) => n > 0);
+  const counts = bucketsOf(job);
+  const total = counts.reduce((n, [, c]) => n + c, 0);
+  const claimed = claimedCount(job && job.report);
+  const detail = counts.map(([k, n]) => `${k}:${n}`).join(' ');
+
+  if (claimed > 0 && total === 0) {
+    return FAIL(`the report claims ${claimed} row(s) and none were written`, String(job && job.report || '').slice(0, 140));
+  }
   if (!counts.length) return UNKNOWN('nothing was written to a results bucket');
-  return PASS('rows were written', counts.map(([k, n]) => `${k}:${n}`).join(' '));
+  if (claimed > 0 && total < claimed) {
+    return FAIL(`the report claims ${claimed} row(s) and ${total} were written`, detail);
+  }
+
+  /*
+   * CONFIRMED MEANS THE NUMBERS AGREE, NOT THAT ONE EXCEEDS THE OTHER.
+   *
+   * The first rule promoted anything with at least as many rows as claimed, and produced lines like
+   * "79 row(s) written, matching the 50 the report claims" — which is not a match, it is a report
+   * that understates what happened. Harmless, but not evidence of anything, and treating it as
+   * confirmation quietly fills the top tier with runs nobody checked.
+   *
+   * Either bucket may carry it: "I saved five leads" against leads:5 and places:1 is a confirmed
+   * claim even though the total is six, because the five it named are there.
+   */
+  const exact = total === claimed || counts.some(([, n]) => n === claimed);
+  if (claimed > 0 && exact) {
+    return PASS(`${claimed} row(s) claimed and ${claimed} written`, detail);
+  }
+  if (claimed > 0) {
+    return PASS(`${total} row(s) written, more than the ${claimed} claimed`, detail);
+  }
+  return PASS('rows were written', detail);
 }
 
 const VERIFIERS = {
@@ -218,6 +325,21 @@ const VERIFIERS = {
 
 /** Which verifiers, when they pass, are external truth rather than a good sign. */
 const EXTERNAL = new Set(['actWasApproved', 'automationRunCompleted', 'recordingCompleted', 'fileWasProduced', 'typedTextLanded']);
+
+/**
+ * `resultsWereWritten` is external ONLY when it checked a number against the report.
+ *
+ * Rows existing proves the agent acted. Rows matching a count the report gave proves something
+ * outside the agent's own prose agrees with it, which is the whole definition of gold. Treating
+ * every written row as external would have promoted a thousand unchecked runs overnight.
+ *
+ * The phrase matched here is "claimed and", which only the confirmed branch produces. An earlier
+ * version tested for "written" — which also matches the plain "rows were written" of an unclaimed
+ * run, and quietly promoted exactly the thousand runs this is meant to keep out. The wording is
+ * load-bearing; change the sentence and this stops working, which is why the tests assert it.
+ */
+const externalWhen = (name, res) =>
+  EXTERNAL.has(name) || (name === 'resultsWereWritten' && res && res.ok === true && /claimed and /.test(res.why || ''));
 
 /**
  * WAS THIS THE AGENT'S DOING AT ALL?
@@ -289,7 +411,7 @@ function outcomeOf(job, deps = {}) {
     try { checks[name] = fn(job, deps); } catch (e) { checks[name] = UNKNOWN(`verifier threw: ${e.message}`); }
   }
   const failed = Object.entries(checks).filter(([, r]) => r.ok === false);
-  const passedExternal = Object.entries(checks).filter(([n, r]) => r.ok === true && EXTERNAL.has(n));
+  const passedExternal = Object.entries(checks).filter(([n, r]) => r.ok === true && externalWhen(n, r));
 
   const report = String((job && job.report) || '').trim();
   const wandered = /step (limit|budget)/i.test(report);

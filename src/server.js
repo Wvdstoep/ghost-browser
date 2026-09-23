@@ -1890,6 +1890,69 @@ app.get('/v1/training/script/:name', authed, (req, res) => {
   res.type('text/plain').send(require('fs').readFileSync(p, 'utf8'));
 });
 
+/**
+ * A RUN THAT HAPPENED ON A DEVICE, RECORDED AS A JOB.
+ *
+ * The device ring exists for the work that can only be done on a machine holding a real login at a
+ * real address — the most valuable and least reproducible browsing there is. None of it taught the
+ * model anything: a device journalled prose (`steps: [{line}]`) into /profiles/device-runs, which
+ * nothing reads, while the training set is built only from jobs whose steps are {kind, tool, args}.
+ *
+ * So the device now sends the same shape a cluster job has, and it is written through the ordinary
+ * job machinery rather than to a store of its own. That is the point: the verifiers, the tiering,
+ * the corpus tally and the set builder all work on it with no special case, and a device run is
+ * gold or silver on exactly the same evidence as anything else.
+ *
+ * It is NOT a live job — it already finished, somewhere else. So it is created, filled and closed
+ * in one call, and finish() takes the verdict at the end as it does for everything.
+ */
+app.post('/v1/device-runs/trace', authed, (req, res) => {
+  try {
+    const b = req.body || {};
+    const goal = String(b.goal || '').trim();
+    if (!goal) return res.status(400).json({ error: 'a run with no goal teaches nothing — send the goal' });
+    const steps = Array.isArray(b.steps) ? b.steps : [];
+    if (!steps.length) return res.status(400).json({ error: 'no steps' });
+
+    const job = jobs.create({
+      owner: req.client.owner,
+      goal: goal.slice(0, 4000),
+      companyId: null,
+      profile: String(b.profile || '').slice(0, 80) || null,
+      /* There is no cluster session — the browser was somewhere else. Naming the device instead
+         keeps it obvious where this came from when somebody reads the history. */
+      sessionId: `device:${String(b.deviceName || 'unknown').slice(0, 60)}`,
+      workflowId: null, runId: null, nodeId: null,
+    });
+    if (b.role) job.role = String(b.role).slice(0, 80);
+
+    /*
+     * Replayed through jobs.step so each one is persisted, numbered and broadcast exactly like a
+     * cluster step. Writing the array straight onto the job would skip the trimming and the bus,
+     * and a reader watching the history would never see it arrive.
+     */
+    for (const s of steps.slice(0, 600)) {
+      const kind = String((s && s.kind) || '').slice(0, 20);
+      if (!kind || kind === 'you') continue;   // the goal is already the job's own first line
+      const extra = {};
+      if (s.tool) extra.tool = String(s.tool).slice(0, 60);
+      if (s.args && typeof s.args === 'object') extra.args = s.args;
+      if (s.url) extra.url = String(s.url).slice(0, 300);
+      /* The numbered list, which is the only thing that makes a click learnable. */
+      if (s.marks) extra.marks = String(s.marks).slice(0, 2000);
+      if (kind === 'done' || kind === 'end') continue;   // finish() writes the ending itself
+      jobs.step(job, kind, String((s && s.text) || ''), extra);
+    }
+
+    const status = ['idle', 'stopped', 'failed', 'interrupted'].includes(String(b.status)) ? String(b.status) : 'idle';
+    if (b.report) jobs.setReport(job, String(b.report).slice(0, 4000));
+    jobs.finish(job, status, String(b.report || status).slice(0, 600));
+
+    log.info(`[device-run] ${b.deviceName || 'a device'} filed ${steps.length} step(s) — ${job.verdict ? job.verdict.tier : 'unjudged'}`);
+    res.json({ ok: true, jobId: job.id, tier: job.verdict ? job.verdict.tier : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/v1/agent/roles', authed, (_req, res) => res.json({ roles: roles.list() }));
 
 /*
