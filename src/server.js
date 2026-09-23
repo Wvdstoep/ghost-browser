@@ -1805,6 +1805,131 @@ setInterval(() => {
   } catch (e) { /* a scheduler that throws must not take the browser with it */ }
 }, 10 * 60 * 1000);
 
+/*
+ * ── COLLECTING TRAINING DATA BY ITSELF ─────────────────────────────────────────────────────────
+ *
+ * Every run in this corpus was typed by the owner and waited for. That is why there are 2,313 of
+ * them after months rather than after a week, and why `open` has four thousand examples while
+ * `choose_option` had TWO until a prompt was written by hand this afternoon to exercise it.
+ *
+ * So the browser performs that loop instead: one walk at a time, the next starting when the last
+ * ends, with the prompts chosen from what the set is measurably SHORT of. The decision itself and
+ * everything it refuses live in harvest.js as pure functions, and are tested there.
+ *
+ * It hands work to startWalk, the same path the chat uses, rather than driving the agent directly.
+ * A second walk machine would drift: its own budgets, its own journalling, and a bug to fix twice.
+ */
+const harvest = require('./harvest');
+
+/** One browser, one walk. Anything running at all is a reason to wait. */
+function browserBusy() {
+  try { return jobs.listAll().some((j) => j && j.status === 'running'); } catch (e) { return false; }
+}
+
+/*
+ * Per-tool counts read straight off the built set, because that is where the gap actually is —
+ * not off the corpus, which includes turns the builder threw away. A hundred-odd megabytes to read
+ * and it happens once per batch of prompts, so it is cheaper than being wrong about the gaps.
+ */
+function toolCountsFromSet() {
+  try {
+    const p = require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl');
+    const { toolOf } = require('./slice');
+    const out = {};
+    for (const line of require('fs').readFileSync(p, 'utf8').split(String.fromCharCode(10))) {
+      if (!line.trim()) continue;
+      const tool = toolOf(line);
+      if (tool) out[tool] = (out[tool] || 0) + 1;
+    }
+    return out;
+  } catch (e) { return {}; }
+}
+
+/*
+ * ASK FOR MORE PROMPTS, grounded in the gaps.
+ *
+ * Guarded against overlapping calls: the tick runs every minute and a model call takes ten to
+ * thirty seconds, so without the flag a slow answer would be asked for three times and the queue
+ * would fill with three copies of the same batch.
+ */
+let refillingPrompts = false;
+async function refillPrompts(want) {
+  if (refillingPrompts) return { asked: false, why: 'already asking' };
+  refillingPrompts = true;
+  try {
+    const cfg = settingsStore.read();
+    const key = cfg.llmKey || String(cfg.llmKeys || '').split(/[\s,]+/).filter(Boolean)[0] || null;
+    if (!cfg.llmModel) return { asked: false, why: 'no model is configured' };
+    const known = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
+    const gaps = harvest.gapsFrom({ perTool: toolCountsFromSet(), known });
+    const s = harvest.load();
+    const reply = await llm.chat({
+      host: cfg.llmHost, model: cfg.llmModel, key,
+      messages: harvest.askFor({ gaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) }),
+      timeoutMs: 90000,
+    });
+    const lines = String((reply && reply.content) || '').split(String.fromCharCode(10));
+    const { kept, rejected } = harvest.vet(lines, { history: s.history || [] });
+    const queued = harvest.push(kept, gaps.slice(0, 8).map((g) => `${g.tool} (${g.examples})`));
+    log.info(`[harvest] asked for prompts: ${kept.length} kept, ${rejected.length} refused, ${queued} queued`);
+    for (const r of rejected.slice(0, 4)) log.info(`[harvest] refused — ${r.why}: ${r.prompt}`);
+    return { asked: true, kept: kept.length, rejected, queued, aiming: gaps.slice(0, 8) };
+  } catch (e) {
+    log.warn(`[harvest] could not get prompts — ${e.message}`);
+    return { asked: false, why: e.message };
+  } finally { refillingPrompts = false; }
+}
+
+/*
+ * THE LOOP. A minute, because a walk takes two to ten and the cost of checking is nothing.
+ *
+ * Refilling and dispatching are deliberately independent: the queue is topped up while there are
+ * still prompts in it, so the loop never stands idle waiting for a model to answer.
+ */
+setInterval(() => {
+  (async () => {
+    try {
+      if (!harvest.on()) return;
+      const s = harvest.load();
+      if ((s.queue || []).length <= harvest.QUEUE_LOW) refillPrompts(8).catch(() => {});
+      const plan = harvest.decide({ on: true, busy: browserBusy(), queue: s.queue, recent: s.recent });
+      if (!plan.run) return;
+      /*
+       * The prompt is BOTH the ask and the goal, and that is the best shape there is for training:
+       * no assistant expanded it, so what the set records is exactly a sentence a person would type.
+       * The profile is the public one — unattended work never touches a logged-in account.
+       */
+      const prompt = harvest.take(null);
+      if (!prompt) return;
+      const ctx = operatorContext();
+      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: 'google', maxSteps: 40, maxPages: 12 });
+      if (out && out.error) {
+        log.warn(`[harvest] walk refused — ${out.error}`);
+        /* An empty account is the one error worth stopping for: every further walk would be void
+           and the only lesson in them is what a billing failure looks like. */
+        if (/allowance|no model key|quota/i.test(String(out.error))) harvest.stop(out.error);
+        return;
+      }
+      log.info(`[harvest] walk ${out && out.jobId}: ${String(prompt).slice(0, 90)}`);
+    } catch (e) { /* a collector that throws must not take the browser with it */ }
+  })();
+}, 60 * 1000);
+
+/** The toggle. Off by default, and nothing here starts spending on its own. */
+app.get('/v1/harvest/state', authed, (_req, res) => {
+  try { res.json(harvest.state({ busy: browserBusy() })); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/harvest/on', authed, (req, res) => {
+  const v = harvest.setOn(!!(req.body || {}).on);
+  log.info(`training: collecting data by itself is ${v ? 'ON' : 'off'}`);
+  res.json(harvest.state({ busy: browserBusy() }));
+});
+/** Ask for a batch now — the owner wanting to see what it would choose, without waiting a minute. */
+app.post('/v1/harvest/refill', authed, async (req, res) => {
+  const out = await refillPrompts((req.body || {}).want);
+  res.json({ ...out, state: harvest.state({ busy: browserBusy() }) });
+});
+
 /** The owner allowing, or forbidding, one machine to train. Default is forbidden. */
 app.post('/v1/training/trainers/:deviceId', authed, (req, res) => {
   const on = training.setTrainer(req.params.deviceId, !!(req.body || {}).on);
