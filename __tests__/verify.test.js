@@ -218,6 +218,34 @@ describe('the tier, and the asymmetry that makes checking worth anything', () =>
     ], { report: 'Got partway.' });
     expect(outcomeOf(j, {}).tier).toBe('void');
   });
+  it('a run that said so itself is not gold, however many keystrokes landed', () => {
+    /*
+     * A confirmed keystroke is evidence about the keyboard, not about the goal. Measured on a live
+     * chain: a run reported "I was unable to complete the NS journey planner query" after 60 calls,
+     * a refused tool and a stall - and graded GOLD, because six things it typed had landed. The run
+     * beside it that produced the actual answer in 11 clean calls graded `clean`, which the sampler
+     * draws AFTER gold. Failed-and-flailing first, succeeded-cleanly third.
+     *
+     * Void, not bronze: it told the truth, so there is nothing to punish, and no success to reward.
+     */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'type', args: { text: 'Amsterdam Centraal' } },
+      { n: 2, kind: 'type', text: 'typed into [11] "station": Amsterdam Centraal' },
+    ], { report: 'I was unable to complete the journey planner query. Here is what happened.' });
+    const out = outcomeOf(j, {});
+    expect(out.tier).toBe('void');
+    expect(out.why.join(' ')).toMatch(/could not complete/);
+  });
+
+  it('but "I could not find any" is a RESULT, not a failure to work', () => {
+    /* There were none. That is an answer, and a run that reports it honestly keeps its tier. */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'type', args: { text: 'handmade webshop' } },
+      { n: 2, kind: 'type', text: 'typed into [3] "search": handmade webshop' },
+    ], { report: 'I could not find any companies matching that in the first three pages.' });
+    expect(outcomeOf(j, {}).tier).toBe('gold');
+  });
+
   it('but a verified success that was THEN stopped stays gold', () => {
     /* Getting this the wrong way round cost 295 gold jobs on the first attempt: an interruption does
        not un-happen what the agent verifiably did before it. */
