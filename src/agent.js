@@ -95,6 +95,12 @@ const WRITE_WORDS = [
   'send', 'verstuur', 'verzend', 'stuur',
   'follow', 'volgen', 'add friend', 'vriend toevoegen', 'connect', 'uitnodig', 'invite',
     'like', 'vind ik leuk', 'share', 'delen', 'publish', 'publiceer', 'submit',
+  /*
+   * publiceren is its own entry because the prefix rule cannot reach it: publiceren and
+   * publiceer diverge at the seventh letter, so startsWith never matched and the ordinary Dutch
+   * publish button went through the gate unchecked. Found by a test written for something else.
+   */
+  'publiceren',
   /* NOT 'save' or 'opslaan'. Every second page has a "Saved items" or an "Opgeslagen" link, and
      blocking those blocks navigation, not writing. The words here have to be things a person only
      ever presses to send something. */
@@ -145,6 +151,20 @@ function looksLikeWrite(el) {
        thread cannot be read without them, and gating them deadlocked the reply flow. */
     if (/bekijk|weergeven|verberg|see more|show more|\bview\b|more repl|more comment|meer reacti|meer antwoord|meer opmerking/.test(rawLabel)) return false;
     if (/^\d+\s*(antwoord|reacti|opmerking|repl|comment)/.test(rawLabel)) return false;
+    /*
+     * WORDS THAT ONLY LOOK LIKE WRITE WORDS, because Dutch compounds.
+     *
+     * The prefix rule below is right and necessary, and it over-reaches. Volgende - the
+     * next-page button - begins with volgen, and Postcode begins with post. Measured live on a
+     * Marktplaats search: a click on Volgende was refused as though it published something to
+     * other people, which stops paginated browsing dead and teaches the agent to work around a
+     * wall that was never meant to be there.
+     *
+     * Named explicitly rather than by loosening the prefix rule. The rule protects real
+     * accounts; the honest cost of matching prefixes in a compounding language is a short list
+     * of exceptions.
+     */
+    if (/^(volgende|vorige|postcode|postbus|antwoordnummer)/.test(label)) return false;
     /* Prefix, not whole word: Dutch inflects these — "plaats" becomes "Plaatsen", "verzend"
        becomes "Verzenden" — and a boundary check rejected exactly the buttons this is for. The
        length cap above is what keeps a prefix match from swallowing a sentence. */
