@@ -1939,7 +1939,7 @@ app.post('/v1/device-runs/trace', authed, (req, res) => {
       if (s.args && typeof s.args === 'object') extra.args = s.args;
       if (s.url) extra.url = String(s.url).slice(0, 300);
       /* The numbered list, which is the only thing that makes a click learnable. */
-      if (s.marks) extra.marks = String(s.marks).slice(0, 2000);
+      if (s.marks) extra.marks = String(s.marks).slice(0, 6000);
       if (kind === 'done' || kind === 'end') continue;   // finish() writes the ending itself
       jobs.step(job, kind, String((s && s.text) || ''), extra);
     }

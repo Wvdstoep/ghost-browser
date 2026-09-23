@@ -45,6 +45,46 @@
  */
 const HANDS = ['look', 'read', 'read_table', 'run_script', 'fetch_data', 'press_key', 'wait_for', 'choose_option', 'tabs', 'switch_tab', 'open', 'click', 'click_text', 'type', 'scroll', 'back', 'note', 'finish', 'make_document', 'upload_file', 'save_totp_secret', 'totp_code', 'hover'];
 
+/*
+ * WHAT EVERY ROLE HAS, WHATEVER ITS LIST SAYS.
+ *
+ * Measured across 2,272 recorded runs: 418 of them asked for a tool their role does not carry, and
+ * 112 went on to report success anyway. The top of that list is not exotic —
+ *
+ *     diagnostics   refused ~120 times
+ *     current_url   refused ~80 times
+ *     finish        refused ~100 times, fifty of them to one role
+ *
+ * None of those is a power. They are how an agent SEES where it is, finds out why a page is broken,
+ * and STOPS. A role denied `finish` cannot end its own work: it runs to the step limit every time,
+ * which is filed as having wandered off and is a large part of why runs end with nothing to judge.
+ * A role denied `diagnostics` meets a blank page and has no way to learn that the request 403'd.
+ *
+ * Restricting a role is about what it may DO to the world — post, buy, message, publish. It was
+ * never meant to be about whether it may look at the address bar. The hand-written lists on roles
+ * the master authors keep omitting these because nobody thinks to list the obvious, so the floor is
+ * applied here rather than trusted to every author in future.
+ *
+ * Deliberately NOT here: `open`, `sweep`, `act`, `screenshot_page`. Navigating somewhere new,
+ * reading whole feeds and doing things other people can see are genuine decisions, and a specialist
+ * kept away from them is kept away on purpose.
+ */
+const FLOOR = ['look', 'read', 'note', 'finish', 'current_url', 'diagnostics', 'use_role'];
+
+/*
+ * `use_role` IS IN THE FLOOR, AND THAT IS THE WHOLE POINT OF IT.
+ *
+ * A role that cannot leave itself leaves the wall exactly where it stood. Measured twice on live
+ * runs: a download refused to facebook.scout because the owner happened to be in the facebook
+ * profile, and save_place refused to google.research because the profile was google. Neither job
+ * was possible from its first step, and in both the agent kept going without the one tool it needed.
+ *
+ * Letting it change role is not a hole in the restrictions. What restrictions are FOR is the acts
+ * other people can see, and those are approval-gated whatever role is worn — nothing reaches the
+ * world because a specialist swapped its hat. What the swap buys is that being handed the wrong
+ * brief stops being fatal.
+ */
+
 /* Moving between stored logins. Any role may need the right account. */
 const LOGINS = ['list_profiles', 'use_profile'];
 
@@ -1663,7 +1703,9 @@ function canonical(name) {
 function toolsFor(name, allTools) {
   const role = get(name);
   if (!role.tools) return allTools;
-  const allowed = new Set(role.tools);
+  /* The floor is added, never subtracted: a role's own list says what it may do, and seeing where
+     it is and being able to stop are not among the things a list should be able to take away. */
+  const allowed = new Set([...role.tools, ...FLOOR]);
   const picked = allTools.filter((t) => allowed.has(t.function && t.function.name));
   /*
    * A role naming a tool that does not exist is a typo that would silently narrow what it can do,
@@ -1694,4 +1736,4 @@ function list() {
 /** Which sites have specialists, for anything that needs to ask per site. */
 const sites = () => [...new Set(Object.values(ROLES).map((r) => r.site).filter(Boolean))];
 
-module.exports = { ROLES, ALIASES, get, canonical, toolsFor, list, sites, useExternal, HANDS, LOGINS, CONVERSATION };
+module.exports = { FLOOR, ROLES, ALIASES, get, canonical, toolsFor, list, sites, useExternal, HANDS, LOGINS, CONVERSATION };

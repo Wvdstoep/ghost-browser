@@ -140,3 +140,58 @@ describe('the engine picks, in descending confidence', () => {
     expect(explainChoice(null)).toBe('');
   });
 });
+
+describe('a goal about somewhere else entirely', () => {
+  /*
+   * MEASURED ON A REAL RUN, NOT IMAGINED.
+   *
+   * The goal named ecb.europa.eu. The profile in use was facebook. The job ran as the facebook
+   * specialist, whose tool list does not carry download_link, so the download was refused at the
+   * first attempt — and the agent then reported that it had downloaded the file anyway. The
+   * verifier caught that claim and filed the run bronze, correctly, but the run had been made
+   * impossible before it started.
+   *
+   * A site specialist earns its place through its playbook FOR THAT SITE. Pointed somewhere else it
+   * is only a smaller toolbox and instructions about the wrong place: strictly worse than a
+   * generalist, and silently so.
+   */
+  const onFacebook = withProfiles({ facebook: { site: 'facebook.com' } });
+
+  it('DOES NOT HAND A FACEBOOK SPECIALIST A JOB ABOUT ecb.europa.eu', () => {
+    const d = roleForTask(
+      { goal: 'Go to https://www.ecb.europa.eu/stats/ and download the CSV', profile: 'facebook' },
+      onFacebook,
+    );
+    expect(d.role).toBe('general');
+    expect(d.source).toBe('elsewhere');
+    expect(d.why).toContain('ecb.europa.eu');
+  });
+
+  it('still offers the profile own role, in case it really was that work', () => {
+    const d = roleForTask({ goal: 'Open https://example.com and read it', profile: 'facebook' }, onFacebook);
+    expect(d.alternatives.some((a) => a.source === 'site')).toBe(true);
+  });
+
+  it('keeps the facebook specialist when the goal names that same site', () => {
+    /* The ordinary case, which must not regress. It arrives by the ADDRESS in the goal rather than
+       the profile fallback — a goal naming facebook.com is answered by the role that knows
+       facebook.com, one rule earlier — so the route differs and the answer is the same. */
+    const d = roleForTask({ goal: 'Read my facebook.com notifications', profile: 'facebook' }, onFacebook);
+    expect(d.role).toBe('facebook-reply-desk');
+    expect(d.source).not.toBe('elsewhere');
+  });
+
+  it('keeps the site specialist when the goal names no address at all', () => {
+    /* "check my groups" is about the profile by default — nothing points elsewhere. */
+    const d = roleForTask({ goal: 'Check my groups for people asking for a developer', profile: 'facebook' }, onFacebook);
+    expect(d.source).toBe('site');
+  });
+
+  it('a named role still wins over all of it', () => {
+    const d = roleForTask(
+      { goal: 'Go to https://www.ecb.europa.eu and download the CSV', profile: 'facebook', named: 'google-search-desk' },
+      onFacebook,
+    );
+    expect(d.source).toBe('named');
+  });
+});

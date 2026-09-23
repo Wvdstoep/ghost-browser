@@ -348,12 +348,52 @@ async function extractElements(page) {
   // 0.85 = a child essentially INSIDE its parent (inner span within the button wrapper → ~1.0 of the
   // small box is covered), which is exactly the nesting we want to collapse. Distinct-but-adjacent
   // controls only partially overlap and stay separate.
+  /*
+   * A STACK AND A LIST LOOK IDENTICAL TO THE RULE ABOVE, AND THEY ARE OPPOSITES.
+   *
+   * Keeping the largest box is right for ONE control drawn as several — the <a> wrapper and its
+   * inner spans all cover the same place, and numbering each drew five boxes for one button.
+   *
+   * It is exactly wrong for several controls inside one box. overlapFrac divides by the SMALLER
+   * area, so a card sitting inside a panel scores ~1.0 and is dropped in favour of the panel.
+   * Measured on Google Maps: look() returned six elements and the fifth was a single div holding
+   * every search result concatenated — "Hydraulik Wrocław -Pogotowie Hydrauliczne WrocławHydraulik
+   * W…". The agent could not click any one plumber, looked three times, and was forced to act by
+   * the observe limiter.
+   *
+   * Two conditions separate them, and both are needed. An icon and a label inside one button do not
+   * overlap each other either, so "children that sit apart" alone would split every button in two:
+   *
+   *   THREE OR MORE children that do not overlap one another — a stack has one place, a list has
+   *     several, and two is the ordinary icon-plus-label button.
+   *   THE PARENT IS MUCH BIGGER THAN ANY CHILD — a button wrapper is barely larger than its label,
+   *     while a panel of five results is several times one card.
+   */
+  const looksLikeAList = (parent, kids) => {
+    const distinct = [];
+    for (const c of kids) if (!distinct.some((d) => overlapFrac(c, d) > 0.4)) distinct.push(c);
+    if (distinct.length < 3) return null;
+    const biggest = Math.max(...distinct.map((c) => c.width * c.height));
+    if (biggest <= 0 || (parent.width * parent.height) < biggest * 3) return null;
+    return distinct;
+  };
+
   const dedupe = (list) => {
     const kept = [];
+    const swallowed = new Map();   // index in `kept` -> the boxes it absorbed
     for (const e of [...list].sort((a, b) => (b.width * b.height) - (a.width * a.height))) {
-      if (!kept.some((k) => overlapFrac(e, k) > 0.85)) kept.push(e);
+      const at = kept.findIndex((k) => overlapFrac(e, k) > 0.85);
+      if (at < 0) { kept.push(e); continue; }
+      if (!swallowed.has(at)) swallowed.set(at, []);
+      swallowed.get(at).push(e);
     }
-    return kept;
+    const out = [];
+    kept.forEach((k, i) => {
+      const kids = looksLikeAList(k, swallowed.get(i) || []);
+      /* A container of distinct controls hands back its children; anything else stays one control. */
+      if (kids) out.push(...kids); else out.push(k);
+    });
+    return out;
   };
   const actions = dedupe(sized.filter((e) => isAction(e))).sort(bySpot);
   // rest excludes EVERY action (not just the kept ones) so a de-duped inner span cannot leak back in.

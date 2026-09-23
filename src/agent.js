@@ -429,6 +429,7 @@ const TOOLS = [
    */
   { type: 'function', function: { name: 'use_profile', description: 'Switch to one of the stored logins — use this when the job is about a site your current session is not signed in to. Call list_profiles first to see what is available.', parameters: { type: 'object', properties: { profile: { type: 'string' } }, required: ['profile'] } } },
   { type: 'function', function: { name: 'use_my_profile', description: 'On FACEBOOK: switch back to the owner\'s PERSONAL profile if Facebook is acting as a Page. While it acts as a Page, your groups and personal things are hidden. This is deterministic — it does not need the account menu — so call it FIRST on Facebook, before trying to read groups.', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'use_role', description: 'Change which specialist you are working as, when this job needs something your current role cannot do. A role carries a playbook for a kind of work and the tools that go with it — so a download needs one that can fetch files, and recording businesses off a map needs one that can save places. Call this the moment a tool is refused, rather than working around it: the refusal means you were given the wrong specialist, not that the job is impossible. Use "general" when nothing more specific fits; it can reach everything.', parameters: { type: 'object', properties: { role: { type: 'string', description: 'the role to work as from now on; pass an unknown name to be told which exist' }, why: { type: 'string', description: 'why this job needs it, in one line' } }, required: ['role'] } } },
   { type: 'function', function: { name: 'list_profiles', description: 'The logins available: which site each one is signed in to, and which you are using now.', parameters: { type: 'object', properties: {} } } },
 
   /*
@@ -991,8 +992,21 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
    * The role decides the instructions and what is within reach. Resolved HERE from the registry —
    * a caller picks a name and can neither write a prompt nor grant itself a tool.
    */
-  const theRole = roles.get(role);
-  const myTools = roles.toolsFor(role, TOOLS);
+  /*
+   * THE ROLE IS STATE NOW, NOT A CONSTANT.
+   *
+   * It used to be resolved once and fixed for the whole run, which meant capability was decided by
+   * WHERE THE OWNER HAPPENED TO BE LOGGED IN rather than by what was asked for. Measured twice on
+   * live runs: a download refused to facebook.scout because the profile was facebook, and
+   * save_place refused to google.research because the profile was google. Both jobs were impossible
+   * from the first step and nothing said so until the run was over.
+   *
+   * A role should describe how to work somewhere, not what the agent may never become. It can now
+   * change its own — see use_role below — so a specialist that turns out to be the wrong one is a
+   * correction the agent makes, rather than a wall it spends sixty steps against.
+   */
+  let theRole = roles.get(role);
+  let myTools = roles.toolsFor(role, TOOLS);
   /*
    * AND THE ROLE IS ENFORCED, not merely advertised.
    *
@@ -1006,13 +1020,13 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
    * discretion. Only KNOWN tools are refused; an unknown name still falls through to be handled as it
    * always was.
    */
-  const allowedTools = new Set(myTools.map((t) => t.function && t.function.name).filter(Boolean));
+  let allowedTools = new Set(myTools.map((t) => t.function && t.function.name).filter(Boolean));
   const everyToolName = new Set(TOOLS.map((t) => t.function && t.function.name).filter(Boolean));
   /* Only a role that ASKED for it may be handed an own-origin, and it still only covers the one
      origin this job was sent to. A role that never declared it gets nothing, whatever is passed. */
-  const ground = ownGround(theRole.trustsOwnOrigin ? ownOrigin : null);
-  const site = theRole.site || null;
-  const book = site ? playbook.asContext(site) : '';
+  let ground = ownGround(theRole.trustsOwnOrigin ? ownOrigin : null);
+  let site = theRole.site || null;
+  let book = site ? playbook.asContext(site) : '';
 
   const messages = [{ role: 'system', content: systemPrompt({
     goal: job.goal, companyContext: ctx, meContext: me.asContext(), profileList,
@@ -1020,6 +1034,40 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   }) }];
   if (book) jobsStore.step(job, 'note', `starting from what has worked before on ${site}`);
   job.transcript = messages;
+
+  /**
+   * BECOME A DIFFERENT SPECIALIST, MID-RUN.
+   *
+   * Everything the role decides is recomputed: the tools, what is enforced, the site playbook, and
+   * the system message itself — the model must be TOLD what it can now do, or it will keep working
+   * from the instructions it was given at the start and never use what it just gained.
+   *
+   * Returns a sentence for the agent to read, because a silent capability change is indistinguishable
+   * from nothing having happened.
+   */
+  const becomeRole = (want, why) => {
+    const row = roles.get(want);
+    if (!row || !row.name) {
+      const names = (roles.list() || []).map((r) => r.name).slice(0, 40).join(', ');
+      return `There is no role called "${want}". The ones that exist are: ${names}. "general" can reach every tool.`;
+    }
+    const was = theRole.name || role;
+    theRole = row;
+    myTools = roles.toolsFor(row.name, TOOLS);
+    allowedTools = new Set(myTools.map((x) => x.function && x.function.name).filter(Boolean));
+    ground = ownGround(theRole.trustsOwnOrigin ? ownOrigin : null);
+    site = theRole.site || null;
+    book = site ? playbook.asContext(site) : '';
+    /* The instructions travel with the role, so the system message is rewritten in place — the
+       transcript keeps its shape and the model simply finds itself better briefed. */
+    messages[0] = { role: 'system', content: systemPrompt({
+      goal: job.goal, companyContext: ctx, meContext: me.asContext(), profileList,
+      autoAct: settings.autoAct, role: theRole, playbookContext: book,
+    }) };
+    job.role = theRole.name;
+    jobsStore.step(job, 'note', `working as ${theRole.name} now (was ${was})${why ? ` — ${why}` : ''}`);
+    return `You are working as ${theRole.name} now. Your tools are: ${[...allowedTools].join(', ')}. Carry on with the goal.`;
+  };
 
   /*
    * ARM THE ROUTE-CARD RECORDER for a Herald walk. The role name IS the intent (herald.facebook.setup,
@@ -1068,6 +1116,8 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
     setSession: (next) => { session = next; },
     observe,
     step: (kind, text, extra) => jobsStore.step(job, kind, text, extra || {}),
+    /* For what is only knowable after the step was written — see jobs.annotate. */
+    annotate: (s, extra) => jobsStore.annotate(job, s, extra),
     switchedSession: (info) => jobsStore.switchedSession(job, info),
     switchProfile,
     describeProfiles,
@@ -1513,7 +1563,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
           /* A tool this role was never given is refused, whoever named it. See allowedTools above. */
           if (everyToolName.has(call.name) && !allowedTools.has(call.name)) {
             jobsStore.step(job, 'blocked', `refused ${call.name} — this walk's role (${role}) does not have it`);
-            observe(`Refused: ${call.name} is not one of your tools on this job. You have: ${[...allowedTools].join(', ')}.`
+            observe(`Refused: ${call.name} is not one of your tools as ${theRole.name || role}. You have: ${[...allowedTools].join(', ')}. If this job genuinely needs ${call.name}, call use_role to work as a specialist that has it — being handed the wrong role is not a reason to give up on the goal.`
               + ' Use one of those, or call finish and say what you could not do.');
             continue;
           }
@@ -2040,6 +2090,15 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 ? `Saved "${lead.name}"${sent}.${lead.postUrl ? '' : ' NOTE: you did not give a link to the post — go back, click the post date to get its permalink, and save it again with postUrl set. Without it nobody can open this lead.'} ${job.leads.length} lead(s) so far.`
                   + (lead.leadId ? ` Use leadId ${lead.leadId} when you act on them, so what you send is recorded.` : '')
                 : 'Already saved — do not record the same person twice.');
+              break;
+            }
+            case 'use_role': {
+              /*
+               * The agent correcting its own brief. Deliberately not gated on anything: a role that
+               * could not escape itself would leave the wall exactly where it was, and the acts that
+               * matter — anything other people can see — are approval-gated whatever role is worn.
+               */
+              observe(becomeRole(String(a.role || '').trim(), String(a.why || '').trim()));
               break;
             }
             case 'save_place': {

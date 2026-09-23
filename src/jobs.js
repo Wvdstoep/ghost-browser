@@ -131,6 +131,23 @@ function step(j, kind, text, extra = {}) {
   return s;
 }
 
+/**
+ * ADD TO A STEP THAT IS ALREADY WRITTEN.
+ *
+ * Some of what a step means is only known after it finishes. `open` is recorded before the
+ * navigation — deliberately, so a page that never loads still leaves a trace — and the numbered
+ * list of what is on that page only exists once it has. Without this the list is shown to the model
+ * and dropped from the record, which is exactly what made every click after an open unlearnable.
+ *
+ * Persists, because a mutation nobody writes down is the bug this is fixing.
+ */
+function annotate(j, step, extra) {
+  if (!j || !step || !extra) return step;
+  Object.assign(step, extra);
+  persist(j);
+  return step;
+}
+
 function addLead(j, lead) {
   const l = { at: now(), ...lead };
   /* The same post found twice through two different groups is one lead. Without this the list looks
@@ -515,4 +532,4 @@ function storeData(j, key, value) {
   return j.data;
 }
 
-module.exports = { create, step, setReport, setVerifier, judge, isOver, switchedSession, addLead, addResult, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
+module.exports = { create, step, annotate, setReport, setVerifier, judge, isOver, switchedSession, addLead, addResult, addGig, addReply, addReach, addKeywords, addSearch, addGscToken, addGscHealth, addOpportunity, storeData, propose, decide, say, finish, stop, get, listFor, listAll, view, loadHistory, bus, jobs, DIR };
