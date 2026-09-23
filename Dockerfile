@@ -40,6 +40,11 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-audit --no-fund
 
 COPY src ./src
+# The set builder runs as a spawned child of the server, and the round scripts are served to any
+# laptop that offers to train. Neither lives on a developer machine: without them in the image the
+# nightly loop fails at the first step, and the second machine can never be set up at all.
+COPY scripts ./scripts
+COPY training ./training
 COPY docs ./docs
 COPY public ./public
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
