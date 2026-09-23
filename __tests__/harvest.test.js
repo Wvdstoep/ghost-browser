@@ -44,6 +44,31 @@ describe('what it refuses, in code rather than in an instruction', () => {
     expect(vet(['Log in to the portal and download the invoice list']).kept).toEqual([]);
   });
 
+  it('keeps the ones where a noun is not an act, which the flat list refused', () => {
+    /*
+     * The first version listed the verbs flat and threw away a Project Gutenberg task on its very
+     * first real batch: "... each book in the first five results" was refused as an outward act
+     * because book was on the list. So are post, order, like, share, buy and pay. That does not
+     * only waste a model call, it silently excludes every subject about books, orders or prices.
+     */
+    const fine = [
+      'Go to gutenberg.org, choose Dutch from the language dropdown, and record the title and author of each book in the first five results',
+      'On marktplaats.nl set the sort order to price from low to high and record the ten cheapest adverts',
+      'Read the first post in that forum thread and summarise what the person is asking for',
+      'Compare what three Dutch hosts charge and record the price of each order size',
+    ];
+    expect(vet(fine).kept).toHaveLength(4);
+  });
+
+  it('still refuses them where a verb can actually stand', () => {
+    const r = vet([
+      'Post a reply to the top comment on that thread',
+      'Book a table at that restaurant for two people',
+      'Find the cheapest flight and buy it before the price goes up again',
+    ]);
+    expect(r.kept).toEqual([]);
+    expect(r.rejected).toHaveLength(3);
+  });
   it('refuses the sites that refuse this address', () => {
     /* LinkedIn and Upwork read the cluster's IP as a robot. A blocked walk teaches the model what a
        block page looks like and nothing else; that work belongs on the owner's own device. */

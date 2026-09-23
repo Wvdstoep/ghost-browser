@@ -60,7 +60,23 @@ const KEEP_HISTORY = 300;
  * model has a bad day. A rejected prompt costs nothing — the engine simply asks for more — so these
  * err heavily towards refusing.
  */
-const OUTWARD = /\b(post|posting|comment|reply|send|message|dm|publish|apply|bid|subscribe|unsubscribe|follow|like|share|upvote|downvote|book|buy|order|purchase|pay|checkout|donate|vote)\b/i;
+/*
+ * A NOUN IS NOT AN ACT, AND HALF THESE WORDS ARE BOTH.
+ *
+ * The first version listed the verbs flat and threw away a perfectly good Project Gutenberg task on
+ * its very first batch: "open the first 5 results ... each book" was refused as an outward act
+ * because `book` was on the list. So are `post`, `order`, `like`, `share`, `buy` and `pay` — every
+ * one of them an ordinary noun. Refusing those does not merely waste a model call, it silently
+ * excludes whole subjects: anything about books, orders, posts or prices.
+ *
+ * So two lists. The first have no innocent reading and match anywhere. The second count only where
+ * a verb can actually stand — the start of a clause, or after and/then/to/please/also — which is
+ * where an instruction to DO something sits. "Set the sort order to price", "in order to" and "the
+ * first post" all survive; "Post a reply", "Send them a message" and "Book a table" do not.
+ */
+const OUTWARD_ALWAYS = /\b(comment|commenting|reply|replying|message|messaging|dm|publish|publishing|subscribe|unsubscribe|upvote|downvote|donate|checkout|purchase|retweet|repost)\b/i;
+const OUTWARD_VERB = /(?:^|[.;:!?]\s*|\band\s+|\bthen\s+|\bto\s+|\bplease\s+|\balso\s+)(post|send|apply|bid|follow|like|share|book|buy|order|pay|vote|rate|review)\b/i;
+const OUTWARD = { test: (s) => OUTWARD_ALWAYS.test(s) || OUTWARD_VERB.test(s) };
 const ACCOUNT = /\b(sign ?up|signup|register|registration|create an? account|log ?in|login|sign ?in|password|verify my|confirm my email)\b/i;
 /*
  * Off limits from a datacentre address. LinkedIn and Upwork both read the cluster's IP as a robot
