@@ -32,14 +32,155 @@ Usage:
   python train_round.py --data ... --hours 8 --hub https://gb.example --token XXX --device laptop-carla
 """
 import argparse
+import io
 import json
 import os
+import sys as _sys
 import random
 import re
 import time
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
+
+# ── MAKE torch LOADABLE WHEN THE BROWSER IS WHAT STARTED US ─────────────────────────────────────
+#
+# Measured, not guessed. A round dispatched by the engine died instantly at `import torch`:
+#
+#   OSError: [WinError 1114] A dynamic link library (DLL) initialization routine failed.
+#   Error loading "...	orch\lib\c10.dll" or one of its dependencies.
+#
+# The same import from a shell takes 176 seconds and succeeds. The environment the browser hands
+# down is byte-identical to a working shell's apart from the four variables it sets itself; the child
+# is in no job object and under no process mitigation; and a plain JVM spawning it the same way works.
+# So the difference is not torch, not the venv, not the environment and not the spawn.
+#
+# Loading each of torch's own libraries by hand, from inside the process the browser started, under
+# three different search rules, found it exactly:
+#
+#                      browser-started child      shell
+#   c10.dll  0x1100          WinError 1114        loaded     <- the flags torch itself uses
+#   c10.dll  0x0800          loaded               loaded
+#   c10.dll  0x0000          loaded               loaded
+#   every other lib          loaded               loaded
+#
+# One file, and only under LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS —
+# which is the one rule set that searches neither PATH nor the current directory. So c10.dll is
+# reachable and its dependencies are resolvable; they are simply not all resolvable under those
+# flags in this process.
+#
+# LoadLibrary is reference-counted and idempotent: a module already resident is handed straight back.
+# So loading c10.dll here, under rules that DO work, means torch's own attempt a moment later finds
+# it loaded and carries on. torch is not patched, nothing is copied, and on a machine where the
+# import already works this is a no-op that costs a millisecond.
+def _preload_torch_libs():
+    if os.name != "nt":
+        return "not windows"
+    try:
+        import ctypes
+        from ctypes import wintypes
+        lib = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(_sys.executable)),
+                                            "..", "Lib", "site-packages", "torch", "lib"))
+        if not os.path.isdir(lib):
+            return "no torch/lib at %s" % lib
+        # Puts torch/lib into the DEFAULT_DIRS search set, which is what torch's own flags consult.
+        try:
+            os.add_dll_directory(lib)
+        except Exception:
+            pass
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.LoadLibraryExW.restype = wintypes.HMODULE
+        k32.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+        done = []
+        for name in ("c10.dll",):
+            p = os.path.join(lib, name)
+            if not os.path.isfile(p):
+                done.append("%s missing" % name)
+                continue
+            # System32 first, then default dirs, then the old PATH-searching rules. The first that
+            # works wins; the point is only that the module ends up resident.
+            for flags in (0x00000800, 0x00001000, 0x00000000):
+                ctypes.set_last_error(0)
+                if k32.LoadLibraryExW(p, None, flags):
+                    done.append("%s loaded with %s" % (name, hex(flags)))
+                    break
+            else:
+                done.append("%s could not be loaded under any rules" % name)
+        return done
+    except Exception as e:
+        return repr(e)
+
+
+# The browser sits in a Windows JOB OBJECT and a child it starts inherits that job. A job can cap
+# the memory a process may commit, and torch commits several hundred megabytes of DLL while it
+# initialises — which fails as WinError 1114, the same error a genuinely broken DLL gives. Asked
+# from inside the child, because that is the only process that is actually in the job.
+def _job_limits():
+    try:
+        import ctypes
+        from ctypes import wintypes
+        class BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                        ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t),
+                        ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+        class IOC(ctypes.Structure):
+            _fields_ = [("ReadOperationCount", ctypes.c_uint64), ("WriteOperationCount", ctypes.c_uint64),
+                        ("OtherOperationCount", ctypes.c_uint64), ("ReadTransferCount", ctypes.c_uint64),
+                        ("WriteTransferCount", ctypes.c_uint64), ("OtherTransferCount", ctypes.c_uint64)]
+        class EXT(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", BASIC), ("IoInfo", IOC),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        in_job = wintypes.BOOL()
+        k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(in_job))
+        info = EXT()
+        ok = k32.QueryInformationJobObject(None, 9, ctypes.byref(info), ctypes.sizeof(info), None)
+        flags = info.BasicLimitInformation.LimitFlags
+        return {"in_job": bool(in_job), "queried": bool(ok),
+                "limit_flags": hex(flags),
+                "process_memory_limit": info.ProcessMemoryLimit,
+                "job_memory_limit": info.JobMemoryLimit,
+                "peak_process_memory": info.PeakProcessMemoryUsed,
+                "active_process_limit": info.BasicLimitInformation.ActiveProcessLimit,
+                "breakaway_ok": bool(flags & 0x00000800),
+                "silent_breakaway_ok": bool(flags & 0x00001000),
+                "caps_process_memory": bool(flags & 0x00000100),
+                "caps_job_memory": bool(flags & 0x00000200)}
+    except Exception as e:
+        return {"error": repr(e)}
+
+
+# ── WHAT THIS PROCESS WAS HANDED, WRITTEN DOWN BEFORE THE FIRST HEAVY IMPORT ────────────────────
+#
+# A round dispatched by the engine died at `import torch` with WinError 1114 — the DLL loaded, its
+# initialisation routine did not. The same import run from a shell takes 176 seconds and succeeds,
+# and a Java process spawning it exactly the way the desktop node does also succeeds. So the
+# difference is not torch, not the venv, and not the spawn: it is something in the environment the
+# browser hands down, and the only way to see that environment is from inside a child it started.
+#
+# The preload is the FIX and stands on its own line: it must not be a side effect of writing a
+# diagnostic file. An earlier version called it from inside the json.dump argument list, which meant
+# a full disk or a locked file would have quietly skipped the one thing that makes the import work.
+_PRELOADED = _preload_torch_libs()
+
+# The record of what this process was handed. Cheap, always on, overwritten each round, and never
+# fatal: a round must not die because it could not write a note about itself.
+try:
+    _env = {k: v for k, v in os.environ.items() if "TOKEN" not in k.upper() and "KEY" not in k.upper()}
+    with io.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "round-env.json"),
+                 "w", encoding="utf-8") as _fh:
+        json.dump({"executable": _sys.executable, "cwd": os.getcwd(),
+                   "path": _env.get("PATH", ""), "env": _env, "syspath": _sys.path,
+                   "job_limits": _job_limits(), "preload": _PRELOADED}, _fh, indent=1)
+except Exception:
+    pass
 
 import torch
 from torch.utils.data import DataLoader, Dataset
