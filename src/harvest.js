@@ -302,6 +302,23 @@ function take(jobId) {
   return prompt;
 }
 
+/**
+ * NAME THE WALK THAT THIS PROMPT BECAME.
+ *
+ * take() records the prompt before startWalk has answered, so it cannot know the job id yet - and
+ * the history filled up with "(no id)". Auditing the collector then meant matching runs to prompts
+ * by their goal TEXT, which works only because nothing expands a harvested goal, and would break
+ * the day anything did. The id arrives a moment later; this is where it is written down.
+ */
+function attachJob(jobId) {
+  const s = load();
+  const h = s.history || [];
+  if (!h.length || !jobId) return null;
+  h[h.length - 1] = { ...h[h.length - 1], jobId: String(jobId) };
+  save(s);
+  return h[h.length - 1];
+}
+
 /** Add vetted prompts, newest last, bounded. */
 function push(prompts, aiming = []) {
   const s = load();
@@ -343,6 +360,6 @@ function state({ busy = false, capPerHour = CAP_PER_HOUR, now = Date.now() } = {
 }
 
 module.exports = {
-  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, WALK_SILENT_MS,
+  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, attachJob, WALK_SILENT_MS,
   CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE,
 };

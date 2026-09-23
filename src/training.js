@@ -296,7 +296,18 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       lastAt: (r.lines && r.lines.length) ? r.lines[r.lines.length - 1].at : r.startedAt,
       baseline: r.baseline ? r.baseline.agreement_pct : null,
       result: r.result ? r.result.agreement_pct : null,
-      lines: (r.lines || []).slice(-6),
+      /*
+       * ALL of them for the round that is RUNNING, six for the ones that are over.
+       *
+       * This sent six for every round, and the screen could therefore never show more than six -
+       * so the shape of a round, a loss falling or wandering, an adapter checkpointed every half
+       * hour, was invisible on the one surface built to show it. Forty lines were being kept and
+       * thirty-four thrown away on the way out.
+       *
+       * Only the live round gets the full set, because that is the only one anybody watches line by
+       * line, and twenty finished rounds at forty lines each is a payload nobody reads.
+       */
+      lines: (r.lines || []).slice(r.status === 'running' ? -60 : -6),
     })),
     /*
      * The trainers carry their own round with them, so the device hub renders a row straight from
