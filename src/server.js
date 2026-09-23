@@ -1636,6 +1636,260 @@ app.post('/v1/training/rounds/:id/promote', authed, (req, res) => {
   res.json(r);
 });
 
+/* ── THE LOOP STARTS ITSELF ────────────────────────────────────────────────────────────────────
+ *
+ * Every round until now was started by a person typing. As a way to build the pipeline that was
+ * fine; as a system it is nothing, because the entire point was a loop that improves the model
+ * without anybody driving it.
+ *
+ * The decision lives in trainingPlan.js as a pure function and is tested there. These are only the
+ * doors: the owner's switch, building a set, fetching a set, and acting on the decision.
+ */
+const trainingPlan = require('./trainingPlan');
+
+/** The switch. Absolute: no rule in the planner overrides it. */
+app.get('/v1/training/auto', authed, (_req, res) => res.json({ on: training.autoOn() }));
+app.post('/v1/training/auto', authed, (req, res) => {
+  const on = training.setAuto(!!(req.body || {}).on);
+  log.info(`training: automatic rounds ${on ? 'ON' : 'OFF'}`);
+  res.json({ on });
+});
+
+/**
+ * BUILD TONIGHT'S SET — spawned, never in this process.
+ *
+ * It reads every job on the volume, which today is 2,225 files and 284 MB. Doing that inline would
+ * stall every request the browser is serving for the length of the build, on the one node that is
+ * also the controller. It refuses to write when the pre-flight gate halts, which is the point: a
+ * stale set that is known-good beats a fresh one nobody checked.
+ */
+let buildRunning = false;
+function buildSet(onDone) {
+  if (buildRunning) return false;
+  buildRunning = true;
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [require('path').join(__dirname, '..', 'scripts', 'build-traceset.js')],
+    { cwd: require('path').join(__dirname, '..'), env: process.env });
+  let tail = '';
+  const keep = (b) => { tail = (tail + b.toString()).slice(-4000); };
+  child.stdout.on('data', keep);
+  child.stderr.on('data', keep);
+  child.on('close', (code) => {
+    buildRunning = false;
+    log.info(`training: set build exited ${code}`);
+    if (code !== 0) log.warn(`training: build refused — ${tail.split('\n').filter((l) => l.startsWith('HALT')).join('; ') || tail.slice(-300)}`);
+    if (onDone) { try { onDone(code === 0, tail); } catch (e) { /* the caller is best-effort */ } }
+  });
+  return true;
+}
+
+app.post('/v1/training/build', authed, (_req, res) => {
+  const started = buildSet(null);
+  res.json(started ? { building: true } : { building: false, why: 'a build is already running' });
+});
+
+/**
+ * THE SET ITSELF, so a round can run on a machine that has never seen it.
+ *
+ * "Whichever laptop is connected" only means anything if the laptop can get the data. The device
+ * compares its local manifest with this one and downloads only when they differ — the set is 140 MB
+ * and it changes once a day, so fetching it every round would be most of the cost of a round.
+ */
+app.get('/v1/training/set/:name', authed, (req, res) => {
+  const ok = ['train.jsonl', 'eval.jsonl', 'reject.jsonl', 'manifest.json'];
+  if (!ok.includes(req.params.name)) return res.status(404).json({ error: 'no such file' });
+  const p = require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', req.params.name);
+  if (!require('fs').existsSync(p)) return res.status(404).json({ error: 'the set has not been built yet' });
+  res.sendFile(p);
+});
+
+/** What the planner currently thinks, and why. Read-only — useful on the screen and in a log. */
+function planNow() {
+  const pathx = require('path');
+  const base = process.env.PROFILE_DIR || '/profiles';
+  let manifest = null;
+  try { manifest = JSON.parse(require('fs').readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8')); } catch (e) { manifest = null; }
+  const corpus = corpusLib.tally({
+    dir: jobs.DIR,
+    cacheFile: pathx.join(base, 'training', 'corpus-cache.json'),
+    judge: (j) => require('./verify').outcomeOf(j, {
+      files: () => fileAssets.list(),
+      recordings: () => { try { return [...recorder.list()]; } catch (e) { return []; } },
+      runs: (id) => workflows.readRun(id),
+    }),
+  });
+  /*
+   * ABLE AND ALLOWED. A machine appears here if it CAN train — it says so in its capabilities, and
+   * it only says so when a drive has room and the environment is built. The planner then picks only
+   * from the ones the owner has ALLOWED, because a laptop joining the ring must never enlist itself
+   * into grinding all night.
+   */
+  let trainers = [];
+  try {
+    trainers = (deviceHub.deviceList() || [])
+      .filter((d) => d.caps && (d.caps.trainer || (d.caps.features || []).includes('train_round') || (d.caps.features || []).includes('train_setup')))
+      .map((d) => ({
+        name: d.name || d.deviceId, deviceId: d.deviceId, online: !!d.online,
+        able: !!(d.caps && d.caps.trainer),
+        freeGb: (d.caps && d.caps.trainerFreeGb) || 0,
+        home: (d.caps && d.caps.trainerHome) || '',
+        missing: (d.caps && d.caps.trainerMissing) || [],
+        canSetUp: !!(d.caps && d.caps.trainerCanSetUp),
+      }));
+  } catch (e) { trainers = []; }
+  const st = training.state({ corpus, manifest, trainers });
+  const usable = trainers.filter((x) => x.able && training.trainerOn(x.deviceId));
+  return {
+    plan: trainingPlan.decide({
+      corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
+      trainers: usable, auto: training.autoOn(), serving: st.serving,
+    }),
+    trainers, usable,
+  };
+}
+
+app.get('/v1/training/plan', authed, (_req, res) => {
+  try { res.json(planNow().plan); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * ACT ON THE DECISION.
+ *
+ * `force` is the owner pressing "run a round now": it skips the reasons to WAIT (not enough new
+ * data, the set already covered) but never the reasons it CANNOT run — no machine, no set, a round
+ * already going. Those are not preferences.
+ */
+async function dispatchRound({ force = false } = {}) {
+  const { plan, usable } = planNow();
+  if (!plan.run && !force) return plan;
+  if (!plan.run && force) {
+    const hard = /already running|no machine|no training set|still reading/.test(plan.why || '');
+    if (hard) return { ...plan, forced: true };
+  }
+  const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
+  if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
+  try {
+    await deviceHub.runCommand(dev.deviceId, {
+      path: '/v1/train_round',
+      body: { base: dev.base || '', hours: Number(process.env.TRAIN_HOURS || 0) || 6 },
+    }, 30000);
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}`);
+    return { run: true, why: plan.why, device: dev.device, forced: !!force };
+  } catch (e) {
+    log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
+    return { run: false, why: `${dev.device} would not take it: ${e.message}` };
+  }
+}
+
+app.post('/v1/training/dispatch', authed, async (req, res) => {
+  try { res.json(await dispatchRound({ force: !!(req.body || {}).force })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * THE TICK. Ten minutes, because nothing here is urgent and a round is hours long.
+ *
+ * Deliberately not a clock-based schedule. "Train at 2am" is the wrong rule for machines in unknown
+ * places with lids that close; "train when there is something to learn and a machine free to learn
+ * it" is true at any hour and needs no timezone.
+ */
+setInterval(() => {
+  try {
+    if (!training.autoOn()) return;
+    const { plan } = planNow();
+    /* The set has to exist before anything can be decided about it, and it should be rebuilt as
+       late as possible so a round learns from everything recorded up to the moment it starts. */
+    if (/no training set/.test(plan.why || '')) { buildSet(null); return; }
+    if (!plan.run) return;
+    buildSet((ok) => { if (ok) dispatchRound({}).catch(() => {}); });
+  } catch (e) { /* a scheduler that throws must not take the browser with it */ }
+}, 10 * 60 * 1000);
+
+/** The owner allowing, or forbidding, one machine to train. Default is forbidden. */
+app.post('/v1/training/trainers/:deviceId', authed, (req, res) => {
+  const on = training.setTrainer(req.params.deviceId, !!(req.body || {}).on);
+  log.info(`training: ${req.params.deviceId} is ${on ? 'allowed' : 'not allowed'} to train`);
+  res.json({ deviceId: req.params.deviceId, on });
+});
+
+/**
+ * SET A MACHINE UP TO TRAIN — the command that makes an unable machine able.
+ *
+ * Offered by every desktop node, not only ready ones, because this is what builds the environment
+ * in the first place. It refuses on a full disk rather than failing half way through a
+ * two-gigabyte download, and it reports what it is doing as it goes.
+ */
+app.post('/v1/training/trainers/:deviceId/setup', authed, async (req, res) => {
+  try {
+    const out = await deviceHub.runCommand(req.params.deviceId, { path: '/v1/train_setup', body: {} }, 30000);
+    res.json({ asked: true, reply: out });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+/**
+ * THE SLICE — the turns one round should train on, and nothing else.
+ *
+ * A trainer never receives the whole set. It is 141 MB, a round reaches about seven hundred turns
+ * of it, and "whichever laptop is connected" has to include the one with four gigabytes free.
+ * Drawing here also makes two machines' slices disjoint by construction; two devices sampling
+ * independently would overlap and the second laptop would add almost nothing, silently.
+ */
+app.get('/v1/training/slice', authed, (req, res) => {
+  try {
+    const pathx = require('path');
+    const base = process.env.PROFILE_DIR || '/profiles';
+    const file = pathx.join(base, 'traceset', 'train.jsonl');
+    if (!require('fs').existsSync(file)) return res.status(404).json({ error: 'the set has not been built yet' });
+    const manifest = JSON.parse(require('fs').readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8'));
+    const s = require('./slice').draw({
+      file, builtAt: manifest.builtAt,
+      want: Math.min(5000, Math.max(50, Number(req.query.turns) || 700)),
+      roundId: String(req.query.round || ''),
+    });
+    res.set('X-Slice-Count', String(s.count));
+    res.set('X-Slice-Remaining', String(s.remaining));
+    res.type('application/x-ndjson').send(s.jsonl);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * THE SCORING TURNS — the same ones every time, on purpose.
+ *
+ * Comparing two rounds is only meaningful on identical turns, so this is deterministic and small:
+ * the first N of the evaluation split, which was already cut BY JOB so no job contributes to both
+ * training and scoring. A megabyte, not twenty-one.
+ */
+app.get('/v1/training/evalslice', authed, (req, res) => {
+  try {
+    const pathx = require('path');
+    const file = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'eval.jsonl');
+    if (!require('fs').existsSync(file)) return res.status(404).json({ error: 'the set has not been built yet' });
+    const want = Math.min(1000, Math.max(20, Number(req.query.turns) || 120));
+    const out = [];
+    const NL = String.fromCharCode(10);
+    for (const ln of require('fs').readFileSync(file, 'utf8').split(NL)) {
+      if (ln.trim()) out.push(ln);
+      if (out.length >= want) break;
+    }
+    res.type('application/x-ndjson').send(out.join(NL));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * THE ROUND SCRIPTS, so a machine that has never trained can become one that does.
+ *
+ * They live in the image rather than on any one laptop, which is what makes "whichever laptop is
+ * connected" true. Without this the second machine needs somebody to walk over with a USB stick,
+ * and the setup is only automatic on the machine that happened to be built first.
+ */
+app.get('/v1/training/script/:name', authed, (req, res) => {
+  const ok = ['train_round.py', 'evaluate.py'];
+  if (!ok.includes(req.params.name)) return res.status(404).json({ error: 'no such script' });
+  const p = require('path').join(__dirname, '..', 'training', req.params.name);
+  if (!require('fs').existsSync(p)) return res.status(404).json({ error: 'not in this build' });
+  res.type('text/plain').send(require('fs').readFileSync(p, 'utf8'));
+});
+
 app.get('/v1/agent/roles', authed, (_req, res) => res.json({ roles: roles.list() }));
 
 /*

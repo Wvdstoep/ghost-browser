@@ -89,7 +89,7 @@ function noteRound(id, line) {
  * split; this only records it. Promotion is a separate, explicit act — a round that finished is not
  * a round that won, and conflating them is how a worse model reaches production quietly.
  */
-function endRound(id, { status = 'done', baseline = null, result = null, why = '', adapter = '' } = {}) {
+function endRound(id, { status = 'done', baseline = null, result = null, why = '', adapter = '', trained = 0, drawSeed = null } = {}) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
@@ -98,6 +98,16 @@ function endRound(id, { status = 'done', baseline = null, result = null, why = '
   r.baseline = baseline;
   r.result = result;
   r.why = String(why || '').slice(0, 400);
+  /*
+   * HOW MANY TURNS THIS ROUND ACTUALLY TRAINED ON — not how many were available to it.
+   *
+   * `turns` above is the size of the set the device was handed: 23,233. What it reached in six
+   * hours was 685. Coverage is decided by summing this field, and summing the other one instead
+   * would report the whole corpus as learned after a single night, at which point the loop
+   * correctly concludes there is nothing left to do and quietly stops.
+   */
+  r.trained = Number(trained) || 0;
+  if (drawSeed != null) r.drawSeed = Number(drawSeed);
   if (adapter) r.adapter = String(adapter).slice(0, 200);
   writeJson(ROUNDS(), rows);
   return r;
@@ -133,6 +143,54 @@ function promote(roundId) {
 }
 
 const current = () => readJson(CURRENT(), null);
+
+/* ── the owner's switch ──────────────────────────────────────────────────────────────────────── */
+
+const AUTO = () => path.join(DIR(), 'auto.json');
+
+/**
+ * Whether rounds may start on their own.
+ *
+ * Defaults to ON, because a loop that has to be switched on after every restart is not a loop. It
+ * is stored rather than held in memory for the same reason: a pod restart must not silently turn
+ * the training off and leave the machines idle with nothing saying why.
+ */
+const autoOn = () => {
+  const v = readJson(AUTO(), null);
+  return v === null ? true : !!v.on;
+};
+
+const setAuto = (on) => { writeJson(AUTO(), { on: !!on, at: new Date().toISOString() }); return !!on; };
+
+/* ── which machines the owner allows to train ────────────────────────────────────────────────── */
+
+const TRAINERS = () => path.join(DIR(), 'trainers.json');
+
+/**
+ * ABLE AND ALLOWED ARE DIFFERENT QUESTIONS, AND ONLY ONE OF THEM LIVES HERE.
+ *
+ * Whether a machine CAN train — a drive with room, a virtual environment, the model cached — is
+ * known only to the machine, and it reports that in its capabilities. Whether it MAY train is the
+ * owner's decision, and it is stored here.
+ *
+ * Conflating them gives one of two bad outcomes: a laptop that starts grinding all night because it
+ * happened to have disk space, or a laptop that is fully set up and never chosen because nothing
+ * ever recorded that it was wanted. Default OFF for exactly the first reason — a machine joining
+ * the ring must not quietly enlist itself.
+ */
+const trainerOn = (deviceId) => {
+  const all = readJson(TRAINERS(), {}) || {};
+  return !!(all[String(deviceId)] && all[String(deviceId)].on);
+};
+
+function setTrainer(deviceId, on) {
+  const all = readJson(TRAINERS(), {}) || {};
+  all[String(deviceId)] = { on: !!on, at: new Date().toISOString() };
+  writeJson(TRAINERS(), all);
+  return !!on;
+}
+
+const trainerList = () => readJson(TRAINERS(), {}) || {};
 
 /* ── the view ───────────────────────────────────────────────────────────────────────────────── */
 
@@ -233,6 +291,9 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
     rounds: rounds.slice(0, 20).map((r) => ({
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       turns: r.turns, promoted: r.promoted, why: r.why,
+      /* What it trained, and when it last spoke — the two things the planner decides on. */
+      trained: r.trained || 0,
+      lastAt: (r.lines && r.lines.length) ? r.lines[r.lines.length - 1].at : r.startedAt,
       baseline: r.baseline ? r.baseline.agreement_pct : null,
       result: r.result ? r.result.agreement_pct : null,
       lines: (r.lines || []).slice(-6),
@@ -241,9 +302,22 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
      * The trainers carry their own round with them, so the device hub renders a row straight from
      * this without joining two lists itself. Same numbers as the pipeline screen, by construction.
      */
-    trainers: (trainers || []).map((t) => ({ ...t, training: work[t.name] || null })),
+    /*
+     * Each machine carries BOTH answers plus, when it cannot train, what it is missing. A row that
+     * merely fails to appear teaches nobody anything; "could train, needs 4 GB free on D:" is a
+     * thing somebody can act on.
+     */
+    trainers: (trainers || []).map((t) => ({
+      ...t,
+      allowed: trainerOn(t.deviceId),
+      training: work[t.name] || null,
+    })),
     byDevice: work,
+    /* The switch, and how much of the set has been learned from so far — the two numbers that say
+       whether this loop is running itself or waiting for somebody. */
+    auto: autoOn(),
+    covered: rounds.reduce((n, r) => n + (Number(r.trained) || 0), 0),
   };
 }
 
-module.exports = { startRound, noteRound, endRound, promote, current, allRounds, state, byDevice, DIR };
+module.exports = { startRound, noteRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
