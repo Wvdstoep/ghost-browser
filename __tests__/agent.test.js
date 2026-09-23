@@ -1877,7 +1877,23 @@ describe('a walk cannot use a tool its role was never given', () => {
   const roles = require('../src/roles');
 
   it('the allowed set comes from the role, resolved server-side', () => {
-    expect(src).toMatch(/const allowedTools = new Set\(myTools\.map\(\(t\) => t\.function && t\.function\.name\)\.filter\(Boolean\)\);/);
+    /*
+     * `let`, not `const`, and that is the change rather than a slip. The role used to be fixed for a
+     * whole run, so capability was decided by where the owner happened to be logged in: a download
+     * refused to facebook.scout, save_place refused to google.research, both jobs impossible from
+     * step one. The agent can now change role mid-run, so everything the role decides has to be able
+     * to follow it. What matters here is unchanged — the set is still derived from the role by the
+     * server, never from anything the model says.
+     */
+    expect(src).toMatch(/allowedTools = new Set\(myTools\.map\(\(t\) => t\.function && t\.function\.name\)\.filter\(Boolean\)\);/);
+  });
+
+  it('and changing role recomputes what is allowed, or the switch would be cosmetic', () => {
+    /* A use_role that changed the briefing but not the enforcement would leave the agent told it
+       can do something and refused when it tries — worse than not switching at all. */
+    expect(src).toMatch(/allowedTools = new Set\(myTools\.map/g);
+    expect(src).toMatch(/const becomeRole = \(want, why\) => \{/);
+    expect(src).toMatch(/messages\[0\] = \{ role: 'system'/);
   });
 
   it('and a known tool outside it is refused in the loop, where the other policy lives', () => {

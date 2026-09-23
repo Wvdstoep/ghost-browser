@@ -10,7 +10,7 @@
  * post, however the conversation goes.
  */
 import { describe, it, expect } from 'vitest';
-import { ROLES, get, canonical, toolsFor, list, sites } from '../src/roles.js';
+import { ROLES, get, canonical, toolsFor, list, sites, useExternal } from '../src/roles.js';
 import { TOOLS, looksLikeWrite, ownGround } from '../src/agent.js';
 
 const names = (ts) => ts.map((t) => t.function.name);
@@ -873,5 +873,78 @@ describe('the audit is given the tabs rather than sent to find them', () => {
   /* The language hints stay as a fallback for READING values, not as a way to find the tabs. */
   it('and the language hints remain for reading, not for hunting', () => {
     expect(role).toMatch(/match by MEANING, never by the English word/);
+  });
+});
+
+describe('seeing and stopping are not powers', () => {
+  /*
+   * MEASURED, NOT ASSUMED. Across 2,272 recorded runs, 418 asked for a tool their role does not
+   * carry and 112 of those reported success regardless. The top of the list was diagnostics
+   * (~120 refusals), current_url (~80) and finish (~100, fifty of them to a single role).
+   *
+   * A role denied `finish` cannot end its own work — it runs to the step limit every time, which is
+   * then filed as having wandered off. A role denied `diagnostics` meets a blank page with no way to
+   * learn that the request was refused. Neither restriction protects anything.
+   */
+  const namesFor = (role) => toolsFor(role, TOOLS).map((t) => (t.function || t).name);
+
+  for (const role of ['research.web', 'reach.search', 'facebook.scout', 'useme.proposal']) {
+    it(`${role} can always see where it is and stop`, () => {
+      const n = namesFor(role);
+      for (const must of ['look', 'read', 'note', 'finish', 'current_url', 'diagnostics', 'use_role']) {
+        expect(n, `${role} is missing ${must}`).toContain(must);
+      }
+    });
+  }
+
+  it('A ROLE AUTHORED WITH A BARE LIST STILL GETS THE FLOOR', () => {
+    /* The roles the master writes keep omitting the obvious, because nobody lists it. One of them
+       was refused `finish` fifty times and could never stop on its own. */
+    const HAND = { name: 'hand-written', site: '', tools: ['click'] };
+    useExternal({ getRole: (k) => (k === 'hand-written' ? HAND : null), listRoles: () => [HAND] });
+    try {
+      const n = namesFor('hand-written');
+      expect(n).toContain('click');
+      expect(n).toContain('finish');
+      expect(n).toContain('diagnostics');
+    } finally { useExternal(null); }
+  });
+
+  it('does NOT quietly hand out the things a specialist is kept away from', () => {
+    /* Acting where other people can see, and reading whole feeds, are genuine decisions. A floor
+       that grew to include them would turn every specialist into a generalist. */
+    const own = get('reach.search').tools || [];
+    const n = namesFor('reach.search');
+    for (const notFree of ['sweep', 'act']) {
+      if (!own.includes(notFree)) expect(n, `${notFree} must not be free`).not.toContain(notFree);
+    }
+  });
+});
+
+describe('a role can always stop being itself', () => {
+  /*
+   * MEASURED TWICE ON LIVE RUNS. A download was refused to facebook.scout because the owner was in
+   * the facebook profile; save_place was refused to google.research because the profile was google.
+   * Neither job was possible from its first step, and in both the agent kept working without the
+   * one tool it needed — sixty-two steps, in the second case, for nothing.
+   *
+   * A role that cannot leave itself leaves the wall exactly where it stood, so use_role belongs to
+   * every role or it belongs to none. This is not a hole in the restrictions: what they are FOR is
+   * the acts other people can see, and those stay approval-gated whatever role is worn.
+   */
+  const { TOOLS } = require('../src/agent.js');
+  it('every role carries use_role, including the most restricted', () => {
+    for (const r of list()) {
+      const n = toolsFor(r.name, TOOLS).map((x) => (x.function || x).name);
+      expect(n, `${r.name} cannot change role`).toContain('use_role');
+    }
+  });
+
+  it('and general can reach what a specialist was refused', () => {
+    /* The escape has to lead somewhere. If general lacked save_place too, switching would be a
+       gesture. */
+    const g = toolsFor('general', TOOLS).map((x) => (x.function || x).name);
+    expect(g).toContain('save_place');
+    expect(g).toContain('download_link');
   });
 });

@@ -48,6 +48,25 @@ const FLOOR = 4;
 /** No single tool may exceed this share of a slice, however common it really is. */
 const CAP_SHARE = 0.15;
 
+/*
+ * NO SINGLE RUN MAY DOMINATE A SLICE EITHER — the same mistake, one axis over.
+ *
+ * Measured across 1,226 usable runs holding 40,031 turns: the longest tenth supplied 41% of the
+ * set and the longest quarter supplied 71%. Runs of five turns or fewer contributed 595 turns in
+ * total; runs of forty or more contributed 28,210. Long runs outweigh short ones forty-seven to
+ * one, while being only twice as numerous.
+ *
+ * That is not a judgement about quality, it is arithmetic: a run that takes sixty steps yields
+ * sixty examples and a run that takes two yields two. And it points the wrong way, because sixty
+ * steps for something achievable in five is usually the model STRUGGLING. Such a run is gold on the
+ * strength of its ending, while its middle is forty steps of confusion — so the set over-samples
+ * precisely the runs where the agent coped worst, and teaches the next model to flail.
+ *
+ * The median run is twelve turns. Capping there gives every run its fair say and costs only the
+ * marathons their surplus.
+ */
+const PER_RUN = 12;
+
 const readJson = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } };
 const writeJson = (p, v) => {
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -59,7 +78,23 @@ const writeJson = (p, v) => {
    seven hundred of them costs hundreds of megabytes for nothing. */
 const TOOL = /\{\\"tool\\":\\"([a-z_]+)\\"/;
 const toolOf = (line) => { const m = TOOL.exec(line); return m ? m[1] : null; };
+
+/* Which run a turn came from, so no one run can flood a slice. */
+const JOB = /"jobId":"([^"]+)"/;
+const jobOf = (line) => { const m = JOB.exec(line); return m ? m[1] : ''; };
 const isGold = (line) => line.includes('"tier":"gold"') || line.includes('"tier": "gold"');
+
+/*
+ * HOW WELL THE RUN WAS CONDUCTED, not only whether it worked.
+ *
+ * `best` is a clean run with outside confirmation. Preferring it is the whole answer to a measured
+ * problem: 537 messy runs supplied 29,627 turns against 10,468 from 693 clean ones, so three
+ * quarters of the training data came from runs that stalled, were refused a tool, or never finished
+ * on their own. Sorting on the tier alone cannot see the difference.
+ */
+const { rankOf } = require('./quality');
+const GRADE = /"grade":"([a-z]+)"/;
+const gradeOf = (line) => { const m = GRADE.exec(line); return m ? m[1] : (isGold(line) ? 'gold' : 'silver'); };
 
 /**
  * The ledger of what has already been handed out.
@@ -83,7 +118,7 @@ function ledgerFor(builtAt) {
  * @param roundId  who it went to, for the record
  * @returns { jsonl, count, tools, remaining, exhausted }
  */
-function draw({ file, builtAt, want = 700, roundId = '' } = {}) {
+function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}) {
   const lines = [];
   const raw = fs.readFileSync(file, 'utf8');
   /* Split once; the file is large but this runs a handful of times a day, not per request. */
@@ -102,9 +137,10 @@ function draw({ file, builtAt, want = 700, roundId = '' } = {}) {
     byTool.get(tool).push(i);
   }
 
-  /* Gold first inside each tool: gold means something outside the run's own report agreed the work
-     happened, and a slice should spend its budget on the best evidence available. */
-  for (const idxs of byTool.values()) idxs.sort((a, b) => (isGold(lines[b]) ? 1 : 0) - (isGold(lines[a]) ? 1 : 0));
+  /* Best first inside each tool: a clean run with outside confirmation, then a confirmed one, then
+     a clean unconfirmed one. Evidence still outranks tidiness — a scruffy run that produced a file
+     with bytes in it beats a neat one nothing could check. */
+  for (const idxs of byTool.values()) idxs.sort((a, b) => rankOf(gradeOf(lines[a])) - rankOf(gradeOf(lines[b])));
 
   const available = [...byTool.values()].reduce((n, v) => n + v.length, 0);
   if (!available) return { jsonl: '', count: 0, tools: {}, remaining: 0, exhausted: true };
@@ -124,10 +160,26 @@ function draw({ file, builtAt, want = 700, roundId = '' } = {}) {
 
   const picked = [];
   const cursor = new Map();
+  /* How many turns each run has already given this slice. See PER_RUN. */
+  const fromRun = new Map();
   const take = (tool, n) => {
     const idxs = byTool.get(tool);
     let at = cursor.get(tool) || 0;
-    for (let i = 0; i < n && at < idxs.length && picked.length < want; i++, at++) picked.push(idxs[at]);
+    let got = 0;
+    while (got < n && at < idxs.length && picked.length < want) {
+      const i = idxs[at];
+      at++;
+      const job = jobOf(lines[i]);
+      if (job) {
+        const used = fromRun.get(job) || 0;
+        /* A marathon run has already said what it has to say; the rest of the budget belongs to
+           runs that have not been heard from. */
+        if (used >= perRun) continue;
+        fromRun.set(job, used + 1);
+      }
+      picked.push(i);
+      got++;
+    }
     cursor.set(tool, at);
   };
 
@@ -176,4 +228,4 @@ function progress(builtAt, total) {
 /** Forget the marks and start the set again — an explicit act, never a side effect of a build. */
 function reset(builtAt) { writeJson(LEDGER(), { builtAt, taken: {}, handed: 0 }); }
 
-module.exports = { draw, progress, reset, toolOf, isGold, LEDGER, FLOOR, CAP_SHARE };
+module.exports = { draw, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN };

@@ -22,6 +22,7 @@
 const localPrompt = require('./localPrompt');
 
 const { outcomeOf } = require('./verify');
+const { gradeOf } = require('./quality');
 
 /* ── redaction ──────────────────────────────────────────────────────────────────────────────── */
 
@@ -126,7 +127,7 @@ function threwRightAfter(steps, i) {
   return false;
 }
 
-function turnsOf(job, { maxObs = 600, maxMarks = 2000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
+function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
@@ -218,6 +219,13 @@ function build(jobs, deps = {}, opts = {}) {
   for (const job of (jobs || [])) {
     if (!job || !job.id) continue;
     const o = outcomeOf(job, deps);
+    /*
+     * HOW it was done, alongside WHETHER it worked. A clean verified run is the only thing worth
+     * ranking above gold: the outcome was confirmed AND the method is worth copying. Measured, the
+     * two are almost independent — plenty of gold runs stalled, were refused a tool, or never
+     * finished on their own.
+     */
+    o.grade = gradeOf(job, o.tier);
     tiers[o.tier] = (tiers[o.tier] || 0) + 1;
     for (const f of o.failures) caught[f] = (caught[f] || 0) + 1;
     if (o.tier === 'void') voidReasons[o.voidReason || 'unknown'] = (voidReasons[o.voidReason || 'unknown'] || 0) + 1;
@@ -310,7 +318,7 @@ function build(jobs, deps = {}, opts = {}) {
       return true;
     })
     .map((t) => ({
-      ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
+      ...t, jobId: job.id, tier: outcome.tier, grade: outcome.grade, verified: outcome.external,
       ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
     })));
 
@@ -321,7 +329,7 @@ function build(jobs, deps = {}, opts = {}) {
    * Kept undeduped and uncapped too — there are only 152 such jobs and every one is scarce.
    */
   const rejectTurns = reject.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, keepThrown: true }).map((t) => ({
-    ...t, jobId: job.id, tier: outcome.tier, verified: outcome.external,
+    ...t, jobId: job.id, tier: outcome.tier, grade: outcome.grade, verified: outcome.external,
     ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
   })));
 
@@ -400,7 +408,7 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
       { role: 'user', content: localPrompt.userFor({ goal: t.goal, observed: t.observed }) },
       { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: t.action.args }) },
     ],
-    meta: { jobId: t.jobId, tier: t.tier, verified: t.verified, role: t.role, at: t.at },
+    meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at },
   })).join('\n');
 }
 

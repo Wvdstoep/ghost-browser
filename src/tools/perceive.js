@@ -104,6 +104,27 @@ const COLLECT_TEXT = () => {
   return collect(document);
 };
 
+/*
+ * HOW MUCH OF THE NUMBERED LIST IS KEPT, AND WHY IT IS NOT A ROUND NUMBER.
+ *
+ * The first version kept 2,000 characters, chosen without measuring. Every real list hit it exactly:
+ * a Marktplaats search showed 38 elements and 35 were recorded, the 35th sliced mid-word
+ * ('[35] a - "Badkamer | Badkamerme'). The model saw all 38 and could click number 38; the record
+ * held no such element, so the turn was either unlearnable or — worse — taught clicking an index
+ * that is not in the list it was given.
+ *
+ * The inspector caps a page at 90 elements and an entry averages about 57 characters, so 6,000
+ * covers the worst real page. And the cut lands on a line boundary: half an entry is not an entry,
+ * and a truncated one at the end is indistinguishable from a real one.
+ */
+const trimMarks = (s, max) => {
+  const t = String(s || '');
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const nl = cut.lastIndexOf(String.fromCharCode(10));
+  return nl > 0 ? cut.slice(0, nl) : cut;
+};
+
 module.exports = {
   /** Every clickable thing, numbered. The numbers are only valid until the page changes. */
   async look(ctx) {
@@ -125,7 +146,7 @@ module.exports = {
      * that was actually clicked in almost every case.
      */
     ctx.step('look', `${an.title || an.url} — ${an.elementCount} things to click${an.modal ? ' (inside the open dialog)' : ''}`,
-      { url: an.url, marks: String(an.summary || '').slice(0, 2000) });
+      { url: an.url, marks: trimMarks(an.summary, 6000) });
     /* Sixty element lines, resent every step, was most of the bill. If the page has not moved since
        the last look, say so in one line instead of repeating all of it. */
     const fingerprint = `${an.url}|${an.summary}`;
@@ -248,6 +269,19 @@ module.exports = {
     ctx.resetClickLoop();                 // a new page is progress
     await ctx.settle(700);                // let an SPA hydrate / frames attach before the first look
     const an = await ctx.freshAnalysis();
+    /*
+     * THE LIST GOES INTO THE RECORD, NOT ONLY TO THE MODEL — the same fix look needed.
+     *
+     * This observation hands over every numbered element on the page, and the agent acts on
+     * those numbers at once: seen live, open then type [9] "Dropdown zoekbalk" with no look
+     * in between. The step held only the URL, so that decision could never be learnt from —
+     * the record showed a nine chosen out of nothing.
+     *
+     * Written afterwards because the step is recorded BEFORE the navigation, so a page that
+     * never loads still leaves a trace. The list only exists once it has.
+     */
+    try { if (openedStep) ctx.annotate(openedStep, { marks: trimMarks(an.summary, 6000) }); }
+    catch (e) { /* a record of the page is never worth failing the navigation over */ }
     ctx.observe(`Opened ${an.url} — ${an.title}\n\nClickable:\n${an.summary}`);
   },
 };

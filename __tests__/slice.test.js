@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { draw, progress, reset, toolOf } from '../src/slice.js';
+import { draw, progress, reset, toolOf, jobOf } from '../src/slice.js';
 
 let dir, file;
 
@@ -129,6 +129,104 @@ describe('the shape of the slice — what cost round one', () => {
     for (const [tool, n] of Object.entries(s.tools)) {
       expect(n, `${tool} got ${n}`).toBeGreaterThanOrEqual(4);
     }
+  });
+});
+
+describe('no single run may flood a slice', () => {
+  /*
+   * MEASURED, NOT FEARED. Across 1,226 usable runs holding 40,031 turns, the longest tenth supplied
+   * 41% of the set and the longest quarter supplied 71%. Runs of five turns or fewer gave 595 turns
+   * between them; runs of forty or more gave 28,210 — forty-seven times the weight from twice the
+   * count.
+   *
+   * It is arithmetic, not merit: a sixty-step run yields sixty examples. And it points the wrong
+   * way, because sixty steps for something achievable in five is the model struggling. Such a run is
+   * gold on the strength of its ENDING while its middle is forty steps of confusion, so the set
+   * over-samples the runs where the agent coped worst.
+   */
+  const NL = String.fromCharCode(10);
+  const turn = (jobId, n) => JSON.stringify({
+    messages: [
+      { role: 'system', content: 'You are Ghost Browser working as general.' },
+      { role: 'user', content: 'GOAL: thing ' + n },
+      { role: 'assistant', content: JSON.stringify({ tool: 'read', args: {} }) },
+    ],
+    meta: { jobId, tier: 'gold', role: 'general' },
+  });
+
+  const withMarathon = (len) => {
+    const rows = [];
+    for (let i = 0; i < len; i++) rows.push(turn('j-marathon', i));
+    for (let i = 0; i < 30; i++) rows.push(turn('j-short-' + i, i));
+    fs.writeFileSync(file, rows.join(NL));
+  };
+
+  it('CAPS WHAT ONE RUN CAN CONTRIBUTE', () => {
+    withMarathon(200);
+    const s = draw({ file, builtAt: 'm1', want: 60, perRun: 12 });
+    const jobs = s.jsonl.split(NL).map((l) => JSON.parse(l).meta.jobId);
+    expect(jobs.filter((x) => x === 'j-marathon').length).toBeLessThanOrEqual(12);
+    /* And the budget it did not take went to runs that had not been heard from. */
+    expect(new Set(jobs).size).toBeGreaterThan(10);
+  });
+
+  it('leaves an ordinary run untouched', () => {
+    /* The median run is twelve turns. The cap must cost the marathons their surplus and nothing
+       else — a rule that trimmed normal runs would just be a smaller set. */
+    withMarathon(4);
+    const s = draw({ file, builtAt: 'm2', want: 40, perRun: 12 });
+    const jobs = s.jsonl.split(NL).map((l) => JSON.parse(l).meta.jobId);
+    expect(jobs.filter((x) => x === 'j-marathon').length).toBe(4);
+  });
+
+  it('reads the run off the line without parsing the whole set', () => {
+    expect(jobOf('{"meta":{"jobId":"j-abc","tier":"gold"}}')).toBe('j-abc');
+    expect(jobOf('no job here')).toBe('');
+  });
+});
+
+describe('the runs worth copying come first', () => {
+  /*
+   * MEASURED: 693 clean runs supplied 10,468 turns and 537 messy ones supplied 29,627. Clean runs
+   * are 56% of the runs and 26% of the data, because a run that stalls, gets refused a tool, or
+   * never finishes produces MORE examples than one that goes straight to the answer.
+   *
+   * Sorting on the tier alone cannot see that: a gold run that flailed for sixty steps and a gold
+   * run that took eight are the same thing to it. `best` — confirmed AND clean — is the only grade
+   * worth putting above gold, and it is what a first training should mostly be made of.
+   */
+  const NL2 = String.fromCharCode(10);
+  const graded = (jobId, grade, n) => JSON.stringify({
+    messages: [
+      { role: 'system', content: 'You are Ghost Browser working as general.' },
+      { role: 'user', content: 'GOAL: thing ' + n },
+      { role: 'assistant', content: JSON.stringify({ tool: 'read', args: {} }) },
+    ],
+    meta: { jobId, tier: grade === 'best' || grade === 'gold' ? 'gold' : 'silver', grade, role: 'general' },
+  });
+
+  it('PREFERS A CLEAN CONFIRMED RUN OVER AN UNTIDY CONFIRMED ONE', () => {
+    const rows = [];
+    for (let i = 0; i < 20; i++) rows.push(graded('j-messy-' + i, 'gold', i));
+    for (let i = 0; i < 20; i++) rows.push(graded('j-clean-' + i, 'best', i));
+    fs.writeFileSync(file, rows.join(NL2));
+
+    const s = draw({ file, builtAt: 'g1', want: 20, perRun: 12 });
+    const grades = s.jsonl.split(NL2).map((l) => JSON.parse(l).meta.grade);
+    expect(grades.filter((g) => g === 'best').length).toBeGreaterThan(grades.filter((g) => g === 'gold').length);
+  });
+
+  it('still puts evidence above tidiness', () => {
+    /* Method does not replace proof. A scruffy run that produced a file with bytes in it is worth
+       more than a neat one nothing could check. */
+    const rows = [];
+    for (let i = 0; i < 20; i++) rows.push(graded('j-tidy-' + i, 'clean', i));
+    for (let i = 0; i < 20; i++) rows.push(graded('j-proof-' + i, 'gold', i));
+    fs.writeFileSync(file, rows.join(NL2));
+
+    const s = draw({ file, builtAt: 'g2', want: 20, perRun: 12 });
+    const grades = s.jsonl.split(NL2).map((l) => JSON.parse(l).meta.grade);
+    expect(grades.filter((g) => g === 'gold').length).toBeGreaterThan(grades.filter((g) => g === 'clean').length);
   });
 });
 
