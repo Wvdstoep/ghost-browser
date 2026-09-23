@@ -294,6 +294,29 @@ function build(jobs, deps = {}, opts = {}) {
        * discard every job's first decision.
        */
       if (!t.observed.length && !t.first) { dropped['nothing had been observed yet'] = (dropped['nothing had been observed yet'] || 0) + 1; return false; }
+      /*
+       * AN INDEX WITH NO LIST IS A NUMBER OUT OF NOWHERE.
+       *
+       * `click {index: 19}` only means something next to the numbered list it was read from. For
+       * every run recorded before the look and open steps started carrying their marks, that list
+       * was drawn and thrown away — so the example reads: given a page you cannot see, emit 19.
+       * There is no rule connecting the prompt to the answer, and the only thing a model can take
+       * from thousands of them is the habit of producing plausible integers. That is worse than
+       * not teaching the tool at all, because a hallucinated index still clicks something.
+       *
+       * Measured on the rebuild of 2026-09-23: 3,073 index-bearing turns in the training set and
+       * 12 of them learnable. The other 3,061 are not a weak signal, they are noise with a
+       * completion attached.
+       *
+       * Clicking is the fallback anyway — the behaviour worth teaching is reaching a page directly
+       * and reading it. So these go, and the tool comes back on its own as runs recorded with
+       * marks accumulate, at which point the same filter keeps them.
+       */
+      if (t.action && t.action.args && t.action.args.index !== undefined
+        && !(t.observed || []).some((o) => o && o.marks)) {
+        dropped['an index with no list to read it from'] = (dropped['an index with no list to read it from'] || 0) + 1;
+        return false;
+      }
       if (dedupe) {
         /*
          * THE KEY IS THE TRAINING EXAMPLE ITSELF: goal, role, what was last seen, and the call.
