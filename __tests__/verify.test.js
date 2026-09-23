@@ -193,6 +193,31 @@ describe('the tier, and the asymmetry that makes checking worth anything', () =>
     expect(outcomeOf(j, {}).tier).toBe('void');
   });
 
+  it('a run that FINISHED and was then closed is not an interruption', () => {
+    /*
+     * The console writes `stopped by you` whenever the session ends, so the owner reading a
+     * finished report and closing the window looked exactly like a cancellation. Measured across
+     * all 2,292 jobs: 471 carried the line and had already called finish, 469 of them with no tool
+     * call in between, and not one run anywhere was stopped and then finished. The rule had never
+     * fired on a real interruption and had voided 23,635 turns.
+     */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'look', args: {} },
+      { n: 2, kind: 'tool', tool: 'finish', args: { summary: 'three listings, recorded' } },
+      { n: 3, kind: 'done', text: 'three listings, recorded' },
+      { n: 4, kind: 'end', text: 'stopped by you' },
+    ], { report: 'Recorded 3 leads.' });
+    expect(outcomeOf(j, {}).tier).not.toBe('void');
+  });
+
+  it('still voids a stop that came before the run ever concluded', () => {
+    /* The 189 runs with no finish at all are the real cancellations and must stay out of the set. */
+    const j = job([
+      { n: 1, kind: 'tool', tool: 'look', args: {} },
+      { n: 2, kind: 'end', text: 'stopped by you' },
+    ], { report: 'Got partway.' });
+    expect(outcomeOf(j, {}).tier).toBe('void');
+  });
   it('but a verified success that was THEN stopped stays gold', () => {
     /* Getting this the wrong way round cost 295 gold jobs on the first attempt: an interruption does
        not un-happen what the agent verifiably did before it. */

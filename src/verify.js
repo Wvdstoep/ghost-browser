@@ -374,7 +374,28 @@ function voidOf(job) {
   const err = String((job && job.error) || '');
   const both = `${report} ${err} ${txt}`;
 
-  if (/stopped by you/i.test(txt)) return { isVoid: true, reason: 'the owner stopped it' };
+  /*
+   * A STOP THAT ARRIVES AFTER THE ANSWER IS NOT AN INTERRUPTION.
+   *
+   * This used to test the whole transcript for `stopped by you` and void on sight. But the
+   * console writes that line whenever the session ends, including when the owner reads the
+   * finished report and closes the window - so a run that concluded on its own, wrote its
+   * summary and stopped calling tools was thrown out of the set as though it had been cut off.
+   *
+   * Measured across all 2,292 jobs: 471 carry the line AND called finish, and in 469 of them
+   * there is not one tool call between the finish and the stop. There is no run anywhere in the
+   * corpus where a stop interrupted work that later finished - the ordering is always the other
+   * way round. So the rule has never once fired on what it was written for, and it voided 23,635
+   * turns doing it. The 189 runs that were stopped without ever finishing are the real
+   * interruptions, and they still void below.
+   *
+   * The test is the ORDER, not the presence: only a stop that came before the run concluded says
+   * anything about whether the work was worth learning from.
+   */
+  const stopAt = all.findIndex((s) => /stopped by you/i.test(textOf(s)));
+  const finishedBeforeTheStop = stopAt >= 0
+    && all.some((s, i) => i < stopAt && s && s.kind === 'tool' && s.tool === 'finish');
+  if (stopAt >= 0 && !finishedBeforeTheStop) return { isVoid: true, reason: 'the owner stopped it' };
   if (job && job.status === 'running') return { isVoid: true, reason: 'still marked running — cut off by a deploy' };
   if (/out of allowance|no model key|every model key/i.test(both)) return { isVoid: true, reason: 'it ran out of model credit' };
   if (/model stopped answering|returned 5\d\d|rate limit|429|was rejected \(401\)|Unauthorized/i.test(both)) {

@@ -264,7 +264,7 @@ module.exports = {
     // outright, which costs a step and teaches nothing.
     const url = /^[a-z]+:\/\//i.test(String(a.url).trim())
       ? String(a.url).trim() : `https://${String(a.url).trim().replace(/^\/+/, '')}`;
-    ctx.step('open', url);
+    const openedStep = ctx.step('open', url);
     await ctx.page().goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     ctx.resetClickLoop();                 // a new page is progress
     await ctx.settle(700);                // let an SPA hydrate / frames attach before the first look
