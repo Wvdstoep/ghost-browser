@@ -3531,7 +3531,7 @@ function operatorContext() {
     stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
     /* A WALK for the assistant: the same browser agent a flow step runs, in the profile asked for,
        unattended (its acts become proposals at the gate — nothing outward without the owner). */
-    startWalk: async ({ goal, profile, role, maxSteps, maxPages }) => {
+    startWalk: async ({ goal, ask, profile, role, maxSteps, maxPages }) => {
       const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
       const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
       /*

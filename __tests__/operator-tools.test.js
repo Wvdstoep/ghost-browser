@@ -4,6 +4,7 @@
  * wired to the right internals and marked repeatable.
  */
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
 import { Registry } from '../src/operator/registry.js';
 import { registerOperatorTools, flowProblems, sanitizeFlow, isWatcher, summarizeRun } from '../src/operator/tools.js';
 
@@ -30,6 +31,34 @@ function fakeCtx() {
   };
 }
 
+describe('everything gb_walk sends, the server accepts', () => {
+  /*
+   * Shipped and broken in one go: `ask` was added to the gb_walk schema and used inside the
+   * server's startWalk, but never added to startWalk's own parameter list. Every walk answered
+   * "did not work: ask is not defined" and the assistant retried it. Nothing caught it, because
+   * the tool and its handler live in different files and no test compared them.
+   *
+   * So: discover what the tool actually SENDS by calling it against a recording context, then
+   * check the server's destructuring list names each one. Text, not types, because that is where
+   * the drift is.
+   */
+  it('startWalk destructures every key gb_walk passes it', async () => {
+    const ctx = fakeCtx();
+    let sent = null;
+    ctx.startWalk = (a) => { sent = a; return { jobId: 'j-1' }; };
+    const reg = new Registry();
+    registerOperatorTools(reg, ctx);
+    await reg.execute('gb_walk', { goal: 'a plan', ask: 'what I said', profile: 'google' });
+    expect(sent).toBeTruthy();
+    expect(sent.ask).toBe('what I said');
+
+    const src = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+    const m = /startWalk: async \(\{([^}]*)\}\)/.exec(src);
+    expect(m).toBeTruthy();
+    const accepted = m[1].split(',').map((s) => s.trim().split(/[:=]/)[0].trim()).filter(Boolean);
+    for (const key of Object.keys(sent)) expect(accepted).toContain(key);
+  });
+});
 describe('flowProblems — a watcher judged as a watcher, a flow as a flow', () => {
   it('accepts a good watcher and a good one-off flow', () => { expect(isWatcher(watcher)).toBe(true); expect(flowProblems(watcher)).toEqual([]); expect(flowProblems(oneOff)).toEqual([]); });
   it('refuses a watcher without a schedule, a role step, or a budget', () => {
