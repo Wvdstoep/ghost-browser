@@ -1957,19 +1957,70 @@ setInterval(() => {
         if (/allowance|no model key|quota/i.test(String(out.error))) harvest.stop(out.error);
         return;
       }
+      /* The id belongs against the prompt that made it: take() ran before startWalk answered, so
+         without this the history reads "(no id)" and an audit has to match runs by goal text. */
+      if (out && out.jobId) harvest.attachJob(out.jobId);
       log.info(`[harvest] walk ${out && out.jobId}: ${String(prompt).slice(0, 90)}`);
     } catch (e) { /* a collector that throws must not take the browser with it */ }
   })();
 }, 60 * 1000);
 
+/*
+ * WHAT EACH COLLECTED PROMPT ACTUALLY BECAME.
+ *
+ * harvest.js keeps the prompts and knows nothing about jobs or verdicts, deliberately - it is a pure
+ * module with tests and no stores. But a page that says "31 prompts collected" and nothing else is a
+ * page nobody can act on: the only question worth asking of a collector is whether what it collected
+ * was any GOOD, and that answer lives on the jobs.
+ *
+ * Reads the STORED verdict rather than re-judging. It was computed at the moment the job finished,
+ * with the file store and the workflow runs in reach, and evidence ages - a captured file is cleaned
+ * up, a run rolls out of its window - so judging again later gives a worse answer than the one
+ * already on the record. jobs.judge would also write and persist, which a screen must never do.
+ *
+ * A run still going says so. A run whose job has been trimmed out of the store says that too, rather
+ * than reading as one that produced nothing.
+ */
+function harvestRuns(limit = 40) {
+  const s = harvest.load();
+  const quality = require('./quality');
+  const rows = (s.history || []).slice(-limit).reverse();
+  const out = [];
+  const tally = {};
+  for (const h of rows) {
+    const row = { at: h.at, prompt: String(h.prompt || '').slice(0, 300), jobId: h.jobId || '' };
+    const j = h.jobId ? jobs.get(h.jobId) : null;
+    if (!j) {
+      row.state = h.jobId ? 'no longer on record' : 'not recorded';
+      out.push(row);
+      continue;
+    }
+    row.status = j.status;
+    row.calls = (j.steps || []).filter((x) => x && x.kind === 'tool').length;
+    const counts = {};
+    for (const x of (j.steps || [])) if (x && x.kind === 'tool' && x.tool) counts[x.tool] = (counts[x.tool] || 0) + 1;
+    row.tools = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`);
+    if (j.status === 'running') { row.state = 'running'; out.push(row); continue; }
+    const v = j.verdict || null;
+    if (!v) { row.state = 'unjudged'; out.push(row); continue; }
+    row.tier = v.tier || '';
+    row.grade = quality.gradeOf(j, v.tier);
+    row.why = (v.why && v.why.length) ? String(v.why[0]).slice(0, 120) : (v.voidReason || '');
+    row.state = row.grade;
+    tally[row.grade] = (tally[row.grade] || 0) + 1;
+    out.push(row);
+  }
+  return { runs: out, tally };
+}
+
 /** The toggle. Off by default, and nothing here starts spending on its own. */
 app.get('/v1/harvest/state', authed, (_req, res) => {
-  try { res.json(harvest.state({ busy: browserBusy() })); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json({ ...harvest.state({ busy: browserBusy() }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/harvest/on', authed, (req, res) => {
   const v = harvest.setOn(!!(req.body || {}).on);
   log.info(`training: collecting data by itself is ${v ? 'ON' : 'off'}`);
-  res.json(harvest.state({ busy: browserBusy() }));
+  res.json({ ...harvest.state({ busy: browserBusy() }), ...harvestRuns(40) });
 });
 /** Ask for a batch now — the owner wanting to see what it would choose, without waiting a minute. */
 app.post('/v1/harvest/refill', authed, async (req, res) => {
