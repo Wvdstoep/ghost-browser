@@ -228,4 +228,89 @@ function progress(builtAt, total) {
 /** Forget the marks and start the set again — an explicit act, never a side effect of a build. */
 function reset(builtAt) { writeJson(LEDGER(), { builtAt, taken: {}, handed: 0 }); }
 
-module.exports = { draw, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN };
+/**
+ * THE EXAM — a sample of the evaluation split, not the top of it.
+ *
+ * The scoring turns used to be the FIRST N rows of eval.jsonl. The split is cut by job, which is
+ * right — it stops a job contributing to both training and scoring — but it also means the rows
+ * arrive job by job, so the first 150 of them are a handful of whole jobs rather than a sample of
+ * anything. Measured on the set built 2026-09-23: 39.3% of the exam was `dig`, and `open` — 15% of
+ * what the round trains on and the most common real action there is — did not appear once.
+ *
+ * A round could therefore correct its whole tool distribution and be scored almost entirely on one
+ * research tool. The number would be honest and would measure the wrong thing, which is worse than
+ * a number that is obviously wrong.
+ *
+ * So: proportional to the split's own distribution, with the same floor and cap the training draw
+ * uses, and DETERMINISTIC — comparing two rounds is only meaningful on identical turns, so the
+ * shuffle is seeded with a constant and the tools are walked in a fixed order. Rebuilding the set
+ * changes the exam, which is unavoidable and is why a round records the manifest it was built
+ * from; within one built set, every round sits the same exam.
+ *
+ * Unlike the training draw there is no ledger and no gold preference: an exam is not consumed, and
+ * scoring only on the tidiest turns would flatter the model.
+ */
+function exam({ file, want = 150 } = {}) {
+  const NL = String.fromCharCode(10);
+  const lines = fs.readFileSync(file, 'utf8').split(NL).filter((l) => l.trim());
+
+  const byTool = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const tool = toolOf(lines[i]);
+    if (!tool) continue;
+    if (!byTool.has(tool)) byTool.set(tool, []);
+    byTool.get(tool).push(i);
+  }
+  if (!byTool.size) return { jsonl: '', count: 0, tools: {} };
+
+  /* A seeded shuffle, so the same set always produces the same exam. Math.random here would mean
+     two rounds an hour apart were marked on different papers and the difference reported as
+     progress. */
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const tools = [...byTool.keys()].sort();
+  for (const tl of tools) {
+    const a = byTool.get(tl);
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  }
+
+  const total = lines.length;
+  const cap = Math.max(FLOOR, Math.floor(want * CAP_SHARE));
+  const need = new Map();
+  for (const tl of tools) {
+    const have = byTool.get(tl).length;
+    const share = Math.round((want * have) / total);
+    need.set(tl, Math.min(have, Math.max(FLOOR, Math.min(cap, share))));
+  }
+
+  /* Clamping moves the total either way; settle the difference against the tools that still have
+     rows, largest first, since that is where the turns belong. */
+  const sum = () => [...need.values()].reduce((a, b) => a + b, 0);
+  const bySize = [...tools].sort((a, b) => byTool.get(b).length - byTool.get(a).length);
+  let guard = 0;
+  while (sum() > want && guard++ < 10000) {
+    for (let i = bySize.length - 1; i >= 0 && sum() > want; i--) {
+      const tl = bySize[i];
+      if (need.get(tl) > 1) need.set(tl, need.get(tl) - 1);
+    }
+  }
+  guard = 0;
+  while (sum() < want && guard++ < 10000) {
+    let moved = false;
+    for (const tl of bySize) {
+      if (sum() >= want) break;
+      if (need.get(tl) < Math.min(byTool.get(tl).length, cap)) { need.set(tl, need.get(tl) + 1); moved = true; }
+    }
+    if (!moved) break;
+  }
+
+  const picked = [];
+  for (const tl of tools) picked.push(...byTool.get(tl).slice(0, need.get(tl)));
+  picked.sort((a, b) => a - b);
+
+  const counted = {};
+  for (const i of picked) { const tl = toolOf(lines[i]); counted[tl] = (counted[tl] || 0) + 1; }
+  return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted };
+}
+
+module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN };

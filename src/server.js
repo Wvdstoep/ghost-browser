@@ -1865,13 +1865,17 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
     const file = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'eval.jsonl');
     if (!require('fs').existsSync(file)) return res.status(404).json({ error: 'the set has not been built yet' });
     const want = Math.min(1000, Math.max(20, Number(req.query.turns) || 120));
-    const out = [];
-    const NL = String.fromCharCode(10);
-    for (const ln of require('fs').readFileSync(file, 'utf8').split(NL)) {
-      if (ln.trim()) out.push(ln);
-      if (out.length >= want) break;
-    }
-    res.type('application/x-ndjson').send(out.join(NL));
+    /*
+     * A SAMPLE of the split, not the top of it. Taking the first N rows looked deterministic and
+     * cheap, and it was both, but the split is ordered job by job — so the first 150 rows were a
+     * few whole jobs. Measured on the set of 2026-09-23: 39.3% of the exam was `dig` and `open`,
+     * which is 15% of what a round trains on, did not appear at all. A round could fix its entire
+     * tool distribution and be marked almost solely on one research tool.
+     */
+    const s = require('./slice').exam({ file, want });
+    res.set('X-Exam-Count', String(s.count));
+    res.set('X-Exam-Tools', JSON.stringify(s.tools).slice(0, 900));
+    res.type('application/x-ndjson').send(s.jsonl);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3672,11 +3676,28 @@ ${g}` : g;
           }
         }
       }
-      const job = jobs.create({ owner, goal: g.slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
+      /*
+       * THE JOB IS RECORDED AS WHAT THE PERSON ASKED FOR, NOT AS THE PLAN.
+       *
+       * The assistant turns a wish into a recipe, which is useful to the walk and wrong to store as
+       * the goal: the training set takes its prompt from job.goal, so the small model was being
+       * taught to expect an ordered list of steps with the url already in it. Nobody types that. A
+       * live example, measured: the owner wrote "on ns.nl look up a train from Amsterdam to
+       * Eindhoven around nine" and the stored goal was a twelve-clause recipe beginning with a url
+       * that did not exist.
+       *
+       * So `ask` is the goal and the recipe becomes `plan` — handed to the walk, journalled as a
+       * note so it sits in the transcript where a reader and the set builder both find it, and kept
+       * out of the one field that has to read like a person.
+       */
+      const asked = String(ask || '').trim();
+      const plan = asked && asked !== g ? g : '';
+      const job = jobs.create({ owner, goal: (asked || g).slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
         maxSteps: Math.min(120, Math.max(0, Math.round(Number(maxSteps) || 40))), maxPages: Math.min(60, Math.max(0, Math.round(Number(maxPages) || 12))) });
       /* The adopted role, not "general": a walk in a profile whose specialist exists should run as
          that specialist even when it stays on the cluster. */
       s.job = job.id; job.role = walkRole || roles.canonical(role || 'general');
+      if (plan) job.plan = plan.slice(0, 4000);
       assistantWalks.add(job.id); myWalks.add(job.id);
       const switchProfile = async (name) => { const ss = await sessionFor(profiles.safeName(name)); ss.job = job.id; return ss; };
       agent.run({ job, session: s, settings: cfg, switchProfile, sink: null, convo: null, role: job.role, ownOrigin: null, unattended: true, log })

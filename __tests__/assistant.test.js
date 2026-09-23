@@ -116,6 +116,36 @@ describe('assistant', () => {
     else expect(step.image).toBeUndefined();   // no writable shots dir on this host: the step still lands
   });
 
+  it('records what a person asked, not the recipe it wrote', () => {
+    /*
+     * The training set takes its prompt from job.goal. The assistant writes a plan, and storing
+     * that as the goal taught the model to expect an ordered list with the url already in it.
+     * Measured on a live run: the owner wrote "on ns.nl look up a train from Amsterdam to Eindhoven
+     * around nine" and the stored goal was a twelve-clause recipe starting from a url that 404'd.
+     */
+    const p = assistantPrompt();
+    /* Plain string containment, not regex: the instruction contains backticks and an apostrophe,
+       and both have to survive being written down in a test. */
+    expect(p.includes('ALWAYS PASS')).toBe(true);
+    expect(p.includes('own words, verbatim')).toBe(true);
+  });
+
+  it('never hands a walk a path it invented', () => {
+    /*
+     * The prompt used to say "say the start url", and the assistant duly wrote one. Measured on a
+     * live run: ns.nl/en/travellers/journeyplanner looked entirely plausible, returned a 404, and the
+     * walk that followed it burnt 120 steps, 23 looks, a click loop and a stall without reporting an
+     * answer. A walk can find a page. It cannot know that the url it was handed was imagined.
+     *
+     * Asserted on the text because that is where the behaviour lives — there is no code that builds
+     * the goal, only this instruction, so an instruction quietly dropped is the whole regression.
+     */
+    const p = assistantPrompt();
+    expect(p).toMatch(/NEVER write a path you have not actually seen/);
+    expect(p).toMatch(/Name the domain and let the walk find/);
+    expect(p).not.toMatch(/say the start url/);
+  });
+
   it('labels steps for people and ships a prompt that carries the ladder and the operator method', () => {
     expect(labelOf('gb_watcher_run')).toBe('Running the watcher'); expect(labelOf('gb_zzz_thing')).toBe('zzz thing');
     const p = assistantPrompt();
