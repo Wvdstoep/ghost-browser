@@ -23,6 +23,49 @@ const whyOf = (job) => (outcomeOf(job, {}).why || []).join('; ');
    the outcome why at all, so asserting on the outcome would be asserting on the wrong sentence. */
 const checkOf = (job) => (outcomeOf(job, {}).checks || {}).resultsWereWritten || {};
 
+describe('crediting rows the report agrees about, without inventing claims', () => {
+  it('CREDITS the verb these runs actually use, which was missing', () => {
+    /*
+     * Measured over 2,313 runs: 598 wrote rows and only ELEVEN were confirmed here. `collected` is
+     * the verb the reports use - "Collected 3 qualifying notifications", "Collected 11 qualifying
+     * notifications" - and it was not on the list. That one omission accounts for 297 of them.
+     */
+    const j = { report: 'Notification sweep complete. Collected 3 qualifying notifications.', results: [1, 2, 3] };
+    expect(checkOf(j).why).toMatch(/3 row\(s\) claimed and 3 written/);
+    expect(tierOf(j)).toBe('gold');
+  });
+
+  it('credits a number beside a counted noun when the rows agree', () => {
+    /*
+     * The run this came from stored seven leads and opened with "I found 7 Dutch companies that sell
+     * handmade products online". `found` is not a storing verb and must not become one, but seven
+     * rows in the bucket beside the number seven and the word companies is corroboration from the
+     * store, with the report only having to agree about how many.
+     */
+    const j = { report: 'I found 7 Dutch companies that sell handmade products online.', leads: [1, 2, 3, 4, 5, 6, 7] };
+    expect(checkOf(j).why).toMatch(/7 named in the report and 7 written/);
+    expect(tierOf(j)).toBe('gold');
+  });
+
+  it('DOES NOT read an http status as a claim, which cost an honest run its name', () => {
+    /*
+     * A looser rule allowed the verb to come after the number and duly read this as a claim of 404
+     * rows, failing the verifier and grading a read-only probe as though it had lied. Three of
+     * eleven new bronzes were that shape. A missed catch costs one signal; a false catch teaches the
+     * model that correct behaviour is wrong.
+     */
+    const j = { report: 'READ-ONLY PROBE REPORT for https://www.upwork.com/nx/jobs/search/ (1) DIALOG / BANNER: 404 saved nothing.', results: [] };
+    expect(checkOf(j).ok).not.toBe(false);
+    expect(tierOf(j)).not.toBe('bronze');
+  });
+
+  it('does not credit a number beside a noun we keep no rows of', () => {
+    /* "12+ sources" counts something real and something we do not store. No rows, no credit. */
+    const j = { report: 'After reading 12 sources I wrote up what I found.', opportunities: [1, 2, 3, 4] };
+    expect(checkOf(j).why).toMatch(/rows were written/);
+    expect(tierOf(j)).toBe('silver');
+  });
+});
 describe('finding the rows, wherever a tool put them', () => {
   it('SEES A BUCKET NOBODY REMEMBERED TO LIST', () => {
     /* `results` is where `collect` writes, and it was not among the six hand-kept names. This is

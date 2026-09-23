@@ -251,8 +251,41 @@ function claimedCount(report) {
    * backspace character and \s and \d are just the letters s and d. It compiled, it ran, it matched
    * nothing, and every claim sailed through unchecked. A literal cannot be mis-escaped.
    */
-  const DIGITS = /\b(?:saved|stored|recorded|logged|added|kept|wrote down)\s+(?:a\s+total\s+of\s+)?(\d{1,3})\b/gi;
-  const WORDS = /\b(?:saved|stored|recorded|logged|added|kept|wrote down)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b/gi;
+  /*
+   * THE VERB LIST WAS TOO SHORT, AND THE WORD ORDER TOO FIXED.
+   *
+   * Measured over 2,313 runs: 598 wrote rows to a bucket and only ELEVEN were confirmed by this
+   * function. Reading the reports shows why. `collected` was missing outright, and it is the verb
+   * these runs actually use - "Collected 3 qualifying notifications", "Collected 11 qualifying
+   * notifications" - which accounts for 297 of them on its own. And reports write it the other way
+   * round as often as not: "31 leads saved, 1 opportunity" never matched a pattern that expects the
+   * verb before the number.
+   *
+   * Still anchored on storing verbs, because "found three suppliers" is not a claim to have stored
+   * three and treating it as one would mark honest runs as liars. The list is longer; the rule is
+   * the same.
+   *
+   * NO ESCAPE SEQUENCES IN THESE PATTERNS. A backslash-b has been eaten five times on its way into
+   * this tree, arriving as a backspace byte that matches nothing and looks right in every editor -
+   * one of them sat in this very file. Character classes cannot be mis-escaped.
+   */
+  const DIGITS = /(?:saved|stored|recorded|logged|added|kept|collected|captured|gathered|wrote down) +(?:a total of )?([0-9]{1,3})/gi;
+  const WORDS = /(?:saved|stored|recorded|logged|added|kept|collected|captured|gathered|wrote down) +(one|two|three|four|five|six|seven|eight|nine|ten)/gi;
+  /* "31 leads saved" - the number first, then up to three words, then the verb. */
+  /*
+   * NO REVERSED WORD ORDER, AND THIS WAS TRIED AND WITHDRAWN RATHER THAN NOT THOUGHT OF.
+   *
+   * Reports do write it the other way round - "31 leads saved, 1 opportunity" - and a pattern
+   * for number-then-verb picks those up. It also picked up this, on a real run:
+   *
+   *   "the report claims 404 row(s) and none were written"
+   *   report: READ-ONLY PROBE REPORT for https://www.upwork.com/... (1) DIALOG / BANNER
+   *
+   * 404 is an HTTP status. The rule read it as a claim of 404 rows and marked an honest run as
+   * a liar, and three of eleven new bronzes were that shape. A missed catch costs one signal; a
+   * false catch teaches the model that correct behaviour is wrong. So the verb comes first or
+   * the claim is not counted, and "31 leads saved" is a catch we give up on purpose.
+   */
   const spelled = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
   let best = 0;
   let m;
@@ -311,6 +344,36 @@ function resultsWereWritten(job) {
   if (claimed > 0) {
     return PASS(`${total} row(s) written, more than the ${claimed} claimed`, detail);
   }
+
+  /*
+   * A COUNTED NOUN NEXT TO THE NUMBER, WHICH AN HTTP STATUS NEVER HAS.
+   *
+   * claimedCount stays anchored on storing verbs, and that is right: "found seven suppliers" is
+   * not a claim to have stored seven. But the run this was measured on DID store them - seven leads
+   * in the bucket, report opening "I found 7 Dutch companies that sell handmade products online" -
+   * and graded silver purely because it said "found".
+   *
+   * Two looser rules were tried and withdrawn first, and both failures shaped this one. Crediting
+   * ANY number in the report that equalled the row count promoted 430 runs, more than the evidence
+   * justified. Allowing the verb to come after the number read "404" in a probe report as a claim of
+   * 404 rows and branded an honest run a liar.
+   *
+   * What separates the real ones is the NOUN: "7 Dutch companies" counts something, "404 READ-ONLY
+   * PROBE REPORT" counts nothing, and "12+ sources" counts something we do not store. So the number
+   * must sit beside a noun we keep rows of AND equal how many rows there are. That is corroboration
+   * from the store, with the report only having to agree.
+   *
+   * Weaker than a checked claim and recorded as such, so the wording stays distinguishable.
+   */
+  const COUNTED = /([0-9]{1,3}) +(?:[a-z]+ +){0,2}(?:lead|leads|place|places|compan|business|organisation|organization|opportunit|notification|listing|result|contact|keyword|supplier|advert|vacanc|candidate|row)/gi;
+  const rep = String((job && job.report) || '');
+  let named = 0, cm;
+  while ((cm = COUNTED.exec(rep))) {
+    const n = Number(cm[1]) || 0;
+    if (n === total || counts.some(([, c]) => c === n)) named = Math.max(named, n);
+  }
+  if (named > 0) return PASS(`${named} named in the report and ${named} written`, detail);
+
   return PASS('rows were written', detail);
 }
 
@@ -339,7 +402,8 @@ const EXTERNAL = new Set(['actWasApproved', 'automationRunCompleted', 'recording
  * load-bearing; change the sentence and this stops working, which is why the tests assert it.
  */
 const externalWhen = (name, res) =>
-  EXTERNAL.has(name) || (name === 'resultsWereWritten' && res && res.ok === true && /claimed and /.test(res.why || ''));
+  EXTERNAL.has(name) || (name === 'resultsWereWritten' && res && res.ok === true
+    && (/claimed and /.test(res.why || '') || /named in the report and /.test(res.why || '')));
 
 /**
  * WAS THIS THE AGENT'S DOING AT ALL?
