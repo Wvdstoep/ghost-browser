@@ -23,9 +23,49 @@ is excellent at `look` and hopeless at `finish` averages out fine and never stop
 """
 import argparse
 import json
+import os
 import random
+import sys as _sys
 import time
 from collections import Counter, defaultdict
+
+
+# ── MAKE torch LOADABLE WHEN THE BROWSER IS WHAT STARTED US (see train_round.py) ────────────────
+#
+# The scorer runs in a process the round starts, which is a process the browser started, so it
+# inherits whatever makes `import torch` fail there: c10.dll refuses to load under the search flags
+# torch itself uses, and only under those. Loading it first, under rules that work, leaves it
+# resident and torch's own attempt then succeeds. Measured, and a no-op where the import already
+# works — but it has to be HERE too, or the round trains for six hours and then cannot score itself.
+def _preload_torch_libs():
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        lib = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(_sys.executable)),
+                                            "..", "Lib", "site-packages", "torch", "lib"))
+        if not os.path.isdir(lib):
+            return
+        try:
+            os.add_dll_directory(lib)
+        except Exception:
+            pass
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.LoadLibraryExW.restype = wintypes.HMODULE
+        k32.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+        p = os.path.join(lib, "c10.dll")
+        if not os.path.isfile(p):
+            return
+        for flags in (0x00000800, 0x00001000, 0x00000000):
+            ctypes.set_last_error(0)
+            if k32.LoadLibraryExW(p, None, flags):
+                return
+    except Exception:
+        pass
+
+
+_preload_torch_libs()
 
 
 def load(path, limit=None, seed=7):
