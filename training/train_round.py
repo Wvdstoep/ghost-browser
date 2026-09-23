@@ -196,13 +196,30 @@ def label_of(line):
     return (m.group(1) if m else None), (_GOLD in line or '"tier": "gold"' in line)
 
 
-def stratified(lines, budget, seed=None):
-    """Take `budget` turns without letting the loud tools take all of them.
+# A rare tool still has to appear often enough to be learnable at all, and a common one must not
+# be allowed to become the answer to everything. Same two numbers the hub's slice builder uses —
+# they are here rather than imported because the two live on different machines, and the one thing
+# worse than one sampler is two that quietly disagree.
+FLOOR = 4          # every tool present in the corpus gets at least this many
+CAP_SHARE = 0.15   # and none may take more than this fraction of the round
 
-    The raw distribution is dominated by a handful of tools — `open` and `read` alone are a third of
-    every call ever made. Sampling that distribution straight into a small round produces a model
-    that is excellent at opening pages and has seen `finish` four times, which is the failure that
-    hides inside a good average: it never stops working.
+
+def stratified(lines, budget, seed=None):
+    """Take `budget` turns, keeping the shape of the real distribution but trimming its extremes.
+
+    WHAT THIS REPLACED, AND WHY IT HAD TO GO.
+
+    The first version dealt round-robin: every tool got its first example before any tool got its
+    second. That does not trim the distribution, it ERASES it — forty tools come out with roughly
+    equal weight, so a model is taught that `save_keywords` and `open` are equally likely next
+    moves when the truth is 9.5% against 18.7%. Round one ran that sampler and scored 20% against a
+    5% baseline, which reads as a win until the per-tool numbers are read: save_keywords 8/8 and
+    sweep 2/2 carried almost the whole gain, while `read` went 1/15 -> 0/15 and `look` 1/11 -> 0/11.
+    It had not learnt to browse. It had learnt the rare tools, because the sampler made them common.
+
+    So: PROPORTIONAL, with a floor under the rare tools and a cap over the loud ones. A tool that is
+    a fifth of real work stays roughly a fifth of the round, `finish` is guaranteed to show up
+    enough times to be learnable, and nothing may take more than CAP_SHARE of the draw.
 
     Gold is preferred over silver inside each tool, because gold means something outside the agent's
     own report agreed the work happened.
@@ -223,26 +240,47 @@ def stratified(lines, budget, seed=None):
         tool, gold = label_of(line)
         if tool:
             by_tool[tool].append((0 if gold else 1, i))
+    if not by_tool:
+        return []
 
     rnd = random.Random(seed)
     for tool in by_tool:
         rnd.shuffle(by_tool[tool])
         by_tool[tool].sort(key=lambda p: p[0])   # gold first, shuffled within tier
 
-    picked, tools = [], sorted(by_tool, key=lambda t: len(by_tool[t]))
-    i = 0
-    # Round-robin: every tool gets its first example before any tool gets its second.
-    while len(picked) < budget:
-        took = False
-        for t in tools:
-            if i < len(by_tool[t]):
-                picked.append(by_tool[t][i][1])
-                took = True
-                if len(picked) >= budget:
-                    break
-        if not took:
+    total = sum(len(v) for v in by_tool.values())
+    cap = max(FLOOR, int(budget * CAP_SHARE))
+
+    # The share each tool has earned, then clamped. A tool with fewer examples than its share simply
+    # gives the remainder back — it cannot invent turns it does not have.
+    want = {}
+    for tool, rows in by_tool.items():
+        share = int(round(budget * len(rows) / total))
+        want[tool] = min(len(rows), max(FLOOR, min(cap, share)))
+
+    # Clamping moves the total off `budget` in either direction, so settle the difference against
+    # the tools that still have rows left, largest first — which is where the extra turns belong.
+    order = sorted(by_tool, key=lambda t: -len(by_tool[t]))
+    while sum(want.values()) > budget:
+        for tool in reversed(order):
+            if sum(want.values()) <= budget:
+                break
+            if want[tool] > 1:
+                want[tool] -= 1
+    while sum(want.values()) < budget:
+        moved = False
+        for tool in order:
+            if sum(want.values()) >= budget:
+                break
+            if want[tool] < min(len(by_tool[tool]), cap):
+                want[tool] += 1
+                moved = True
+        if not moved:
             break
-        i += 1
+
+    picked = []
+    for tool, n in want.items():
+        picked.extend(i for _, i in by_tool[tool][:n])
     rnd.shuffle(picked)
     return [json.loads(lines[j]) for j in picked]
 
