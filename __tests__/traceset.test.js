@@ -131,6 +131,43 @@ describe('the label comes from verifiers, never from the report', () => {
   });
 });
 
+describe('a click by number needs the list the number came from', () => {
+  /*
+   * Every run recorded before look and open began carrying their marks drew a numbered list and
+   * threw it away. The turn that survives reads: given a page you cannot see, emit 19. The
+   * rebuild of 2026-09-23 had 3,073 of these and 12 that were learnable.
+   */
+  const clicked = (marks) => job({
+    proposals: [{ pid: 'p1', state: 'approved' }],
+    steps: [
+      { n: 1, kind: 'you', text: 'Find three suppliers' },
+      { n: 2, kind: 'tool', tool: 'look', args: {} },
+      { n: 3, kind: 'look', text: 'the page', ...(marks ? { marks } : {}) },
+      { n: 4, kind: 'tool', tool: 'click', args: { index: 19 } },
+      { n: 5, kind: 'read', text: 'the listing' },
+    ],
+  });
+
+  it('throws away an index whose list was never recorded', () => {
+    const out = build([clicked(null)], {});
+    const kept = [...out.train, ...out.eval];
+    expect(kept.some((x) => x.action.tool === 'click')).toBe(false);
+    expect(out.manifest.droppedTurns['an index with no list to read it from']).toBeGreaterThan(0);
+  });
+
+  it('keeps the same turn once the list travels with it', () => {
+    const out = build([clicked('[19] Website laten maken | incl. hosting')], {});
+    const kept = [...out.train, ...out.eval];
+    expect(kept.some((x) => x.action.tool === 'click' && x.action.args.index === 19)).toBe(true);
+  });
+
+  it('leaves calls that name what they want alone', () => {
+    /* Only an index is meaningless without the list. A url or a query carries its own subject. */
+    const out = build([job({ proposals: [{ pid: 'p1', state: 'approved' }] })], {});
+    const kept = [...out.train, ...out.eval];
+    expect(kept.some((x) => x.action.tool === 'open')).toBe(true);
+  });
+});
 describe('the evaluation split is cut by job, before any turn exists', () => {
   it('never puts two turns from the same job on both sides', () => {
     const jobs = [];
