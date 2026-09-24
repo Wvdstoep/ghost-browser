@@ -88,19 +88,40 @@ class Hub:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
 
+    PART = 64 * 1024 * 1024
+
     def upload(self, tag, path, digest):
-        """One streamed PUT. The cluster writes it to its models volume under the tag."""
+        """In parts of 64 MB, then joined and checked on the cluster.
+
+        The edge in front of the cluster closes any single request past about a hundred megabytes
+        (the first two attempts died with an SSL EOF at exactly that point), and a model is five to
+        sixteen times that. Each part is retried on its own, so a dropped connection costs one part."""
         size = os.path.getsize(path)
-        say(f"uploading {size / 1e6:.0f} MB to the cluster as {tag}")
+        parts = (size + self.PART - 1) // self.PART
+        say(f"uploading {size / 1e6:.0f} MB to the cluster as {tag}, in {parts} part(s)")
         with open(path, "rb") as fh:
-            req = urllib.request.Request(
-                f"{self.base}/v1/training/models/{tag}/file",
-                data=fh, method="PUT",
-                headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/octet-stream",
-                         "Content-Length": str(size), "X-Sha256": digest},
-            )
-            with urllib.request.urlopen(req, timeout=3600) as r:
-                return json.loads(r.read().decode("utf-8") or "{}")
+            for i in range(parts):
+                fh.seek(i * self.PART)
+                chunk = fh.read(self.PART)
+                for attempt in range(4):
+                    try:
+                        req = urllib.request.Request(
+                            f"{self.base}/v1/training/models/{tag}/part/{i}", data=chunk, method="PUT",
+                            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/octet-stream",
+                                     "Content-Length": str(len(chunk))},
+                        )
+                        with urllib.request.urlopen(req, timeout=600) as r:
+                            r.read()
+                        break
+                    except (urllib.error.URLError, OSError) as e:
+                        if attempt == 3:
+                            raise
+                        say(f"part {i} failed ({str(e)[:80]}) — trying again")
+                        time.sleep(5)
+                say(f"  part {i + 1}/{parts} landed")
+        say("asking the cluster to join the parts")
+        body = json.dumps({"parts": parts, "digest": digest}).encode("utf-8")
+        return self._req("POST", f"/v1/training/models/{tag}/assemble", body, {"Content-Type": "application/json"}, timeout=1800)
 
     def create(self, tag, digest, base, round_id):
         say(f"asking the cluster to register {tag}")
