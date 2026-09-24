@@ -2001,7 +2001,7 @@ async function servingState() {
     reachable, models: models.slice(0, 20),
     hasModel: (() => { const bare = (m) => String(m || '').replace(/:latest$/, ''); return !!cfg.studentModel && models.some((m) => bare(m) === bare(cfg.studentModel)); })(),
     /* The model map and what each entry has earned (autopilot.js), and the switch itself. */
-    models: cfg.studentModels || {},
+    map: cfg.studentModels || {},
     autopilot: cfg.autopilot !== false,
     stages: autopilot.stages({ models: cfg.studentModels || {}, ledgers: shadow.all() }),
     rules: autopilot.RULES,
