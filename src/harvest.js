@@ -439,5 +439,5 @@ function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_P
 
 module.exports = {
   on, setOn, state, decide, take, push, stop, vet, gapsFrom, roleGapsFrom, askFor, load, busyFrom, liveFrom, attachJob, WALK_SILENT_MS, PARALLEL, LOGIN_PLATFORMS,
-  CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE,
+  CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE, TOOL_WORDS,
 };
