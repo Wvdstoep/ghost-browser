@@ -605,6 +605,30 @@ def main():
         print(f"no turns to train on at {train_path}")
         return 2
 
+    # ── AN ADAPTER THAT LIVES ON THE HUB ─────────────────────────────────────────────────────────
+    # A rented machine hands its adapter back to the hub as its last act, and the next round - on
+    # any machine - chains from it by name. `hub:<name>` is fetched into ./adapters/<name> here.
+    if args.adapter and str(args.adapter).startswith("hub:") and hub.base:
+        name = str(args.adapter)[4:].strip()
+        into = os.path.join(args.out, "adapters", name)
+        if not os.path.isfile(os.path.join(into, "adapter_config.json")):
+            import tarfile
+            os.makedirs(into, exist_ok=True)
+            tgz = into + ".tgz"
+            req = urllib.request.Request(f"{hub.base}/v1/training/adapters/{name}", headers={"Authorization": f"Bearer {hub.token}"})
+            try:
+                with urllib.request.urlopen(req, timeout=600) as r, open(tgz, "wb") as fh:
+                    for chunk in iter(lambda: r.read(1 << 20), b""):
+                        fh.write(chunk)
+                with tarfile.open(tgz, "r:gz") as tf:
+                    tf.extractall(into)
+                print(f"fetched adapter {name} from the hub", flush=True)
+            except Exception as e:
+                print(f"could not fetch adapter {name} from the hub ({e}) — starting from the base", flush=True)
+                args.adapter = None
+        if args.adapter:
+            args.adapter = into
+
     # Raw lines only. 141 MB of text is fine to hold; 141 MB parsed into dicts, beside a model, is
     # not — and the failure mode is the process simply disappearing.
     with open(train_path, "r", encoding="utf-8") as fh:

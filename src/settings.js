@@ -32,6 +32,16 @@ const DEFAULTS = {
   studentModel: '',
   studentMode: 'off',        // off | shadow | canary | primary
   studentShare: 10,          // canary: share of jobs the student drives, in percent
+  /* WHERE ROUNDS RUN. One flow at a time, chosen by a person: the laptops that offered, or a
+     card rented per round and destroyed after it. The key never leaves the server. */
+  trainOn: 'laptop',         // laptop | gpu
+  gpuProvider: 'runpod',
+  gpuKey: '',
+  gpuOwner: '',              // who saved the key - the rented machine reports as their device
+  gpuHub: '',                // this cluster's public address, as the machine must reach it
+  gpuType: 'NVIDIA GeForce RTX 4090',
+  gpuCloud: 'COMMUNITY',     // COMMUNITY (cheaper) | SECURE
+  gpuMaxHours: 2,            // the hard stop, whatever the round says
   llmKey: null,
   /*
    * WHETHER THE AGENT MAY ACT WITHOUT ASKING.
@@ -99,6 +109,13 @@ function write(input = {}) {
   if (typeof input.studentModel === 'string') out.studentModel = input.studentModel.trim().slice(0, 120);
   if (['off', 'shadow', 'canary', 'primary'].includes(input.studentMode)) out.studentMode = input.studentMode;
   if (Number.isFinite(Number(input.studentShare))) out.studentShare = Math.max(1, Math.min(100, Math.round(Number(input.studentShare))));
+  if (['laptop', 'gpu'].includes(input.trainOn)) out.trainOn = input.trainOn;
+  if (typeof input.gpuKey === 'string') out.gpuKey = input.gpuKey.trim().slice(0, 200);
+  if (typeof input.gpuOwner === 'string') out.gpuOwner = input.gpuOwner.trim().slice(0, 120);
+  if (typeof input.gpuHub === 'string' && /^https?:\/\/[^\s]+$/.test(input.gpuHub.trim())) out.gpuHub = input.gpuHub.trim().replace(/\/+$/, '');
+  if (typeof input.gpuType === 'string' && input.gpuType.trim()) out.gpuType = input.gpuType.trim().slice(0, 80);
+  if (['COMMUNITY', 'SECURE'].includes(input.gpuCloud)) out.gpuCloud = input.gpuCloud;
+  if (Number.isFinite(Number(input.gpuMaxHours))) out.gpuMaxHours = Math.max(0.25, Math.min(12, Number(input.gpuMaxHours)));
   // An empty string means "clear it"; undefined means "leave it alone". Those are different asks and
   // collapsing them would make the key impossible to remove.
   if (input.llmKey === null || input.llmKey === '') out.llmKey = null;
@@ -124,6 +141,9 @@ function redacted() {
     llmKey: undefined,
     /* The backups are keys too. The spread above carried them to every screen that asked. */
     llmKeys: undefined,
+    gpuKey: undefined,
+    gpuKeySet: !!s.gpuKey,
+    gpuKeyHint: s.gpuKey ? `…${String(s.gpuKey).slice(-4)}` : null,
     keySet: !!s.llmKey,
     // Whether a backup account exists — never the key itself, same rule as the first.
     keys2Set: !!(s.llmKeys && String(s.llmKeys).trim()),
