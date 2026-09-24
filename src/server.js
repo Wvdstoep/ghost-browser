@@ -1942,6 +1942,22 @@ function readinessNow({ corpus = {}, serving = null } = {}) {
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
 
+/* The device log's last set-up line, and whether the set-up is still going (no closing line yet). */
+function lastSetupLine(deviceId) {
+  try {
+    const lines = ((deviceHub.deviceLog(deviceId, 0) || {}).lines || []).map((l) => (typeof l === 'string' ? l : (l && l.line) || '')).filter((l) => /^train: /.test(l));
+    return lines.length ? lines[lines.length - 1].replace(/^train: /, '') : '';
+  } catch (e) { return ''; }
+}
+function setupInProgress(deviceId) {
+  try {
+    const lines = ((deviceHub.deviceLog(deviceId, 0) || {}).lines || []).map((l) => (typeof l === 'string' ? l : (l && l.line) || '')).filter((l) => /^train: /.test(l));
+    if (!lines.length) return false;
+    const last = lines[lines.length - 1];
+    return !/ready to train|still not ready|setup failed|cannot set up|setup is already running/.test(last);
+  } catch (e) { return false; }
+}
+
 function planNow() {
   const pathx = require('path');
   const base = process.env.PROFILE_DIR || '/profiles';
@@ -1973,6 +1989,10 @@ function planNow() {
         home: (d.caps && d.caps.trainerHome) || '',
         missing: (d.caps && d.caps.trainerMissing) || [],
         canSetUp: !!(d.caps && d.caps.trainerCanSetUp),
+        /* A set-up in progress, read off the caps when the app sends them and off the device log
+           otherwise - "torch is not installed" for ten minutes read as nothing happening. */
+        settingUp: !!(d.caps && d.caps.trainerSettingUp) || setupInProgress(d.deviceId),
+        setupLine: String((d.caps && d.caps.trainerSetupLine) || lastSetupLine(d.deviceId) || ''),
       }));
   } catch (e) { trainers = []; }
   /*
