@@ -1603,7 +1603,7 @@ app.get('/v1/training/state', authed, (_req, res) => {
         .map((d) => ({ name: d.name || d.deviceId, deviceId: d.deviceId, online: !!d.online }));
     } catch (e) { trainers = []; }
 
-    res.json(training.state({ corpus, manifest, trainers }));
+    res.json({ ...training.state({ corpus, manifest, trainers }), resight: resight.state() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1693,6 +1693,101 @@ app.post('/v1/training/build', authed, (_req, res) => {
   const started = buildSet(null);
   res.json(started ? { building: true } : { building: false, why: 'a build is already running' });
 });
+
+/*
+ * RE-SIGHT THE OLD RUNS - resight.js says why and which. Here: a switch, a state, and while the
+ * switch is on, one short batch a minute in a login-less profile of its own, closed again after
+ * each batch so a deploy is never held for more than a few minutes. No model is asked anything.
+ */
+app.get('/v1/training/resight', authed, (_req, res) => res.json(resight.state()));
+app.post('/v1/training/resight', authed, (req, res) => {
+  const st = resight.setOn(!!(req.body || {}).on);
+  log.info(`training: re-sighting old runs ${st.on ? 'ON' : 'OFF'}`);
+  res.json(resight.state());
+});
+
+let resighting = false;
+/* The scan in progress, and the queue it produced: [{id, tier, createdAt, n}] gold first. In
+   memory only - a restart simply counts again, which is cheap and always right. */
+const resightMem = { queue: null, found: [], scanNext: 0 };
+async function resightBatch() {
+  if (resighting) return;
+  const st = resight.load();
+  if (!st.on) return;
+  resighting = true;
+  let s = null;
+  try {
+    /* COUNT FIRST, IN SLICES. The runs are files; reading them all at once would stall every
+       request the browser is serving, so a tick reads a few hundred and comes back. */
+    if (!resightMem.queue) {
+      const r = resight.scan(jobs.DIR, st, { from: resightMem.scanNext, limit: 300 });
+      resightMem.found.push(...r.found);
+      resightMem.scanNext = r.next;
+      if (!r.done) { st.lastWhy = `counting the blind reads — ${r.next} of ${r.total} runs read`; resight.save(st); return; }
+      resightMem.queue = resight.order(resightMem.found);
+      resightMem.found = [];
+      resightMem.scanNext = 0;
+      st.left = resightMem.queue.reduce((n, e) => n + e.n, 0);
+      if (!resightMem.queue.length) {
+        st.on = false; st.lastAt = new Date().toISOString();
+        st.lastWhy = 'every old run that could be re-sighted has been';
+        resight.save(st); resightMem.queue = null;
+        log.info('[resight] nothing left to re-sight - switched off');
+        return;
+      }
+      st.lastWhy = `${st.left} blind read(s) to re-take across ${resightMem.queue.length} run(s)`;
+      resight.save(st);
+      log.info(`[resight] ${st.lastWhy}`);
+    }
+    if (!pool.capacity().accepting) return;
+    const PROFILE = String(process.env.RESIGHT_PROFILE || 'resight');
+    if (!pool.listProfiles().includes(PROFILE)) {
+      try { pool.createProfile(PROFILE, { note: 're-sighting old runs; holds no login' }); } catch (e) { /* exists */ }
+    }
+    const o = await pool.createSession({ owner: 'resight', profile: PROFILE, takeover: true });
+    s = pool.get(o.sessionId);
+    let acc = 0, rej = 0, pages = 0;
+    while (resightMem.queue.length && pages < 25) {
+      const entry = resightMem.queue[0];
+      const job = resight.loadJob(jobs.DIR, entry.id);
+      if (!job) { resightMem.queue.shift(); continue; }
+      const cands = resight.candidates(job).slice(0, 25 - pages);
+      for (const c of cands) {
+        const stepRow = job.steps[c.index];
+        let text = '', landed = c.url;
+        try {
+          await s.page.goto(c.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await new Promise((r) => setTimeout(r, 1500));
+          landed = s.page.url();
+          text = await s.page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '');
+        } catch (e) { text = ''; }
+        const v = resight.accept({ expected: c.expected, got: text.length, asked: c.url, landed });
+        const at = new Date().toISOString();
+        if (v.ok) { jobs.annotate(job, stepRow, { content: resight.contentFor(landed, text), resighted: { at, got: text.length, expected: c.expected } }); acc++; }
+        else { jobs.annotate(job, stepRow, { resighted: { at, rejected: v.why, expected: c.expected } }); rej++; }
+        pages++;
+      }
+      /* Done only once every candidate of the run was tried; a run cut by the batch edge comes back. */
+      const rest = resight.candidates(job).length;
+      if (rest === 0) { st.doneJobs[job.id] = new Date().toISOString(); resightMem.queue.shift(); } else { entry.n = rest; }
+    }
+    st.accepted += acc; st.rejected += rej; st.acceptedSinceBuild += acc; st.batches += 1;
+    st.left = resightMem.queue.reduce((n, e) => n + e.n, 0);
+    st.lastAt = new Date().toISOString();
+    st.lastWhy = `${acc} page(s) recovered, ${rej} left blind in the last batch`;
+    resight.save(st);
+    log.info(`[resight] batch ${st.batches}: ${acc} recovered, ${rej} rejected, ${st.left} to go`);
+    if (!resightMem.queue.length) resightMem.queue = null;   // count again next tick; nothing found switches it off
+    /* Enough recovered to be worth a set: rebuild, so the sighted count the planner gates on moves. */
+    if (st.acceptedSinceBuild >= resight.REBUILD_AT && !buildRunning) {
+      if (buildSet(null)) { st.acceptedSinceBuild = 0; resight.save(st); }
+    }
+  } finally {
+    if (s) { try { await pool.close(s.id, 're-sight batch done'); } catch (e) { /* already gone */ } }
+    resighting = false;
+  }
+}
+setInterval(() => { resightBatch().catch((e) => log.warn(`[resight] ${e.message}`)); }, 60000).unref?.();
 
 /**
  * THE SET ITSELF, so a round can run on a machine that has never seen it.
@@ -1853,6 +1948,7 @@ setInterval(() => {
  * A second walk machine would drift: its own budgets, its own journalling, and a bug to fix twice.
  */
 const harvest = require('./harvest');
+const resight = require('./resight');
 
 /**
  * One browser, one walk - but only a walk that is actually ALIVE holds it.
