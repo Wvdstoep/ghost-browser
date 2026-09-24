@@ -1962,6 +1962,55 @@ app.put('/v1/training/models/:tag/file', authed, (req, res) => {
   out.on('error', (e) => res.status(500).json({ error: e.message }));
 });
 
+/*
+ * IN PARTS. The edge in front of this host closes any single request past about a hundred
+ * megabytes, and a model is five to sixteen times that. So the laptop sends numbered parts of
+ * sixty-four megabytes and then asks for them to be joined; the join checks the sha256 of the
+ * whole, so a part lost or doubled on the way is refused rather than served.
+ */
+app.put('/v1/training/models/:tag/part/:n', authed, (req, res) => {
+  const tag = safeTag(req.params.tag);
+  const n = Number(req.params.n);
+  if (!tag || !Number.isInteger(n) || n < 0 || n > 999) return res.status(400).json({ error: 'a tag and a part number are needed' });
+  const fsx = require('fs'); const pathx = require('path');
+  const dir = pathx.join(MODELS_DIR(), 'uploads', `${tag.replace(/:/g, '-')}.parts`);
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) { return res.status(500).json({ error: `cannot write to ${dir}: ${e.message}` }); }
+  const file = pathx.join(dir, `part-${String(n).padStart(4, '0')}`);
+  let bytes = 0;
+  const out = fsx.createWriteStream(`${file}.tmp`);
+  req.on('data', (b) => { bytes += b.length; });
+  req.pipe(out);
+  out.on('finish', () => { fsx.renameSync(`${file}.tmp`, file); res.json({ tag, part: n, bytes }); });
+  out.on('error', (e) => res.status(500).json({ error: e.message }));
+});
+app.post('/v1/training/models/:tag/assemble', authed, async (req, res) => {
+  const tag = safeTag(req.params.tag);
+  const b = req.body || {};
+  const parts = Number(b.parts);
+  const digest = String(b.digest || '').toLowerCase();
+  if (!tag || !Number.isInteger(parts) || parts < 1 || !/^[0-9a-f]{64}$/.test(digest)) return res.status(400).json({ error: 'a tag, the number of parts and the sha256 are needed' });
+  const fsx = require('fs'); const pathx = require('path'); const crypto = require('crypto');
+  const dir = pathx.join(MODELS_DIR(), 'uploads', `${tag.replace(/:/g, '-')}.parts`);
+  const file = pathx.join(MODELS_DIR(), 'uploads', `${tag.replace(/:/g, '-')}.gguf`);
+  try {
+    const hash = crypto.createHash('sha256');
+    const out = fsx.createWriteStream(`${file}.part`);
+    let bytes = 0;
+    for (let i = 0; i < parts; i++) {
+      const p = pathx.join(dir, `part-${String(i).padStart(4, '0')}`);
+      if (!fsx.existsSync(p)) { out.destroy(); return res.status(400).json({ error: `part ${i} of ${parts} never arrived` }); }
+      await new Promise((ok, no) => { const s = fsx.createReadStream(p); s.on('data', (c) => { hash.update(c); bytes += c.length; }); s.on('error', no); s.on('end', ok); s.pipe(out, { end: false }); });
+    }
+    await new Promise((ok) => out.end(ok));
+    const got = hash.digest('hex');
+    if (got !== digest) { try { fsx.unlinkSync(`${file}.part`); } catch (e) { /* gone */ } return res.status(400).json({ error: `the joined file does not match (sha256 ${got.slice(0, 12)} ≠ ${digest.slice(0, 12)})` }); }
+    fsx.renameSync(`${file}.part`, file);
+    try { fsx.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* parts are spent */ }
+    log.info(`training: model file for ${tag} assembled from ${parts} part(s) (${Math.round(bytes / 1e6)} MB, ${digest.slice(0, 12)})`);
+    res.json({ tag, file, bytes, digest });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* Hand the file to the sidecar as a blob, then create the tag from it. Ollama's own protocol. */
 async function createServedModel({ tag, digest, base = '', roundId = '' }) {
   const fsx = require('fs'); const pathx = require('path');
