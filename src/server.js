@@ -1746,8 +1746,8 @@ async function resightBatch() {
     }
     const o = await pool.createSession({ owner: 'resight', profile: PROFILE, takeover: true });
     s = pool.get(o.sessionId);
-    let acc = 0, rej = 0, pages = 0;
-    while (resightMem.queue.length && pages < 25) {
+    let acc = 0, rej = 0, pages = 0, gone = false;
+    while (resightMem.queue.length && pages < 25 && !gone) {
       const entry = resightMem.queue[0];
       const job = resight.loadJob(jobs.DIR, entry.id);
       if (!job) { resightMem.queue.shift(); continue; }
@@ -1755,18 +1755,26 @@ async function resightBatch() {
       for (const c of cands) {
         const stepRow = job.steps[c.index];
         let text = '', landed = c.url;
+        s.lastUsed = Date.now();   // the reaper closes an idle session after five minutes; this one is busy
         try {
-          await s.page.goto(c.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await s.page.goto(c.url, { waitUntil: 'domcontentloaded', timeout: 15000 });
           await new Promise((r) => setTimeout(r, 1500));
           landed = s.page.url();
           text = await s.page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '');
-        } catch (e) { text = ''; }
+        } catch (e) {
+          /* The browser itself went away (a deploy, the reaper, a crash): nothing after this can
+             be judged, so the batch ends here and the step stays untried for the next one. */
+          if (/closed|detached|crashed/i.test(String(e.message))) { gone = true; break; }
+          text = '';
+        }
         const v = resight.accept({ expected: c.expected, got: text.length, asked: c.url, landed });
         const at = new Date().toISOString();
         if (v.ok) { jobs.annotate(job, stepRow, { content: resight.contentFor(landed, text), resighted: { at, got: text.length, expected: c.expected } }); acc++; }
         else { jobs.annotate(job, stepRow, { resighted: { at, rejected: v.why, expected: c.expected } }); rej++; }
         pages++;
+        if (pages % 5 === 0) log.info(`[resight] ${pages} page(s) this batch, ${acc} recovered so far`);
       }
+      if (gone) { log.warn('[resight] the browser went away mid-batch - stopping here, the rest stays for the next batch'); break; }
       /* Done only once every candidate of the run was tried; a run cut by the batch edge comes back. */
       const rest = resight.candidates(job).length;
       if (rest === 0) { st.doneJobs[job.id] = new Date().toISOString(); resightMem.queue.shift(); } else { entry.n = rest; }
