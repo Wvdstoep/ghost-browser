@@ -233,6 +233,24 @@ describe('which scope the next round trains', () => {
     expect(d2.device).toBe('Second');
   });
 
+  it('A MACHINE WHOSE ROUNDS CRASHED TWICE IN AN HOUR RESTS, and the other one carries on', () => {
+    const s = scopes(); s[0].adapter = 'base-v1'; s[0].seen = 1700;
+    const two = [{ name: 'WojMagEmi', deviceId: 'd1', online: true }, { name: 'Karolina', deviceId: 'd2', online: true }];
+    const now = new Date().toISOString();
+    const crashed = [
+      { status: 'failed', device: 'KAROLINA', startedAt: now, endedAt: now, why: 'the trainer process died' },
+      { status: 'failed', device: 'KAROLINA', startedAt: now, endedAt: now, why: 'the trainer process died' },
+    ];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: crashed, trainers: two, auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 });
+    expect(d.run).toBe(true);
+    expect(d.device).toBe('WojMagEmi');
+    const only = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: crashed, trainers: [two[1]], auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 });
+    expect(only.run).toBe(false);
+    expect(only.why).toContain('resting');
+    /* One failure is a failure, not a pattern. */
+    expect(decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [crashed[0]], trainers: [two[1]], auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 }).run).toBe(true);
+  });
+
   it('sums coverage per scope, and counts rounds from before the scopes as base', () => {
     const rounds = [{ trained: 100 }, { trained: 50, scope: { key: 'platform:facebook' } }, { trained: 20, scope: { key: 'base' } }];
     expect(coveredFor(rounds, 'base')).toBe(120);

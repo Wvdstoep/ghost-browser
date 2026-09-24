@@ -37,6 +37,33 @@ const ENOUGH_NEW = 200;
  */
 const SILENT_MS = 75 * 60 * 1000;
 
+/* A machine whose rounds failed this many times within REST_WINDOW_MS rests for REST_MS. */
+const CRASHES_TO_REST = 2;
+const REST_WINDOW_MS = 60 * 60 * 1000;
+const REST_MS = 60 * 60 * 1000;
+
+/** Devices (lower-case names) that should not be handed a round right now, with why. */
+function restingDevices(rounds, now = Date.now()) {
+  const byDevice = new Map();
+  for (const r of rounds || []) {
+    if (r.status !== 'failed') continue;
+    const at = Date.parse(r.endedAt || r.startedAt || '') || 0;
+    if (!at || now - at > REST_WINDOW_MS) continue;
+    const k = String(r.device || '').toLowerCase();
+    if (!k) continue;
+    const row = byDevice.get(k) || { n: 0, last: 0 };
+    row.n++; row.last = Math.max(row.last, at);
+    byDevice.set(k, row);
+  }
+  const out = new Map();
+  for (const [k, row] of byDevice) {
+    if (row.n >= CRASHES_TO_REST && now - row.last < REST_MS) {
+      out.set(k, `${row.n} rounds failed on it in the last hour — resting until ${new Date(row.last + REST_MS).toISOString().slice(11, 16)} UTC`);
+    }
+  }
+  return out;
+}
+
 /**
  * How much of the set has actually been trained on, across every round that reported it.
  *
@@ -89,9 +116,16 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   const withScopes = Array.isArray(scopes) && scopes.length > 0;
   if (alive.length && !withScopes) return no(`a round is already running on ${alive[0].device || 'a device'}`);
 
-  const free = (trainers || []).filter((t) => t.online && !busyDevices.has(String(t.name || '').toLowerCase()));
+  const resting = restingDevices(rounds, now);
+  const free = (trainers || []).filter((t) => t.online && !busyDevices.has(String(t.name || '').toLowerCase()) && !resting.has(String(t.name || '').toLowerCase()));
   if (!(trainers || []).some((t) => t.online)) return no('no machine is connected that can train');
-  if (!free.length) return no(`every machine that can train is busy: ${alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`).join(', ')}`);
+  if (!free.length) {
+    const why = [
+      ...alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`),
+      ...[...resting].filter(([k]) => (trainers || []).some((t) => t.online && String(t.name || '').toLowerCase() === k)).map(([k, w]) => `${k}: ${w}`),
+    ];
+    return no(`every machine that can train is busy or resting: ${why.join('; ')}`);
+  }
 
   if (!dataset || !dataset.train) return no('no training set has been built yet');
 
@@ -197,4 +231,4 @@ function pickScope(scopes, sliceTurns = 0, { basePending = false } = {}) {
   return { pick: null, why: 'every scope is covered' };
 }
 
-module.exports = { decide, covered, coveredFor, pickScope, ENOUGH_NEW, SILENT_MS };
+module.exports = { decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS };
