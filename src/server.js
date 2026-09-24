@@ -198,7 +198,9 @@ app.get('/api/auth/state', (req, res) => {
    */
   res.json({ needsSignup: accounts.needsSignup(), signedIn: !!who, username: who ? who.username : null,
             superadmin: !!(who && SUPERADMIN.has(String(who.username || '').toLowerCase())),
-            minPassword: accounts.MIN_PASSWORD, sso: !!process.env.LEADFLOW_JWT_SECRET, ssoOnly: SSO_ONLY });
+            minPassword: accounts.MIN_PASSWORD, sso: !!process.env.LEADFLOW_JWT_SECRET, ssoOnly: SSO_ONLY,
+            /* Whether email + password can open this instance at all - the gate and the app show the form on it. */
+            hasPassword: accounts.hasPassword() });
 });
 
 app.post('/api/auth/signup', (req, res) => {
@@ -212,7 +214,14 @@ app.post('/api/auth/signup', (req, res) => {
 });
 
 app.post('/api/auth/login', (req, res) => {
-  if (SSO_ONLY) return ssoOnlyBlock(req, res);
+  /*
+   * THE WAY IN THAT DOES NOT DEPEND ON THE PLATFORM. An SSO-only instance still opens to its
+   * owner's email and password once the owner has set one (Settings, or the console's Account
+   * card); before that, the message says what to do rather than showing a form that cannot work.
+   */
+  if (SSO_ONLY && !accounts.hasPassword()) {
+    return res.status(403).json({ error: 'No password is set on this Ghost Browser yet. Open it from your platform once (the Tools tab), then set a password in Settings — after that you can sign in here with your email and that password.' });
+  }
   try {
     const rec = accounts.login(req.body?.username, req.body?.password);
     const { token, exp } = accounts.issue(rec);
@@ -245,6 +254,7 @@ app.post('/api/auth/sso', (req, res) => {
       // A password nobody will ever type. Signing in happens through LeadFlow; this exists only
       // because the record needs one, and a guessable placeholder would be worse than a random one.
       rec = accounts.signup(who, crypto.randomBytes(24).toString('hex'));
+      try { accounts.markSso(); } catch (e) { /* the flag is a courtesy */ }
       log.info(`[sso] created the owner account for ${rec.username}`);
     } else {
       /*
@@ -274,6 +284,15 @@ app.post('/api/auth/sso', (req, res) => {
 });
 
 app.post('/api/auth/logout', (_req, res) => { accounts.clearCookie(res); res.json({ ok: true }); });
+
+/* The owner sets (or changes) the password that opens this instance without the platform. */
+app.post('/api/auth/password', authed, (req, res) => {
+  try {
+    const rec = accounts.setPassword(req.body && req.body.password);
+    log.info(`[auth] the owner set a sign-in password (${rec.username})`);
+    res.json({ ok: true, username: rec.username, hasPassword: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
 
 /*
  * SUPERADMIN OVERVIEW — the platform (my-app) superadmin's cross-tenant view, one pod at a time.
