@@ -151,6 +151,9 @@ const CONTENT_KINDS = new Set(['read', 'data']);
 const REFUSED_STEP = /refused|no option matches|not one of your tools|is not one of your tools|may not (navigate|click|submit|fire|make requests)/i;
 const STALLED_STEP = /looks\/reads in a row with no action/i;
 function stepVerdict(steps, i) {
+  const s0 = steps[i] || {};
+  /* A person's label outranks everything: it is the one label taken with the page in view. */
+  if (s0.human && ['good', 'wrong'].includes(s0.human.verdict)) return { verdict: s0.human.verdict, why: 'a person said so', reason: (s0.judged && s0.judged.reason) || '' };
   for (let k = i + 1; k < steps.length; k++) {
     const s = steps[k] || {};
     if (s.kind === 'tool') break;
@@ -158,7 +161,10 @@ function stepVerdict(steps, i) {
     if (s.kind === 'blocked' && REFUSED_STEP.test(text)) return { verdict: 'wrong', why: 'the call was refused' };
     if (s.kind === 'blocked' && STALLED_STEP.test(text)) return { verdict: 'wrong', why: 'one look too many' };
   }
-  return { verdict: 'unknown', why: '' };
+  /* The teacher's offline judgement, last: an opinion, kept under its own name, never gold. */
+  if (s0.judged && s0.judged.verdict === 'wrong') return { verdict: 'wrong', why: `the teacher judged it wrong${s0.judged.why ? ` (${String(s0.judged.why).slice(0, 80)})` : ''}`, reason: '' };
+  if (s0.judged && s0.judged.verdict === 'good') return { verdict: 'good', why: 'the teacher judged it good', reason: String(s0.judged.reason || '') };
+  return { verdict: 'unknown', why: '', reason: '' };
 }
 function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
@@ -216,7 +222,7 @@ function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHis
     const sv = stepVerdict(steps, steps.indexOf(s));
     out.push({
       goal,
-      step: sv.verdict, stepWhy: sv.why,
+      step: sv.verdict, stepWhy: sv.why, reason: sv.reason || '',
       role: String((job && job.role) || 'general'),
       site: scrubText(String((job && job.profile) || '')),
       observed: history.slice(),
@@ -520,7 +526,7 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
     /* `sighted`: the decision had a page or a numbered list to read - the same fact the manifest
        counts as turnsWithContent, written per turn so coverage can be read per tool off the file. */
     meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at,
-      sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))), step: t.step || 'unknown' },
+      sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))), step: t.step || 'unknown', ...(t.reason ? { reason: t.reason } : {}) },
   })).join('\n');
 }
 
