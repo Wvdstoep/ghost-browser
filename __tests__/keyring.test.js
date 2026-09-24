@@ -36,12 +36,12 @@ describe('makeKeyring', () => {
 
   it('treats the same key twice as one key', () => {
     const r = makeKeyring(['a', 'a', 'b']);
-    expect(r.state()).toEqual({ total: 2, usable: 2 });
+    expect(r.state()).toEqual({ total: 2, usable: 2, dead: 0 });
   });
 
   it('ignores blanks, so an unset second field costs nothing', () => {
     const r = makeKeyring(['', '  ', 'a']);
-    expect(r.state()).toEqual({ total: 1, usable: 1 });
+    expect(r.state()).toEqual({ total: 1, usable: 1, dead: 0 });
     expect(r.current()).toBe('a');
   });
 
@@ -52,7 +52,7 @@ describe('makeKeyring', () => {
     expect(r.current()).toBe('b');
     t = 2000;
     expect(r.current()).toBe('a');          // rested, and it is still the preferred key
-    expect(r.state()).toEqual({ total: 2, usable: 2 });
+    expect(r.state()).toEqual({ total: 2, usable: 2, dead: 0 });
   });
 
   it('with every key spent it hands back the oldest rather than nothing', () => {
