@@ -1910,6 +1910,76 @@ async function servingState() {
     shadow: shadow.state(),
   };
 }
+/*
+ * A TRAINED MODEL ARRIVES. The laptop merges the adapter into the base, converts it to one GGUF
+ * file and PUTs it here; this streams it onto the models volume (never into memory - a 1.5B
+ * model is 1.6 GB), then hands it to the sidecar the way Ollama wants it: as a blob under its
+ * sha256, then a create naming that blob. From then on the tag is a model the serving switch
+ * can name, and promotion is the thing that asks the laptop for it.
+ */
+const MODELS_DIR = () => process.env.MODELS_DIR || '/models';
+const safeTag = (s) => String(s || '').replace(/[^a-zA-Z0-9._:-]/g, '').replace(/^[.:]+|[.:]+$/g, '').slice(0, 80);
+app.put('/v1/training/models/:tag/file', authed, (req, res) => {
+  const tag = safeTag(req.params.tag);
+  if (!tag) return res.status(400).json({ error: 'a tag is needed' });
+  const fsx = require('fs'); const pathx = require('path'); const crypto = require('crypto');
+  const dir = pathx.join(MODELS_DIR(), 'uploads');
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) { return res.status(500).json({ error: `cannot write to ${dir}: ${e.message}` }); }
+  const file = pathx.join(dir, `${tag.replace(/:/g, '-')}.gguf`);
+  const tmp = `${file}.part`;
+  const hash = crypto.createHash('sha256');
+  let bytes = 0;
+  const out = fsx.createWriteStream(tmp);
+  req.on('data', (b) => { hash.update(b); bytes += b.length; });
+  req.pipe(out);
+  out.on('finish', () => {
+    const digest = hash.digest('hex');
+    const claimed = String(req.headers['x-sha256'] || '');
+    if (claimed && claimed !== digest) { try { fsx.unlinkSync(tmp); } catch (e) { /* gone */ } return res.status(400).json({ error: `the file arrived damaged (sha256 ${digest.slice(0, 12)} ≠ ${claimed.slice(0, 12)})` }); }
+    fsx.renameSync(tmp, file);
+    log.info(`training: model file for ${tag} arrived (${Math.round(bytes / 1e6)} MB, ${digest.slice(0, 12)})`);
+    res.json({ tag, file, bytes, digest });
+  });
+  out.on('error', (e) => res.status(500).json({ error: e.message }));
+});
+
+/* Hand the file to the sidecar as a blob, then create the tag from it. Ollama's own protocol. */
+async function createServedModel({ tag, digest, base = '', roundId = '' }) {
+  const fsx = require('fs'); const pathx = require('path');
+  const cfg = settingsStore.read();
+  const host = String(cfg.studentHost || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const file = pathx.join(MODELS_DIR(), 'uploads', `${tag.replace(/:/g, '-')}.gguf`);
+  if (!fsx.existsSync(file)) throw Object.assign(new Error(`no file for ${tag} has arrived yet`), { status: 404 });
+  const stat = fsx.statSync(file);
+  const head = await fetch(`${host}/api/blobs/sha256:${digest}`, { method: 'HEAD' });
+  if (head.status !== 200) {
+    const put = await fetch(`${host}/api/blobs/sha256:${digest}`, { method: 'POST', body: fsx.createReadStream(file), duplex: 'half', headers: { 'Content-Length': String(stat.size) } });
+    if (!put.ok) throw new Error(`the model server refused the blob: ${put.status} ${(await put.text()).slice(0, 200)}`);
+  }
+  const made = await fetch(`${host}/api/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: tag, files: { [`${tag.replace(/:/g, '-')}.gguf`]: `sha256:${digest}` }, stream: false }) });
+  const text = await made.text();
+  if (!made.ok) throw new Error(`create failed: ${made.status} ${text.slice(0, 300)}`);
+  const record = { tag, digest, base, roundId, bytes: stat.size, at: new Date().toISOString() };
+  try {
+    const p = pathx.join(process.env.PROFILE_DIR || '/profiles', 'training', 'models.json');
+    let all = []; try { all = JSON.parse(fsx.readFileSync(p, 'utf8')); } catch (e) { all = []; }
+    all = [record, ...all.filter((m) => m.tag !== tag)].slice(0, 50);
+    fsx.writeFileSync(p, JSON.stringify(all, null, 1));
+  } catch (e) { /* the list is a courtesy */ }
+  log.info(`training: ${tag} is now a model on the sidecar (${Math.round(stat.size / 1e6)} MB)`);
+  return { ...record, server: text.slice(0, 200) };
+}
+app.post('/v1/training/models/:tag/create', authed, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const tag = safeTag(req.params.tag);
+    const digest = String(b.digest || '').toLowerCase();
+    if (!tag || !/^[0-9a-f]{64}$/.test(digest)) return res.status(400).json({ error: 'a tag and a sha256 digest are needed' });
+    res.json(await createServedModel({ tag, digest, base: b.base, roundId: b.roundId }));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.get('/v1/training/serving', authed, async (_req, res) => {
   try { res.json(await servingState()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
