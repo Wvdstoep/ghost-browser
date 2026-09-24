@@ -16,12 +16,14 @@ describe('the boot script', () => {
     expect(s).toMatch(/train_round\.py .*--bf16/);
     expect(s).toMatch(/--hours 1\.5 --epochs 3 --slice 10000 --eval-turns 500/);
     expect(s).toContain("--adapter 'hub:r-abc'");
-    expect(s).toContain('/v1/training/script/train_round.py');
+    expect(s).toContain('/v1/training/script/$f');
+    expect(s).toContain('for f in train_round.py evaluate.py export_model.py');
   });
 
   it('hands the adapter back, exports the tag, and asks to be destroyed - in that order', () => {
+    /* The script FETCHES export_model.py early; the export itself is the later python3 call. */
     const a = s.indexOf('/v1/training/gpu/adapter');
-    const e = s.indexOf('export_model.py');
+    const e = s.indexOf('python3 export_model.py');
     const r = s.indexOf('/v1/training/gpu/release');
     expect(a).toBeGreaterThan(0);
     expect(e).toBeGreaterThan(a);
