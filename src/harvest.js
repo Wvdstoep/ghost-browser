@@ -43,7 +43,12 @@ const FILE = () => path.join(DIR(), 'harvest.json');
  * Twelve runs an hour, which is one every five minutes, and a walk takes two to ten. So the cap
  * binds only when runs are quick — it is there to stop a runaway, not to pace the normal case.
  */
-const CAP_PER_HOUR = 12;
+/* Walks at once. Sequential collection tops out near ten an hour whatever the cap says,
+   because a walk takes two to ten minutes; width is the only lever that reaches a slice in
+   a night. Each walk needs its own profile - a profile holds one session. */
+const PARALLEL = Number(process.env.HARVEST_PARALLEL || 0) || 4;
+/* The runaway guard, scaled to the width. */
+const CAP_PER_HOUR = 12 * PARALLEL;
 
 /** Ask for more prompts while a few are still queued, so the loop never waits on a model call. */
 const QUEUE_LOW = 3;
@@ -264,6 +269,19 @@ function vet(lines, { history = [] } = {}) {
  */
 const WALK_SILENT_MS = 10 * 60 * 1000;
 
+/** How many walks are alive, and which profiles they hold. */
+function liveFrom(all, now = Date.now(), silentMs = WALK_SILENT_MS) {
+  const held = [];
+  for (const j of all || []) {
+    if (!j || j.status !== 'running') continue;
+    const steps = j.steps && j.steps.length ? j.steps : null;
+    const stamp = (steps && steps[steps.length - 1] && steps[steps.length - 1].at) || j.createdAt || '';
+    const last = Date.parse(stamp) || 0;
+    if (last && now - last < silentMs) held.push(j.profile || '');
+  }
+  return { count: held.length, profiles: held };
+}
+
 function busyFrom(all, now = Date.now(), silentMs = WALK_SILENT_MS) {
   for (const j of all || []) {
     if (!j || j.status !== 'running') continue;
@@ -279,12 +297,13 @@ function busyFrom(all, now = Date.now(), silentMs = WALK_SILENT_MS) {
  * WHETHER TO START A RUN RIGHT NOW. A pure function of what is known, so it is testable and so the
  * screen and the loop can never disagree about the reason.
  */
-function decide({ on: isOn = false, busy = false, queue = [], recent = [], capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
+function decide({ on: isOn = false, busy = false, live = 0, parallel = PARALLEL, queue = [], recent = [], capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
   if (!isOn) return no('collection is switched off');
   /* The browser is one browser. Two walks in a profile is the thing startWalk already waits out,
      and queueing behind it here would only move the wait somewhere less visible. */
   if (busy) return no('a run is using the browser');
+  if (live >= parallel) return no(`${live} walk(s) already running, and the width is ${parallel}`);
   const inHour = (recent || []).filter((t) => now - t < 3600000).length;
   if (inHour >= capPerHour) return no(`${inHour} run(s) in the last hour, and the cap is ${capPerHour}`);
   if (!(queue || []).length) return no('nothing queued — waiting for the next batch of prompts');
@@ -342,14 +361,16 @@ function stop(why) {
 }
 
 /** Everything the screen needs, in one read. */
-function state({ busy = false, capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
+function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
   const s = load();
-  const plan = decide({ on: s.on, busy, queue: s.queue, recent: s.recent, capPerHour, now });
+  const plan = decide({ on: s.on, busy, live, parallel, queue: s.queue, recent: s.recent, capPerHour, now });
   return {
     on: !!s.on,
     queued: (s.queue || []).length,
     next: (s.queue || [])[0] || null,
     inLastHour: (s.recent || []).filter((t) => now - t < 3600000).length,
+    live,
+    parallel,
     capPerHour,
     collected: (s.history || []).length,
     aiming: s.aiming || [],
@@ -360,6 +381,6 @@ function state({ busy = false, capPerHour = CAP_PER_HOUR, now = Date.now() } = {
 }
 
 module.exports = {
-  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, attachJob, WALK_SILENT_MS,
+  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, liveFrom, attachJob, WALK_SILENT_MS, PARALLEL,
   CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE,
 };

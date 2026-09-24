@@ -1965,8 +1965,17 @@ setInterval(() => {
       if (!harvest.on()) return;
       const s = harvest.load();
       if ((s.queue || []).length <= harvest.QUEUE_LOW) refillPrompts(8).catch(() => {});
-      const plan = harvest.decide({ on: true, busy: browserBusy(), queue: s.queue, recent: s.recent });
+      /*
+       * Several walks at once, each in its own login-less profile. A profile holds one session,
+       * so width means profiles; and unattended work must not sit in a profile that holds a real
+       * login - the collector used to walk in `google`, which does. These four are empty.
+       */
+      const PUBLIC = String(process.env.HARVEST_PROFILES || 'default,ghostbrowser,livetest,hn').split(',').map((x) => x.trim()).filter(Boolean);
+      const alive = harvest.liveFrom(jobs.jobs.values());
+      const free = PUBLIC.filter((p) => !alive.profiles.includes(p) && !profileBusy(p));
+      const plan = harvest.decide({ on: true, live: alive.count, queue: s.queue, recent: s.recent });
       if (!plan.run) return;
+      if (!free.length) return;
       /*
        * The prompt is BOTH the ask and the goal, and that is the best shape there is for training:
        * no assistant expanded it, so what the set records is exactly a sentence a person would type.
@@ -1975,7 +1984,7 @@ setInterval(() => {
       const prompt = harvest.take(null);
       if (!prompt) return;
       const ctx = operatorContext();
-      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: 'google', maxSteps: 40, maxPages: 12 });
+      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: free[0], maxSteps: 40, maxPages: 12 });
       if (out && out.error) {
         log.warn(`[harvest] walk refused — ${out.error}`);
         /* An empty account is the one error worth stopping for: every further walk would be void
@@ -2041,17 +2050,17 @@ function harvestRuns(limit = 40) {
 
 /** The toggle. Off by default, and nothing here starts spending on its own. */
 app.get('/v1/harvest/state', authed, (_req, res) => {
-  try { res.json({ ...harvest.state({ busy: browserBusy() }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/harvest/on', authed, (req, res) => {
   const v = harvest.setOn(!!(req.body || {}).on);
   log.info(`training: collecting data by itself is ${v ? 'ON' : 'off'}`);
-  res.json({ ...harvest.state({ busy: browserBusy() }), ...harvestRuns(40) });
+  res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }), ...harvestRuns(40) });
 });
 /** Ask for a batch now — the owner wanting to see what it would choose, without waiting a minute. */
 app.post('/v1/harvest/refill', authed, async (req, res) => {
   const out = await refillPrompts((req.body || {}).want);
-  res.json({ ...out, state: harvest.state({ busy: browserBusy() }) });
+  res.json({ ...out, state: harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }) });
 });
 
 /** The owner allowing, or forbidding, one machine to train. Default is forbidden. */
