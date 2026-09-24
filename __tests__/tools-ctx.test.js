@@ -21,7 +21,8 @@ function offered() {
   const end = agent.indexOf('\n  };', start);
   const body = agent.slice(start, end);
   const names = new Set();
-  for (const m of body.matchAll(/^\s{4}([a-zA-Z_][a-zA-Z0-9_]*)\s*[:(]/gm)) names.add(m[1]);
+  /* `name: ...`, `name(...) {`, and the shorthand `name,` - observe and switchProfile are shorthand. */
+  for (const m of body.matchAll(/^\s{4}([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:[:(]|,\s*(?:\/\/.*)?$)/gm)) names.add(m[1]);
   /* ...and everything spread in from elsewhere is out of reach of a source-level check; name the spreads. */
   const spreads = [...body.matchAll(/^\s{4}\.\.\.([a-zA-Z_][a-zA-Z0-9_.()]*)/gm)].map((m) => m[1]);
   return { names, spreads };
