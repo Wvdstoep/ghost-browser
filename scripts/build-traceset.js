@@ -146,7 +146,9 @@ function main() {
     ...m,
     marks: { turnsWithMarks: withMarks, turnsWithContent: withContent, indexTurns, indexWithMarks },
     promptedWith: { tools: TOOLS.length, perRole: true },
-    ...(ACCEPT ? { accepted: [{ reason: ACCEPT, at: new Date().toISOString() }] } : {}),
+    /* Every reason ever confirmed, carried forward, so a confirmed filter stays confirmed. */
+    accepted: [...((last && last.accepted) || []), ...(ACCEPT ? [{ reason: ACCEPT, at: new Date().toISOString() }] : [])]
+      .filter((a, i, all) => all.findIndex((b) => (b && b.reason) === (a && a.reason)) === i),
   };
   fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
   say(`written to ${OUT}`);

@@ -29,6 +29,7 @@ const fb = require('./sites/facebook');
 const gg = require('./sites/google');
 const diagnostics = require('./diagnostics');
 const { makeKeyring, isSpent } = require('./keyring');
+const { steerFor } = require('./steer');
 const toolRegistry = require('./tools');
 const li = require('./sites/linkedin');
 const roles = require('./roles');
@@ -1074,9 +1075,13 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   let site = theRole.site || null;
   let book = site ? playbook.asContext(site) : '';
 
+  /* The collector's steer, if this walk carries one: only tools this role has, and only in the
+     teacher's message - the student's prompt is built elsewhere from the goal and the role. */
+  const steer = steerFor(job.hintTools || [], allowedTools);
+  if (steer) jobsStore.step(job, 'note', `practising ${(job.hintTools || []).filter((x) => allowedTools.has(x)).slice(0, 4).join(', ')} on this walk`);
   const messages = [{ role: 'system', content: systemPrompt({
     goal: job.goal, plan: job.plan || '', companyContext: ctx, meContext: me.asContext(), profileList,
-    autoAct: settings.autoAct, role: theRole, playbookContext: book,
+    autoAct: settings.autoAct, role: theRole, playbookContext: [book, steer].filter(Boolean).join('\n\n'),
   }) }];
   if (book) jobsStore.step(job, 'note', `starting from what has worked before on ${site}`);
   job.transcript = messages;

@@ -184,3 +184,17 @@ describe('a deliberate filter, confirmed by naming it', () => {
     expect(c.halts.join(' ')).toMatch(/shrank/);
   });
 });
+
+describe('a reason carried from the last manifest', () => {
+  /* Confirmed once, confirmed until somebody changes the filter: the next build reads it off
+     the manifest the confirming build wrote, and needs no flag. */
+  const built = { train: Array.from({ length: 117 }, (_, i) => ({ jobId: `t${i}` })), eval: [{ jobId: 'e1' }] };
+  const now = { droppedTurns: { 'a decision with no page to read it from': 130 }, tiers: { gold: 100, silver: 20 }, turns: { train: 117 } };
+  const last = { turns: { train: 120 }, tiers: { gold: 100, silver: 20 }, accepted: [{ reason: 'a decision with no page to read it from', at: 'x' }] };
+
+  it('lifts the share halt without a flag', () => {
+    const c = preflight(now, last, built, {});
+    expect(c.halts.filter((h) => /alone removed/.test(h))).toEqual([]);
+    expect(c.notes.join(' ')).toMatch(/accepted/);
+  });
+});

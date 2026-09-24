@@ -51,7 +51,12 @@ function preflight(now, last, sets = {}, opts = {}) {
    * gold collapsing or the exam leaking into the lesson still halt. The acceptance is written
    * into the manifest, so the next build compares against the new size and needs no flag.
    */
-  const accepted = new Set([].concat(opts.accept || []).map(String).filter(Boolean));
+  /* Named now, or named on an earlier build and written into its manifest. The comment above
+     promised the next build would need no flag; without this line it needed one every time,
+     and the automatic rebuild after re-sighting refused the set on a filter confirmed that
+     morning. */
+  const carried = ((last && last.accepted) || []).map((a) => (a && a.reason) || a).map(String).filter(Boolean);
+  const accepted = new Set([].concat(opts.accept || [], carried).map(String).filter(Boolean));
 
   const halts = [];
   const warnings = [];
