@@ -117,8 +117,16 @@ function compare(teacher, student) {
 }
 
 /** One question to the student. Text in, text out; the caller parses. */
-async function ask({ chat, host, model, messages, signal, timeoutMs = 25000 }) {
-  const r = await chat({ host, model, key: '', messages, tools: [], signal, timeoutMs });
+/*
+ * The prompt is two to four thousand tokens (the catalogue, then the page); the default context
+ * of four thousand would silently cut the page off the end. The answer is one JSON object, so
+ * it is short and deterministic. Kept loaded for a day: the first call pays the load, the rest
+ * pay only the prompt. On a CPU that prompt is the cost - tens of seconds - which is why the
+ * shadow gets ninety seconds and a driving turn forty-five.
+ */
+const OPTIONS = { num_ctx: 8192, temperature: 0, num_predict: 120 };
+async function ask({ chat, host, model, messages, signal, timeoutMs = 45000 }) {
+  const r = await chat({ host, model, key: '', messages, tools: [], signal, timeoutMs, options: OPTIONS, keepAlive: '24h' });
   return String((r && r.content) || '');
 }
 

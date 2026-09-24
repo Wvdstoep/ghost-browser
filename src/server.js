@@ -1925,7 +1925,9 @@ async function servingState() {
   } catch (e) { reachable = false; }
   return {
     mode: cfg.studentMode || 'off', model: cfg.studentModel || '', host: cfg.studentHost || '', share: Number(cfg.studentShare) || 10,
-    reachable, models: models.slice(0, 20), hasModel: !!cfg.studentModel && models.includes(cfg.studentModel),
+    /* Ollama lists a tag as name:latest; a person names it without. The same model either way. */
+    reachable, models: models.slice(0, 20),
+    hasModel: (() => { const bare = (m) => String(m || '').replace(/:latest$/, ''); return !!cfg.studentModel && models.some((m) => bare(m) === bare(cfg.studentModel)); })(),
     shadow: shadow.state(),
   };
 }
