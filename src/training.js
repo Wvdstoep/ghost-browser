@@ -253,6 +253,7 @@ function promote(roundId) {
     return { error: `its paper held only ${paper} turn(s) — ${MIN_PAPER} are needed before a score means anything` };
   }
   r.promoted = true;
+  r.promotedAt = new Date().toISOString();
   writeJson(ROUNDS(), rows);
   /*
    * THE PROMOTION MAP. One entry per scope (platforms.js): base, each platform, each role. The
