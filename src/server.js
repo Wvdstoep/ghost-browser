@@ -1563,7 +1563,7 @@ app.put('/v1/profiles/:name/settings', authed, async (req, res) => {
 const training = require('./training');
 const corpusLib = require('./corpus');
 
-app.get('/v1/training/state', authed, (_req, res) => {
+app.get('/v1/training/state', authed, async (_req, res) => {
   try {
     const fsx = require('fs');
     const pathx = require('path');
@@ -1606,6 +1606,7 @@ app.get('/v1/training/state', authed, (_req, res) => {
       ...training.state({ corpus, manifest, trainers: now.trainers }),
       plan: now.plan, readiness: now.readiness, coverage: now.coverage,
       resight: resight.state(),
+      student: await servingState(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1889,6 +1890,46 @@ function planNow() {
   };
 }
 
+/*
+ * SERVING THE STUDENT. The mode (off / shadow / canary / primary), the model tag, the canary
+ * share, whether the sidecar answers, and the live ledger - agreement per tool on real jobs.
+ */
+async function servingState() {
+  const cfg = settingsStore.read();
+  let reachable = null, models = [];
+  try {
+    /* listModels answers a stock list with fetched:false when the host is silent - that is
+       not reachable, and the stock names are not models the sidecar has. */
+    const r = await llm.listModels({ host: cfg.studentHost, key: '', timeoutMs: 4000 });
+    reachable = !!(r && r.fetched);
+    models = reachable ? (r.models || []).map((m) => (typeof m === 'string' ? m : (m.name || m.model || ''))).filter(Boolean) : [];
+  } catch (e) { reachable = false; }
+  return {
+    mode: cfg.studentMode || 'off', model: cfg.studentModel || '', host: cfg.studentHost || '', share: Number(cfg.studentShare) || 10,
+    reachable, models: models.slice(0, 20), hasModel: !!cfg.studentModel && models.includes(cfg.studentModel),
+    shadow: shadow.state(),
+  };
+}
+app.get('/v1/training/serving', authed, async (_req, res) => {
+  try { res.json(await servingState()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/training/serving', authed, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const before = settingsStore.read();
+    const patch = {};
+    if (typeof b.mode === 'string') patch.studentMode = b.mode;
+    if (typeof b.model === 'string') patch.studentModel = b.model;
+    if (b.share != null) patch.studentShare = b.share;
+    if (typeof b.host === 'string') patch.studentHost = b.host;
+    settingsStore.write({ ...before, ...patch });
+    const after = settingsStore.read();
+    if (patch.studentModel && patch.studentModel !== before.studentModel) shadow.reset(after.studentModel);
+    log.info(`training: serving ${after.studentMode} with ${after.studentModel || '(no model)'} at ${after.studentShare}%`);
+    res.json(await servingState());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* The six checks on their own, with the per-tool coverage under them. */
 app.get('/v1/training/readiness', authed, (_req, res) => {
   try { const n = planNow(); res.json({ readiness: n.readiness, coverage: n.coverage, plan: n.plan }); }
@@ -1984,6 +2025,7 @@ setInterval(() => {
 const harvest = require('./harvest');
 const resight = require('./resight');
 const coverage = require('./coverage');
+const shadow = require('./shadow');
 const readiness = require('./readiness');
 
 /**
