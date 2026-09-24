@@ -129,6 +129,28 @@ def predicted_tool(text):
     return None
 
 
+def _collapse(said, per_tool, total):
+    """How far the model's loudest answer is from how often that answer is correct.
+
+    1.0 means it says each tool about as often as it should. Tonight's round came out near 3.6 on
+    `look`, which is a model that has stopped reading the page and started guessing the cheapest
+    token. Reported rather than judged here - what counts as too far is the controller's business,
+    and it lives in the promotion gate where the reasoning can be read."""
+    if not total or not said:
+        return {}
+    tool, n = said.most_common(1)[0]
+    share = n / total
+    seen = (per_tool.get(tool) or [0, 0])[1]
+    should = (seen / total) if total else 0
+    return {
+        "tool": tool,
+        "said_pct": round(100 * share, 1),
+        "correct_pct": round(100 * should, 1),
+        "ratio": round(share / should, 2) if should else None,
+        "distinct": len(said),
+    }
+
+
 def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300, max_new=48,
           model_obj=None, tok=None, trainable=False, note=print):
     """Agreement with the gold trajectory, as a plain dict.
@@ -162,6 +184,22 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
     unusable = 0
     per_tool = defaultdict(lambda: [0, 0])   # expected -> [right, seen]
     confusion = Counter()
+    # ── WHAT IT ACTUALLY SAID, which nothing recorded until now ─────────────────────────────────
+    #
+    # per_tool counts what was EXPECTED and whether the answer was right. That cannot see the one
+    # failure that matters most. The first round to finish this path scored 15.33% against a 3.33%
+    # baseline and reported beat: true, and the model was answering `look` to almost everything:
+    # scroll -> look, open -> look, read -> look, run_script -> look, finish -> look. `look` is the
+    # right answer on 10% of the paper and it gave it at least 36% of the time.
+    #
+    # Mode collapse is what a small adapter does when one answer is much cheaper to produce than
+    # the others - {"tool":"look","args":{}} is the shortest string in the set, and with prompt
+    # tokens masked the quickest way to cut loss is to always say it. It reads as progress in every
+    # headline number: agreement rises because the cheap answer is also a common one, and unusable
+    # FALLS because the model has learnt to emit valid JSON. Both improved tonight.
+    #
+    # So count the predictions themselves. A gate cannot refuse what nobody measured.
+    said = Counter()
     started = time.time()
 
     for i, row in enumerate(rows):
@@ -173,10 +211,11 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
         with torch.no_grad():
             out = model_obj.generate(**ids, max_new_tokens=max_new, do_sample=False,
                                      pad_token_id=tok.eos_token_id)
-        said = tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
-        got = predicted_tool(said)
+        text = tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
+        got = predicted_tool(text)
         if got is None:
             unusable += 1
+        said[got or "(nothing usable)"] += 1
         per_tool[want][1] += 1
         if got == want:
             hits += 1
@@ -203,6 +242,11 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
         "per_tool": {k: {"right": v[0], "seen": v[1], "pct": round(100 * v[0] / v[1], 1)}
                      for k, v in sorted(per_tool.items(), key=lambda kv: -kv[1][1])},
         "top_confusions": confusion.most_common(12),
+        # What it said, and how far the loudest answer is from how often it is actually right.
+        # Scale-free on purpose: a paper with 32 tools and one with 8 are not comparable by share
+        # alone, but "it says this 3.6 times more often than it should" is.
+        "said": dict(said.most_common(12)),
+        "collapse": _collapse(said, per_tool, total),
     }
 
 
