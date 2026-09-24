@@ -128,3 +128,27 @@ describe('the user message', () => {
     expect(userFor({ goal: 'Find three suppliers', observed: [] }).startsWith('GOAL: Find three suppliers')).toBe(true);
   });
 });
+
+describe('the student sees the page it decides on', () => {
+  it('shows the page on the most recent observation that has one, and only that one', () => {
+    /* The teacher was handed six thousand characters of the page; the student was told a page
+       had been read. Two rounds scored zero on open, run_script and dig for exactly that. */
+    const u = userFor({ goal: 'find the suppliers', observed: [
+      { kind: 'read', text: 'read the page (900 characters)', content: 'OLD PAGE: nothing here' },
+      { kind: 'scroll', text: 'scrolled down' },
+      { kind: 'read', text: 'read the page (1200 characters)', content: 'NEW PAGE: Suppliers - Acme, Globex' },
+    ] });
+    expect(u).toMatch(/NEW PAGE: Suppliers/);
+    expect(u).not.toMatch(/OLD PAGE/);
+  });
+
+  it('lets the numbered list win where a look came after the read', () => {
+    /* A look step records only marks, and they are the page for a click. */
+    const u = userFor({ goal: 'g', observed: [
+      { kind: 'read', text: 'read the page (1200 characters)', content: 'PAGE TEXT' },
+      { kind: 'look', text: 'Acme - 4 things to click', marks: '[1] Suppliers [2] Contact' },
+    ] });
+    expect(u).toMatch(/\[1\] Suppliers/);
+    expect(u).not.toMatch(/PAGE TEXT/);
+  });
+});

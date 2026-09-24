@@ -161,11 +161,57 @@ describe('a click by number needs the list the number came from', () => {
     expect(kept.some((x) => x.action.tool === 'click' && x.action.args.index === 19)).toBe(true);
   });
 
-  it('leaves calls that name what they want alone', () => {
-    /* Only an index is meaningless without the list. A url or a query carries its own subject. */
-    const out = build([job({ proposals: [{ pid: 'p1', state: 'approved' }] })], {});
+  it('leaves calls that name what they want alone, once the page they came from is on record', () => {
+    /* A url carries its own subject - but only if the read it was chosen from is in the record.
+       The fixture's reads carry content here; without it the same turn is a blind decision. */
+    const sighted = job({ proposals: [{ pid: 'p1', state: 'approved' }] });
+    for (const s of sighted.steps) if (s.kind === 'read') s.content = 'Example Ltd - sales@example.com - +32 496 31 12 12 - https://example.com/contact';
+    const out = build([sighted], {});
     const kept = [...out.train, ...out.eval];
     expect(kept.some((x) => x.action.tool === 'open')).toBe(true);
+  });
+});
+
+describe('a decision needs the page it was made from', () => {
+  /*
+   * The finding behind both failed rounds. 58% of a training slice followed a read whose content
+   * was never recorded - "read the page (14592 characters)" and nothing else - and those turns'
+   * answers were dig 284, open 215, run_script 213, finish 114: the exact tools that scored zero.
+   * Both rounds collapsed onto look. Same rule as the index with no list, one level up.
+   */
+  const blind = () => job({
+    proposals: [{ pid: 'p1', state: 'approved' }],
+    steps: [
+      { n: 1, kind: 'you', text: 'Find three suppliers' },
+      { n: 2, kind: 'tool', tool: 'open', args: { url: 'https://example.com' } },
+      { n: 3, kind: 'read', text: 'read the page (14592 characters)' },
+      { n: 4, kind: 'tool', tool: 'open', args: { url: 'https://example.com/suppliers' } },
+      { n: 5, kind: 'read', text: 'read the page (2210 characters)' },
+    ],
+  });
+
+  it('drops a decision that followed a read whose content was never recorded', () => {
+    const out = build([blind()], {});
+    const kept = [...out.train, ...out.eval].filter((x) => x.action.tool === 'open' && x.action.args.url.endsWith('/suppliers'));
+    expect(kept).toHaveLength(0);
+    expect(out.manifest.droppedTurns['a decision with no page to read it from']).toBeGreaterThan(0);
+  });
+
+  it('keeps the same decision once the page travels with it', () => {
+    const j = blind();
+    j.steps[2].content = 'Example Ltd. Suppliers: https://example.com/suppliers. Contact: sales@example.com';
+    const out = build([j], {});
+    const kept = [...out.train, ...out.eval].filter((x) => x.action.tool === 'open' && x.action.args.url.endsWith('/suppliers'));
+    expect(kept).toHaveLength(1);
+    expect(kept[0].observed[kept[0].observed.length - 1].content).toMatch(/suppliers/);
+  });
+
+  it('never drops the opening move, which is decided from the goal alone', () => {
+    /* What do you reach for when you know nothing yet - the most informative turn there is,
+       and one that by definition has no page to be blind to. */
+    const out = build([blind()], {});
+    const first = [...out.train, ...out.eval].filter((x) => x.action.tool === 'open' && x.action.args.url === 'https://example.com');
+    expect(first).toHaveLength(1);
   });
 });
 describe('the exam does not pay for what training spent', () => {

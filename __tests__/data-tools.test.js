@@ -52,7 +52,10 @@ describe('the browser has the hands a person at a laptop has', () => {
     expect(agentSrc).toMatch(/observeData/);
     expect(agentSrc).toMatch(/more characters — return less/);
     // the prose observation is untouched
-    expect(agentSrc).toMatch(/const observe = \(text\) => \{ messages\.push\(\{ role: 'tool', content: String\(text\)\.slice\(0, 6000\) \}\); \};/);
+    /* The prose cap is still 6000. observe() also writes the page into the journal now (see
+       remember() beside it), so the exact one-liner is no longer the thing to pin - the cap is. */
+    expect(agentSrc).toMatch(/const observe = \(text\) => \{ messages\.push\(\{ role: 'tool', content: String\(text\)\.slice\(0, 6000\) \}\);/);
+    expect(agentSrc).toMatch(/const CONTENT_CAP = 6000;/);
   });
 });
 

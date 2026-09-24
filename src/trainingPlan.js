@@ -54,7 +54,7 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -80,6 +80,23 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   /* Never decide on a partial count. The corpus is read in slices, so early on the numbers are
      still climbing and "not enough new data" would be a statement about the scan, not the data. */
   if (corpus.scanning) return no(`still reading the history — ${corpus.pending || 0} job(s) to go`);
+
+  /*
+   * NO ROUND UNTIL THE SET CAN SEE ITS OWN PAGES.
+   *
+   * Two rounds trained on a set where 58% of the turns followed a read whose content was never
+   * recorded, and both collapsed onto `look`. The turns are not bad; they are blind, and a
+   * model cannot learn open(url) from "read the page (14592 characters)". The builder now
+   * counts the turns whose latest observation carries the page, and a round waits until there
+   * are at least a slice's worth of them - otherwise the draw fills up with the blind ones and
+   * twelve hours of CPU produce the same collapse a third time.
+   *
+   * A manifest built before this was counted reports nothing, and nothing is not zero: an old
+   * manifest must not lock the loop shut on a number nobody took.
+   */
+  if (typeof sighted === 'number' && sliceTurns > 0 && sighted < sliceTurns) {
+    return no(`only ${sighted} turn(s) in the set can see the page they decide on, and a round draws ${sliceTurns} — collecting`);
+  }
 
   const seen = covered(rounds);
   const total = Number(dataset.train) || 0;
