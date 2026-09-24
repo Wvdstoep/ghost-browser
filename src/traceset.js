@@ -166,7 +166,7 @@ function stepVerdict(steps, i) {
   if (s0.judged && s0.judged.verdict === 'good') return { verdict: 'good', why: 'the teacher judged it good', reason: String(s0.judged.reason || '') };
   return { verdict: 'unknown', why: '', reason: '' };
 }
-function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
+function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null, judgedOnly = false } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
@@ -220,6 +220,8 @@ function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHis
     /* The decision itself. Arguments scrubbed, because a `type` call's text is often a real
        message to a real person and sometimes a credential somebody pasted. */
     const sv = stepVerdict(steps, steps.indexOf(s));
+    /* A void run: only a step somebody judged good is an example; the rest is not evidence. */
+    if (judgedOnly && sv.verdict !== 'good') { if (onDrop) onDrop('a step in a void run nobody judged good'); continue; }
     out.push({
       goal,
       step: sv.verdict, stepWhy: sv.why, reason: sv.reason || '',
@@ -306,6 +308,7 @@ function build(jobs, deps = {}, opts = {}) {
   const reject = [];
   const perRole = {};
   const kept = [];
+  const recovered = [];
   for (const { job, outcome } of labelled) {
     /*
      * VOID IS DROPPED ON THE FLOOR, in both directions.
@@ -319,7 +322,27 @@ function build(jobs, deps = {}, opts = {}) {
      * The credit ones also stop existing the moment the model runs on the ring: there is no
      * allowance to exhaust. They are an artefact of today's cloud LLM, not evidence about a policy.
      */
-    if (outcome.tier === 'void') continue;
+    if (outcome.tier === 'void') {
+      /*
+       * A VOID RUN CONTRIBUTES EXACTLY THE STEPS SOMEBODY JUDGED GOOD, AND NOTHING ELSE.
+       *
+       * Measured on 24 Sep 2026: 716 void jobs - cut off by a deploy (138), stopped by the owner
+       * (122), out of credit (162), the model's API down, the browser gone - held about eleven
+       * hundred decisions taken on a page the record kept, and every one was thrown away because
+       * the JOB had no outcome. The decisions before the cut were made the same way as in any
+       * gold run. So a void run is kept when the teacher or a person judged at least one of its
+       * steps good, and turnsOf keeps only those steps; an unjudged step in a void run is not
+       * evidence, and none of them reach the paper.
+       */
+      const steps = job.steps || [];
+      const anyGood = steps.some((s, i) => s && s.kind === 'tool' && s.tool && (s.human || s.judged) && stepVerdict(steps, i).verdict === 'good');
+      if (anyGood) {
+        const role = String(job.role || 'general');
+        perRole[role] = (perRole[role] || 0) + 1;
+        if (perRole[role] <= perRoleCap) recovered.push({ job, outcome });
+      }
+      continue;
+    }
 
     /* Punished, and kept SEPARATE from the positives. See below for why not simply negative SFT. */
     if (outcome.tier === 'bronze') { reject.push({ job, outcome }); continue; }
@@ -367,7 +390,7 @@ function build(jobs, deps = {}, opts = {}) {
   const toolCap = opts.toolCap == null ? 4000 : opts.toolCap;
 
   const note = (why) => { dropped[why] = (dropped[why] || 0) + 1; };
-  const toTurns = (rows, { dedupe = true, cap = true, perTool = {} } = {}) => rows.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, onDrop: note })
+  const toTurns = (rows, { dedupe = true, cap = true, perTool = {}, judgedOnly = false } = {}) => rows.flatMap(({ job, outcome }) => turnsOf(job, { ...opts, onDrop: note, judgedOnly })
     .filter((t) => {
       const why = mislabelled(t);
       if (why) { dropped[why] = (dropped[why] || 0) + 1; return false; }
@@ -452,8 +475,10 @@ function build(jobs, deps = {}, opts = {}) {
       ...(outcome.failures && outcome.failures.length ? { failed: outcome.failures } : {}),
     })));
 
-  const trainTurns = toTurns(train);
   const evalTurns = toTurns(evalSet);
+  /* The judged-good steps of void runs, into training only - the paper stays on complete runs. */
+  const recoveredTurns = toTurns(recovered, { judgedOnly: true }).map((t) => ({ ...t, grade: 'judged' }));
+  const trainTurns = [...toTurns(train), ...recoveredTurns];
   /* The wrong steps of GOOD runs: the scarcest negatives there are, each beside the page it
      was taken on, and the pairs a preference round wants (the same situation, a refused call). */
   const wrongSteps = [...train, ...evalSet].flatMap(({ job, outcome }) => turnsOf(job, { ...opts })
@@ -480,7 +505,9 @@ function build(jobs, deps = {}, opts = {}) {
       voidReasons,
       /* Turns thrown away because the call and its effect disagreed. See mislabelled(). */
       droppedTurns: dropped,
-      kept: { train: train.length, eval: evalSet.length, reject: reject.length },
+      kept: { train: train.length, eval: evalSet.length, reject: reject.length, recovered: recovered.length },
+      /* Void runs that gave their judged-good steps to training. */
+      recovered: { jobs: recovered.length, turns: recoveredTurns.length },
       turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length + wrongSteps.length },
       wrongSteps: wrongSteps.length,
       perRoleCap,

@@ -421,3 +421,31 @@ describe('the platform map is a reading of the set', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+
+/* ── a void run gives its judged-good steps, and nothing else ──────────────────────────────── */
+import { build as buildSet } from '../src/traceset.js';
+describe('a void run contributes exactly the steps somebody judged good', () => {
+  const voidJob = (id, judged) => ({
+    id, goal: 'find three yoga studios in Rotterdam and record them', role: 'general', status: 'stopped', createdAt: '2026-09-24T10:00:00Z',
+    steps: [
+      { n: 1, kind: 'goal', text: 'find three yoga studios' },
+      { n: 2, kind: 'tool', tool: 'open', args: { url: 'https://example.com/yoga' }, text: 'open', ...(judged[0] ? { judged: { verdict: judged[0] } } : {}) },
+      { n: 3, kind: 'read', text: 'read the page', content: 'Yoga studios in Rotterdam: A, B, C', url: 'https://example.com/yoga' },
+      { n: 4, kind: 'tool', tool: 'note', args: { text: 'A, B, C' }, text: 'note', ...(judged[1] ? { judged: { verdict: judged[1] } } : {}) },
+      { n: 5, kind: 'read', text: 'read again', content: 'more', url: 'https://example.com/yoga' },
+      { n: 6, kind: 'tool', tool: 'finish', args: {}, text: 'finish', ...(judged[2] ? { judged: { verdict: judged[2] } } : {}) },
+    ],
+    /* stopped by the owner, no report: void */
+  });
+  it('keeps the judged-good steps of a void run in training, never in the paper, and drops the rest', () => {
+    const out = buildSet([voidJob('v1', ['good', 'wrong', null]), voidJob('v2', [null, null, null])], {}, { evalFraction: 0.5 });
+    expect(out.manifest.recovered.jobs).toBe(1);
+    expect(out.manifest.recovered.turns).toBe(1);
+    expect(out.train.filter((t) => t.jobId === 'v1').map((t) => t.action.tool)).toEqual(['open']);
+    expect(out.train.find((t) => t.jobId === 'v1').grade).toBe('judged');
+    expect(out.eval.some((t) => t.jobId === 'v1')).toBe(false);
+    expect(out.train.some((t) => t.jobId === 'v2')).toBe(false);
+    expect(out.manifest.droppedTurns['a step in a void run nobody judged good']).toBe(2);
+  });
+});

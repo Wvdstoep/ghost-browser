@@ -76,7 +76,8 @@ describe('the loop\'s bookkeeping', () => {
     expect(judge.wants(job())).toBe(true);
     const blind = job(); delete blind.steps[4].content; expect(judge.wants(blind)).toBe(false);
     const done = job(); for (const s of done.steps) if (s.kind === 'tool') s.judged = { verdict: 'good' }; expect(judge.wants(done)).toBe(false);
-    const v = job(); v.verdict = { tier: 'void' }; expect(judge.wants(v)).toBe(false);
+    /* A void run is judged too: the set takes exactly its judged-good steps (traceset.js). */
+    const v = job(); v.verdict = { tier: 'void' }; expect(judge.wants(v)).toBe(true);
     expect(judge.wants(job(), { 'j-judge': 'x' })).toBe(false);
   });
 

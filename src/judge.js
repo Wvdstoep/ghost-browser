@@ -47,8 +47,8 @@ function trail(job) {
 function wants(job, done = {}) {
   if (!job || !job.id || done[job.id]) return false;
   if (job.status === 'running') return false;
-  const tier = (job.verdict && job.verdict.tier) || '';
-  if (tier === 'void') return false;
+  /* Void runs are judged too: the set takes exactly the steps judged good out of them, and a
+     decision taken on a real page before a deploy cut the run short is as good as any. */
   const steps = job.steps || [];
   if (!steps.some((s) => s && s.content)) return false;
   const calls = steps.filter((s) => s && s.kind === 'tool' && s.tool);
