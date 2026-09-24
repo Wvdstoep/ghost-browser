@@ -40,6 +40,9 @@ const persistable = (j) => ({
   /* The assistant's plan, when a person's own words are the goal. Named here on purpose: the
      verdict was computed and dropped for 2,228 jobs because this shape did not name it. */
   plan: j.plan || null,
+  /* Tools the collector asked this walk to practise - the teacher's steer, kept so a run can be
+     audited against what it was pointed at. Never read by the training prompt. */
+  hintTools: j.hintTools || null,
   // Which automation run this job belongs to, so an approval shows under ITS flow's results and not
   // every flow's — a workflow step's job carries its run and workflow ids; a one-off job carries none.
   workflowId: j.workflowId || null, runId: j.runId || null, nodeId: j.nodeId || null,

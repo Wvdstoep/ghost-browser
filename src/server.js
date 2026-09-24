@@ -2139,7 +2139,9 @@ setInterval(() => {
       const prompt = harvest.take(null);
       if (!prompt) return;
       const ctx = operatorContext();
-      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: free[0], maxSteps: 40, maxPages: 12 });
+      /* The batch was written against the current gaps; every walk of it is pointed at them. */
+      const hintTools = require('./steer').toolsOfAim(s.aiming || []).slice(0, 4);
+      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: free[0], maxSteps: 40, maxPages: 12, hintTools });
       if (out && out.error) {
         log.warn(`[harvest] walk refused — ${out.error}`);
         /* An empty account is the one error worth stopping for: every further walk would be void
@@ -3959,7 +3961,7 @@ function operatorContext() {
     stopWalks: async () => { let n = 0; for (const id of myWalks) { const j = jobs.get(id); if (j && ['running', 'idle'].includes(j.status)) { try { await jobs.stop(j); n++; } catch (e) { /* ending */ } } } myWalks.clear(); return n; },
     /* A WALK for the assistant: the same browser agent a flow step runs, in the profile asked for,
        unattended (its acts become proposals at the gate — nothing outward without the owner). */
-    startWalk: async ({ goal, ask, profile, role, maxSteps, maxPages }) => {
+    startWalk: async ({ goal, ask, profile, role, maxSteps, maxPages, hintTools = null }) => {
       const cfg = settingsStore.read(); if (!cfg.llmModel) return { error: 'no AI model configured' };
       const g = String(goal || '').trim(); if (!g) return { error: 'goal required' };
       /*
@@ -4122,6 +4124,7 @@ ${g}` : g;
       const plan = asked && asked !== g ? g : '';
       const job = jobs.create({ owner, goal: (asked || g).slice(0, 4000), companyId: null, profile: s.profile || null, sessionId: s.id, workflowId: null, runId: null, nodeId: null,
         maxSteps: Math.min(120, Math.max(0, Math.round(Number(maxSteps) || 40))), maxPages: Math.min(60, Math.max(0, Math.round(Number(maxPages) || 12))) });
+      if (Array.isArray(hintTools) && hintTools.length) job.hintTools = hintTools.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 6);
       /* The adopted role, not "general": a walk in a profile whose specialist exists should run as
          that specialist even when it stays on the cluster. */
       s.job = job.id; job.role = walkRole || roles.canonical(role || 'general');
