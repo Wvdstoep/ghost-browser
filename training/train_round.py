@@ -457,16 +457,23 @@ class Turns(Dataset):
         growing. So the length is chosen to lose nothing AND the ones that would be lost are
         removed, because the next thing to make prompts longer should not silently poison a round.
         """
-        keep, dropped = [], 0
+        """
+        ...AND NOW THEY ARE FITTED INSTEAD. The first round on sighted data dropped 152 of its 200
+        turns at 2048 tokens - three quarters of the slice, and the sighted ones at that. The window
+        is 4096 and a prompt that still does not fit loses its oldest observations first and the
+        end of its latest page last (evaluate.fit_messages), so the answer always has a prompt in
+        front of it and no turn is thrown away for being the kind of turn a round exists to learn.
+        """
+        from evaluate import fit_messages
+        keep, cut = [], 0
         for r in rows:
             m = r["messages"]
-            prompt = tok.apply_chat_template(m[:2], tokenize=False, add_generation_prompt=True)
-            if len(tok(prompt, add_special_tokens=False)["input_ids"]) >= max_len - 4:
-                dropped += 1
-                continue
-            keep.append(r)
-        if dropped:
-            note(f"dropped {dropped} turn(s) too long to keep their answer at {max_len} tokens")
+            fitted, was_cut = fit_messages(tok, m, max_len, answer_tokens=96)
+            if was_cut:
+                cut += 1
+            keep.append({**r, "messages": [fitted[0], fitted[1], m[2]]})
+        if cut:
+            note(f"shortened {cut} turn(s) to fit {max_len} tokens (oldest observations first) — none dropped")
         self.rows, self.tok, self.max_len = keep, tok, max_len
 
     def __len__(self):
@@ -520,7 +527,7 @@ def main():
     ap.add_argument("--hours", type=float, default=8.0, help="how long this device may spend training")
     ap.add_argument("--eval-turns", type=int, default=None,
                     help="exam size; 150 on a CPU (an exam costs 25 minutes there), 500 on a GPU")
-    ap.add_argument("--max-len", type=int, default=2048, help="every answer must survive truncation; see Turns")
+    ap.add_argument("--max-len", type=int, default=4096, help="a sighted turn is ~2,700 tokens; 4096 fits nine in ten, the rest are fitted (see Turns)")
     ap.add_argument("--batch", type=int, default=1)
     # ── THE RECIPE ───────────────────────────────────────────────────────────────────────────────
     # Two rounds ran with a flat 1e-4, batch 1, no warm-up, no schedule, no shuffle, and never saw
@@ -593,7 +600,9 @@ def main():
         # 34 seconds a turn on the smoke run) and wants its epochs over what it draws, so the slice
         # is sized to be seen `epochs` times inside the hours. A GPU round is not bound by the clock
         # and takes a full slice.
-        want = args.slice or (10000 if use_cuda else max(200, int(args.hours * 110 / args.epochs)))
+        # A sighted turn is ~2,700 tokens and takes about 100 s a pass on this CPU - forty an hour, not
+        # a hundred. The controller's gate uses the same figure.
+        want = args.slice or (10000 if use_cuda else max(120, int(args.hours * 40 / args.epochs)))
         got = hub.fetch(f"/v1/training/slice?turns={want}", train_path)
         if got > 0:
             print(f"the controller handed over {got} turns", flush=True)
