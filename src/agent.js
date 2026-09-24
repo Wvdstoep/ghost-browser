@@ -1015,11 +1015,11 @@ async function awaitDecision(job, pid, signal, onWait) {
  * handed back to the teacher on the third strike of a job. Never throws: a student that cannot
  * be reached is a teacher turn, and says so once per job.
  */
-async function studentTurn({ job, settings, role, tools, allowedTools, playbook, chat, signal, log, strikes, recentCalls, marksCount }) {
+async function studentTurn({ job, settings, role, tools, allowedTools, playbook, chat, signal, log, strikes, recentCalls, marksCount, shadowing = false }) {
   const messages = student.promptFor(job, { role: role && role.name ? role.name : String(role || 'general'), tools, playbook });
   let text = '';
   try {
-    text = await student.ask({ chat, host: settings.studentHost, model: settings.studentModel, messages, signal });
+    text = await student.ask({ chat, host: settings.studentHost, model: settings.studentModel, messages, signal, timeoutMs: shadowing ? 90000 : 45000 });
   } catch (e) {
     if (!job._studentDown) { job._studentDown = true; jobsStore.step(job, 'note', `the student could not be reached (${String(e.message).slice(0, 120)}) — the teacher drives`); }
     return { call: null, wrong: 'the student could not be reached', text: '' };
@@ -1640,7 +1640,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
           if (route.shadow && reply.toolCalls && reply.toolCalls.length) {
             /* Beside, never instead: the student's answer is written down and the job goes on. */
             const teacherCall = { name: reply.toolCalls[0].name, args: reply.toolCalls[0].args || {} };
-            studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: 0, recentCalls: [], marksCount: marksCountOf(job) })
+            studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: 0, recentCalls: [], marksCount: marksCountOf(job), shadowing: true })
               .then((a) => { const c = student.compare(teacherCall, a.call); shadow.record({ jobId: job.id, role: theRole.name || 'general', step: steps, tool: teacherCall.name, teacher: teacherCall, student: a.call, agree: c.tool, argsAgree: c.args, model: settings.studentModel }); })
               .catch(() => { /* a shadow that fails is a shadow that recorded nothing */ });
           }

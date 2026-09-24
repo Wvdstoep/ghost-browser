@@ -17,7 +17,7 @@ const NET_TIMEOUT_MS = 120000;   // a large hosted model thinking about a full p
  * One turn. `messages` is the running transcript, `tools` the JSON-schema tool list; the reply comes
  * back as { content, toolCalls } with toolCalls already normalised to { name, args }.
  */
-async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET_TIMEOUT_MS, fetchImpl = fetch }) {
+async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET_TIMEOUT_MS, fetchImpl = fetch, options: extra = null, keepAlive = null }) {
   if (!model) throw Object.assign(new Error('No model is configured — set one in the agent settings.'), { status: 400 });
   const base = String(host || 'https://ollama.com').replace(/\/+$/, '');
   // A hosted endpoint without a key produces a 401 whose body is not always readable; saying it up
@@ -48,7 +48,11 @@ async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET
           // Low, because this agent decides between listed options rather than writing prose. The
           // creative part — what a comment says — is reviewed by a person before it is sent.
           temperature: 0.3,
+          /* A caller that knows better - the student wants a context its prompt fits in and a
+             deterministic, short answer - says so here. */
+          ...(extra && typeof extra === 'object' ? extra : {}),
         },
+        ...(keepAlive ? { keep_alive: keepAlive } : {}),
       }),
       signal: ctl.signal,
     });
