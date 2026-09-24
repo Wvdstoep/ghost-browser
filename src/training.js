@@ -284,7 +284,7 @@ const trainerList = () => readJson(TRAINERS(), {}) || {};
  * Returned as a map so a screen can look a device up by name instead of scanning the round list and
  * re-deriving the answer, which is how two screens end up disagreeing about the same fact.
  */
-const SILENT_MS = 30 * 60 * 1000;
+const SILENT_MS = 75 * 60 * 1000;   // the same figure the planner uses, so the row and the decision agree
 
 function byDevice(now = Date.now()) {
   const out = {};
