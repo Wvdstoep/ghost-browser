@@ -1617,6 +1617,12 @@ app.post('/v1/training/rounds/:id/note', authed, (req, res) => {
   if (!r) return res.status(404).json({ error: 'no such round' });
   res.json({ ok: true });
 });
+/* A validation point while it trains - the curve, not a line of prose. */
+app.post('/v1/training/rounds/:id/check', authed, (req, res) => {
+  const r = training.checkRound(req.params.id, req.body || {});
+  if (!r) return res.status(404).json({ error: 'no such round' });
+  res.json({ ok: true, checks: (r.validation || []).length, bestValLoss: r.bestValLoss == null ? null : r.bestValLoss });
+});
 app.post('/v1/training/rounds/:id/end', authed, (req, res) => {
   const r = training.endRound(req.params.id, req.body || {});
   if (!r) return res.status(404).json({ error: 'no such round' });
@@ -1745,14 +1751,15 @@ function planNow() {
       trainers: usable, auto: training.autoOn(), serving: st.serving,
       /*
        * How many turns in the set can see the page they decide on, against how many a round
-       * draws. The draw is the laptop's own rule - max(200, hours * 300) in train_round.py - and
+       * draws. The draw is the laptop's own rule - max(200, hours * 110 / epochs) in
+       * train_round.py, from a measured hundred-odd turns an hour on a CPU seen three times - and
        * it is repeated here rather than shared because the two run on different machines; a
-       * round of twelve hours draws 3,600, and a set with fewer sighted turns than that would fill
+       * round of twelve hours draws 440, and a set with fewer sighted turns than that would fill
        * the draw with blind ones. Null when the manifest predates the count, which decide()
        * treats as unknown rather than as zero.
        */
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
-      sliceTurns: Math.max(200, (Number(process.env.TRAIN_HOURS || 0) || 12) * 300),
+      sliceTurns: Math.max(200, Math.round((Number(process.env.TRAIN_HOURS || 0) || 12) * 110 / 3)),
     }),
     trainers, usable,
   };
