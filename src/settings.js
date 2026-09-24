@@ -26,6 +26,12 @@ const DEFAULTS = {
   /* A SECOND account, used only when the first is out of allowance for the period. One key meant
      one weekly limit took the browser, the builder and the master down together. */
   llmKeys: '',
+  /* The model WE trained, served beside the teacher. Off until a person turns it on; the
+     host is the Ollama sidecar in this pod, the model a tag `ollama create` made. */
+  studentHost: 'http://127.0.0.1:11434',
+  studentModel: '',
+  studentMode: 'off',        // off | shadow | canary | primary
+  studentShare: 10,          // canary: share of jobs the student drives, in percent
   llmKey: null,
   /*
    * WHETHER THE AGENT MAY ACT WITHOUT ASKING.
@@ -89,6 +95,10 @@ function write(input = {}) {
   }
   if (typeof input.llmModel === 'string' && input.llmModel.trim()) out.llmModel = input.llmModel.trim().slice(0, 120);
   if (typeof input.llmKeys === 'string') out.llmKeys = input.llmKeys.trim().slice(0, 2000);
+  if (typeof input.studentHost === 'string' && /^https?:\/\/[^\s]+$/.test(input.studentHost.trim())) out.studentHost = input.studentHost.trim().replace(/\/+$/, '');
+  if (typeof input.studentModel === 'string') out.studentModel = input.studentModel.trim().slice(0, 120);
+  if (['off', 'shadow', 'canary', 'primary'].includes(input.studentMode)) out.studentMode = input.studentMode;
+  if (Number.isFinite(Number(input.studentShare))) out.studentShare = Math.max(1, Math.min(100, Math.round(Number(input.studentShare))));
   // An empty string means "clear it"; undefined means "leave it alone". Those are different asks and
   // collapsing them would make the key impossible to remove.
   if (input.llmKey === null || input.llmKey === '') out.llmKey = null;

@@ -30,6 +30,9 @@ const gg = require('./sites/google');
 const diagnostics = require('./diagnostics');
 const { makeKeyring, isSpent } = require('./keyring');
 const { steerFor } = require('./steer');
+const student = require('./student');
+const router = require('./router');
+const shadow = require('./shadow');
 const toolRegistry = require('./tools');
 const li = require('./sites/linkedin');
 const roles = require('./roles');
@@ -1003,6 +1006,40 @@ async function awaitDecision(job, pid, signal, onWait) {
  * the part that touches someone's real account, and they need to be checkable without depending on
  * what a hosted model happens to answer today.
  */
+/*
+ * THE STUDENT'S TURN - see router.js for who drives and student.js for the prompt.
+ *
+ * Asked with the prompt it was trained on, built from the job's own record; its answer read
+ * back as the one JSON object it was taught to emit. In the shadow the answer is only written
+ * beside the teacher's. Driving, it is checked for the four ways a lost model shows itself and
+ * handed back to the teacher on the third strike of a job. Never throws: a student that cannot
+ * be reached is a teacher turn, and says so once per job.
+ */
+async function studentTurn({ job, settings, role, tools, allowedTools, playbook, chat, signal, log, strikes, recentCalls, marksCount }) {
+  const messages = student.promptFor(job, { role: role && role.name ? role.name : String(role || 'general'), tools, playbook });
+  let text = '';
+  try {
+    text = await student.ask({ chat, host: settings.studentHost, model: settings.studentModel, messages, signal });
+  } catch (e) {
+    if (!job._studentDown) { job._studentDown = true; jobsStore.step(job, 'note', `the student could not be reached (${String(e.message).slice(0, 120)}) — the teacher drives`); }
+    return { call: null, wrong: 'the student could not be reached', text: '' };
+  }
+  const call = student.parseCall(text);
+  const wrong = router.looksWrong({ call, allowed: allowedTools, marksCount, recent: recentCalls });
+  return { call, wrong, text };
+}
+
+/** How many marks the latest look offered - the bound a click index must respect. */
+function marksCountOf(job) {
+  const steps = (job && job.steps) || [];
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s && s.kind === 'look') { const m = String(s.marks || '').match(/^\[(\d+)\]/gm); return m ? m.length : null; }
+    if (s && (s.kind === 'open' || s.kind === 'click')) return null;   // the page moved on; the list is stale
+  }
+  return null;
+}
+
 async function run({ job, session, settings, switchProfile = null, chat = llm.chat, pace = 1,
                      idleTimeoutMs = 30 * 60 * 1000, sink = null, convo = null, role = 'general', ownOrigin = null,
                      unattended = false,
@@ -1574,8 +1611,40 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
       trimTranscript(messages);
 
       let reply;
+      /*
+       * WHO ANSWERS THIS STEP. router.js decides from the serving mode; the student is asked
+       * with its own prompt (student.js) and, driving, is checked before its answer is applied.
+       * Everything it says or does is written to the shadow ledger, which is the live exam.
+       */
+      const route = router.decide({ mode: settings.studentMode, share: (Number(settings.studentShare) || 10) / 100, jobId: job.id, strikes: job._studentStrikes || 0, model: settings.studentModel });
+      job._studentRecent = job._studentRecent || [];
+      let studentAnswer = null;
+      if (route.drive === 'student') {
+        if (!job._studentDriving) { job._studentDriving = true; jobsStore.step(job, 'note', `the trained model (${settings.studentModel}) drives this job — ${route.why}`); }
+        studentAnswer = await studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: job._studentStrikes || 0, recentCalls: job._studentRecent, marksCount: marksCountOf(job) });
+        if (studentAnswer.wrong) {
+          job._studentStrikes = (job._studentStrikes || 0) + 1;
+          jobsStore.step(job, 'note', `the trained model ${studentAnswer.wrong} — the teacher takes this step (strike ${job._studentStrikes} of ${router.STRIKES})`);
+          try { shadow.drove({ jobId: job.id, fallback: true, why: studentAnswer.wrong }); } catch (e) { /* the ledger is a courtesy */ }
+          studentAnswer = null;
+        } else {
+          try { shadow.drove({ jobId: job.id }); } catch (e) { /* the ledger is a courtesy */ }
+        }
+      }
       try {
-        reply = await askWithRetry({ chat, settings, messages, signal, job, pace });
+        if (studentAnswer && studentAnswer.call) {
+          reply = router.asReply(studentAnswer.call);
+          job._studentRecent = [...job._studentRecent, studentAnswer.call].slice(-3);
+        } else {
+          reply = await askWithRetry({ chat, settings, messages, signal, job, pace });
+          if (route.shadow && reply.toolCalls && reply.toolCalls.length) {
+            /* Beside, never instead: the student's answer is written down and the job goes on. */
+            const teacherCall = { name: reply.toolCalls[0].name, args: reply.toolCalls[0].args || {} };
+            studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: 0, recentCalls: [], marksCount: marksCountOf(job) })
+              .then((a) => { const c = student.compare(teacherCall, a.call); shadow.record({ jobId: job.id, role: theRole.name || 'general', step: steps, tool: teacherCall.name, teacher: teacherCall, student: a.call, agree: c.tool, argsAgree: c.args, model: settings.studentModel }); })
+              .catch(() => { /* a shadow that fails is a shadow that recorded nothing */ });
+          }
+        }
       } catch (e) {
         if (signal.aborted) break;
         /*

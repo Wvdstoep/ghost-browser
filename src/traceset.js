@@ -488,4 +488,4 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
   })).join('\n');
 }
 
-module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, DROP_FIELDS, SCRUBS };
+module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
