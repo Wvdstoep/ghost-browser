@@ -2286,7 +2286,7 @@ app.get('/v1/training/runs/:id', authed, (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
   const j = resight.loadJob(jobs.DIR, id);
   if (!j) return res.status(404).json({ error: 'no such run' });
-  const steps = (j.steps || []).map((s, n) => ({
+  const steps = (j.steps || []).map((s, n) => (s || {})).map((s, n) => ({
     n, kind: s.kind, text: String(s.text || '').slice(0, 300), tool: s.tool || '', args: s.tool ? JSON.stringify(s.args || {}).slice(0, 300) : '',
     content: s.content ? String(s.content).slice(0, 600) : '', marks: s.marks ? String(s.marks).split('\n').length : 0, at: s.at || '',
     judged: s.judged ? { verdict: s.judged.verdict, why: s.judged.why || '', reason: s.judged.reason || '' } : null,
@@ -2294,7 +2294,7 @@ app.get('/v1/training/runs/:id', authed, (req, res) => {
     resighted: !!(s.resighted && s.content),
   }));
   res.json({ id: j.id, goal: j.goal || '', role: j.role || 'general', profile: j.profile || '', status: j.status || '', createdAt: j.createdAt || '', report: String(j.report || '').slice(0, 800),
-    tier: (j.verdict && j.verdict.tier) || '', why: (j.verdict && (j.verdict.why || [])).slice(0, 3), steps });
+    tier: (j.verdict && j.verdict.tier) || '', why: (j.verdict && Array.isArray(j.verdict.why) ? j.verdict.why : []).slice(0, 3), steps });
 });
 app.post('/v1/training/runs/:id/steps/:n/label', authed, (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
