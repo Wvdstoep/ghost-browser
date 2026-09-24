@@ -1855,7 +1855,7 @@ function readinessNow({ corpus = {}, serving = null } = {}) {
   const train = coverage.cached(pathx.join(base, 'train.jsonl'));
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
-  const sliceTurns = Math.max(200, Math.round(trainHoursNow() * 110 / 3));
+  const sliceTurns = Math.max(120, Math.round(trainHoursNow() * 40 / 3));
   const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
@@ -1927,7 +1927,7 @@ function planNow() {
        * treats as unknown rather than as zero.
        */
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
-      sliceTurns: Math.max(200, Math.round(trainHoursNow() * 110 / 3)),
+      sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)),
     }),
     trainers, usable, readiness: ready.readiness, coverage: ready.coverage,
   };

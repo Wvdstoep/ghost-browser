@@ -94,6 +94,55 @@ def expected_tool(row):
         return None
 
 
+# ── MAKE THE PROMPT FIT, NEVER DROP THE TURN ─────────────────────────────────────────────────────
+#
+# A sighted turn carries the page it decided on - six thousand characters - and the catalogue, and
+# the first round on sighted data dropped 152 of its 200 turns as "too long for 2048 tokens". The
+# window is wider now (4096 fits 91% of them), and the rest are FITTED rather than dropped: the
+# oldest observations are cut from the user message first - they are what the prompt itself
+# demotes to one line - and only then is the latest page shortened from its end. The goal, the
+# newest observation and the answer always survive, which is the same priority the live prompt has.
+SEEN = "\n\nSEEN SO FAR:\n"
+
+
+def _tokens(tok, messages):
+    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return len(tok(prompt, add_special_tokens=False)["input_ids"])
+
+
+def fit_messages(tok, messages, max_len, answer_tokens=64):
+    """The first two messages, shortened until prompt + answer fit in max_len. Returns (messages, cut)."""
+    budget = max_len - answer_tokens
+    sys_m, user_m = messages[0], messages[1]
+    if _tokens(tok, [sys_m, user_m]) <= budget:
+        return [sys_m, user_m], False
+    content = user_m["content"]
+    if SEEN in content:
+        head, seen = content.split(SEEN, 1)
+        blocks = seen.split("\n- ")
+        blocks = [blocks[0]] + ["- " + b for b in blocks[1:]] if blocks else []
+        while len(blocks) > 1:
+            blocks = blocks[1:]
+            trial = {"role": "user", "content": head + SEEN + "\n".join(blocks)}
+            if _tokens(tok, [sys_m, trial]) <= budget:
+                return [sys_m, trial], True
+        user_m = {"role": "user", "content": head + SEEN + "\n".join(blocks)}
+    # One block left and still too long: shorten it from the end, by characters, until it fits.
+    text = user_m["content"]
+    lo, hi = 0, len(text)
+    best = None
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        trial = {"role": "user", "content": text[:mid]}
+        if _tokens(tok, [sys_m, trial]) <= budget:
+            best, lo = trial, mid
+        else:
+            hi = mid - 1
+    if best is None:
+        best = {"role": "user", "content": text[:200]}
+    return [sys_m, best], True
+
+
 def expected_call(row):
     try:
         obj = json.loads(row["messages"][2]["content"])
@@ -240,7 +289,7 @@ def _collapse(said, per_tool, total):
 
 
 def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300, max_new=48,
-          model_obj=None, tok=None, trainable=False, note=print):
+          model_obj=None, tok=None, trainable=False, note=print, max_len=4096):
     """Agreement with the gold trajectory, as a plain dict.
 
     `model_obj` lets a caller hand in a model it already has in memory — the training round scores
@@ -300,8 +349,9 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
         if not want:
             continue
         role = role_of(row)
-        prompt = tok.apply_chat_template(row["messages"][:2], tokenize=False, add_generation_prompt=True)
-        ids = tok(prompt, return_tensors="pt", truncation=True, max_length=4096).to(device)
+        fitted, _cut = fit_messages(tok, row["messages"], max_len)
+        prompt = tok.apply_chat_template(fitted, tokenize=False, add_generation_prompt=True)
+        ids = tok(prompt, return_tensors="pt", truncation=True, max_length=max_len).to(device)
         with torch.no_grad():
             out = model_obj.generate(**ids, max_new_tokens=max_new, do_sample=False,
                                      pad_token_id=tok.eos_token_id)
