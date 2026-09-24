@@ -122,6 +122,8 @@ function redacted() {
   return {
     ...s,
     llmKey: undefined,
+    /* The backups are keys too. The spread above carried them to every screen that asked. */
+    llmKeys: undefined,
     keySet: !!s.llmKey,
     // Whether a backup account exists — never the key itself, same rule as the first.
     keys2Set: !!(s.llmKeys && String(s.llmKeys).trim()),
