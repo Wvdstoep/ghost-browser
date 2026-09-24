@@ -40,6 +40,9 @@ const opt = (name, fallback) => {
 
 const OUT = opt('--out', path.join(BASE, 'traceset'));
 const DRY = flag('--dry');
+/* The one-time confirmation of a deliberate filter, by its exact reason string. Lifts only the
+   halts that reason explains; recorded in the manifest so the next build needs no flag. */
+const ACCEPT = opt('--accept', '');
 
 const say = (s) => process.stdout.write(`${s}\n`);
 
@@ -111,7 +114,7 @@ function main() {
   /* The first argument is the NEW manifest, not a clock — the gate compares two manifests and the
      turn sets, and handing it a timestamp makes every tier read as zero, which it then correctly
      reports as a total collapse. */
-  const check = preflight.preflight(m, last, built, {});
+  const check = preflight.preflight(m, last, built, ACCEPT ? { accept: [ACCEPT] } : {});
   for (const w of check.warnings || []) say(`warning: ${w}`);
   for (const n of check.notes || []) say(`note: ${n}`);
   for (const h of check.halts || []) say(`HALT: ${h}`);
@@ -143,6 +146,7 @@ function main() {
     ...m,
     marks: { turnsWithMarks: withMarks, turnsWithContent: withContent, indexTurns, indexWithMarks },
     promptedWith: { tools: TOOLS.length, perRole: true },
+    ...(ACCEPT ? { accepted: [{ reason: ACCEPT, at: new Date().toISOString() }] } : {}),
   };
   fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
   say(`written to ${OUT}`);

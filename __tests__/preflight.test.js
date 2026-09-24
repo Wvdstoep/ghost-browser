@@ -158,3 +158,29 @@ describe('the report reads without anyone watching it live', () => {
     expect(out).toMatch(/^ {2}HALT {2}/m);
   });
 });
+
+describe('a deliberate filter, confirmed by naming it', () => {
+  /* The comment always said a halt is lifted once somebody confirms it; the accept option is
+     that somebody. It lifts only the halts the named reason explains. */
+  const built = { train: Array.from({ length: 117 }, (_, i) => ({ jobId: `t${i}` })), eval: [{ jobId: 'e1' }] };
+  const now = { droppedTurns: { 'a decision with no page to read it from': 130 }, tiers: { gold: 100, silver: 20 }, turns: { train: 117 } };
+  const last = { turns: { train: 213 }, tiers: { gold: 100, silver: 20 } };
+
+  it('halts on the shrink and the dominating filter when nobody confirmed', () => {
+    const c = preflight(now, last, built, {});
+    expect(c.halts.join(' ')).toMatch(/shrank/);
+    expect(c.halts.join(' ')).toMatch(/alone removed/);
+  });
+
+  it('lifts exactly those two once the reason is named, and records it as a note', () => {
+    const c = preflight(now, last, built, { accept: ['a decision with no page to read it from'] });
+    expect(c.halts.filter((h) => /shrank|alone removed/.test(h))).toEqual([]);
+    expect(c.notes.join(' ')).toMatch(/accepted/);
+  });
+
+  it('does not lift a halt the named reason does not explain', () => {
+    const other = { ...now, droppedTurns: { 'a decision with no page to read it from': 10, 'something else': 120 } };
+    const c = preflight(other, last, built, { accept: ['a decision with no page to read it from'] });
+    expect(c.halts.join(' ')).toMatch(/shrank/);
+  });
+});

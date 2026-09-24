@@ -44,6 +44,14 @@ function preflight(now, last, sets = {}, opts = {}) {
   const maxShrink = opts.maxShrinkPct == null ? 30 : opts.maxShrinkPct;
   const maxOneReason = opts.maxOneReasonPct == null ? 25 : opts.maxOneReasonPct;
   const minGoldPct = opts.minGoldPct == null ? 50 : opts.minGoldPct;
+  /*
+   * A deliberate filter, confirmed by naming it. The comment above has always said a halt is
+   * lifted once somebody confirms it; this is the somebody. Naming the reason lifts the two
+   * halts that reason explains - its own share, and the shrink it caused - and nothing else:
+   * gold collapsing or the exam leaking into the lesson still halt. The acceptance is written
+   * into the manifest, so the next build compares against the new size and needs no flag.
+   */
+  const accepted = new Set([].concat(opts.accept || []).map(String).filter(Boolean));
 
   const halts = [];
   const warnings = [];
@@ -65,7 +73,10 @@ function preflight(now, last, sets = {}, opts = {}) {
   if (last && last.turns && last.turns.train) {
     const before = last.turns.train;
     const drop = pct(before - train.length, before);
-    if (drop > maxShrink) {
+    const explained = accepted.size > 0 && [...accepted].some((r) => (now.droppedTurns || {})[r] >= (before - train.length) * 0.5);
+    if (drop > maxShrink && explained) {
+      notes.push(`the training set shrank ${drop.toFixed(0)}% (${before} → ${train.length}) — accepted, the named filter accounts for it`);
+    } else if (drop > maxShrink) {
       halts.push(`the training set shrank ${drop.toFixed(0)}% (${before} → ${train.length}) — more than the ${maxShrink}% a round may lose without somebody confirming it`);
     } else if (drop > 5) {
       warnings.push(`the training set is ${drop.toFixed(0)}% smaller than last round (${before} → ${train.length})`);
@@ -83,7 +94,9 @@ function preflight(now, last, sets = {}, opts = {}) {
   const consideredTotal = train.length + evalSet.length + droppedTotal;
   for (const [reason, n] of Object.entries(now.droppedTurns || {})) {
     const share = pct(n, consideredTotal);
-    if (share > maxOneReason) {
+    if (share > maxOneReason && accepted.has(reason)) {
+      notes.push(`"${reason}" removed ${share.toFixed(0)}% of the turns (${n}) — accepted`);
+    } else if (share > maxOneReason) {
       halts.push(`"${reason}" alone removed ${share.toFixed(0)}% of the turns (${n}) — a filter that takes a quarter of the data is a bug until proven otherwise`);
     } else if (share > 10) {
       warnings.push(`"${reason}" removed ${share.toFixed(0)}% of the turns (${n})`);
