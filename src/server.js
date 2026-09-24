@@ -1632,10 +1632,20 @@ app.post('/v1/training/rounds/:id/check', authed, (req, res) => {
   if (!r) return res.status(404).json({ error: 'no such round' });
   res.json({ ok: true, checks: (r.validation || []).length, bestValLoss: r.bestValLoss == null ? null : r.bestValLoss });
 });
-app.post('/v1/training/rounds/:id/end', authed, (req, res) => {
+app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
   const r = training.endRound(req.params.id, req.body || {});
   if (!r) return res.status(404).json({ error: 'no such round' });
-  res.json(r);
+  /*
+   * PROMOTION RUNS BY ITSELF, AND ONLY THROUGH THE GATES. A round that finished with a measurement
+   * is put to the same three checks a person's tap runs - beat its baseline, no collapse, a paper
+   * of thirty turns - and goes into the map the moment it passes, with the export asked of the
+   * machine that trained it. A round that fails a gate is kept and says why; nothing else changes.
+   */
+  let promotion = null;
+  if (r.status === 'done' && r.result && r.baseline) {
+    try { promotion = await promoteAndExport(r.id, 'by itself'); } catch (e) { promotion = { error: e.message }; }
+  }
+  res.json({ ...r, promotion });
 });
 
 /**
@@ -1645,29 +1655,37 @@ app.post('/v1/training/rounds/:id/end', authed, (req, res) => {
  * its own baseline on the frozen evaluation split, so a worse adapter cannot reach production on
  * the strength of being the most recent thing to finish.
  */
-app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
-  const r = training.promote(req.params.id);
-  if (r.error) return res.status(400).json(r);
-  /*
-   * A PROMOTION IS ONLY A POINTER UNTIL SOMETHING SERVES IT. The adapter lives on the laptop
-   * that trained it, so that laptop is asked to merge, convert and upload it (export_model.py);
-   * when the file arrives and the sidecar has it, the tag becomes the served model - in the
-   * shadow first, never straight into driving. The ask is best-effort and says what happened.
-   */
+/**
+ * PROMOTE, THEN EXPORT. A promotion is only a pointer until something serves it: the adapter
+ * lives on the machine that trained it, so that machine is asked to merge, convert and upload it
+ * (export_model.py); when the file arrives and the sidecar has it, the tag goes into the model
+ * map under the round's scope - in the shadow first, never straight into driving. The ask is
+ * best-effort and says what happened; a machine that has gone to sleep is asked again by a tap.
+ */
+async function promoteAndExport(roundId, how = 'by hand') {
+  const r = training.promote(roundId);
+  if (r.error) { log.info(`training: ${roundId} not promoted ${how} — ${r.error}`); return r; }
   let exportAsk = { asked: false, why: '' };
   try {
-    const round = training.allRounds().find((x) => x.id === req.params.id) || {};
+    const round = training.allRounds().find((x) => x.id === roundId) || {};
     const tag = `gb-${trainScopes.slug(round.scope || 'base')}-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
     const dev = (deviceHub.deviceList() || []).find((d) => d.online && String(d.name || '').toLowerCase() === String(round.device || '').toLowerCase());
     if (!round.adapter) exportAsk.why = 'the round recorded no adapter path';
+    else if (String(round.adapter).startsWith('hub:')) exportAsk.why = 'the machine exported it itself';
     else if (!dev) exportAsk.why = `${round.device || 'the machine that trained it'} is not online to export it`;
     else {
       const out = await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_export', body: { adapter: round.adapter, tag, base: round.base || '', roundId: round.id } }, 30000);
       exportAsk = { asked: !!(out && out.started), why: out && out.error ? out.error : '', tag, device: dev.name };
     }
-    log.info(`training: promoted ${round.id}; export ${exportAsk.asked ? `asked of ${dev && dev.name} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+    log.info(`training: promoted ${round.id} ${how} (${r.scope}); export ${exportAsk.asked ? `asked of ${dev && dev.name} as ${tag}` : `not asked - ${exportAsk.why}`}`);
   } catch (e) { exportAsk = { asked: false, why: e.message }; }
-  res.json({ ...r, export: exportAsk });
+  return { ...r, how, export: exportAsk };
+}
+
+app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
+  const r = await promoteAndExport(req.params.id, 'by hand');
+  if (r.error) return res.status(400).json(r);
+  res.json(r);
 });
 
 /* ── THE LOOP STARTS ITSELF ────────────────────────────────────────────────────────────────────
