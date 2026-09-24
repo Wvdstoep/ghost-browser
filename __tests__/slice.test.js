@@ -308,3 +308,30 @@ describe('when the set is rebuilt', () => {
     expect(draw({ file, builtAt: 't1', want: 10 }).count).toBe(10);
   });
 });
+
+describe('sighted turns only', () => {
+  /* Two rounds collapsed on blind turns; the gate counts sighted ones, so the draw must too. A set
+     from before the flag existed carries none and is drawn as it always was. */
+  const row = (tool, sighted, job) => JSON.stringify({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }, { role: 'assistant', content: JSON.stringify({ tool, args: {} }) }], meta: { jobId: job, tier: 'gold', grade: 'gold', role: 'general', at: 1, sighted } });
+  let dir;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-slice-sighted-')); process.env.PROFILE_DIR = dir; });
+  afterEach(() => { delete process.env.PROFILE_DIR; try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } });
+
+  it('draws and examines only the sighted turns when the set has any', () => {
+    const p = path.join(dir, 'train.jsonl');
+    fs.writeFileSync(p, [row('look', true, 'a'), row('open', true, 'b'), row('read', true, 'c'), row('look', false, 'd'), row('open', false, 'e'), row('dig', false, 'f')].join('\n'));
+    const d = draw({ file: p, builtAt: 'x', want: 10 });
+    expect(d.count).toBe(3);
+    expect(d.jsonl).not.toMatch(/"sighted":false/);
+    const e = exam({ file: p, want: 10 });
+    expect(e.count).toBe(3);
+    expect(e.jsonl).not.toMatch(/"sighted":false/);
+  });
+
+  it('draws an older set, with no flag at all, as before', () => {
+    const p = path.join(dir, 'train.jsonl');
+    const old = (tool, job) => JSON.stringify({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }, { role: 'assistant', content: JSON.stringify({ tool, args: {} }) }], meta: { jobId: job, tier: 'gold', grade: 'gold' } });
+    fs.writeFileSync(p, [old('look', 'a'), old('open', 'b')].join('\n'));
+    expect(draw({ file: p, builtAt: 'y', want: 10 }).count).toBe(2);
+  });
+});
