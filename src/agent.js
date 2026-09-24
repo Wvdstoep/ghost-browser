@@ -647,6 +647,12 @@ async function askWithRetry({ chat, settings, messages, signal, job, pace = 1, a
    */
   const ring = ringFor(settings);
   let key = ring.current();
+  if (!key && ring.size > 0) {
+    /* Every key was rejected. Not a retry, not a wait - a settings problem, said as one. */
+    const dead = Object.assign(new Error('every model key was rejected by the provider — check the keys in Settings'), { status: 401, permanent: true });
+    if (job) jobsStore.step(job, 'blocked', dead.message);
+    throw dead;
+  }
   for (let i = 1; i <= attempts; i++) {
     try {
       return await chat({
@@ -655,6 +661,20 @@ async function askWithRetry({ chat, settings, messages, signal, job, pace = 1, a
       });
     } catch (e) {
       if (signal?.aborted) throw e;
+      /*
+       * A REJECTED KEY IS NOT A SPENT ONE. Live, the backup key answered 401 on every call and the
+       * ring - which only knows about allowances - kept handing it back every half hour, so the
+       * status read "1 of 2 usable" while nothing worked. A 401 or 403 retires the key and moves
+       * on; if that leaves a usable key the walk carries on, and if not the error is the real one.
+       */
+      if ((e.status === 401 || e.status === 403) && ring.size > 1) {
+        const next = ring.reject(key, e.message);
+        if (next && next !== key) {
+          key = next;
+          if (job) jobsStore.step(job, 'note', 'that model key was rejected — carrying on with the next key');
+          continue;
+        }
+      }
       if (isSpent(e)) {
         const next = ring.spend(key, e.message);
         if (next && next !== key) {
@@ -2512,5 +2532,5 @@ function keyState(settings) {
 }
 
 module.exports = {
-  keyState, run, TOOLS, cardStore, scriptRefusal, pickPath, describeProfiles, summariseCall, MAX_LEAD_AGE_DAYS, looksLikeComposer, HANDS_DOC: null, askWithRetry, PERMANENT, looksLikeWrite, systemPrompt, trimTranscript, WRITE_WORDS, ownGround, looksGarbled,
+  keyState, ringFor, run, TOOLS, cardStore, scriptRefusal, pickPath, describeProfiles, summariseCall, MAX_LEAD_AGE_DAYS, looksLikeComposer, HANDS_DOC: null, askWithRetry, PERMANENT, looksLikeWrite, systemPrompt, trimTranscript, WRITE_WORDS, ownGround, looksGarbled,
   confirmPosted, pageHasText, flatten, stripMarks, lettersOnly, readableText, loginWall };

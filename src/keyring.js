@@ -43,9 +43,13 @@ function makeKeyring(keys = [], { now = () => Date.now(), restMs = REST_MS, log 
     /* NEVER spent is -Infinity, not 0: a falsy timestamp is indistinguishable from "spent at time
      * zero", which reads a just-spent key as fresh. Only an injected clock exposes that, and a test
      * did — with a real clock it would have sat here unnoticed until someone virtualised time. */
-    .map((key) => ({ key, spentAt: -Infinity }));
+    .map((key) => ({ key, spentAt: -Infinity, dead: false }));
 
-  const live = () => ring.filter((e) => now() - e.spentAt > restMs);
+  /* Usable now: not resting, and not dead. A dead key is one the provider REJECTED (401/403):
+     no amount of resting brings it back, and offering it again every half hour is how a ring
+     of two reports "1 of 2 usable" while every call it makes fails. */
+  const alive = () => ring.filter((e) => !e.dead);
+  const live = () => alive().filter((e) => now() - e.spentAt > restMs);
 
   return {
     size: ring.length,
@@ -58,7 +62,8 @@ function makeKeyring(keys = [], { now = () => Date.now(), restMs = REST_MS, log 
        * still has work to do, the provider may have reset early, and a real 429 is a better answer
        * than a synthetic "no key" the caller has never seen before.
        */
-      return ring.length ? ring.slice().sort((a, b) => a.spentAt - b.spentAt)[0].key : null;
+      const a = alive();
+      return a.length ? a.slice().sort((x, y) => x.spentAt - y.spentAt)[0].key : null;
     },
     /** Mark a key spent. Returns the next key to try, or null when there is nothing left today. */
     spend(key, why = '') {
@@ -70,8 +75,22 @@ function makeKeyring(keys = [], { now = () => Date.now(), restMs = REST_MS, log 
       const l = live();
       return l.length ? l[0].key : null;
     },
-    /** For a status line: how many keys exist and how many are usable right now. */
-    state() { return { total: ring.length, usable: live().length }; },
+    /**
+     * Retire a key the provider refused outright. Returns the next key to try, or null. Different
+     * from spend(): a spent key comes back when the allowance resets; a rejected key is wrong,
+     * revoked or for another service, and stays out until the settings change.
+     */
+    reject(key, why = '') {
+      const e = ring.find((x) => x.key === key);
+      if (e && !e.dead) {
+        e.dead = true;
+        log.warn?.(`[keyring] key …${String(key).slice(-6)} was REJECTED${why ? ` (${why})` : ''} — retired until the settings change; ${live().length} of ${ring.length} still usable`);
+      }
+      const l = live();
+      return l.length ? l[0].key : null;
+    },
+    /** For a status line: how many keys exist, how many are usable right now, how many are dead. */
+    state() { return { total: ring.length, usable: live().length, dead: ring.filter((e) => e.dead).length }; },
   };
 }
 

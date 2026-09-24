@@ -357,6 +357,9 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       turns: manifest.turns,
       tiers: manifest.tiers,
       dropped: manifest.droppedTurns || {},
+      /* The counts the planner gates on (turnsWithContent, indexTurns...). Null on a manifest
+         built before anyone counted - the screen must not read that as zero. */
+      marks: manifest.marks || null,
     } : null,
     preflight: preflight || null,
     serving: current(),
