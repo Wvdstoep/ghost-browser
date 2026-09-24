@@ -36,9 +36,9 @@ function observedOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, max
 }
 
 /** The two messages the student sees. `tools` is the role's catalogue, `playbook` its text. */
-function promptFor(job, { role = 'general', tools = [], playbook = '' } = {}) {
+function promptFor(job, { role = 'general', tools = [], playbook = '', notes = '' } = {}) {
   return [
-    { role: 'system', content: localPrompt.systemFor({ role, site: String((job && job.profile) || ''), tools, playbook }) },
+    { role: 'system', content: localPrompt.systemFor({ role, site: String((job && job.profile) || ''), tools, playbook, notes }) },
     { role: 'user', content: localPrompt.userFor({ goal: traceset.scrubText(String((job && job.goal) || '')), observed: observedOf(job) }) },
   ];
 }

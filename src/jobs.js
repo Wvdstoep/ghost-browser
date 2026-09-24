@@ -78,6 +78,9 @@ const persistable = (j) => ({
   sink: j.sink || null,
   // Which specialist ran it, so a conversation reopened later reads correctly.
   role: j.role || 'general',
+  // Which trained model drove it, if one did, and in which scope - the verifiers' verdict on the
+  // job is that model's canary score (shadow.outcome).
+  student: j.student || null, studentScope: j.studentScope || null,
   // The agent's own conclusion in full — see setReport.
   report: j.report || null,
 });
@@ -270,6 +273,8 @@ function judge(j) {
     ...(v.endedBy ? { endedBy: v.endedBy } : {}),
     at: now(),
   };
+  /* A job a trained model drove: its verdict is that model's live score (autopilot.js). */
+  if (j.student) { try { require('./shadow').outcome({ model: j.student, jobId: j.id, tier: v.tier }); } catch (e) { /* the ledger is a courtesy */ } }
   if (v.failures && v.failures.length) {
     /* Not a warning about the job — a warning about the REPORT. The work may have been fine; what
        is wrong is that it claimed something the record contradicts. */

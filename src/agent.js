@@ -44,6 +44,8 @@ const { makeCardStore } = require('./cardstore');
    on any failure. Module-level so every run shares what the browser has learned. */
 const cardStore = makeCardStore({});
 const playbook = require('./playbook');
+const autopilot = require('./autopilot');
+const platformMap = require('./platformMap');
 const { makeSink } = require('./sink');
 
 /* Human pacing. Not a fingerprinting trick — a person reading a group does not open eleven posts in
@@ -1015,11 +1017,12 @@ async function awaitDecision(job, pid, signal, onWait) {
  * handed back to the teacher on the third strike of a job. Never throws: a student that cannot
  * be reached is a teacher turn, and says so once per job.
  */
-async function studentTurn({ job, settings, role, tools, allowedTools, playbook, chat, signal, log, strikes, recentCalls, marksCount, shadowing = false }) {
-  const messages = student.promptFor(job, { role: role && role.name ? role.name : String(role || 'general'), tools, playbook });
+async function studentTurn({ job, settings, role, tools, allowedTools, playbook, chat, signal, log, strikes, recentCalls, marksCount, shadowing = false, model = '' }) {
+  const roleName = role && role.name ? role.name : String(role || 'general');
+  const messages = student.promptFor(job, { role: roleName, tools, playbook, notes: platformMap.textFor(roleName) });
   let text = '';
   try {
-    text = await student.ask({ chat, host: settings.studentHost, model: settings.studentModel, messages, signal, timeoutMs: shadowing ? 90000 : 45000 });
+    text = await student.ask({ chat, host: settings.studentHost, model: model || settings.studentModel, messages, signal, timeoutMs: shadowing ? 90000 : 45000 });
   } catch (e) {
     if (!job._studentDown) { job._studentDown = true; jobsStore.step(job, 'note', `the student could not be reached (${String(e.message).slice(0, 120)}) — the teacher drives`); }
     return { call: null, wrong: 'the student could not be reached', text: '' };
@@ -1111,6 +1114,8 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   let ground = ownGround(theRole.trustsOwnOrigin ? ownOrigin : null);
   let site = theRole.site || null;
   let book = site ? playbook.asContext(site) : '';
+  /* Where things are on this platform, as measured from the runs that worked (platformMap.js). */
+  const notes = platformMap.textFor(theRole.name || 'general');
 
   /* The collector's steer, if this walk carries one: only tools this role has, and only in the
      teacher's message - the student's prompt is built elsewhere from the goal and the role. */
@@ -1118,7 +1123,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   if (steer) jobsStore.step(job, 'note', `practising ${(job.hintTools || []).filter((x) => allowedTools.has(x)).slice(0, 4).join(', ')} on this walk`);
   const messages = [{ role: 'system', content: systemPrompt({
     goal: job.goal, plan: job.plan || '', companyContext: ctx, meContext: me.asContext(), profileList,
-    autoAct: settings.autoAct, role: theRole, playbookContext: [book, steer].filter(Boolean).join('\n\n'),
+    autoAct: settings.autoAct, role: theRole, playbookContext: [book, notes, steer].filter(Boolean).join('\n\n'),
   }) }];
   if (book) jobsStore.step(job, 'note', `starting from what has worked before on ${site}`);
   job.transcript = messages;
@@ -1150,7 +1155,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
        transcript keeps its shape and the model simply finds itself better briefed. */
     messages[0] = { role: 'system', content: systemPrompt({
       goal: job.goal, plan: job.plan || '', companyContext: ctx, meContext: me.asContext(), profileList,
-      autoAct: settings.autoAct, role: theRole, playbookContext: book,
+      autoAct: settings.autoAct, role: theRole, playbookContext: [book, notes].filter(Boolean).join('\n\n'),
     }) };
     job.role = theRole.name;
     jobsStore.step(job, 'note', `working as ${theRole.name} now (was ${was})${why ? ` — ${why}` : ''}`);
@@ -1620,19 +1625,22 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
        * with its own prompt (student.js) and, driving, is checked before its answer is applied.
        * Everything it says or does is written to the shadow ledger, which is the live exam.
        */
-      const route = router.decide({ mode: settings.studentMode, share: (Number(settings.studentShare) || 10) / 100, jobId: job.id, strikes: job._studentStrikes || 0, model: settings.studentModel });
+      /* The most specific trained model that has earned its stage - the role's, its platform's,
+         base - or none (autopilot.js). A person's mode setting applies when autopilot is off. */
+      const pick = autopilot.pick({ role: theRole.name || 'general', models: settings.studentModels || {}, ledgers: shadow.all(), settings });
+      const route = router.decide({ mode: pick.mode, share: (Number(settings.studentShare) || 10) / 100, jobId: job.id, strikes: job._studentStrikes || 0, model: pick.model });
       job._studentRecent = job._studentRecent || [];
       let studentAnswer = null;
       if (route.drive === 'student') {
-        if (!job._studentDriving) { job._studentDriving = true; jobsStore.step(job, 'note', `the trained model (${settings.studentModel}) drives this job — ${route.why}`); }
-        studentAnswer = await studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: job._studentStrikes || 0, recentCalls: job._studentRecent, marksCount: marksCountOf(job) });
+        if (!job._studentDriving) { job._studentDriving = true; job.student = pick.model; job.studentScope = pick.key; jobsStore.step(job, 'note', `the trained model (${pick.model}, ${pick.key}) drives this job — ${route.why}`); }
+        studentAnswer = await studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: job._studentStrikes || 0, recentCalls: job._studentRecent, marksCount: marksCountOf(job), model: pick.model });
         if (studentAnswer.wrong) {
           job._studentStrikes = (job._studentStrikes || 0) + 1;
           jobsStore.step(job, 'note', `the trained model ${studentAnswer.wrong} — the teacher takes this step (strike ${job._studentStrikes} of ${router.STRIKES})`);
-          try { shadow.drove({ jobId: job.id, fallback: true, why: studentAnswer.wrong }); } catch (e) { /* the ledger is a courtesy */ }
+          try { shadow.drove({ jobId: job.id, fallback: true, why: studentAnswer.wrong, model: pick.model }); } catch (e) { /* the ledger is a courtesy */ }
           studentAnswer = null;
         } else {
-          try { shadow.drove({ jobId: job.id }); } catch (e) { /* the ledger is a courtesy */ }
+          try { shadow.drove({ jobId: job.id, model: pick.model }); } catch (e) { /* the ledger is a courtesy */ }
         }
       }
       try {
@@ -1644,8 +1652,8 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
           if (route.shadow && reply.toolCalls && reply.toolCalls.length) {
             /* Beside, never instead: the student's answer is written down and the job goes on. */
             const teacherCall = { name: reply.toolCalls[0].name, args: reply.toolCalls[0].args || {} };
-            studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: 0, recentCalls: [], marksCount: marksCountOf(job), shadowing: true })
-              .then((a) => { const c = student.compare(teacherCall, a.call); shadow.record({ jobId: job.id, role: theRole.name || 'general', step: steps, tool: teacherCall.name, teacher: teacherCall, student: a.call, agree: c.tool, argsAgree: c.args, model: settings.studentModel }); })
+            studentTurn({ job, settings, role: theRole, tools: myTools, allowedTools, playbook: book, chat, signal, log, strikes: 0, recentCalls: [], marksCount: marksCountOf(job), shadowing: true, model: pick.shadowModel })
+              .then((a) => { const c = student.compare(teacherCall, a.call); shadow.record({ jobId: job.id, role: theRole.name || 'general', step: steps, tool: teacherCall.name, teacher: teacherCall, student: a.call, agree: c.tool, argsAgree: c.args, model: pick.shadowModel }); })
               .catch(() => { /* a shadow that fails is a shadow that recorded nothing */ });
           }
         }

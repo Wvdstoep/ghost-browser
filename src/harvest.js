@@ -174,14 +174,41 @@ function gapsFrom({ perTool = {}, known = [], floor = 200 } = {}) {
   return rows;
 }
 
+/*
+ * THE ROLES THE SET IS SHORT OF - a role is data, and a role added this morning is a gap by noon.
+ *
+ * A role gets its own adapter when it holds a slice of sighted turns (platforms.js). Until then it
+ * rides on its platform's and base's. So the thin roles are where a walk changes the most - but
+ * only the ones this collector MAY walk: a public, read-and-record job. A role that posts, replies,
+ * signs in or lives behind a login is listed with `needsRealUse` set, and its examples come from
+ * the owner's own runs and the device ring, never from here.
+ */
+const LOGIN_PLATFORMS = new Set(['facebook', 'linkedin', 'upwork', 'useme', 'x', 'olx', 'studio', 'alquarium']);
+const ACTS = /\b(post|posts|posting|reply|replies|comment|message|dm|sign[- ]?(up|in)|log ?in|apply|bid|submit|publish|send|upload|activate)\b/i;
+function roleGapsFrom({ perRole = {}, roles = [], floor = 120 } = {}) {
+  const rows = [];
+  for (const r of roles || []) {
+    const name = String((r && r.name) || '').toLowerCase();
+    if (!name || name === 'general') continue;
+    const n = Number((perRole[name] && perRole[name].sighted != null ? perRole[name].sighted : perRole[name]) || 0);
+    if (n >= floor) continue;
+    const text = `${r.label || ''} ${r.description || ''} ${r.prompt || ''}`.slice(0, 1200);
+    const needsRealUse = LOGIN_PLATFORMS.has(String(r.platform || '')) || ACTS.test(text);
+    rows.push({ role: name, platform: r.platform || 'web', examples: n, description: String(r.description || '').slice(0, 160), needsRealUse });
+  }
+  rows.sort((a, b) => a.examples - b.examples);
+  return rows;
+}
+
 /**
  * The request put to the model. Grounded in the three numbers that actually decide value.
  *
  * Written as a plain brief rather than a schema, because a schema produces prompts that read like
  * form fields, and the whole requirement is that these read like a person typing.
  */
-function askFor({ gaps = [], history = [], want = 8, sites = [] } = {}) {
+function askFor({ gaps = [], history = [], want = 8, sites = [], roleGaps = [] } = {}) {
   const thin = gaps.slice(0, 12).map((g) => `${g.tool} (${g.examples} example${g.examples === 1 ? '' : 's'})`).join(', ');
+  const specialists = (roleGaps || []).filter((g) => !g.needsRealUse).slice(0, 6);
   const already = history.slice(-40).map((h) => `- ${h.prompt}`).join('\n');
   const where = sites.length ? sites.join(', ') : 'any public Dutch or international site that needs no login';
 
@@ -204,10 +231,12 @@ function askFor({ gaps = [], history = [], want = 8, sites = [] } = {}) {
     '  3. It is specific enough to have a right answer, so a wrong one is visible.',
     '',
     'One task per line. No numbering, no commentary, nothing else.',
+    ...(specialists.length ? ['', 'Some tasks are for a SPECIALIST below: start such a line with its id in square brackets, like', '[hacker-news-freelance-job-scout] find this week\'s freelance postings on the Who is hiring thread and record them.'] : []),
   ].join('\n');
 
   const user = [
     `The training set is short of these skills: ${thin || 'nothing in particular'}.`,
+    ...(specialists.length ? ['', 'And short of examples for these specialists (write about half the tasks for them, each prefixed with its id):', ...specialists.map((g) => `- ${g.role} (${g.examples} example${g.examples === 1 ? '' : 's'}): ${g.description || 'no description'}`)] : []),
     '',
     `Where to work: ${where}.`,
     '',
@@ -226,12 +255,18 @@ function askFor({ gaps = [], history = [], want = 8, sites = [] } = {}) {
  * to the top comment" every time is something the owner should be able to see on the screen, and a
  * silent filter looks identical to a model that has nothing left to suggest.
  */
-function vet(lines, { history = [] } = {}) {
+function vet(lines, { history = [], roles = null } = {}) {
   const seen = new Set(history.map((h) => String(h.prompt || '').trim().toLowerCase()));
   const kept = [];
   const rejected = [];
+  const roleOf = {};
   for (const raw of lines || []) {
-    const p = String(raw || '').replace(/^\s*[-*\d.)\s]+/, '').trim();
+    let p = String(raw || '').replace(/^\s*[-*\d.)\s]+/, '').trim();
+    /* "[role-id] task" - the specialist the task is for, when the brief asked for one. An id
+       nobody knows is dropped from the line, not the line from the batch. */
+    let role = '';
+    const m = /^\[([a-z0-9._-]{3,80})\]\s*(.+)$/i.exec(p);
+    if (m) { role = m[1].toLowerCase(); p = m[2].trim(); if (roles && !roles.has(role)) role = ''; }
     if (!p) continue;
     const why = (() => {
       if (p.length < 25) return 'too short to have a right answer';
@@ -246,8 +281,9 @@ function vet(lines, { history = [] } = {}) {
     if (why) { rejected.push({ prompt: p.slice(0, 120), why }); continue; }
     seen.add(p.toLowerCase());
     kept.push(p);
+    if (role) roleOf[p] = role;
   }
-  return { kept, rejected };
+  return { kept, rejected, roleOf };
 }
 
 /*
@@ -327,12 +363,16 @@ function decide({ on: isOn = false, busy = false, live = 0, parallel = PARALLEL,
 /** Take the next prompt off the queue and record that it went. */
 function take(jobId) {
   const s = load();
-  const prompt = s.queue.shift();
+  const entry = s.queue.shift();
+  if (!entry) return null;
+  const prompt = typeof entry === 'string' ? entry : String(entry.prompt || '');
+  const role = typeof entry === 'string' ? '' : String(entry.role || '');
   if (!prompt) return null;
   s.recent = [...(s.recent || []), Date.now()].filter((t) => Date.now() - t < 7200000);
-  s.history = [...(s.history || []), { at: new Date().toISOString(), prompt, jobId: jobId || null }].slice(-KEEP_HISTORY);
+  s.history = [...(s.history || []), { at: new Date().toISOString(), prompt, ...(role ? { role } : {}), jobId: jobId || null }].slice(-KEEP_HISTORY);
   save(s);
-  return prompt;
+  /* A string when no specialist was named - the shape every caller before the roles knew. */
+  return role ? { prompt, role } : prompt;
 }
 
 /**
@@ -353,9 +393,10 @@ function attachJob(jobId) {
 }
 
 /** Add vetted prompts, newest last, bounded. */
-function push(prompts, aiming = []) {
+function push(prompts, aiming = [], roleOf = null) {
   const s = load();
-  s.queue = [...(s.queue || []), ...(prompts || [])].slice(0, QUEUE_MAX);
+  const entries = (prompts || []).map((p) => (roleOf && roleOf[p] ? { prompt: p, role: roleOf[p] } : p));
+  s.queue = [...(s.queue || []), ...entries].slice(0, QUEUE_MAX);
   if (aiming.length) s.aiming = aiming.slice(0, 12);
   return save(s).queue.length;
 }
@@ -397,6 +438,6 @@ function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_P
 }
 
 module.exports = {
-  on, setOn, state, decide, take, push, stop, vet, gapsFrom, askFor, load, busyFrom, liveFrom, attachJob, WALK_SILENT_MS, PARALLEL,
+  on, setOn, state, decide, take, push, stop, vet, gapsFrom, roleGapsFrom, askFor, load, busyFrom, liveFrom, attachJob, WALK_SILENT_MS, PARALLEL, LOGIN_PLATFORMS,
   CAP_PER_HOUR, QUEUE_LOW, QUEUE_MAX, FILE, NEVER_CHASE,
 };

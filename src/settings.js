@@ -32,6 +32,11 @@ const DEFAULTS = {
   studentModel: '',
   studentMode: 'off',        // off | shadow | canary | primary
   studentShare: 10,          // canary: share of jobs the student drives, in percent
+  /* THE MODEL MAP (platforms.js, autopilot.js): one served tag per scope - base, a platform, a
+     role - filled in by promotion. Autopilot picks the most specific tag that has earned its
+     stage; off, the mode above applies to the most specific tag there is. */
+  studentModels: {},
+  autopilot: true,
   /* WHERE ROUNDS RUN. One flow at a time, chosen by a person: the laptops that offered, or a
      card rented per round and destroyed after it. The key never leaves the server. */
   trainOn: 'laptop',         // laptop | gpu
@@ -112,6 +117,12 @@ function write(input = {}) {
   if (typeof input.studentModel === 'string') out.studentModel = input.studentModel.trim().slice(0, 120);
   if (['off', 'shadow', 'canary', 'primary'].includes(input.studentMode)) out.studentMode = input.studentMode;
   if (Number.isFinite(Number(input.studentShare))) out.studentShare = Math.max(1, Math.min(100, Math.round(Number(input.studentShare))));
+  if (input.studentModels && typeof input.studentModels === 'object' && !Array.isArray(input.studentModels)) {
+    out.studentModels = Object.fromEntries(Object.entries(input.studentModels)
+      .filter(([k, v]) => typeof v === 'string' && v.trim() && /^(base|platform:[a-z0-9-]+|role:[a-z0-9._-]+)$/.test(String(k)))
+      .map(([k, v]) => [String(k), v.trim().slice(0, 120)]));
+  }
+  if (typeof input.autopilot === 'boolean') out.autopilot = input.autopilot;
   if (['laptop', 'gpu'].includes(input.trainOn)) out.trainOn = input.trainOn;
   if ([3, 6, 12, 24].includes(Number(input.trainHours))) out.trainHours = Number(input.trainHours);
   if (typeof input.gpuKey === 'string') out.gpuKey = input.gpuKey.trim().slice(0, 200);

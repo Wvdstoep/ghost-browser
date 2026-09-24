@@ -1605,6 +1605,8 @@ app.get('/v1/training/state', authed, async (_req, res) => {
     res.json({
       ...training.state({ corpus, manifest, trainers: now.trainers }),
       plan: now.plan, readiness: now.readiness, coverage: now.coverage,
+      scopes: now.scopes,
+      platformMap: platformMap.state(),
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
@@ -1654,7 +1656,7 @@ app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
   let exportAsk = { asked: false, why: '' };
   try {
     const round = training.allRounds().find((x) => x.id === req.params.id) || {};
-    const tag = `gb-general-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
+    const tag = `gb-${trainScopes.slug(round.scope || 'base')}-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
     const dev = (deviceHub.deviceList() || []).find((d) => d.online && String(d.name || '').toLowerCase() === String(round.device || '').toLowerCase());
     if (!round.adapter) exportAsk.why = 'the round recorded no adapter path';
     else if (!dev) exportAsk.why = `${round.device || 'the machine that trained it'} is not online to export it`;
@@ -1677,6 +1679,9 @@ app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
  * doors: the owner's switch, building a set, fetching a set, and acting on the decision.
  */
 const trainingPlan = require('./trainingPlan');
+const trainScopes = require('./trainScopes');
+const autopilot = require('./autopilot');
+const platformMap = require('./platformMap');
 
 /** The switch. Absolute: no rule in the planner overrides it. */
 app.get('/v1/training/auto', authed, (_req, res) => res.json({ on: training.autoOn() }));
@@ -1709,6 +1714,8 @@ function buildSet(onDone) {
     buildRunning = false;
     log.info(`training: set build exited ${code}`);
     if (code !== 0) log.warn(`training: build refused — ${tail.split('\n').filter((l) => l.startsWith('HALT')).join('; ') || tail.slice(-300)}`);
+    /* The platform map is a reading of the set; a new set means a new map (platformMap.js). */
+    if (code === 0) { try { platformMap.rebuild(require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl')); } catch (e) { /* the map is a courtesy */ } }
     if (onDone) { try { onDone(code === 0, tail); } catch (e) { /* the caller is best-effort */ } }
   });
   return true;
@@ -1850,6 +1857,41 @@ function trainHoursNow() {
   return Number(process.env.TRAIN_HOURS || 0) || 12;
 }
 
+/*
+ * THE SCOPES A ROUND CAN TRAIN, MEASURED (platforms.js): base, every platform the set has seen,
+ * every role - each with its sighted turns in the train set and the paper, how many of them
+ * rounds of that scope have trained on, what serves for it and what its parent serves. The
+ * planner picks from these; the Studio's model map is these.
+ */
+function scopesNow({ serving = null } = {}) {
+  const pathx = require('path');
+  const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
+  const train = coverage.cached(pathx.join(base, 'train.jsonl'));
+  const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
+  const all = training.allRounds();
+  const models = settingsStore.read().studentModels || {};
+  const ledgers = shadow.all();
+  const rows = [{ level: 'base', name: '', key: 'base', sighted: train.sighted || 0, all: train.total || 0, exam: exam.sighted || 0 }];
+  for (const [name, v] of Object.entries(train.perPlatform || {})) {
+    if (name === trainScopes.BASE) continue;
+    rows.push({ level: 'platform', name, key: `platform:${name}`, sighted: v.sighted, all: v.all, exam: ((exam.perPlatform || {})[name] || {}).sighted || 0 });
+  }
+  for (const [name, v] of Object.entries(train.perRole || {})) {
+    if (name === 'general') continue;
+    rows.push({ level: 'role', name, key: `role:${name}`, platform: v.platform || trainScopes.platformOf(name), sighted: v.sighted, all: v.all, exam: ((exam.perRole || {})[name] || {}).sighted || 0 });
+  }
+  for (const r of rows) {
+    r.seen = trainingPlan.coveredFor(all, r.key);
+    const own = training.adapterFor(r);
+    r.adapter = own.from === r.key ? own.adapter : '';
+    const parent = trainScopes.parentOf(r);
+    r.parentAdapter = parent ? training.adapterFor(parent).adapter : '';
+    r.model = models[r.key] || '';
+    r.stage = r.model ? autopilot.stageOf(ledgers[r.model]) : null;
+  }
+  return rows;
+}
+
 function readinessNow({ corpus = {}, serving = null } = {}) {
   const pathx = require('path');
   const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
@@ -1913,11 +1955,14 @@ function planNow() {
   const st = training.state({ corpus, manifest, trainers });
   const usable = trainers.filter((x) => x.able && (gpuFlow ? !!x.virtual : (!x.virtual && training.trainerOn(x.deviceId))));
   const ready = readinessNow({ corpus: st.corpus, serving: st.serving });
+  const scopes = scopesNow({ serving: st.serving });
   return {
+    scopes,
     plan: trainingPlan.decide({
       corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
       trainers: usable, auto: training.autoOn(), serving: st.serving,
       readiness: ready.readiness,
+      scopes,
       /*
        * How many turns in the set can see the page they decide on, against how many a round
        * draws. The draw is the laptop's own rule - max(200, hours * 110 / epochs) in
@@ -1953,7 +1998,12 @@ async function servingState() {
     /* Ollama lists a tag as name:latest; a person names it without. The same model either way. */
     reachable, models: models.slice(0, 20),
     hasModel: (() => { const bare = (m) => String(m || '').replace(/:latest$/, ''); return !!cfg.studentModel && models.some((m) => bare(m) === bare(cfg.studentModel)); })(),
-    shadow: shadow.state(),
+    /* The model map and what each entry has earned (autopilot.js), and the switch itself. */
+    models: cfg.studentModels || {},
+    autopilot: cfg.autopilot !== false,
+    stages: autopilot.stages({ models: cfg.studentModels || {}, ledgers: shadow.all() }),
+    rules: autopilot.RULES,
+    shadow: shadow.state(cfg.studentModel),
   };
 }
 /*
@@ -2063,13 +2113,21 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
     fsx.writeFileSync(p, JSON.stringify(all, null, 1));
   } catch (e) { /* the list is a courtesy */ }
   log.info(`training: ${tag} is now a model on the sidecar (${Math.round(stat.size / 1e6)} MB)`);
-  /* Serve it - in the shadow, where it can only be measured. A person moves it to canary. */
+  /*
+   * Serve it - in the shadow, where it can only be measured. It goes into the model map under the
+   * scope its round trained (base, a platform, a role); autopilot moves it on when the ledger says
+   * so, or a person does when autopilot is off. The base tag is also the single-model setting,
+   * the shape everything read before the map existed.
+   */
   try {
     const before = settingsStore.read();
+    const round = training.allRounds().find((x) => x.id === roundId) || null;
+    const key = trainScopes.parse((round && round.scope) || 'base').key;
     const mode = before.studentMode === 'off' ? 'shadow' : before.studentMode;
-    settingsStore.write({ ...before, studentModel: tag, studentMode: mode });
-    if (before.studentModel !== tag) shadow.reset(tag);
-    log.info(`training: serving ${tag} in ${mode}`);
+    const models = { ...(before.studentModels || {}), [key]: tag };
+    settingsStore.write({ ...before, studentModels: models, studentMode: mode, ...(key === 'base' ? { studentModel: tag } : {}) });
+    shadow.reset(tag);
+    log.info(`training: serving ${tag} for ${key} (${mode}${before.autopilot === false ? '' : ', autopilot'})`);
   } catch (e) { log.warn(`training: could not switch serving to ${tag}: ${e.message}`); }
   return { ...record, server: text.slice(0, 200) };
 }
@@ -2166,6 +2224,19 @@ app.get('/v1/training/adapters/:name', authed, (req, res) => {
   fsx.createReadStream(file).pipe(res);
 });
 
+/* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
+app.get('/v1/training/scopes', authed, (_req, res) => {
+  try { res.json({ scopes: scopesNow({ serving: training.current() }), platformMap: platformMap.state(), sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/v1/training/platform-map', authed, (req, res) => {
+  try {
+    const m = platformMap.load();
+    const name = String(req.query.platform || '');
+    res.json(name ? { platform: name, text: platformMap.textOf(m, name), data: (m.platforms || {})[name] || null } : { ...platformMap.state(), texts: Object.fromEntries(Object.keys(m.platforms || {}).map((p) => [p, platformMap.textOf(m, p)])) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/v1/training/serving', authed, async (_req, res) => {
   try { res.json(await servingState()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2178,6 +2249,13 @@ app.post('/v1/training/serving', authed, async (req, res) => {
     if (typeof b.model === 'string') patch.studentModel = b.model;
     if (b.share != null) patch.studentShare = b.share;
     if (typeof b.host === 'string') patch.studentHost = b.host;
+    if (typeof b.autopilot === 'boolean') patch.autopilot = b.autopilot;
+    /* One entry of the map by hand: {models: {"platform:facebook": "gb-facebook-x"}}; '' removes. */
+    if (b.models && typeof b.models === 'object') {
+      const next = { ...(before.studentModels || {}) };
+      for (const [k, v] of Object.entries(b.models)) { if (typeof v === 'string' && v.trim()) next[k] = v.trim(); else delete next[k]; }
+      patch.studentModels = next;
+    }
     settingsStore.write({ ...before, ...patch });
     const after = settingsStore.read();
     if (patch.studentModel && patch.studentModel !== before.studentModel) shadow.reset(after.studentModel);
@@ -2399,6 +2477,8 @@ async function dispatchRound({ force = false } = {}) {
     const hard = /already running|no machine|no training set|still reading/.test(plan.why || '');
     if (hard) return { ...plan, forced: true };
   }
+  /* The scope this round trains, written down for the device to draw against (training.js). */
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '' });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
@@ -2424,7 +2504,7 @@ async function dispatchRound({ force = false } = {}) {
       body: { base: dev.base || '', hours: trainHoursNow() },
     }, 30000);
     log.info(`training: handed a round to ${dev.device} — ${plan.why}`);
-    return { run: true, why: plan.why, device: dev.device, forced: !!force };
+    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
     return { run: false, why: `${dev.device} would not take it: ${e.message}` };
@@ -2532,8 +2612,17 @@ async function refillPrompts(want) {
     const perTool = {};
     try { for (const row of readinessNow().coverage.perTool) perTool[row.tool] = row.sighted; } catch (e) { Object.assign(perTool, toolCountsFromSet()); }
     const gaps = harvest.gapsFrom({ perTool, known });
+    /* The thin ROLES too - a role is data, and one added this morning is a gap by noon. */
+    let roleGaps = [];
+    let roleNames = null;
+    try {
+      const cov = coverage.cached(require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl'));
+      const list = roles.list().map((r) => ({ name: r.name, platform: trainScopes.platformOf(r.name), label: r.label, description: r.description, prompt: r.prompt }));
+      roleNames = new Set(list.map((r) => String(r.name).toLowerCase()));
+      roleGaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) });
+    } catch (e) { roleGaps = []; }
     const s = harvest.load();
-    const messages = harvest.askFor({ gaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) });
+    const messages = harvest.askFor({ gaps, roleGaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) });
 
     /*
      * THE BACKUP KEY, HERE TOO.
@@ -2586,8 +2675,9 @@ async function refillPrompts(want) {
         return { asked: false, why: 'every model key is out of allowance — waiting for the allowance to reset' };
       }
       const lines = String((reply && reply.content) || '').split(String.fromCharCode(10));
-      const { kept, rejected } = harvest.vet(lines, { history: s.history || [] });
-      const queued = harvest.push(kept, gaps.slice(0, 8).map((g) => `${g.tool} (${g.examples})`));
+      const { kept, rejected, roleOf } = harvest.vet(lines, { history: s.history || [], roles: roleNames });
+      const aiming = gaps.slice(0, 8).map((g) => `${g.tool} (${g.examples})`).concat(roleGaps.filter((g) => !g.needsRealUse).slice(0, 4).map((g) => `role ${g.role} (${g.examples})`));
+      const queued = harvest.push(kept, aiming, roleOf);
       log.info(`[harvest] asked for prompts: ${kept.length} kept, ${rejected.length} refused, ${queued} queued`);
       for (const r of rejected.slice(0, 4)) log.info(`[harvest] refused — ${r.why}: ${r.prompt}`);
       return { asked: true, kept: kept.length, rejected, queued, aiming: gaps.slice(0, 8) };
@@ -2627,12 +2717,15 @@ setInterval(() => {
        * no assistant expanded it, so what the set records is exactly a sentence a person would type.
        * The profile is the public one — unattended work never touches a logged-in account.
        */
-      const prompt = harvest.take(null);
-      if (!prompt) return;
+      const taken = harvest.take(null);
+      if (!taken) return;
+      const prompt = typeof taken === 'string' ? taken : taken.prompt;
+      /* A task written for a specialist runs AS that specialist, so its turns land on that role. */
+      const walkRole = typeof taken === 'string' ? undefined : taken.role;
       const ctx = operatorContext();
       /* The batch was written against the current gaps; every walk of it is pointed at them. */
       const hintTools = require('./steer').toolsOfAim(s.aiming || []).slice(0, 4);
-      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: free[0], maxSteps: 40, maxPages: 12, hintTools });
+      const out = await ctx.startWalk({ goal: prompt, ask: prompt, profile: free[0], role: walkRole, maxSteps: 40, maxPages: 12, hintTools });
       if (out && out.error) {
         log.warn(`[harvest] walk refused — ${out.error}`);
         /* An empty account is the one error worth stopping for: every further walk would be void
@@ -2766,9 +2859,12 @@ app.get('/v1/training/slice', authed, (req, res) => {
       file, builtAt: manifest.builtAt,
       want: Math.min(5000, Math.max(50, Number(req.query.turns) || 700)),
       roundId: String(req.query.round || ''),
+      /* The round's scope, or the pending dispatch's when the round is not registered yet. */
+      scope: training.scopeOfRound(String(req.query.round || '')),
     });
     res.set('X-Slice-Count', String(s.count));
     res.set('X-Slice-Remaining', String(s.remaining));
+    res.set('X-Slice-Scope', String(s.scope || 'base'));
     res.type('application/x-ndjson').send(s.jsonl);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2793,8 +2889,9 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
      * which is 15% of what a round trains on, did not appear at all. A round could fix its entire
      * tool distribution and be marked almost solely on one research tool.
      */
-    const s = require('./slice').exam({ file, want });
+    const s = require('./slice').exam({ file, want, scope: training.scopeOfRound(String(req.query.round || '')) });
     res.set('X-Exam-Count', String(s.count));
+    res.set('X-Exam-Scope', String(s.scope || 'base'));
     res.set('X-Exam-Tools', JSON.stringify(s.tools).slice(0, 900));
     res.type('application/x-ndjson').send(s.jsonl);
   } catch (e) { res.status(500).json({ error: e.message }); }
