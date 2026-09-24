@@ -1607,6 +1607,7 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       plan: now.plan, readiness: now.readiness, coverage: now.coverage,
       scopes: now.scopes,
       platformMap: platformMap.state(),
+      practice: practiceState(),
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
@@ -1680,6 +1681,7 @@ app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
  */
 const trainingPlan = require('./trainingPlan');
 const trainScopes = require('./trainScopes');
+const practice = require('./practice');
 const autopilot = require('./autopilot');
 const platformMap = require('./platformMap');
 
@@ -2688,6 +2690,122 @@ async function refillPrompts(want) {
     return { asked: false, why: e.message };
   } finally { refillingPrompts = false; }
 }
+
+/*
+ * ── THE PLATFORM AND ROLE COLLECTOR (practice.js) ──────────────────────────────────────────────
+ *
+ * The loop above is the base collector: public sites, no login, no role. This one takes the
+ * thinnest role whose platform has a profile with a saved login, asks the teacher for tasks that
+ * role would be handed, and runs them AS that role IN that profile - one walk at a time, never
+ * while automatic acting is on, never an account task. Its turns land on the role and on the
+ * platform, which is what a platform or a role adapter trains on.
+ */
+function loginsNow() {
+  const base = process.env.PROFILE_DIR || '/profiles';
+  const out = [];
+  let names = [];
+  try { names = require('fs').readdirSync(base); } catch (e) { names = []; }
+  for (const name of names) {
+    if (/^(training|traceset|jobs|roles|recordings|files|assets|sessions|operator|device-runs|file-assets|people|lost\+found|cust_)/.test(name) || /\./.test(name)) continue;
+    let login = false;
+    try { login = profiles.hasLogin(name); } catch (e) { login = false; }
+    if (!login) continue;
+    const platform = practice.platformOfProfile(name, trainScopes.normalizeSite);
+    if (platform && platform !== trainScopes.BASE) out.push({ profile: name, platform });
+  }
+  return out;
+}
+function practiceState() {
+  try {
+    const alive = harvest.liveFrom(jobs.jobs.values());
+    return { ...practice.state({ busy: alive.count > 0, keys: agent.keyState(settingsStore.read()) }), logins: loginsNow(), autoAct: !!settingsStore.read().autoAct };
+  } catch (e) { return { on: practice.on(), error: e.message }; }
+}
+app.get('/v1/training/practice', authed, (_req, res) => res.json(practiceState()));
+app.post('/v1/training/practice', authed, (req, res) => {
+  const on = practice.setOn(!!(req.body || {}).on);
+  log.info(`[practice] ${on ? 'ON' : 'OFF'}`);
+  res.json(practiceState());
+});
+
+/** One ask of the teacher through the walks' key ring; null when no key can answer. */
+async function askRing(messages) {
+  const cfg = settingsStore.read();
+  if (!cfg.llmModel) return null;
+  const { isSpent } = require('./keyring');
+  const ring = agent.ringFor(cfg);
+  let key = ring.current();
+  if (!key && ring.size > 0) return null;
+  for (let attempt = 0; attempt < Math.max(1, ring.size); attempt++) {
+    try {
+      return await llm.chat({ host: cfg.llmHost, model: cfg.llmModel, key, messages, timeoutMs: 90000 });
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) { const next = ring.reject(key, e.message); if (next && next !== key) { key = next; continue; } return null; }
+      if (!isSpent(e)) throw e;
+      const next = ring.spend(key, e.message);
+      if (next && next !== key) { key = next; continue; }
+      return null;
+    }
+  }
+  return null;
+}
+
+/* The map exists from the first boot after this shipped, not from the first rebuild after it. */
+try {
+  const trainFile = require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl');
+  if (!require('fs').existsSync(platformMap.FILE()) && require('fs').existsSync(trainFile)) {
+    setTimeout(() => { try { platformMap.rebuild(trainFile); log.info('[training] platform map built'); } catch (e) { /* next build */ } }, 20000).unref?.();
+  }
+} catch (e) { /* the map is a courtesy */ }
+
+let practising = false;
+setInterval(() => {
+  (async () => {
+    if (!practice.on() || practising) return;
+    practising = true;
+    try {
+      const cfg = settingsStore.read();
+      const s = practice.load();
+      const alive = harvest.liveFrom(jobs.jobs.values());
+      const gate = practice.decide({ on: true, autoAct: !!cfg.autoAct, busy: false, live: 0, queued: 1, recent: s.recent, keys: agent.keyState(cfg) });
+      if (!gate.run) return;   // acting on, cap reached, or keys spent - nothing to plan
+      /* The thin roles, and which of them has a signed-in platform to practise on. */
+      const cov = coverage.cached(require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl'));
+      const list = roles.list().map((r) => ({ name: r.name, platform: trainScopes.platformOf(r.name), label: r.label, description: r.description, prompt: r.prompt }));
+      const gaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) });
+      const plan = practice.planFor({ gaps, logins: loginsNow(), perRole: s.perRole || {} });
+      if (!plan.role) return;
+      /* Tasks for that role, asked once and kept per role. */
+      if (!(s.queue || []).some((q) => q.role === plan.role)) {
+        const rec = list.find((r) => r.name === plan.role) || { name: plan.role };
+        const reply = await askRing(practice.askFor({ role: rec, platform: plan.platform, history: s.history || [], want: 6 }));
+        if (!reply) { log.warn('[practice] no key could ask for tasks — waiting'); return; }
+        const { kept, rejected } = practice.vet(String(reply.content || '').split(String.fromCharCode(10)), { history: s.history || [] });
+        const n = practice.push(plan.role, plan.platform, plan.profile, kept);
+        log.info(`[practice] ${plan.role}: ${n} task(s) queued, ${rejected.length} refused`);
+        for (const r of rejected.slice(0, 3)) log.info(`[practice] refused — ${r.why}: ${r.prompt}`);
+        if (!n) return;
+      }
+      /* One walk, in the platform's own profile, as the role. */
+      if (alive.profiles.includes(plan.profile) || profileBusy(plan.profile)) return;
+      const go = practice.decide({ on: true, autoAct: !!cfg.autoAct, busy: false, live: 0, queued: 1, recent: s.recent, keys: agent.keyState(cfg) });
+      if (!go.run) return;
+      const task = practice.take(plan.role);
+      if (!task) return;
+      const ctx = operatorContext();
+      const out = await ctx.startWalk({ goal: task.prompt, ask: task.prompt, profile: task.profile, role: task.role, maxSteps: 40, maxPages: 12 });
+      if (out && out.error) {
+        log.warn(`[practice] walk refused — ${out.error}`);
+        if (/allowance|no model key|quota/i.test(String(out.error))) practice.stop(out.error);
+        return;
+      }
+      if (out && out.jobId) practice.attachJob(out.jobId);
+      log.info(`[practice] ${task.role} in ${task.profile}: ${String(task.prompt).slice(0, 80)}`);
+    } catch (e) {
+      log.warn(`[practice] ${e.message}`);
+    } finally { practising = false; }
+  })();
+}, 60 * 1000);
 
 /*
  * THE LOOP. A minute, because a walk takes two to ten and the cost of checking is nothing.
