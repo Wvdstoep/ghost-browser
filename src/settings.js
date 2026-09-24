@@ -127,6 +127,8 @@ function redacted() {
     keys2Set: !!(s.llmKeys && String(s.llmKeys).trim()),
     // Enough to tell two keys apart, not enough to be one.
     keyHint: s.llmKey ? `…${String(s.llmKey).slice(-4)}` : null,
+    /* The backups too, so a person can tell on the screen which account is which. */
+    keys2Hint: String(s.llmKeys || "").split(",").map((k) => k.trim()).filter(Boolean).map((k) => `…${k.slice(-4)}`).join(", ") || null,
   };
 }
 
