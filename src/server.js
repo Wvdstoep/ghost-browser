@@ -1606,6 +1606,7 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       ...training.state({ corpus, manifest, trainers: now.trainers }),
       plan: now.plan, readiness: now.readiness, coverage: now.coverage,
       resight: resight.state(),
+      judge: judge.state(),
       student: await servingState(),
       gpu: gpuView(),
     });
@@ -2185,6 +2186,130 @@ app.post('/v1/training/serving', authed, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/*
+ * THE TEACHER JUDGES THE OLD RUNS - judge.js says what and why. A switch, a state, and while it
+ * is on, three runs a minute through the same key ring the walks use; a spent ring means a
+ * quiet minute, never a failed run. Every judgement is written on the step under `judged`.
+ */
+app.get('/v1/training/judge', authed, (_req, res) => res.json(judge.state()));
+app.post('/v1/training/judge', authed, (req, res) => {
+  const st = judge.setOn(!!(req.body || {}).on);
+  log.info(`training: teacher judging old runs ${st.on ? 'ON' : 'OFF'}`);
+  res.json(judge.state());
+});
+let judging = false;
+const judgeMem = { queue: null, found: [], scanNext: 0 };
+async function judgeTick() {
+  if (judging) return;
+  const st = judge.load();
+  if (!st.on) return;
+  const cfg = settingsStore.read();
+  if (!cfg.llmModel) return;
+  const ks = agent.keyState(cfg);
+  if (ks.total > 0 && ks.usable === 0) { st.lastWhy = 'the model allowance is spent — waiting'; judge.save(st); return; }
+  judging = true;
+  try {
+    if (!judgeMem.queue) {
+      const r = judge.scan(jobs.DIR, st, { from: judgeMem.scanNext, limit: 300 });
+      judgeMem.found.push(...r.found); judgeMem.scanNext = r.next;
+      if (!r.done) { st.lastWhy = `counting the runs to judge — ${r.next} of ${r.total} read`; judge.save(st); return; }
+      judgeMem.queue = judge.order(judgeMem.found); judgeMem.found = []; judgeMem.scanNext = 0;
+      st.left = judgeMem.queue.length;
+      if (!judgeMem.queue.length) { st.on = false; st.lastWhy = 'every sighted run has been judged'; judge.save(st); judgeMem.queue = null; return; }
+      st.lastWhy = `${st.left} run(s) to judge`; judge.save(st);
+    }
+    const ring = agent.ringFor(cfg);
+    let n = 0;
+    while (judgeMem.queue.length && n < judge.PER_TICK) {
+      const entry = judgeMem.queue.shift();
+      const job = resight.loadJob(jobs.DIR, entry.id);
+      if (!job || !judge.wants(job, st.doneJobs)) continue;
+      n++;
+      let text = '';
+      try {
+        const key = ring.current();
+        const r = await llm.chat({ host: cfg.llmHost, model: cfg.llmModel, key, messages: judge.promptFor(job), tools: [], timeoutMs: 90000, options: { temperature: 0 } });
+        text = String((r && r.content) || '');
+        st.calls++;
+      } catch (e) {
+        st.failed++;
+        const { isSpent } = require('./keyring');
+        if (isSpent(e)) { ring.spend(ring.current(), e.message); st.lastWhy = 'a key ran out — the ring moved on'; }
+        else if (e.status === 401 || e.status === 403) { ring.reject(ring.current(), e.message); st.lastWhy = 'a key was rejected'; }
+        else st.lastWhy = `the teacher did not answer: ${String(e.message).slice(0, 100)}`;
+        judgeMem.queue.unshift(entry);
+        break;
+      }
+      const out = judge.apply(job, judge.parse(text), { model: cfg.llmModel, annotate: (j, s, extra) => jobs.annotate(j, s, extra) });
+      st.doneJobs[job.id] = new Date().toISOString();
+      st.runs++; st.steps += out.landed; st.wrong += out.wrong;
+      st.reasons += (job.steps || []).filter((s) => s && s.judged && s.judged.reason).length;
+      st.lastAt = new Date().toISOString();
+      st.lastWhy = `${out.landed} of ${out.asked} steps judged on ${job.id} (${out.wrong} wrong)`;
+    }
+    st.left = judgeMem.queue.length;
+    judge.save(st);
+    if (!judgeMem.queue.length) judgeMem.queue = null;
+  } catch (e) { log.warn(`[judge] ${e.message}`); }
+  finally { judging = false; }
+}
+setInterval(() => { judgeTick().catch(() => {}); }, 60000).unref?.();
+
+/*
+ * THE RUNS, FOR THE DATA BROWSER. A page of the recent runs with their grade and how much of
+ * each is sighted and judged; one run with its steps, the page each read (its head), and every
+ * verdict on each step; and a person's label on a step, which outranks the rest in the set.
+ */
+app.get('/v1/training/runs', authed, (req, res) => {
+  const fsx = require('fs'); const pathx = require('path');
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 60));
+  let files = [];
+  try { files = fsx.readdirSync(jobs.DIR).filter((f) => f.endsWith('.json')).map((f) => ({ f, m: fsx.statSync(pathx.join(jobs.DIR, f)).mtimeMs })).sort((a, b) => b.m - a.m).slice(0, limit * 2); } catch (e) { files = []; }
+  const out = [];
+  for (const { f } of files) {
+    if (out.length >= limit) break;
+    let j; try { j = JSON.parse(fsx.readFileSync(pathx.join(jobs.DIR, f), 'utf8')); } catch (e) { continue; }
+    const steps = j.steps || [];
+    const calls = steps.filter((s) => s && s.kind === 'tool' && s.tool);
+    const tools = {}; for (const s of calls) tools[s.tool] = (tools[s.tool] || 0) + 1;
+    out.push({
+      id: j.id, goal: String(j.goal || '').slice(0, 200), role: j.role || 'general', profile: j.profile || '', status: j.status || '', createdAt: j.createdAt || '',
+      tier: (j.verdict && j.verdict.tier) || '', grade: (() => { try { return require('./quality').gradeOf(j, (j.verdict && j.verdict.tier) || 'void'); } catch (e) { return ''; } })(),
+      calls: calls.length, sighted: steps.filter((s) => s && s.content).length, judged: calls.filter((s) => s.judged).length, human: calls.filter((s) => s.human).length,
+      wrong: calls.filter((s) => (s.human && s.human.verdict === 'wrong') || (s.judged && s.judged.verdict === 'wrong')).length,
+      tools: Object.entries(tools).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`),
+    });
+  }
+  res.json({ runs: out });
+});
+app.get('/v1/training/runs/:id', authed, (req, res) => {
+  const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const j = resight.loadJob(jobs.DIR, id);
+  if (!j) return res.status(404).json({ error: 'no such run' });
+  const steps = (j.steps || []).map((s, n) => ({
+    n, kind: s.kind, text: String(s.text || '').slice(0, 300), tool: s.tool || '', args: s.tool ? JSON.stringify(s.args || {}).slice(0, 300) : '',
+    content: s.content ? String(s.content).slice(0, 600) : '', marks: s.marks ? String(s.marks).split('\n').length : 0, at: s.at || '',
+    judged: s.judged ? { verdict: s.judged.verdict, why: s.judged.why || '', reason: s.judged.reason || '' } : null,
+    human: s.human ? { verdict: s.human.verdict, at: s.human.at || '' } : null,
+    resighted: !!(s.resighted && s.content),
+  }));
+  res.json({ id: j.id, goal: j.goal || '', role: j.role || 'general', profile: j.profile || '', status: j.status || '', createdAt: j.createdAt || '', report: String(j.report || '').slice(0, 800),
+    tier: (j.verdict && j.verdict.tier) || '', why: (j.verdict && (j.verdict.why || [])).slice(0, 3), steps });
+});
+app.post('/v1/training/runs/:id/steps/:n/label', authed, (req, res) => {
+  const id = String(req.params.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  const n = Number(req.params.n);
+  const verdict = String((req.body || {}).verdict || '');
+  if (!['good', 'wrong', 'clear'].includes(verdict)) return res.status(400).json({ error: 'verdict must be good, wrong or clear' });
+  const j = resight.loadJob(jobs.DIR, id);
+  if (!j || !Number.isInteger(n) || !j.steps || !j.steps[n]) return res.status(404).json({ error: 'no such step' });
+  const step = j.steps[n];
+  if (verdict === 'clear') { delete step.human; jobs.annotate(j, step, {}); }
+  else jobs.annotate(j, step, { human: { verdict, at: new Date().toISOString(), by: String((req.client && req.client.owner) || '') } });
+  log.info(`training: a person marked step ${n} of ${id} ${verdict}`);
+  res.json({ ok: true, n, human: step.human || null });
+});
+
 /* The six checks on their own, with the per-tool coverage under them. */
 app.get('/v1/training/readiness', authed, (_req, res) => {
   try { const n = planNow(); res.json({ readiness: n.readiness, coverage: n.coverage, plan: n.plan }); }
@@ -2349,6 +2474,7 @@ const resight = require('./resight');
 const coverage = require('./coverage');
 const shadow = require('./shadow');
 const gpu = require('./gpu');
+const judge = require('./judge');
 const readiness = require('./readiness');
 
 /**
