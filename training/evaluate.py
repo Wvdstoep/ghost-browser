@@ -94,8 +94,97 @@ def expected_tool(row):
         return None
 
 
+def expected_call(row):
+    try:
+        obj = json.loads(row["messages"][2]["content"])
+        return obj.get("tool"), (obj.get("args") if isinstance(obj.get("args"), dict) else {})
+    except Exception:
+        return None, {}
+
+
+def role_of(row):
+    try:
+        return str((row.get("meta") or {}).get("role") or "general")
+    except Exception:
+        return "general"
+
+
+# ── DO THE ARGUMENTS AGREE? ─────────────────────────────────────────────────────────────────────
+#
+# The tool name was the whole score, and a model that answers `open` with https://www.google.com
+# to every open looked identical to one that read the page and chose the listing. So each argument
+# is compared the way a person would: an address by its host and path (never the query string or
+# a trailing slash), an index exactly, a piece of text by similarity, anything else by equality.
+# A missing optional argument on both sides is agreement; an argument the gold call has and the
+# model left out is not.
+def _norm_text(s):
+    return " ".join(str(s or "").lower().split())
+
+
+def _norm_url(u):
+    u = str(u or "").strip().lower()
+    u = u.split("#")[0].split("?")[0]
+    u = u.replace("https://", "").replace("http://", "")
+    if u.startswith("www."):
+        u = u[4:]
+    return u.rstrip("/")
+
+
+URLISH = ("url", "href", "link", "address", "postUrl")
+INDEXISH = ("index", "n", "i")
+
+
+def _arg_agrees(key, want, got):
+    if key in URLISH:
+        return _norm_url(want) == _norm_url(got)
+    if key in INDEXISH:
+        try:
+            return int(want) == int(got)
+        except Exception:
+            return False
+    if isinstance(want, (int, float, bool)) or isinstance(got, (int, float, bool)):
+        return want == got
+    if isinstance(want, (list, dict)) or isinstance(got, (list, dict)):
+        return json.dumps(want, sort_keys=True) == json.dumps(got, sort_keys=True)
+    a, b = _norm_text(want), _norm_text(got)
+    if not a and not b:
+        return True
+    if not a or not b:
+        return False
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+def args_agree(want, got):
+    """Every argument the gold call made agrees; extra arguments the model added do not count against it."""
+    want = want if isinstance(want, dict) else {}
+    got = got if isinstance(got, dict) else {}
+    for k, v in want.items():
+        if v in (None, "", [], {}):
+            continue
+        if k not in got:
+            return False
+        if not _arg_agrees(k, v, got.get(k)):
+            return False
+    return True
+
+
+def predicted_call(text):
+    """The tool name and its arguments out of whatever the model said, however untidily it said it."""
+    obj = _first_object(text)
+    if not obj:
+        return None, {}
+    t = obj.get("tool") or obj.get("name")
+    a = obj.get("args") if isinstance(obj.get("args"), dict) else (obj.get("arguments") if isinstance(obj.get("arguments"), dict) else {})
+    return (t if isinstance(t, str) else None), a
+
+
 def predicted_tool(text):
-    """The tool name out of whatever the model said, however untidily it said it."""
+    return predicted_call(text)[0]
+
+
+def _first_object(text):
+    """The first complete JSON object in the text, or None."""
     if not text:
         return None
     start = text.find("{")
@@ -124,8 +213,7 @@ def predicted_tool(text):
                     obj = json.loads(text[start:i + 1])
                 except Exception:
                     return None
-                t = obj.get("tool") or obj.get("name")
-                return t if isinstance(t, str) else None
+                return obj if isinstance(obj, dict) else None
     return None
 
 
@@ -200,26 +288,36 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
     #
     # So count the predictions themselves. A gate cannot refuse what nobody measured.
     said = Counter()
+    # Arguments, and the role: a right tool with the wrong address is a wrong answer live, and an
+    # average over roles hides the role that is hopeless.
+    args_hits = 0
+    per_role = defaultdict(lambda: [0, 0])   # role -> [right, seen]
     started = time.time()
+    device = next(model_obj.parameters()).device
 
     for i, row in enumerate(rows):
-        want = expected_tool(row)
+        want, want_args = expected_call(row)
         if not want:
             continue
+        role = role_of(row)
         prompt = tok.apply_chat_template(row["messages"][:2], tokenize=False, add_generation_prompt=True)
-        ids = tok(prompt, return_tensors="pt", truncation=True, max_length=4096)
+        ids = tok(prompt, return_tensors="pt", truncation=True, max_length=4096).to(device)
         with torch.no_grad():
             out = model_obj.generate(**ids, max_new_tokens=max_new, do_sample=False,
                                      pad_token_id=tok.eos_token_id)
         text = tok.decode(out[0][ids["input_ids"].shape[1]:], skip_special_tokens=True)
-        got = predicted_tool(text)
+        got, got_args = predicted_call(text)
         if got is None:
             unusable += 1
         said[got or "(nothing usable)"] += 1
         per_tool[want][1] += 1
+        per_role[role][1] += 1
         if got == want:
             hits += 1
             per_tool[want][0] += 1
+            per_role[role][0] += 1
+            if args_agree(want_args, got_args):
+                args_hits += 1
         else:
             confusion[f"{want} -> {got}"] += 1
         if (i + 1) % 25 == 0:
@@ -237,6 +335,12 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
         "adapter": adapter,
         "turns": total,
         "agreement_pct": round(100 * hits / total, 2) if total else 0,
+        # The tool AND its arguments, over every turn - the number that says whether it would have
+        # done the right thing live, not only named it. And the same over the turns it named right.
+        "args_agreement_pct": round(100 * args_hits / total, 2) if total else 0,
+        "args_of_hits_pct": round(100 * args_hits / hits, 2) if hits else 0,
+        "per_role": {k: {"right": v[0], "seen": v[1], "pct": round(100 * v[0] / v[1], 1)}
+                     for k, v in sorted(per_role.items(), key=lambda kv: -kv[1][1])},
         "unusable_pct": round(100 * unusable / total, 2) if total else 0,
         "seconds": round(time.time() - started, 1),
         "per_tool": {k: {"right": v[0], "seen": v[1], "pct": round(100 * v[0] / v[1], 1)}

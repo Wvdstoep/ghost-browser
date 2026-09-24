@@ -518,7 +518,8 @@ def main():
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--adapter", default=None, help="carry on from this adapter instead of the bare base")
     ap.add_argument("--hours", type=float, default=8.0, help="how long this device may spend training")
-    ap.add_argument("--eval-turns", type=int, default=150)
+    ap.add_argument("--eval-turns", type=int, default=None,
+                    help="exam size; 150 on a CPU (an exam costs 25 minutes there), 500 on a GPU")
     ap.add_argument("--max-len", type=int, default=2048, help="every answer must survive truncation; see Turns")
     ap.add_argument("--batch", type=int, default=1)
     # ── THE RECIPE ───────────────────────────────────────────────────────────────────────────────
@@ -557,6 +558,8 @@ def main():
     # Where and in what. A GPU makes the same round a few minutes; bf16 only means anything there.
     use_cuda = torch.cuda.is_available() and not args.cpu
     device = torch.device("cuda" if use_cuda else "cpu")
+    if args.eval_turns is None:
+        args.eval_turns = 500 if use_cuda else 150
     dtype = torch.bfloat16 if (args.bf16 and use_cuda) else torch.float32
     targets = (["q_proj", "k_proj", "v_proj", "o_proj"] if args.lora_scope == "attn"
                else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])

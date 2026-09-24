@@ -1596,14 +1596,17 @@ app.get('/v1/training/state', authed, (_req, res) => {
 
     /* Which connected devices could take a round, read off what they advertise — the same way every
        other kind of work is routed, so it is whichever laptop is on rather than a named one. */
-    let trainers = [];
-    try {
-      trainers = (deviceHub.deviceList() || [])
-        .filter((d) => d.caps && (d.caps.trainer || (d.caps.features || []).includes('train_round')))
-        .map((d) => ({ name: d.name || d.deviceId, deviceId: d.deviceId, online: !!d.online }));
-    } catch (e) { trainers = []; }
-
-    res.json({ ...training.state({ corpus, manifest, trainers }), resight: resight.state() });
+    /*
+     * THE SAME ROWS THE PLANNER USES. This built its own three-field row and the screen read
+     * `able` off it as undefined, so a laptop that had just been set up to train showed
+     * "cannot train on this machine" with no reason - the reason was in the row the planner had.
+     */
+    const now = planNow();
+    res.json({
+      ...training.state({ corpus, manifest, trainers: now.trainers }),
+      plan: now.plan, readiness: now.readiness, coverage: now.coverage,
+      resight: resight.state(),
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1813,6 +1816,22 @@ app.get('/v1/training/set/:name', authed, (req, res) => {
 });
 
 /** What the planner currently thinks, and why. Read-only — useful on the screen and in a log. */
+/**
+ * THE SIX CHECKS OVER THE SET AS IT STANDS. Read off the jsonl files, cached until they change,
+ * so the screen, the planner and the collector all see one answer. `catalogue` is every tool the
+ * live agent can offer, so a tool with no examples at all still shows up as a gap.
+ */
+function readinessNow({ corpus = {}, serving = null } = {}) {
+  const pathx = require('path');
+  const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
+  const train = coverage.cached(pathx.join(base, 'train.jsonl'));
+  const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
+  const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
+  const sliceTurns = Math.max(200, Math.round((Number(process.env.TRAIN_HOURS || 0) || 12) * 110 / 3));
+  const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
+  return { readiness: r, coverage: coverage.summary(train), sliceTurns };
+}
+
 function planNow() {
   const pathx = require('path');
   const base = process.env.PROFILE_DIR || '/profiles';
@@ -1848,10 +1867,12 @@ function planNow() {
   } catch (e) { trainers = []; }
   const st = training.state({ corpus, manifest, trainers });
   const usable = trainers.filter((x) => x.able && training.trainerOn(x.deviceId));
+  const ready = readinessNow({ corpus: st.corpus, serving: st.serving });
   return {
     plan: trainingPlan.decide({
       corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
       trainers: usable, auto: training.autoOn(), serving: st.serving,
+      readiness: ready.readiness,
       /*
        * How many turns in the set can see the page they decide on, against how many a round
        * draws. The draw is the laptop's own rule - max(200, hours * 110 / epochs) in
@@ -1864,10 +1885,15 @@ function planNow() {
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
       sliceTurns: Math.max(200, Math.round((Number(process.env.TRAIN_HOURS || 0) || 12) * 110 / 3)),
     }),
-    trainers, usable,
+    trainers, usable, readiness: ready.readiness, coverage: ready.coverage,
   };
 }
 
+/* The six checks on their own, with the per-tool coverage under them. */
+app.get('/v1/training/readiness', authed, (_req, res) => {
+  try { const n = planNow(); res.json({ readiness: n.readiness, coverage: n.coverage, plan: n.plan }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/v1/training/plan', authed, (_req, res) => {
   try { res.json(planNow().plan); } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1957,6 +1983,8 @@ setInterval(() => {
  */
 const harvest = require('./harvest');
 const resight = require('./resight');
+const coverage = require('./coverage');
+const readiness = require('./readiness');
 
 /**
  * One browser, one walk - but only a walk that is actually ALIVE holds it.
@@ -2008,7 +2036,11 @@ async function refillPrompts(want) {
     const cfg = settingsStore.read();
     if (!cfg.llmModel) return { asked: false, why: 'no model is configured' };
     const known = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
-    const gaps = harvest.gapsFrom({ perTool: toolCountsFromSet(), known });
+    /* Thin means thin in SIGHTED examples: a tool with two thousand blind turns and none it can
+       learn from is a gap. The readiness engine names them; the gap list keeps the counts. */
+    const perTool = {};
+    try { for (const row of readinessNow().coverage.perTool) perTool[row.tool] = row.sighted; } catch (e) { Object.assign(perTool, toolCountsFromSet()); }
+    const gaps = harvest.gapsFrom({ perTool, known });
     const s = harvest.load();
     const messages = harvest.askFor({ gaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) });
 
@@ -2172,18 +2204,33 @@ function harvestRuns(limit = 40) {
 }
 
 /** The toggle. Off by default, and nothing here starts spending on its own. */
+/* What each live walk is doing right now - the profile, the goal, how far it is. The card
+   said "3 live" and nothing else, and "on" beside a number is not a state anyone can act on. */
+function withWalks(s) {
+  const walks = [];
+  try {
+    const mine = new Set(((harvest.load().history) || []).map((h) => h && h.jobId).filter(Boolean));
+    for (const j of jobs.jobs.values()) {
+      if (!j || j.status !== 'running' || !mine.has(j.id)) continue;
+      const steps = j.steps || [];
+      walks.push({ jobId: j.id, profile: j.profile || '', goal: String(j.goal || '').slice(0, 160), steps: steps.length,
+        since: j.createdAt || '', last: steps.length ? String(steps[steps.length - 1].text || '').slice(0, 120) : '' });
+    }
+  } catch (e) { /* the list is a courtesy */ }
+  return { ...s, walks };
+}
 app.get('/v1/harvest/state', authed, (_req, res) => {
-  try { res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json({ ...withWalks(harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) })), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/harvest/on', authed, (req, res) => {
   const v = harvest.setOn(!!(req.body || {}).on);
   log.info(`training: collecting data by itself is ${v ? 'ON' : 'off'}`);
-  res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }), ...harvestRuns(40) });
+  res.json({ ...withWalks(harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) })), ...harvestRuns(40) });
 });
 /** Ask for a batch now — the owner wanting to see what it would choose, without waiting a minute. */
 app.post('/v1/harvest/refill', authed, async (req, res) => {
   const out = await refillPrompts((req.body || {}).want);
-  res.json({ ...out, state: harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }) });
+  res.json({ ...out, state: withWalks(harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) })) });
 });
 
 /** The owner allowing, or forbidding, one machine to train. Default is forbidden. */
