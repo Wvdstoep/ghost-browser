@@ -22,7 +22,7 @@ import os from 'os';
 import path from 'path';
 import training from '../src/training.js';
 
-const { startRound, noteRound, endRound, promote, current, byDevice, state } = training;
+const { startRound, noteRound, checkRound, endRound, promote, current, byDevice, state } = training;
 
 let dir;
 beforeEach(() => {
@@ -266,5 +266,42 @@ describe('the one answer both screens read', () => {
     expect(s.rounds).toEqual([]);
     expect(s.serving).toBe(null);
     expect(s.trainers).toEqual([]);
+  });
+});
+
+describe('the recipe and the validation curve', () => {
+  /* A score with no recipe beside it cannot be reproduced, and a round with no curve cannot say
+     whether it was still learning when the clock stopped it. Both travel with the round. */
+  const recipe = { loraR: 32, loraScope: 'all', lr: 0.0002, epochs: 3, batch: 1, accum: 16, device: 'cpu', dtype: 'float32' };
+
+  it('keeps the recipe the device trained with', () => {
+    const r = startRound({ device: 'laptop', base: 'qwen', turns: 900, recipe });
+    expect(state({}).rounds.find((x) => x.id === r.id).recipe).toEqual(recipe);
+  });
+
+  it('records each validation point, in order, and tracks the best', () => {
+    const r = startRound({ device: 'laptop', base: 'qwen', turns: 900, recipe });
+    checkRound(r.id, { step: 10, turns: 160, valLoss: 1.42, trainLoss: 1.6, lr: 0.00019 });
+    checkRound(r.id, { step: 20, turns: 320, valLoss: 1.21, trainLoss: 1.3, lr: 0.00015 });
+    checkRound(r.id, { step: 30, turns: 480, valLoss: 1.25, trainLoss: 1.1, lr: 0.0001 });
+    const row = state({}).rounds.find((x) => x.id === r.id);
+    expect(row.validation.map((p) => p.valLoss)).toEqual([1.42, 1.21, 1.25]);
+    expect(row.bestValLoss).toBe(1.21);
+    expect(row.bestAtTurns).toBe(320);
+  });
+
+  it('ignores a point with no loss in it, and a round it has never heard of', () => {
+    const r = startRound({ device: 'laptop', base: 'qwen', turns: 900 });
+    checkRound(r.id, { step: 1, turns: 16 });
+    expect(checkRound('r-nope', { valLoss: 1 })).toBeNull();
+    const row = state({}).rounds.find((x) => x.id === r.id);
+    expect(row.validation).toEqual([]);
+    expect(row.bestValLoss).toBeNull();
+    expect(row.recipe).toBeNull();
+  });
+
+  it('does not let a recipe that is not an object in', () => {
+    const r = startRound({ device: 'laptop', base: 'qwen', turns: 900, recipe: 'r32' });
+    expect(state({}).rounds.find((x) => x.id === r.id).recipe).toBeNull();
   });
 });

@@ -51,7 +51,7 @@ const allRounds = () => readJson(ROUNDS(), []);
  * The difference matters: a round recorded at dispatch and never picked up looks identical to one
  * that ran and vanished, and telling those apart is the whole job of a status page.
  */
-function startRound({ device = '', base = '', turns = 0, note = '' } = {}) {
+function startRound({ device = '', base = '', turns = 0, note = '', recipe = null } = {}) {
   const r = {
     id: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     startedAt: new Date().toISOString(),
@@ -61,6 +61,10 @@ function startRound({ device = '', base = '', turns = 0, note = '' } = {}) {
     turns: Number(turns) || 0,
     status: 'running',
     note: String(note || '').slice(0, 300),
+    /* The recipe the device trained with - rank, scope, learning rate, epochs, accumulation,
+       device. Two rounds are comparable only if this is; a score without it is a score nobody
+       can reproduce. Free-form on purpose: the trainer owns its own vocabulary. */
+    recipe: recipe && typeof recipe === 'object' && !Array.isArray(recipe) ? recipe : null,
     baseline: null,     // what the model scored BEFORE this round
     result: null,       // and after
     promoted: false,
@@ -78,6 +82,35 @@ function noteRound(id, line) {
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
   r.lines = [...(r.lines || []), { at: new Date().toISOString(), text: String(line || '').slice(0, 300) }].slice(-40);
+  writeJson(ROUNDS(), rows);
+  return r;
+}
+
+/**
+ * ONE VALIDATION POINT FROM THE DEVICE.
+ *
+ * The exam runs twice a round because it costs half an hour on a CPU; the validation loss runs
+ * every hour because it costs two minutes. This is the curve that says whether a round is still
+ * learning, and the reason a round can stop early and keep its best checkpoint rather than its
+ * last. Kept in full (two hundred points is a long round) because the shape is the information.
+ */
+function checkRound(id, point = {}) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  const v = Number(point.valLoss);
+  if (!Number.isFinite(v)) return r;
+  const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
+  const p = {
+    at: new Date().toISOString(),
+    step: Number(point.step) || 0,
+    turns: Number(point.turns) || 0,
+    valLoss: v,
+    trainLoss: num(point.trainLoss),
+    lr: num(point.lr),
+  };
+  r.validation = [...(r.validation || []), p].slice(-200);
+  if (r.bestValLoss == null || v < r.bestValLoss) { r.bestValLoss = v; r.bestAtTurns = p.turns; }
   writeJson(ROUNDS(), rows);
   return r;
 }
@@ -346,6 +379,12 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
        * Only the live round gets the full set, because that is the only one anybody watches line by
        * line, and twenty finished rounds at forty lines each is a payload nobody reads.
        */
+      /* The recipe and the validation curve: what it trained with, and whether it was still
+         learning when it stopped. The curve is sent whole - its shape is the point. */
+      recipe: r.recipe || null,
+      validation: r.validation || [],
+      bestValLoss: r.bestValLoss == null ? null : r.bestValLoss,
+      bestAtTurns: r.bestAtTurns || 0,
       lines: (r.lines || []).slice(r.status === 'running' ? -60 : -6),
     })),
     /*
@@ -370,4 +409,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, startRound, noteRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
+module.exports = { MAX_COLLAPSE, startRound, noteRound, checkRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };

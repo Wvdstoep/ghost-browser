@@ -275,11 +275,19 @@ class Hub:
             print(f"  [hub unreachable: {e}]", flush=True)
             return None
 
-    def start(self, base_model, turns):
-        got = self._post("/v1/training/rounds", {"device": self.device, "base": base_model, "turns": turns})
+    def start(self, base_model, turns, recipe=None):
+        # The recipe travels with the round. Two rounds are comparable only if the recipe is, and
+        # a number on a screen with no recipe beside it is a number nobody can reproduce.
+        got = self._post("/v1/training/rounds", {"device": self.device, "base": base_model, "turns": turns,
+                                                 "recipe": recipe or {}})
         self.round_id = (got or {}).get("id")
         print(f"round {self.round_id or '(local only)'} on {self.device}", flush=True)
         return self.round_id
+
+    def check(self, point):
+        """One validation point: {step, turns, valLoss, trainLoss, best, lr}. The curve the screen draws."""
+        if self.round_id:
+            self._post(f"/v1/training/rounds/{self.round_id}/check", point)
 
     def note(self, line):
         """One line of progress. Printed always, sent when there is somewhere to send it."""
@@ -513,7 +521,24 @@ def main():
     ap.add_argument("--eval-turns", type=int, default=150)
     ap.add_argument("--max-len", type=int, default=2048, help="every answer must survive truncation; see Turns")
     ap.add_argument("--batch", type=int, default=1)
-    ap.add_argument("--lr", type=float, default=1e-4)
+    # ── THE RECIPE ───────────────────────────────────────────────────────────────────────────────
+    # Two rounds ran with a flat 1e-4, batch 1, no warm-up, no schedule, no shuffle, and never saw
+    # an example twice. Both collapsed. Each of these is the ordinary fix for one of those.
+    ap.add_argument("--lr", type=float, default=2e-4, help="peak; 5%% linear warm-up then cosine to a tenth")
+    ap.add_argument("--epochs", type=float, default=3.0, help="passes over the slice; --hours is the ceiling, not the plan")
+    ap.add_argument("--accum", type=int, default=16, help="gradient accumulation: effective batch = batch x accum")
+    ap.add_argument("--warmup", type=float, default=0.05, help="share of the planned steps spent warming up")
+    ap.add_argument("--lora-r", type=int, default=32)
+    ap.add_argument("--lora-alpha", type=int, default=64)
+    ap.add_argument("--lora-scope", choices=["attn", "all"], default="all",
+                    help="attn = q/k/v/o only; all = attention and the MLP, where a page-to-tool mapping lives")
+    ap.add_argument("--bf16", action="store_true", help="bfloat16 on a GPU; ignored on CPU")
+    ap.add_argument("--cpu", action="store_true", help="stay on the CPU even when a GPU is present")
+    ap.add_argument("--slice", type=int, default=None, help="turns to ask the controller for; default fits the hours")
+    ap.add_argument("--validate-every", type=float, default=60.0,
+                    help="minutes between validation checks on CPU; on a GPU every 200 optimiser steps")
+    ap.add_argument("--validate-turns", type=int, default=64, help="held-out turns the validation loss is taken on")
+    ap.add_argument("--patience", type=int, default=3, help="validation checks without improvement before stopping")
     ap.add_argument("--no-fetch", action="store_true",
                     help="use the local set instead of asking the controller for a slice")
     ap.add_argument("--seed", type=int, default=None,
@@ -528,6 +553,20 @@ def main():
 
     torch.set_num_threads(args.threads)
     hub = Hub(args.hub, args.token, args.device_name)
+
+    # Where and in what. A GPU makes the same round a few minutes; bf16 only means anything there.
+    use_cuda = torch.cuda.is_available() and not args.cpu
+    device = torch.device("cuda" if use_cuda else "cpu")
+    dtype = torch.bfloat16 if (args.bf16 and use_cuda) else torch.float32
+    targets = (["q_proj", "k_proj", "v_proj", "o_proj"] if args.lora_scope == "attn"
+               else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
+    recipe = {
+        "base": args.model, "device": "cuda" if use_cuda else "cpu", "dtype": str(dtype).replace("torch.", ""),
+        "loraR": args.lora_r, "loraAlpha": args.lora_alpha, "loraScope": args.lora_scope,
+        "lr": args.lr, "warmup": args.warmup, "schedule": "cosine",
+        "epochs": args.epochs, "batch": args.batch, "accum": args.accum, "maxLen": args.max_len,
+        "hoursCeiling": args.hours, "validateTurns": args.validate_turns, "patience": args.patience,
+    }
 
     train_path = os.path.join(args.data, "train.jsonl")
     eval_path = os.path.join(args.data, "eval.jsonl")
@@ -547,7 +586,11 @@ def main():
     # local file keeps a round possible on a machine that has the set already, which is how this was
     # developed — but the hub path is the one that works on a laptop that has never seen the data.
     if not args.no_fetch and hub.base:
-        want = max(200, int(args.hours * 3600 / 12))
+        # A CPU round reaches about a hundred turns an hour (measured: 641 turns in six hours, and
+        # 34 seconds a turn on the smoke run) and wants its epochs over what it draws, so the slice
+        # is sized to be seen `epochs` times inside the hours. A GPU round is not bound by the clock
+        # and takes a full slice.
+        want = args.slice or (10000 if use_cuda else max(200, int(args.hours * 110 / args.epochs)))
         got = hub.fetch(f"/v1/training/slice?turns={want}", train_path)
         if got > 0:
             print(f"the controller handed over {got} turns", flush=True)
@@ -570,7 +613,7 @@ def main():
 
     # The round is registered once there is something to report about — before the model is loaded,
     # because the baseline runs elsewhere and this process should hold nothing while it does.
-    hub.start(args.model, len(all_rows))
+    hub.start(args.model, len(all_rows), recipe)
 
     # ── what the model scores before we touch it ─────────────────────────────────────────────────
     #
@@ -586,19 +629,19 @@ def main():
     # sdpa asks for memory-efficient attention rather than the maths path that materialises the
     # whole attention matrix. On CPU it is not guaranteed, which is why checkpointing below is the
     # load-bearing fix and this is only the cheap half.
-    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.float32,
-                                                 attn_implementation="sdpa")
+    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype,
+                                                 attn_implementation="sdpa").to(device)
     if args.adapter:
         # Carrying on from the serving adapter rather than starting over: each night is a small
         # step from where the model already is, which is what makes this a loop and not a series of
-        # unrelated experiments.
+        # unrelated experiments. The adapter's own shape wins over the flags here.
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, args.adapter, is_trainable=True)
         print(f"continuing from {args.adapter}", flush=True)
     else:
         model = get_peft_model(model, LoraConfig(
-            r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05, task_type="CAUSAL_LM",
+            target_modules=targets,
         ))
     model.print_trainable_parameters()
 
@@ -622,84 +665,207 @@ def main():
 
     # ── train ────────────────────────────────────────────────────────────────────────────────────
     budget_s = args.hours * 3600
-    # Deliberately generous: the sampler is cheap and the time budget is what actually stops the
-    # round. Taking too few turns wastes the night; taking too many costs nothing but a list.
-    # Sized to the night with headroom, not to the corpus. The time budget is what actually stops
-    # the round; taking far more than can be reached only costs memory.
-    want = max(200, int(budget_s / 12))
+    # The slice is what the controller handed over (or the local file); the draw below only
+    # re-balances it. The plan is EPOCHS over that slice, and the hours are the ceiling.
+    want = len(all_rows)
     draw_seed = args.seed if args.seed is not None else int(time.time())
+    torch.manual_seed(draw_seed)
     rows = stratified(all_rows, budget=min(len(all_rows), want), seed=draw_seed)
     hub.note(f"drew {min(len(all_rows), want)} turns with seed {draw_seed}")
     del all_rows
     print(f"round will draw on {len(rows)} turns", flush=True)
     ds = Turns(rows, tok, args.max_len, note=hub.note)
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=False,
+    # SHUFFLED. The slice arrives grouped by tool, and a loader that walks it in order feeds the
+    # optimiser forty `open` turns, then forty `read` turns: each group drags the adapter toward
+    # its own tool and the last group wins. That is one of the ways the first rounds collapsed.
+    gen = torch.Generator()
+    gen.manual_seed(draw_seed)
+    dl = DataLoader(ds, batch_size=args.batch, shuffle=True, generator=gen,
                     collate_fn=lambda b: collate(b, tok.pad_token_id))
-    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr)
+    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.0)
 
-    adapter_dir = os.path.join(out_dir, "adapter")
+    # ── THE SCHEDULE ─────────────────────────────────────────────────────────────────────────────
+    # Warm up over the first few percent of the planned steps, then cosine down to a tenth of the
+    # peak. `total` is a one-element list because the plan is revised once the machine's real
+    # speed is known: on a CPU the hours usually cut the epochs short, and a cosine that expected
+    # 600 steps and got 120 never left its warm-up. The lambda reads the list, so revising it is
+    # one assignment and the curve re-shapes itself around the steps that will actually happen.
+    import math
+    per_epoch = max(1, math.ceil(len(ds) / (args.batch * args.accum)))
+    total = [max(1, int(round(args.epochs * per_epoch)))]
+
+    def lr_at(step):
+        warm = max(1, int(total[0] * args.warmup))
+        if step < warm:
+            return (step + 1) / warm
+        prog = min(1.0, (step - warm) / max(1, total[0] - warm))
+        return 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * prog))
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_at)
+    hub.note(f"plan: {args.epochs:g} epoch(s) over {len(ds)} turns = {total[0]} steps of {args.batch * args.accum}, "
+             f"peak lr {args.lr:g}, r={args.lora_r} on {args.lora_scope}, {recipe['device']} {recipe['dtype']}")
+
+    # ── VALIDATION, AND WHY IT IS A LOSS AND NOT AN EXAM ────────────────────────────────────────
+    # The exam (generate, compare the tool) takes twenty-five minutes on this CPU, so it can only
+    # be taken twice a round. A teacher-forced loss over a few dozen held-out turns takes two
+    # minutes, runs in this process (forward only, no generate, so none of the allocator trouble
+    # that killed the in-process exams), and moves in step with the exam score. It is what says
+    # WHEN to stop and WHICH checkpoint to keep; the exam at the end still says how good it is.
+    val_ds = None
+    if os.path.isfile(eval_path) and args.validate_turns > 0:
+        val_rows = load_jsonl(eval_path, limit=args.validate_turns)
+        if val_rows:
+            val_ds = Turns(val_rows, tok, args.max_len, note=lambda _s: None)
+
+    def val_loss():
+        if val_ds is None or len(val_ds) == 0:
+            return None
+        model.eval()
+        tot, n = 0.0, 0
+        with torch.no_grad():
+            for i in range(len(val_ds)):
+                ids, labels, mask = collate([val_ds[i]], tok.pad_token_id)
+                out = model(input_ids=ids.to(device), attention_mask=mask.to(device), labels=labels.to(device))
+                if torch.isfinite(out.loss):
+                    tot += float(out.loss.item())
+                    n += 1
+        model.train()
+        return (tot / n) if n else None
+
+    adapter_dir = os.path.join(out_dir, "adapter")          # the BEST checkpoint — what gets measured
+    last_dir = os.path.join(out_dir, "adapter-last")        # the most recent one, for a crash
     model.train()
     started = time.time()
-    seen, skipped, losses, tool_seen = 0, 0, [], Counter()
+    seen, skipped, losses = 0, 0, []
+    step, micro = 0, 0
     last_note = started
     last_save = started
+    last_val = started
+    best, best_at, checks, bad = None, 0, 0, 0
+    replanned = False
+    max_turns = int(args.epochs * len(ds))
     stopped_because = "the time budget ran out"
 
-    for ids, labels, mask in dl:
-        if time.time() - started > budget_s:
+    def save_best():
+        model.save_pretrained(adapter_dir)
+
+    def check_now(final=False):
+        nonlocal best, best_at, checks, bad
+        v = val_loss()
+        if v is None:
+            return False
+        checks += 1
+        improved = best is None or v < best - 1e-4
+        if improved:
+            best, best_at, bad = v, seen, 0
+            save_best()
+        else:
+            bad += 1
+        recent = (sum(losses[-40:]) / len(losses[-40:])) if losses else None
+        hub.check({"step": step, "turns": seen, "valLoss": round(v, 4),
+                   "trainLoss": (round(recent, 4) if recent is not None else None),
+                   "best": bool(improved), "lr": round(sched.get_last_lr()[0], 7)})
+        hub.note(f"check {checks}: validation loss {v:.3f}"
+                 + (" — best so far, kept" if improved else f" (best {best:.3f} at {best_at} turns, {bad} without gain)")
+                 + (" — final" if final else ""))
+        return improved
+
+    done = False
+    for epoch in range(max(1, math.ceil(args.epochs))):
+        if done:
             break
-        out = model(input_ids=ids, attention_mask=mask, labels=labels)
-        # Even with the filter above, one NaN reaching backward() destroys every LoRA weight for the
-        # rest of the night, and nothing downstream would say so — the round would report turns,
-        # minutes and a loss, and hand back an adapter of NaN. Cheap to check, catastrophic to miss.
-        if not torch.isfinite(out.loss):
-            skipped += 1
-            opt.zero_grad()
-            continue
-        out.loss.backward()
+        for ids, labels, mask in dl:
+            if time.time() - started > budget_s:
+                done = True
+                break
+            if seen >= max_turns:
+                stopped_because = f"{args.epochs:g} epoch(s) done"
+                done = True
+                break
+            ids, labels, mask = ids.to(device), labels.to(device), mask.to(device)
+            out = model(input_ids=ids, attention_mask=mask, labels=labels)
+            # Even with the filter above, one NaN reaching backward() destroys every LoRA weight
+            # for the rest of the night, and nothing downstream would say so. Cheap to check.
+            if not torch.isfinite(out.loss):
+                skipped += 1
+                continue
+            (out.loss / args.accum).backward()
+            micro += 1
+            seen += ids.shape[0]
+            losses.append(float(out.loss.item()))
+
+            if micro % args.accum == 0:
+                torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
+                opt.step()
+                sched.step()
+                opt.zero_grad()
+                step += 1
+
+                # Re-plan once the real speed is known: how many steps fit in the hours left.
+                if not replanned and step >= 2:
+                    per_turn = (time.time() - started) / max(1, seen)
+                    reach = step + int((budget_s - (time.time() - started)) / per_turn / (args.batch * args.accum))
+                    if reach < total[0]:
+                        hub.note(f"at {per_turn:.1f}s a turn the hours allow {reach} of {total[0]} planned steps — schedule shortened")
+                        total[0] = max(step + 1, reach)
+                    replanned = True
+
+                due = (step % 200 == 0) if use_cuda else (time.time() - last_val > args.validate_every * 60)
+                if due:
+                    check_now()
+                    last_val = time.time()
+                    if bad >= args.patience:
+                        stopped_because = f"validation stopped improving ({args.patience} checks)"
+                        done = True
+                        break
+
+            # ── SAVE AS IT GOES ─────────────────────────────────────────────────────────────────
+            # An unknown crash in hour five should cost the remaining hours, not all of them. The
+            # last state goes to its own directory so it can never overwrite the best one.
+            if time.time() - last_save > 1800:
+                try:
+                    model.save_pretrained(last_dir)
+                    hub.note(f"saved the latest adapter at {seen} turns")
+                except Exception as e:
+                    hub.note(f"could not save mid-round: {e}")
+                last_save = time.time()
+
+            if seen == 3 or time.time() - last_note > 300:
+                el = time.time() - started
+                recent = sum(losses[-40:]) / len(losses[-40:])
+                left = max(0, budget_s - el)
+                rss = ""
+                try:
+                    import psutil
+                    rss = f", {psutil.Process().memory_info().rss / 1e9:.1f} GB"
+                except Exception:
+                    rss = ""
+                hub.note(f"{seen} turns (epoch {epoch + 1}, step {step}/{total[0]}), loss {recent:.3f}, "
+                         f"lr {sched.get_last_lr()[0]:.2e}, {el/60:.0f} min in, about {left/60:.0f} min left{rss}")
+                last_note = time.time()
+        else:
+            if epoch + 1 >= math.ceil(args.epochs) and not done:
+                stopped_because = f"{args.epochs:g} epoch(s) done"
+
+    # Whatever is left in the accumulator is a real gradient; apply it rather than throw it away.
+    if micro % args.accum != 0:
+        torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
         opt.step()
         opt.zero_grad()
-        seen += ids.shape[0]
-        losses.append(float(out.loss.item()))
-
-        # A line every few minutes: often enough that a status page is never silent, rare enough
-        # that a night does not become forty thousand rows of history.
-        # ── SAVE AS IT GOES ─────────────────────────────────────────────────────────────────────
-        #
-        # Three rounds have died with SIGSEGV and the cause is still not known. An unknown crash in
-        # hour five of a seven-hour round should cost the remaining two hours, not all seven — and
-        # an adapter trained on four hundred turns is a real result, while an empty directory is
-        # not. Saving is seconds: the adapter is 8.6 MB, not the model.
-        if time.time() - last_save > 1800:
-            try:
-                model.save_pretrained(adapter_dir)
-                hub.note(f"saved the adapter at {seen} turns")
-            except Exception as e:
-                hub.note(f"could not save mid-round: {e}")
-            last_save = time.time()
-
-        if seen == 3 or time.time() - last_note > 300:
-            el = time.time() - started
-            recent = sum(losses[-40:]) / len(losses[-40:])
-            left = max(0, budget_s - el)
-            # Memory is reported because it is what kills this process, and a number that is
-            # climbing is the only warning there will be — a segfault leaves no traceback.
-            rss = ""
-            try:
-                import psutil
-                rss = f", {psutil.Process().memory_info().rss / 1e9:.1f} GB"
-            except Exception:
-                rss = ""
-            hub.note(f"{seen} turns, loss {recent:.3f}, {el/60:.0f} min in, about {left/60:.0f} min left{rss}")
-            last_note = time.time()
-    else:
-        stopped_because = "every turn in the round was used"
+        step += 1
 
     elapsed = time.time() - started
-    hub.note(f"trained on {seen} turns in {elapsed/60:.0f} min — {stopped_because}"
+    hub.note(f"trained on {seen} turns in {elapsed/60:.0f} min over {step} step(s) — {stopped_because}"
              + (f" ({skipped} skipped as unusable)" if skipped else ""))
 
-    model.save_pretrained(adapter_dir)
+    # The last state is checked too: a round that stopped on the clock may have ended on its best
+    # weights, and if it did not, the best checkpoint on disk is the one that gets measured.
+    if val_ds is not None:
+        check_now(final=True)
+    if best is None:
+        save_best()
+    else:
+        hub.note(f"keeping the checkpoint with validation loss {best:.3f} (at {best_at} turns) for the exam")
 
     # ── and what it scores now ───────────────────────────────────────────────────────────────────
     # The adapter is on disk by now, so the round's product survives even if this measurement does
@@ -719,7 +885,8 @@ def main():
 
     summary = {
         "round": stamp, "device": hub.device, "base": args.model, "carriedFrom": args.adapter,
-        "drawSeed": draw_seed,
+        "drawSeed": draw_seed, "recipe": recipe, "steps": step,
+        "bestValLoss": (round(best, 4) if best is not None else None), "bestAtTurns": best_at,
         "turnsTrained": seen, "minutes": round(elapsed / 60, 1), "stoppedBecause": stopped_because,
         "meanLoss": round(sum(losses) / len(losses), 4) if losses else None,
         "baseline": baseline, "result": result, "adapter": adapter_dir, "beat": bool(won),
