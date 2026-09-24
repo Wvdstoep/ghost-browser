@@ -103,6 +103,47 @@ describe('promotion', () => {
     expect(promote(r.id).error).toMatch(/did not beat/);
   });
 
+  it('REFUSES A MODEL THAT BEAT ITS BASELINE BY COLLAPSING', () => {
+    /*
+     * These are the real figures from the first round to finish this path. It scored 15.33%
+     * against a 3.33% baseline, so the one-number gate said yes - and it answered look to almost
+     * everything: scroll -> look, open -> look, read -> look, run_script -> look, finish -> look.
+     * look is correct on 10% of the paper and it said it on 36%.
+     *
+     * Every headline improved. Agreement rose because the cheap answer is also a common one, and
+     * unusable FELL from 21% to 16% because it had learnt to emit valid JSON. Nothing on the page
+     * said the model had stopped reading the page.
+     *
+     * Promoting it is the expensive mistake rather than the wasted night: rounds chain from
+     * whatever is serving, so a collapsed adapter becomes the starting weights for every round
+     * after it.
+     */
+    const r = finished({
+      baseline: { agreement_pct: 3.33 },
+      result: {
+        agreement_pct: 15.33,
+        collapse: { tool: 'look', said_pct: 36.0, correct_pct: 10.0, ratio: 3.6, distinct: 8 },
+      },
+    });
+    const out = promote(r.id);
+    expect(out.error).toMatch(/collapsed onto look/);
+    expect(out.error).toMatch(/3\.6x/);
+    expect(current()).toBe(null);
+  });
+
+  it('promotes a win that answered each tool about as often as it was right', () => {
+    /* 1.0 is a model reading the page. The threshold is there for the collapse, not to police a
+       model that slightly over-reaches for a common tool. */
+    const r = finished({ result: { agreement_pct: 58.9, collapse: { tool: 'open', said_pct: 14.0, correct_pct: 14.0, ratio: 1.0, distinct: 22 } } });
+    expect(promote(r.id)).toEqual({ promoted: r.id });
+  });
+
+  it('does not refuse a round measured before anyone counted this', () => {
+    /* Absent is not refused. Locking out every earlier round on a number nobody took would be a
+       new bug wearing a gate's clothes. */
+    const r = finished({ result: { agreement_pct: 58.9 } });
+    expect(promote(r.id)).toEqual({ promoted: r.id });
+  });
   it('promotes a measured win and records what it beat', () => {
     const r = finished();
     expect(promote(r.id)).toEqual({ promoted: r.id });

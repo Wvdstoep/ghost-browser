@@ -119,6 +119,19 @@ function endRound(id, { status = 'done', baseline = null, result = null, why = '
  * Every version is kept — an adapter is a few megabytes — so rolling back is moving this pointer,
  * not rebuilding anything.
  */
+/*
+ * HOW FAR THE LOUDEST ANSWER MAY BE FROM HOW OFTEN IT IS RIGHT.
+ *
+ * 1.0 is a model that names each tool about as often as that tool is the answer. Above this, it has
+ * stopped reading the page and started reaching for whichever answer is cheapest to produce.
+ *
+ * Two is generous and deliberately so. The evidence: the first round to finish this path came out at
+ * 3.6 on `look` - it said look on 36% of a paper where look is correct 10% of the time - while a
+ * balanced model measures 1.0. Anything near 2 is already guessing; the threshold exists to catch
+ * the collapse, not to police a model that slightly over-reaches for a common tool.
+ */
+const MAX_COLLAPSE = 2.0;
+
 function promote(roundId) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === roundId);
@@ -127,6 +140,29 @@ function promote(roundId) {
   if (!r.result || !r.baseline) return { error: 'that round has no measurement, so there is nothing to promote on' };
   if (Number(r.result.agreement_pct) <= Number(r.baseline.agreement_pct)) {
     return { error: `it did not beat the baseline (${r.result.agreement_pct}% against ${r.baseline.agreement_pct}%)` };
+  }
+  /*
+   * A COLLAPSED MODEL BEATS ITS BASELINE AND IS STILL WORSE THAN NOTHING.
+   *
+   * The gate compared one number, and one number cannot see this. The first round to finish this path
+   * scored 15.33% against 3.33% and answered `look` to almost everything: scroll -> look, open ->
+   * look, read -> look, run_script -> look, finish -> look. It beat its baseline because the cheap
+   * answer is also a common one, and its `unusable` share FELL from 21% to 16% because it had learnt
+   * to emit valid JSON. Every headline on the page improved.
+   *
+   * Promoting it would have been the expensive mistake, not the wasted night: rounds chain from
+   * whatever is serving, so a collapsed adapter becomes the starting weights for every round after
+   * it. A bad round costs one round only if it is not promoted.
+   *
+   * Absent is not refused. A round measured before this existed carries no collapse figure, and
+   * refusing those would lock out every earlier round on a number nobody took.
+   */
+  const c = r.result.collapse;
+  if (c && typeof c.ratio === 'number' && c.ratio > MAX_COLLAPSE) {
+    return {
+      error: `it collapsed onto ${c.tool}: said on ${c.said_pct}% of the exam, correct on ${c.correct_pct}% `
+        + `(${c.ratio}x, and anything over ${MAX_COLLAPSE}x is guessing rather than reading)`,
+    };
   }
   r.promoted = true;
   writeJson(ROUNDS(), rows);
@@ -240,6 +276,9 @@ function byDevice(now = Date.now()) {
       last,
       baseline: r.baseline ? r.baseline.agreement_pct : null,
       result: r.result ? r.result.agreement_pct : null,
+      /* How lopsided its answers were. A round can beat its baseline and still be a model that
+         says one tool to everything, and that has to be readable without opening a table. */
+      collapse: (r.result && r.result.collapse) || null,
     };
   }
   return out;
@@ -331,4 +370,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { startRound, noteRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
+module.exports = { MAX_COLLAPSE, startRound, noteRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
