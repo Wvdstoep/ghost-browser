@@ -86,6 +86,17 @@ function noteRound(id, line) {
   return r;
 }
 
+/** Where a round's adapter lives, when that is only known after the round - a rented machine
+    hands it to the hub as its last act. */
+function setAdapter(id, adapter) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  r.adapter = String(adapter || '').slice(0, 200);
+  writeJson(ROUNDS(), rows);
+  return r;
+}
+
 /**
  * ONE VALIDATION POINT FROM THE DEVICE.
  *
@@ -412,4 +423,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, startRound, noteRound, checkRound, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
+module.exports = { MAX_COLLAPSE, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };

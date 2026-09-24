@@ -1607,6 +1607,7 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       plan: now.plan, readiness: now.readiness, coverage: now.coverage,
       resight: resight.state(),
       student: await servingState(),
+      gpu: gpuView(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1885,8 +1886,24 @@ function planNow() {
         canSetUp: !!(d.caps && d.caps.trainerCanSetUp),
       }));
   } catch (e) { trainers = []; }
+  /*
+   * ONE FLOW AT A TIME. With the GPU flow chosen, the rented card is the only machine the
+   * planner may pick, whether or not a laptop is awake; with the laptop flow, the laptops are.
+   * The card appears as a machine so the screen shows it beside the others, with its reason.
+   */
+  const cfgNow = settingsStore.read();
+  const gpuFlow = cfgNow.trainOn === 'gpu';
+  if (gpuFlow) {
+    const g = gpu.state();
+    trainers = trainers.map((x) => ({ ...x, parked: 'the GPU flow is chosen' })).concat([{
+      name: 'GPU (rented)', deviceId: 'gpu-runpod', online: true, virtual: true,
+      able: !!cfgNow.gpuKey && !!cfgNow.gpuHub, freeGb: 40, home: `${cfgNow.gpuProvider || 'runpod'} · ${cfgNow.gpuType || gpu.DEFAULT_TYPE}`,
+      missing: [...(!cfgNow.gpuKey ? ['no RunPod API key saved yet'] : []), ...(!cfgNow.gpuHub ? ['the cluster address is not known yet - save the key from the app once'] : [])],
+      canSetUp: false, renting: g.pod || null,
+    }]);
+  }
   const st = training.state({ corpus, manifest, trainers });
-  const usable = trainers.filter((x) => x.able && training.trainerOn(x.deviceId));
+  const usable = trainers.filter((x) => x.able && (gpuFlow ? !!x.virtual : (!x.virtual && training.trainerOn(x.deviceId))));
   const ready = readinessNow({ corpus: st.corpus, serving: st.serving });
   return {
     plan: trainingPlan.decide({
@@ -2058,6 +2075,88 @@ app.post('/v1/training/models/:tag/create', authed, async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+/* ── THE GPU FLOW: the switch, the key, the rental, and what the machine says ─────────────── */
+function gpuView() {
+  const cfg = settingsStore.read();
+  const s = gpu.state();
+  return { trainOn: cfg.trainOn || 'laptop', provider: cfg.gpuProvider || 'runpod', keySet: !!cfg.gpuKey, keyHint: cfg.gpuKey ? `…${String(cfg.gpuKey).slice(-4)}` : '',
+    gpuType: cfg.gpuType || gpu.DEFAULT_TYPE, cloud: cfg.gpuCloud || 'COMMUNITY', maxHours: Number(cfg.gpuMaxHours) || 2, hub: cfg.gpuHub || '', types: gpu.GPU_TYPES,
+    pod: s.pod ? { ...s.pod, token: undefined, notes: (s.pod.notes || []).slice(-12) } : null, last: s.last ? { ...s.last, token: undefined } : null, history: s.history };
+}
+app.get('/v1/training/gpu', authed, (_req, res) => res.json(gpuView()));
+app.post('/v1/training/gpu', authed, (req, res) => {
+  try {
+    const b = req.body || {};
+    const before = settingsStore.read();
+    const patch = {};
+    if (typeof b.trainOn === 'string') patch.trainOn = b.trainOn;
+    if (typeof b.key === 'string' && b.key.trim()) {
+      patch.gpuKey = b.key;
+      patch.gpuOwner = String((req.client && req.client.owner) || before.gpuOwner || '');
+      const proto = String(req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
+      patch.gpuHub = `${proto}://${req.get('x-forwarded-host') || req.get('host')}`;
+    }
+    if (typeof b.gpuType === 'string') patch.gpuType = b.gpuType;
+    if (typeof b.cloud === 'string') patch.gpuCloud = b.cloud;
+    if (b.maxHours != null) patch.gpuMaxHours = b.maxHours;
+    settingsStore.write({ ...before, ...patch });
+    const after = settingsStore.read();
+    log.info(`training: rounds run on ${after.trainOn}${after.trainOn === 'gpu' ? ` (${after.gpuType}, up to ${after.gpuMaxHours} h)` : ''}`);
+    res.json(gpuView());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/training/gpu/destroy', authed, async (_req, res) => {
+  try { res.json(await destroyRental('asked by the owner')); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+/* From the machine itself, with its device token. */
+app.post('/v1/training/gpu/note', authed, (req, res) => {
+  const st = gpu.load();
+  if (!st.pod) return res.json({ ok: false });
+  const line = String((req.body || {}).line || '').slice(0, 300);
+  st.pod.notes = [...(st.pod.notes || []), { at: new Date().toISOString(), text: line }].slice(-40);
+  st.pod.lastNoteAt = new Date().toISOString();
+  gpu.save(st);
+  log.info(`[gpu] ${line}`);
+  res.json({ ok: true });
+});
+app.post('/v1/training/gpu/release', authed, async (_req, res) => {
+  const st = gpu.load();
+  if (!st.pod) return res.json({ ok: false });
+  st.pod.released = true; gpu.save(st);
+  res.json({ ok: true });
+  /* A moment for the response to leave before the machine underneath it goes. */
+  setTimeout(() => { destroyRental('the machine asked to be destroyed').catch(() => {}); }, 5000);
+});
+/* The adapter, handed back so the next round can chain from it and a promotion can export it. */
+app.put('/v1/training/gpu/adapter', authed, (req, res) => {
+  const fsx = require('fs'); const pathx = require('path');
+  const st = gpu.load();
+  const name = (st.pod && st.pod.tag) || `gb-gpu-${Date.now().toString(36)}`;
+  const dir = pathx.join(MODELS_DIR(), 'adapters');
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) { return res.status(500).json({ error: e.message }); }
+  const file = pathx.join(dir, `${name}.tgz`);
+  const out = fsx.createWriteStream(`${file}.part`);
+  let bytes = 0;
+  req.on('data', (b) => { bytes += b.length; });
+  req.pipe(out);
+  out.on('finish', () => {
+    fsx.renameSync(`${file}.part`, file);
+    const round = gpuRound(st.pod);
+    if (round) { try { training.setAdapter(round.id, `hub:${name}`); } catch (e) { /* the file is still there */ } }
+    log.info(`training: adapter ${name} arrived from the rented machine (${Math.round(bytes / 1e6)} MB)${round ? ` for ${round.id}` : ''}`);
+    res.json({ ok: true, name, bytes, round: round && round.id });
+  });
+  out.on('error', (e) => res.status(500).json({ error: e.message }));
+});
+app.get('/v1/training/adapters/:name', authed, (req, res) => {
+  const fsx = require('fs'); const pathx = require('path');
+  const name = String(req.params.name || '').replace(/[^a-zA-Z0-9._-]/g, '');
+  const file = pathx.join(MODELS_DIR(), 'adapters', `${name}.tgz`);
+  if (!name || !fsx.existsSync(file)) return res.status(404).json({ error: 'no such adapter on the hub' });
+  res.type('application/gzip');
+  fsx.createReadStream(file).pipe(res);
+});
+
 app.get('/v1/training/serving', authed, async (_req, res) => {
   try { res.json(await servingState()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -2094,6 +2193,72 @@ app.get('/v1/training/plan', authed, (_req, res) => {
  * data, the set already covered) but never the reasons it CANNOT run — no machine, no set, a round
  * already going. Those are not preferences.
  */
+/*
+ * RENT A CARD FOR THIS ROUND - see gpu.js. The machine gets a device token of the owner who
+ * saved the key, the same scripts the laptops fetch, and one script to run; it reports as a
+ * device named gpu-runpod, hands its adapter back, exports a model, and asks to be destroyed.
+ * The hub destroys it anyway when the round ends, when it goes silent, or past the hours allowed.
+ */
+async function rentRound({ plan } = {}) {
+  const cfg = settingsStore.read();
+  const st = gpu.load();
+  if (st.pod) return { run: false, why: `a rented machine is already on a round (${st.pod.id}, since ${String(st.pod.since).slice(11, 16)})` };
+  if (!cfg.gpuKey) return { run: false, why: 'no GPU provider key is saved' };
+  if (!cfg.gpuOwner || !cfg.gpuHub) return { run: false, why: 'save the GPU key from the app once, so the machine knows whose it is and where the cluster is' };
+  const rec = deviceTokens.mint(keys, { owner: cfg.gpuOwner, deviceId: 'gpu-runpod', name: 'GPU (rented)' });
+  const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(2, 12);
+  const tag = `gb-gpu-${stamp}`;
+  /* Chain from what is serving only when the adapter lives on the hub; a laptop path is not
+     reachable from a rented machine, and a round from the base is still a round. */
+  const chain = (plan && plan.base && /^hub:/.test(String(plan.base))) ? String(plan.base) : '';
+  const script = gpu.bootstrap({ hub: cfg.gpuHub, token: rec.token, deviceName: 'gpu-runpod', hours: Number(cfg.gpuMaxHours) || 2, adapter: chain, tag });
+  const request = gpu.requestFor({ name: `gb-round ${tag}`, gpuType: cfg.gpuType, cloud: cfg.gpuCloud, script });
+  let pod;
+  try { pod = await gpu.rent({ key: cfg.gpuKey, request }); }
+  catch (e) { log.warn(`training: could not rent a card - ${e.message}`); return { run: false, why: `could not rent a card: ${e.message}` }; }
+  st.pod = { id: pod.id, provider: 'runpod', gpuType: cfg.gpuType, cloud: cfg.gpuCloud, since: new Date().toISOString(), costPerHr: pod.costPerHr || null, tag, chain, notes: [], lastNoteAt: '' };
+  gpu.save(st);
+  log.info(`training: rented ${cfg.gpuType} (${pod.id}) for a round as ${tag} — ${plan && plan.why}`);
+  return { run: true, why: (plan && plan.why) || '', device: 'GPU (rented)', pod: pod.id, tag };
+}
+
+/** End the rental, with the reason on the record. Idempotent. */
+async function destroyRental(why = '') {
+  const cfg = settingsStore.read();
+  const st = gpu.load();
+  if (!st.pod) return { ended: false, why: 'nothing is rented' };
+  const pod = st.pod;
+  let ok = true, err = '';
+  try { await gpu.destroy({ key: cfg.gpuKey, id: pod.id }); } catch (e) { ok = e.status === 404; err = e.message; }
+  const ended = new Date().toISOString();
+  const hours = (Date.parse(ended) - Date.parse(pod.since)) / 3600000;
+  st.last = { ...pod, notes: undefined, endedAt: ended, why: String(why).slice(0, 200), hours: Math.round(hours * 100) / 100, cost: pod.costPerHr ? Math.round(hours * pod.costPerHr * 100) / 100 : null, destroyed: ok, error: err.slice(0, 160) };
+  st.history = [...(st.history || []), st.last].slice(-30);
+  if (ok) st.pod = null; else st.pod = { ...pod, destroyFailed: err.slice(0, 160) };
+  gpu.save(st);
+  try { deviceTokens.revoke(keys, cfg.gpuOwner, 'gpu-runpod'); } catch (e) { /* the token dies with the machine either way */ }
+  log[ok ? 'info' : 'warn'](`training: rental ${pod.id} ${ok ? 'destroyed' : 'NOT destroyed (' + err + ')'} — ${why}`);
+  return { ended: ok, why, cost: st.last.cost, hours: st.last.hours, error: err };
+}
+
+/* The newest round the rented machine reported, if any. */
+function gpuRound(pod) {
+  if (!pod) return null;
+  return training.allRounds().find((r) => /^gpu-/i.test(String(r.device || '')) && Date.parse(r.startedAt || '') >= Date.parse(pod.since || '') - 60000) || null;
+}
+
+/* THE WATCH. Three minutes: a rented machine nobody is watching is the expensive mistake. */
+setInterval(() => {
+  (async () => {
+    const st = gpu.load();
+    if (!st.pod) return;
+    const cfg = settingsStore.read();
+    const round = gpuRound(st.pod);
+    const why = gpu.shouldEnd({ pod: st.pod, round, maxHours: Number(cfg.gpuMaxHours) || 2 });
+    if (why) await destroyRental(why);
+  })().catch((e) => log.warn(`[gpu] watch: ${e.message}`));
+}, 3 * 60 * 1000).unref?.();
+
 async function dispatchRound({ force = false } = {}) {
   const { plan, usable } = planNow();
   if (!plan.run && !force) return plan;
@@ -2101,6 +2266,7 @@ async function dispatchRound({ force = false } = {}) {
     const hard = /already running|no machine|no training set|still reading/.test(plan.why || '');
     if (hard) return { ...plan, forced: true };
   }
+  if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
   try {
@@ -2174,6 +2340,7 @@ const harvest = require('./harvest');
 const resight = require('./resight');
 const coverage = require('./coverage');
 const shadow = require('./shadow');
+const gpu = require('./gpu');
 const readiness = require('./readiness');
 
 /**
