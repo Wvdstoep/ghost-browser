@@ -135,3 +135,27 @@ describe('the password rule is one number, stated and enforced from the same pla
     expect(() => accounts.signup('carla', 'x'.repeat(accounts.MIN_PASSWORD))).not.toThrow();
   });
 });
+
+
+/* ── the password the owner sets, so signing in never depends on the platform ─────────────── */
+describe('the password fallback', () => {
+  it('an SSO-born account has no usable password until the owner sets one; then email + password opens it', () => {
+    accounts.reset();
+    accounts.signup('Owner@Example.com', 'random-nobody-types-this');
+    accounts.markSso();
+    expect(accounts.hasPassword()).toBe(false);
+    expect(() => accounts.setPassword('short')).toThrow(/at least/);
+    accounts.setPassword('a-real-password-1');
+    expect(accounts.hasPassword()).toBe(true);
+    /* The address is not case-sensitive; the old password is gone; sessions survive. */
+    const before = accounts.load().sessionSecret;
+    expect(accounts.login('owner@example.com', 'a-real-password-1').username).toBe('Owner@Example.com');
+    expect(() => accounts.login('owner@example.com', 'random-nobody-types-this')).toThrow(/do not match/);
+    expect(accounts.load().sessionSecret).toBe(before);
+  });
+  it('an account created at the gate with a typed password counts as having one', () => {
+    accounts.reset();
+    accounts.signup('someone', 'typed-by-a-person');
+    expect(accounts.hasPassword()).toBe(true);
+  });
+});

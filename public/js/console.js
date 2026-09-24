@@ -138,9 +138,19 @@ async function gateState() {
    * handoff from the platform. Hide the username/password gate entirely so nobody can create an owner
    * here; tell them where to sign in instead. (Any failed-SSO reason set above stays in gateMsg.)
    */
+  /*
+   * THE FORM STAYS. An SSO-only instance used to hide it, and a hand-off that failed left a page
+   * with nothing to press. The owner's email and the password they set here always work; when no
+   * password has been set yet the login says so, in words, instead of a blank card.
+   */
   if (s.ssoOnly) {
-    $('gateSub').textContent = 'Single sign-on only — open Ghost Browser from your platform (the Tools tab) to sign in. There is no separate password here.';
-    ['u', 'p', 'gateGo', 'forgot', 'resetBox'].forEach((id) => { const el = $(id); if (el) el.style.display = 'none'; });
+    mode = 'login';
+    $('gateSub').textContent = s.hasPassword
+      ? 'Open Ghost Browser from your platform (the Tools tab), or sign in with your email and the password you set here.'
+      : 'Open Ghost Browser from your platform (the Tools tab). To sign in here directly, set a password in Settings after that first sign-in.';
+    $('gateGo').textContent = 'Sign in';
+    $('p').placeholder = 'The password you set on this Ghost Browser';
+    checkPw();
     return;
   }
   mode = s.needsSignup ? 'signup' : 'login';
@@ -282,6 +292,18 @@ function enter() {
   }).catch(() => {});
 }
 $('logout').onclick = async () => { await api('/api/auth/logout', { method:'POST' }); location.reload(); };
+/* Set the password that opens this instance without the platform (Settings → Account). */
+(function () {
+  const go = $('setPwGo'), inp = $('setPw'), msg = $('setPwMsg');
+  if (!go || !inp) return;
+  go.onclick = async () => {
+    msg.className = 'smsg'; msg.textContent = '';
+    try {
+      await api('/api/auth/password', { method: 'POST', body: JSON.stringify({ password: inp.value }) });
+      inp.value = ''; msg.className = 'smsg ok'; msg.textContent = 'Set. You can now sign in here with your email and this password, on any device.';
+    } catch (e) { msg.className = 'smsg bad'; msg.textContent = e.message; }
+  };
+})();
 $('showKey').onclick = async () => {
   try {
     const r = await api('/api/auth/key');

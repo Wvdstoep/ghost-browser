@@ -89,10 +89,37 @@ function signup(username, password) {
   });
 }
 
+/*
+ * A PASSWORD THE OWNER CHOSE. An account born through single sign-on carries a random password
+ * nobody will ever type; this replaces it with one the owner set, and marks the record so the
+ * gate can say whether a password sign-in is possible at all. The session secret is untouched:
+ * every device that is signed in stays signed in.
+ */
+function setPassword(password) {
+  const record = load();
+  if (!record) throw Object.assign(new Error('no account yet'), { status: 404 });
+  if (String(password || '').length < MIN_PASSWORD) {
+    throw Object.assign(new Error(`pick a password of at least ${MIN_PASSWORD} characters`), { status: 400 });
+  }
+  const { salt, derived } = hash(password);
+  return save({ ...record, salt, derived, passwordSet: true, passwordAt: new Date().toISOString() });
+}
+
+/** An account born through single sign-on: its password is random until the owner sets one. */
+function markSso() { const r = load(); if (r) save({ ...r, viaSso: true }); }
+
+/** Whether the owner ever set a password (an SSO-born account has one nobody knows). */
+function hasPassword() {
+  const record = load();
+  /* An account created at the gate with a typed password predates the flag and counts. */
+  return !!(record && (record.passwordSet || !record.viaSso));
+}
+
 function login(username, password) {
   const record = load();
   if (!record) throw Object.assign(new Error('no account yet — create one first'), { status: 404 });
-  const ok = String(username || '').trim() === record.username && verifyPassword(password, record);
+  /* The username is an e-mail on an SSO-born account; case is not part of an address. */
+  const ok = String(username || '').trim().toLowerCase() === String(record.username || '').toLowerCase() && verifyPassword(password, record);
   // One message for both wrong-username and wrong-password: saying which was wrong tells an
   // attacker they have found the right half.
   if (!ok) throw Object.assign(new Error('that username and password do not match'), { status: 401 });
@@ -144,6 +171,7 @@ function clearCookie(res) {
 }
 
 module.exports = {
+  setPassword, hasPassword, markSso,
   COOKIE, FILE, needsSignup, signup, login, issue, verifyToken, reset,
   readCookie, setCookie, clearCookie, verifyPassword, hash, load, MIN_PASSWORD,
 };
