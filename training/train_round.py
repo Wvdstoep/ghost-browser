@@ -876,8 +876,14 @@ def main():
                     rss = f", {psutil.Process().memory_info().rss / 1e9:.1f} GB"
                 except Exception:
                     rss = ""
-                hub.note(f"{seen} turns (epoch {epoch + 1}, step {step}/{total[0]}), loss {recent:.3f}, "
-                         f"lr {sched.get_last_lr()[0]:.2e}, {el/60:.0f} min in, about {left/60:.0f} min left{rss}")
+                # "step 0/24" at thirteen turns read as a stall on the screen. A step is one optimizer
+                # update every batch*accum turns, so say how far into the next one this is, and how
+                # many turn-passes of the whole plan are done.
+                per_step = max(1, args.batch * args.accum)
+                into = max(0, min(per_step, seen - step * per_step))
+                hub.note(f"{seen}/{len(ds) * int(math.ceil(args.epochs))} turn-passes · epoch {epoch + 1}/{args.epochs:g} · "
+                         f"step {step}/{total[0]} ({into}/{per_step} turns into the next) · loss {recent:.3f} · "
+                         f"lr {sched.get_last_lr()[0]:.2e} · {el/60:.0f} min in, about {left/60:.0f} min left{rss}")
                 last_note = time.time()
         else:
             if epoch + 1 >= math.ceil(args.epochs) and not done:
