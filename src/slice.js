@@ -42,6 +42,9 @@ const path = require('path');
 const DIR = () => path.join(process.env.PROFILE_DIR || '/profiles', 'training');
 const LEDGER = () => path.join(DIR(), 'slices.json');
 
+/** The mark a turn carries when its decision could see the page (traceset.toJsonl). */
+const SIGHTED = '"sighted":true';
+
 /** A tool with fewer than this many examples in a slice may as well be absent. */
 const FLOOR = 4;
 
@@ -127,10 +130,19 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
   const ledger = ledgerFor(builtAt);
   const taken = ledger.taken || {};
 
+  /*
+   * SIGHTED TURNS ONLY, once the set has any. A blind turn - a decision recorded without the page
+   * it was taken on - is what two rounds collapsed on, and the readiness gate counts sighted turns
+   * for exactly that reason; a draw that then filled the round with blind ones would undo the gate.
+   * A set built before the flag existed has none marked, and is drawn as before.
+   */
+  const sightedOnly = lines.some((l) => l.includes(SIGHTED));
+
   /* Group the ones still available, by tool. */
   const byTool = new Map();
   for (let i = 0; i < lines.length; i++) {
     if (taken[i]) continue;
+    if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);
@@ -254,8 +266,11 @@ function exam({ file, want = 150 } = {}) {
   const NL = String.fromCharCode(10);
   const lines = fs.readFileSync(file, 'utf8').split(NL).filter((l) => l.trim());
 
+  /* The paper is sighted too, for the same reason as the slice: a blind question measures guessing. */
+  const sightedOnly = lines.some((l) => l.includes(SIGHTED));
   const byTool = new Map();
   for (let i = 0; i < lines.length; i++) {
+    if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);
@@ -313,4 +328,4 @@ function exam({ file, want = 150 } = {}) {
   return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted };
 }
 
-module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN };
+module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
