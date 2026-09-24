@@ -481,7 +481,10 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
       { role: 'user', content: localPrompt.userFor({ goal: t.goal, observed: t.observed }) },
       { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: t.action.args }) },
     ],
-    meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at },
+    /* `sighted`: the decision had a page or a numbered list to read - the same fact the manifest
+       counts as turnsWithContent, written per turn so coverage can be read per tool off the file. */
+    meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at,
+      sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))) },
   })).join('\n');
 }
 

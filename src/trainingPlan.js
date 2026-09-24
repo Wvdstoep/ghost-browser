@@ -54,7 +54,7 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -97,6 +97,13 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   if (typeof sighted === 'number' && sliceTurns > 0 && sighted < sliceTurns) {
     return no(`only ${sighted} turn(s) in the set can see the page they decide on, and a round draws ${sliceTurns} — collecting`);
   }
+
+  /*
+   * THE SIX CHECKS, when the caller took them (readiness.js). The sighted gate above is one of
+   * them and stays as the older callers know it; the others - labels, an exam that leaked into
+   * the train set, freshness once something serves - refuse here in their own words.
+   */
+  if (readiness && readiness.ok === false) return no(readiness.why || 'the set is not ready');
 
   const seen = covered(rounds);
   const total = Number(dataset.train) || 0;
