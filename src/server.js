@@ -1842,13 +1842,20 @@ app.get('/v1/training/set/:name', authed, (req, res) => {
  * so the screen, the planner and the collector all see one answer. `catalogue` is every tool the
  * live agent can offer, so a tool with no examples at all still shows up as a gap.
  */
+/** How long a laptop round may run: the setting, else the env var, else twelve hours. */
+function trainHoursNow() {
+  const s = Number(settingsStore.read().trainHours);
+  if ([3, 6, 12, 24].includes(s)) return s;
+  return Number(process.env.TRAIN_HOURS || 0) || 12;
+}
+
 function readinessNow({ corpus = {}, serving = null } = {}) {
   const pathx = require('path');
   const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
   const train = coverage.cached(pathx.join(base, 'train.jsonl'));
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
-  const sliceTurns = Math.max(200, Math.round((Number(process.env.TRAIN_HOURS || 0) || 12) * 110 / 3));
+  const sliceTurns = Math.max(200, Math.round(trainHoursNow() * 110 / 3));
   const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
@@ -1920,7 +1927,7 @@ function planNow() {
        * treats as unknown rather than as zero.
        */
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
-      sliceTurns: Math.max(200, Math.round((Number(process.env.TRAIN_HOURS || 0) || 12) * 110 / 3)),
+      sliceTurns: Math.max(200, Math.round(trainHoursNow() * 110 / 3)),
     }),
     trainers, usable, readiness: ready.readiness, coverage: ready.coverage,
   };
@@ -2079,7 +2086,7 @@ app.post('/v1/training/models/:tag/create', authed, async (req, res) => {
 function gpuView() {
   const cfg = settingsStore.read();
   const s = gpu.state();
-  return { trainOn: cfg.trainOn || 'laptop', provider: cfg.gpuProvider || 'runpod', keySet: !!cfg.gpuKey, keyHint: cfg.gpuKey ? `…${String(cfg.gpuKey).slice(-4)}` : '',
+  return { trainOn: cfg.trainOn || 'laptop', trainHours: trainHoursNow(), provider: cfg.gpuProvider || 'runpod', keySet: !!cfg.gpuKey, keyHint: cfg.gpuKey ? `…${String(cfg.gpuKey).slice(-4)}` : '',
     gpuType: cfg.gpuType || gpu.DEFAULT_TYPE, cloud: cfg.gpuCloud || 'COMMUNITY', maxHours: Number(cfg.gpuMaxHours) || 2, hub: cfg.gpuHub || '', types: gpu.GPU_TYPES,
     pod: s.pod ? { ...s.pod, token: undefined, notes: (s.pod.notes || []).slice(-12) } : null, last: s.last ? { ...s.last, token: undefined } : null, history: s.history };
 }
@@ -2090,6 +2097,7 @@ app.post('/v1/training/gpu', authed, (req, res) => {
     const before = settingsStore.read();
     const patch = {};
     if (typeof b.trainOn === 'string') patch.trainOn = b.trainOn;
+    if (b.trainHours != null) patch.trainHours = Number(b.trainHours);
     if (typeof b.key === 'string' && b.key.trim()) {
       patch.gpuKey = b.key;
       patch.gpuOwner = String((req.client && req.client.owner) || before.gpuOwner || '');
@@ -2288,7 +2296,7 @@ async function dispatchRound({ force = false } = {}) {
        * Still an env var, because a machine that has to close its lid at midnight needs a shorter
        * one and that is a property of the machine, not of the method.
        */
-      body: { base: dev.base || '', hours: Number(process.env.TRAIN_HOURS || 0) || 12 },
+      body: { base: dev.base || '', hours: trainHoursNow() },
     }, 30000);
     log.info(`training: handed a round to ${dev.device} — ${plan.why}`);
     return { run: true, why: plan.why, device: dev.device, forced: !!force };

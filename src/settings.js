@@ -35,6 +35,9 @@ const DEFAULTS = {
   /* WHERE ROUNDS RUN. One flow at a time, chosen by a person: the laptops that offered, or a
      card rented per round and destroyed after it. The key never leaves the server. */
   trainOn: 'laptop',         // laptop | gpu
+  /* How long a laptop round may run. Three hours proves the chain the same afternoon; twelve
+     is a night. The slice a round draws follows from it (about 110 turns an hour, seen thrice). */
+  trainHours: 12,            // 3 | 6 | 12 | 24
   gpuProvider: 'runpod',
   gpuKey: '',
   gpuOwner: '',              // who saved the key - the rented machine reports as their device
@@ -110,6 +113,7 @@ function write(input = {}) {
   if (['off', 'shadow', 'canary', 'primary'].includes(input.studentMode)) out.studentMode = input.studentMode;
   if (Number.isFinite(Number(input.studentShare))) out.studentShare = Math.max(1, Math.min(100, Math.round(Number(input.studentShare))));
   if (['laptop', 'gpu'].includes(input.trainOn)) out.trainOn = input.trainOn;
+  if ([3, 6, 12, 24].includes(Number(input.trainHours))) out.trainHours = Number(input.trainHours);
   if (typeof input.gpuKey === 'string') out.gpuKey = input.gpuKey.trim().slice(0, 200);
   if (typeof input.gpuOwner === 'string') out.gpuOwner = input.gpuOwner.trim().slice(0, 120);
   if (typeof input.gpuHub === 'string' && /^https?:\/\/[^\s]+$/.test(input.gpuHub.trim())) out.gpuHub = input.gpuHub.trim().replace(/\/+$/, '');
