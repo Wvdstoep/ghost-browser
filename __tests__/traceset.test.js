@@ -318,7 +318,8 @@ describe('a verdict per step', () => {
   /* A wrong click inside a gold run used to be labelled gold. The record says otherwise right
      after the call, and that is the label. */
   const step = (kind, text, extra = {}) => ({ kind, text, at: 'x', ...extra });
-  const job = () => ({ id: 'j-sv', goal: 'Find the price', role: 'general', profile: 'default', status: 'done', steps: [
+  /* A report, so the run is silver rather than void - a void run never reaches the filters. */
+  const job = () => ({ id: 'j-sv', goal: 'Find the price', role: 'general', profile: 'default', status: 'done', report: 'The price is 12 euro.', steps: [
     step('you', 'Find the price'),
     step('tool', 'open(https://a.org)', { tool: 'open', args: { url: 'https://a.org' } }), step('open', 'https://a.org'),
     step('tool', 'run_script()', { tool: 'run_script', args: { code: 'location.href=1' } }), step('blocked', 'run_script refused: a script may not navigate — use open'),
