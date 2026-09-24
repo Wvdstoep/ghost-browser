@@ -313,3 +313,37 @@ describe('the output is what a trainer eats', () => {
     expect(out.manifest.jobsSeen).toBe(0);
   });
 });
+
+describe('a verdict per step', () => {
+  /* A wrong click inside a gold run used to be labelled gold. The record says otherwise right
+     after the call, and that is the label. */
+  const step = (kind, text, extra = {}) => ({ kind, text, at: 'x', ...extra });
+  const job = () => ({ id: 'j-sv', goal: 'Find the price', role: 'general', profile: 'default', status: 'done', steps: [
+    step('you', 'Find the price'),
+    step('tool', 'open(https://a.org)', { tool: 'open', args: { url: 'https://a.org' } }), step('open', 'https://a.org'),
+    step('tool', 'run_script()', { tool: 'run_script', args: { code: 'location.href=1' } }), step('blocked', 'run_script refused: a script may not navigate — use open'),
+    step('tool', 'look()', { tool: 'look', args: {} }), step('look', 'A — 3 things to click', { marks: '[1] a\n[2] b\n[3] c' }),
+    step('tool', 'choose_option(2)', { tool: 'choose_option', args: { index: 2, value: 'x' } }), step('blocked', 'choose_option [2]: no option matches'),
+    step('tool', 'click(1)', { tool: 'click', args: { index: 1 } }), step('click', 'clicked [1]'),
+    step('tool', 'finish()', { tool: 'finish', args: { summary: 'done' } }), step('done', 'done'),
+  ] });
+
+  it('marks the refused calls wrong and leaves the rest unknown', () => {
+    const turns = turnsOf(job());
+    expect(turns.map((t) => `${t.action.tool}:${t.step}`)).toEqual(['open:unknown', 'run_script:wrong', 'look:unknown', 'choose_option:wrong', 'click:unknown', 'finish:unknown']);
+    expect(turns[1].stepWhy).toBe('the call was refused');
+  });
+
+  it('keeps a wrong step out of the training set and puts it on the reject pile, marked', () => {
+    const out = build([job()], { files: () => [], recordings: () => [], runs: () => null }, { evalFraction: 0 });
+    const trainTools = out.train.map((t) => t.action.tool);
+    expect(trainTools).not.toContain('run_script');
+    expect(trainTools).not.toContain('choose_option');
+    expect(out.manifest.droppedTurns['a step the record shows was wrong']).toBe(2);
+    const wrong = out.reject.filter((t) => (t.failed || []).some((f) => /^step:/.test(f)));
+    expect(wrong.map((t) => t.action.tool).sort()).toEqual(['choose_option', 'run_script']);
+    expect(out.manifest.wrongSteps).toBe(2);
+    const line = JSON.parse(toJsonl(out.train).split('\n')[0]);
+    expect(line.meta.step).toBe('unknown');
+  });
+});

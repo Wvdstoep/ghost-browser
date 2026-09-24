@@ -1275,6 +1275,10 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
      * initialization". Deferring the lookup to call time is the whole fix.
      */
     freshAnalysis: (...args) => freshAnalysis(...args),
+    /* The element behind a number from the last look. hover, and the image tools, reached for
+       this and it was never here: every hover the collector was steered into threw with
+       "ctx.elementAt is not a function" - 54 times - which is why the tool had no example. */
+    elementAt: (index) => elementAt(index),
     resetClickLoop: (...args) => resetClickLoop(...args),
     get memo() { return memo; },
   };
