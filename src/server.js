@@ -2713,7 +2713,11 @@ function loginsNow() {
     const platform = practice.platformOfProfile(name, trainScopes.normalizeSite);
     if (platform && platform !== trainScopes.BASE) out.push({ profile: name, platform });
   }
-  return out;
+  /* Only the platforms a role works on: a cookie jar for a site no role knows is not a place to
+     practise, and forty of them on the screen would hide the six that matter. */
+  let known = null;
+  try { known = new Set(roles.list().map((r) => trainScopes.platformOf(r.name))); } catch (e) { known = null; }
+  return known ? out.filter((l) => known.has(l.platform)) : out;
 }
 function practiceState() {
   try {
