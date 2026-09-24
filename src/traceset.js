@@ -134,6 +134,32 @@ function threwRightAfter(steps, i) {
  * depend on their text. Only the first kind is a decision the student cannot make blind.
  */
 const CONTENT_KINDS = new Set(['read', 'data']);
+
+/*
+ * A VERDICT PER STEP, READ OFF THE RECORD.
+ *
+ * Every turn used to inherit the tier of its run: a wrong click inside a gold run was labelled
+ * gold. The record often says otherwise, right after the call - the tool refused it ("a script
+ * may not navigate", "no option matches", "not one of your tools"), or the loop had to force an
+ * action after four looks in a row. Those are wrong steps, and 277 usable runs held over a
+ * hundred of them. A wrong step leaves the training set and joins the reject pile as what not
+ * to do; a step the record says nothing about stays, marked unknown, which is the honest state.
+ *
+ * A call that THREW is a different case (threwRightAfter): not a decision the record judged, so
+ * it is dropped, not punished. A host that answered 429 or 503 is the host's fault: unknown.
+ */
+const REFUSED_STEP = /refused|no option matches|not one of your tools|is not one of your tools|may not (navigate|click|submit|fire|make requests)/i;
+const STALLED_STEP = /looks\/reads in a row with no action/i;
+function stepVerdict(steps, i) {
+  for (let k = i + 1; k < steps.length; k++) {
+    const s = steps[k] || {};
+    if (s.kind === 'tool') break;
+    const text = String(s.text || '');
+    if (s.kind === 'blocked' && REFUSED_STEP.test(text)) return { verdict: 'wrong', why: 'the call was refused' };
+    if (s.kind === 'blocked' && STALLED_STEP.test(text)) return { verdict: 'wrong', why: 'one look too many' };
+  }
+  return { verdict: 'unknown', why: '' };
+}
 function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
@@ -187,8 +213,10 @@ function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHis
     }
     /* The decision itself. Arguments scrubbed, because a `type` call's text is often a real
        message to a real person and sometimes a credential somebody pasted. */
+    const sv = stepVerdict(steps, steps.indexOf(s));
     out.push({
       goal,
+      step: sv.verdict, stepWhy: sv.why,
       role: String((job && job.role) || 'general'),
       site: scrubText(String((job && job.profile) || '')),
       observed: history.slice(),
@@ -316,6 +344,8 @@ function build(jobs, deps = {}, opts = {}) {
     .filter((t) => {
       const why = mislabelled(t);
       if (why) { dropped[why] = (dropped[why] || 0) + 1; return false; }
+      /* A step the record refused is not an example of the tool; it goes to the reject pile below. */
+      if (t.step === 'wrong') { dropped['a step the record shows was wrong'] = (dropped['a step the record shows was wrong'] || 0) + 1; return false; }
       /*
        * A decision taken with nothing seen is not reproducible — it is a guess that got recorded.
        * The opening move is the exception and it is the most informative turn there is: what do you
@@ -397,6 +427,11 @@ function build(jobs, deps = {}, opts = {}) {
 
   const trainTurns = toTurns(train);
   const evalTurns = toTurns(evalSet);
+  /* The wrong steps of GOOD runs: the scarcest negatives there are, each beside the page it
+     was taken on, and the pairs a preference round wants (the same situation, a refused call). */
+  const wrongSteps = [...train, ...evalSet].flatMap(({ job, outcome }) => turnsOf(job, { ...opts })
+    .filter((t) => t.step === 'wrong')
+    .map((t) => ({ ...t, jobId: job.id, tier: outcome.tier, grade: outcome.grade, verified: outcome.external, failed: [`step: ${t.stepWhy}`] })));
   /*
    * The reject pile is the one place a failed call BELONGS: it is the example of what not to do.
    * Kept undeduped and uncapped too — there are only 152 such jobs and every one is scarce.
@@ -419,7 +454,8 @@ function build(jobs, deps = {}, opts = {}) {
       /* Turns thrown away because the call and its effect disagreed. See mislabelled(). */
       droppedTurns: dropped,
       kept: { train: train.length, eval: evalSet.length, reject: reject.length },
-      turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length },
+      turns: { train: trainTurns.length, eval: evalTurns.length, reject: rejectTurns.length + wrongSteps.length },
+      wrongSteps: wrongSteps.length,
       perRoleCap,
       toolCap,
       evalFraction,
@@ -441,7 +477,7 @@ function build(jobs, deps = {}, opts = {}) {
      * the positives. 116 is a small pile, and that is the honest state: the corpus contains very
      * little genuine misbehaviour once interruptions are removed.
      */
-    reject: rejectTurns,
+    reject: [...rejectTurns, ...wrongSteps],
   };
 }
 
@@ -484,8 +520,8 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
     /* `sighted`: the decision had a page or a numbered list to read - the same fact the manifest
        counts as turnsWithContent, written per turn so coverage can be read per tool off the file. */
     meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at,
-      sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))) },
+      sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))), step: t.step || 'unknown' },
   })).join('\n');
 }
 
-module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
+module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, stepVerdict, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
