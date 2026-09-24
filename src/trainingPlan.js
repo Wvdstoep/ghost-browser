@@ -73,13 +73,25 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
    * died with SIGSEGV while this was being built; without this clause the first one would have
    * blocked every round after it, permanently, and the screen would have read "training".
    */
-  const live = (rounds || []).find((r) => r.status === 'running');
-  if (live) {
-    const heard = Date.parse((live.lastAt || live.startedAt) || '') || 0;
-    if (!heard || (now - heard) < SILENT_MS) return no(`a round is already running on ${live.device || 'a device'}`);
-  }
+  /*
+   * A RUNNING ROUND HOLDS ITS MACHINE AND ITS SCOPE, NOT THE LOOP. With the scopes measured, a
+   * second laptop takes the next scope in the map while the first trains base - two machines, two
+   * adapters, never the same scope twice at once and never two rounds on one machine. Without
+   * scopes (the older callers) one round at a time is still the rule.
+   */
+  const alive = (rounds || []).filter((r) => {
+    if (r.status !== 'running') return false;
+    const heard = Date.parse((r.lastAt || r.startedAt) || '') || 0;
+    return heard && (now - heard) < SILENT_MS;
+  });
+  const busyDevices = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
+  const busyScopes = new Set(alive.map((r) => ((r.scope && r.scope.key) || 'base')));
+  const withScopes = Array.isArray(scopes) && scopes.length > 0;
+  if (alive.length && !withScopes) return no(`a round is already running on ${alive[0].device || 'a device'}`);
 
+  const free = (trainers || []).filter((t) => t.online && !busyDevices.has(String(t.name || '').toLowerCase()));
   if (!(trainers || []).some((t) => t.online)) return no('no machine is connected that can train');
+  if (!free.length) return no(`every machine that can train is busy: ${alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`).join(', ')}`);
 
   if (!dataset || !dataset.train) return no('no training set has been built yet');
 
@@ -115,7 +127,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   const total = Number(dataset.train) || 0;
   const fresh = Number(corpus.usableSinceLastRound) || 0;
 
-  const device = (trainers || []).find((t) => t.online);
+  const device = free[0];
   const go = (why, scope = null) => ({
     run: true,
     why,
@@ -135,9 +147,10 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
    * then whichever has the most untrained turns. A scope is chained from its own serving adapter,
    * else its parent's, so a bad platform round costs the platform one round and base nothing.
    */
-  if (Array.isArray(scopes) && scopes.length) {
-    const p = pickScope(scopes, sliceTurns);
+  if (withScopes) {
+    const p = pickScope(scopes.filter((s) => !busyScopes.has(s.key)), sliceTurns, { basePending: busyScopes.has('base') });
     if (p.pick) return go(p.why, p.pick);
+    if (alive.length) return no(`${alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`).join(', ')} running — nothing else holds a slice of its own yet`);
     if (fresh >= ENOUGH_NEW) return go(`${fresh} new usable run(s) since the last round`, scopes.find((s) => s.key === 'base') || null);
     return no(`every scope is covered and only ${fresh} new usable run(s) have arrived — a round wants ${ENOUGH_NEW}`);
   }
@@ -167,10 +180,12 @@ const label = (s) => (s.key === 'base' ? 'base' : `${s.name} (${s.level})`);
  * The scope the next round trains. Pure; `scopes` rows carry sighted, seen, adapter, parentAdapter.
  * @returns {{ pick: object|null, why: string }}
  */
-function pickScope(scopes, sliceTurns = 0) {
+function pickScope(scopes, sliceTurns = 0, { basePending = false } = {}) {
   const rows = (scopes || []).map((s) => ({ ...s, untrained: Math.max(0, (Number(s.sighted) || 0) - (Number(s.seen) || 0)) }));
   const base = rows.find((s) => s.key === 'base');
-  if (base && !base.adapter && base.untrained > 0) {
+  /* Base first while nothing serves - unless base is being trained right now on another machine,
+     in which case the second machine may start on a platform and chain from base when it lands. */
+  if (base && !base.adapter && base.untrained > 0 && !basePending) {
     return { pick: base, why: `base: ${base.untrained} of ${base.sighted} sighted turns not trained on yet, and nothing serves yet` };
   }
   const stand = rows.filter((s) => s.key !== 'base' && (Number(s.sighted) || 0) >= Math.max(1, sliceTurns));

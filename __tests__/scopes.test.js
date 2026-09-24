@@ -212,6 +212,27 @@ describe('which scope the next round trains', () => {
     expect(d.run).toBe(false);
     expect(d.why).toContain('every scope is covered');
   });
+  it('TWO MACHINES TRAIN TWO SCOPES AT ONCE, never the same scope twice and never two on one machine', () => {
+    const s = scopes(); s[0].adapter = 'base-v1'; s[0].seen = 1700;
+    const two = [{ name: 'WojMagEmi', deviceId: 'd1', online: true }, { name: 'Second', deviceId: 'd2', online: true }];
+    const running = [{ status: 'running', device: 'WOJMAGEMI', startedAt: new Date().toISOString(), lastAt: new Date().toISOString(), scope: { key: 'platform:google' } }];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: running, trainers: two, auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 });
+    expect(d.run).toBe(true);
+    expect(d.device).toBe('Second');
+    expect(d.scope.key).not.toBe('platform:google');
+    /* One machine, one round: the same picture with only the busy laptop waits and says why. */
+    const one = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: running, trainers: [two[0]], auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 });
+    expect(one.run).toBe(false);
+    expect(one.why).toContain('busy');
+    /* Base running on the first machine: the second starts a platform rather than waiting on base. */
+    const fresh = scopes();
+    const baseRunning = [{ status: 'running', device: 'WOJMAGEMI', startedAt: new Date().toISOString(), lastAt: new Date().toISOString(), scope: { key: 'base' } }];
+    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: baseRunning, trainers: two, auto: true, serving: null, scopes: fresh, sliceTurns: 120 });
+    expect(d2.run).toBe(true);
+    expect(d2.scope.key).toBe('platform:google');
+    expect(d2.device).toBe('Second');
+  });
+
   it('sums coverage per scope, and counts rounds from before the scopes as base', () => {
     const rounds = [{ trained: 100 }, { trained: 50, scope: { key: 'platform:facebook' } }, { trained: 20, scope: { key: 'base' } }];
     expect(coveredFor(rounds, 'base')).toBe(120);
