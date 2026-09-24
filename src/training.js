@@ -320,6 +320,14 @@ function byDevice(now = Date.now()) {
       last,
       baseline: r.baseline ? r.baseline.agreement_pct : null,
       result: r.result ? r.result.agreement_pct : null,
+      /* The two numbers beside the headline that say whether it means anything: the tool AND its
+         arguments, and how far the loudest answer is from how often it is right. */
+      args: r.result && r.result.args_agreement_pct != null ? r.result.args_agreement_pct : null,
+      baselineArgs: r.baseline && r.baseline.args_agreement_pct != null ? r.baseline.args_agreement_pct : null,
+      collapse: r.result && r.result.collapse && typeof r.result.collapse.ratio === number ? r.result.collapse.ratio : null,
+      collapseTool: r.result && r.result.collapse ? String(r.result.collapse.tool || ) : ,
+      unusable: r.result && r.result.unusable_pct != null ? r.result.unusable_pct : null,
+      perTool: r.result && r.result.per_tool ? Object.entries(r.result.per_tool).slice(0, 24).map(([tool, v]) => ({ tool, right: v.right, seen: v.seen, pct: v.pct })) : [],
       /* How lopsided its answers were. A round can beat its baseline and still be a model that
          says one tool to everything, and that has to be readable without opening a table. */
       collapse: (r.result && r.result.collapse) || null,
