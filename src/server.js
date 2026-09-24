@@ -1925,14 +1925,26 @@ async function refillPrompts(want) {
      * every call, which is wrong for a request that wants prose back, and keyring.js is explicitly
      * written to be used directly like this.
      */
-    const { makeKeyring, isSpent } = require('./keyring');
-    const ring = makeKeyring([cfg.llmKey, ...String(cfg.llmKeys || '').split(',')]);
+    const { isSpent } = require('./keyring');
+    /* THE SAME RING THE WALKS USE. A ring built fresh here forgot every spend and rejection the
+       walks had just recorded, and asked the spent account again on every tick. */
+    const ring = agent.ringFor(cfg);
     let key = ring.current();
+    if (!key && ring.size > 0) return { asked: false, why: 'every model key was rejected — check the keys in Settings' };
     for (let attempt = 0; attempt < Math.max(1, ring.size); attempt++) {
       let reply;
       try {
         reply = await llm.chat({ host: cfg.llmHost, model: cfg.llmModel, key, messages, timeoutMs: 90000 });
       } catch (e) {
+        if (e.status === 401 || e.status === 403) {
+          const next = ring.reject(key, e.message);
+          if (next && next !== key) {
+            key = next;
+            log.warn('[harvest] that model key was rejected — asking with the next key');
+            continue;
+          }
+          return { asked: false, why: `the API key was rejected (${e.status}) — check the keys in Settings` };
+        }
         if (!isSpent(e)) throw e;
         const next = ring.spend(key, e.message);
         if (next && next !== key) {
@@ -1940,11 +1952,11 @@ async function refillPrompts(want) {
           log.info('[harvest] that account is out of allowance for this period — asking with the next key');
           continue;
         }
-        /* Every key is spent. Switching off with the reason on the record beats a loop that keeps
-           asking an empty account and quietly stops collecting. */
-        harvest.stop('every model key is out of allowance');
-        log.warn('[harvest] every key is out of allowance — collecting switched off');
-        return { asked: false, why: 'every model key is out of allowance' };
+        /* Every key is spent. The collector stays ON and waits: the tick asks the ring before
+           every walk and the spent keys are tried again after they rest. Switching off here made
+           a reset allowance sit unused until somebody noticed the switch. */
+        log.warn('[harvest] every key is out of allowance — waiting, the collector stays on');
+        return { asked: false, why: 'every model key is out of allowance — waiting for the allowance to reset' };
       }
       const lines = String((reply && reply.content) || '').split(String.fromCharCode(10));
       const { kept, rejected } = harvest.vet(lines, { history: s.history || [] });
