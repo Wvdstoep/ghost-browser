@@ -127,3 +127,31 @@ describe('what a new round carries on from', () => {
     expect(d.deviceId).toBe('d1');
   });
 });
+
+describe('no round on painted cards', () => {
+  /*
+   * Two rounds trained on a set where 58% of the turns followed a read whose content was never
+   * recorded, and both collapsed onto look. A round now waits until the set holds at least a
+   * slice's worth of turns that can see the page they decide on.
+   */
+  const ready = () => ({
+    corpus: { usableSinceLastRound: 0 }, dataset: { train: 21000 }, rounds: [],
+    trainers: [{ name: 'lap', deviceId: 'd1', online: true }], auto: true, serving: null,
+  });
+
+  it('waits while fewer sighted turns exist than a round draws, and says how many', () => {
+    const d = decide({ ...ready(), sighted: 218, sliceTurns: 3600 });
+    expect(d.run).toBe(false);
+    expect(d.why).toMatch(/only 218 turn\(s\)/);
+    expect(d.why).toMatch(/draws 3600/);
+  });
+
+  it('runs once the set can fill a slice with sighted turns', () => {
+    expect(decide({ ...ready(), sighted: 3600, sliceTurns: 3600 }).run).toBe(true);
+  });
+
+  it('treats a manifest that never counted as unknown, not as zero', () => {
+    /* An old manifest must not lock the loop shut on a number nobody took. */
+    expect(decide({ ...ready(), sighted: null, sliceTurns: 3600 }).run).toBe(true);
+  });
+});

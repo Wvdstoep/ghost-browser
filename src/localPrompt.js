@@ -124,8 +124,19 @@ function userFor({ goal = '', observed = [] } = {}) {
     return -1;
   })();
 
+  /*
+   * The page itself, on the most recent observation that has one - the same rule as the marks
+   * and for the same reason: the latest state is what the decision is about, and a stale page
+   * beside a fresh one is worse than none. Marks win where both exist; they are the page for a
+   * click, and a look step records only marks.
+   */
+  const lastContentAt = (() => {
+    for (let i = rows.length - 1; i >= 0; i--) if (rows[i] && rows[i].content) return i;
+    return -1;
+  })();
   const seen = rows.map((o, i) => {
     if (i === lastMarksAt) return `- ${o.kind}: ${o.text}\n${o.marks}`;
+    if (i === lastContentAt && i > lastMarksAt) return `- ${o.kind}: ${o.text}\n${o.content}`;
     return `- ${o.kind}: ${o.text}`;
   });
 

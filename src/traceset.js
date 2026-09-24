@@ -127,7 +127,14 @@ function threwRightAfter(steps, i) {
   return false;
 }
 
-function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
+/*
+ * The observation kinds whose journal line is a SUMMARY of something the model actually read.
+ * A `read` step says how many characters; a `look` step says how many things to click but carries
+ * its list as marks; open/scroll/click/type describe an act, and the next decision does not
+ * depend on their text. Only the first kind is a decision the student cannot make blind.
+ */
+const CONTENT_KINDS = new Set(['read', 'data']);
+function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
@@ -147,7 +154,15 @@ function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxHistory = 6, keepThrow
        * why the set is worth rebuilding as fresh runs land.
        */
       const marks = s.marks ? scrubText(String(s.marks)).slice(0, maxMarks) : undefined;
-      if (t) history.push({ kind: s.kind, text: t, marks, url: s.url ? scrubText(String(s.url)).slice(0, 300) : undefined });
+      /*
+       * WHAT THE PAGE SAID travels the same way the numbered list does. Until agent.js began
+       * writing it down, a read step carried "read the page (14592 characters)" and nothing
+       * else - so the student was trained to decide from a log of which tools had run. Two
+       * rounds scored zero on open, run_script and dig for exactly that reason. Older jobs
+       * have no content, which is the honest state; see the drop below.
+       */
+      const content = s.content ? scrubText(String(s.content)).slice(0, maxContent) : undefined;
+      if (t) history.push({ kind: s.kind, text: t, marks, content, url: s.url ? scrubText(String(s.url)).slice(0, 300) : undefined });
       if (history.length > maxHistory) history.shift();
       continue;
     }
@@ -332,6 +347,26 @@ function build(jobs, deps = {}, opts = {}) {
         dropped['an index with no list to read it from'] = (dropped['an index with no list to read it from'] || 0) + 1;
         return false;
       }
+      /*
+       * A DECISION WITH NO PAGE TO READ IT FROM - the same rule as the index with no list, one
+       * level up, and the finding that explains both failed rounds.
+       *
+       * Measured on the slice the second round trained on: 58% of its turns followed a read,
+       * fetch_data, run_script, google or dig whose content was never recorded. Their answers
+       * were dig 284, open 215, run_script 213, finish 114 - the exact tools that scored zero.
+       * From "read the page (14592 characters)" there is no rule that reaches a url or a
+       * script, and the only thing a model can take from two thousand of them is that the
+       * cheapest answer is usually accepted. Both rounds collapsed onto look.
+       *
+       * The turn keeps its place the moment its evidence is on the record: a run collected
+       * after agent.js began attaching content passes this untouched. Everything before it
+       * stays in the corpus and out of the set, exactly like the index turns did.
+       */
+      const lastObs = t.observed[t.observed.length - 1];
+      if (lastObs && CONTENT_KINDS.has(lastObs.kind) && !lastObs.content && !lastObs.marks && !t.first) {
+        dropped['a decision with no page to read it from'] = (dropped['a decision with no page to read it from'] || 0) + 1;
+        return false;
+      }
       if (dedupe) {
         /*
          * THE KEY IS THE TRAINING EXAMPLE ITSELF: goal, role, what was last seen, and the call.
@@ -345,7 +380,7 @@ function build(jobs, deps = {}, opts = {}) {
            pages are two different decisions, and collapsing them keeps whichever came first while
            silently discarding the other page entirely. */
         const lastObs = t.observed[t.observed.length - 1] || {};
-        const key = `${t.goal}|${t.role}|${t.action.tool}|${JSON.stringify(t.action.args)}|${lastObs.text || ''}|${lastObs.marks || ''}`;
+        const key = `${t.goal}|${t.role}|${t.action.tool}|${JSON.stringify(t.action.args)}|${lastObs.text || ''}|${lastObs.marks || ''}|${(lastObs.content || '').slice(0, 400)}`;
         if (seenTurn.has(key)) { dropped['an identical decision in an identical situation'] = (dropped['an identical decision in an identical situation'] || 0) + 1; return false; }
         seenTurn.add(key);
       }

@@ -1118,7 +1118,39 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
     catch (e) { log.warn?.(`[agent] ${job.id}: could not arm recorder: ${e.message}`); }
   }
 
-  const observe = (text) => { messages.push({ role: 'tool', content: String(text).slice(0, 6000) }); };
+  /*
+   * WHAT THE PAGE SAID GOES INTO THE RECORD, NOT ONLY THAT IT WAS READ.
+   *
+   * Every tool result reaches the model through observe() or observeData(). Until now the journal
+   * kept only the one-line summary the tool wrote - "read the page (14592 characters)" - and the
+   * training set, which is built from the journal, handed the student that line. The teacher saw
+   * six thousand characters of the page; the student was told a page had been read.
+   *
+   * Measured across two full rounds: the model learned `look`, `read` and `scroll` - the tools that
+   * are simply "the next step in the sequence" - and scored zero on `open`, `run_script` and `dig`,
+   * because you cannot choose a url or write an extractor for content you were never shown. 58% of
+   * a training slice was decisions whose evidence had never been written down. Three times the
+   * turns made the collapse worse, not better.
+   *
+   * So the observation is attached to the step it belongs to, here, in the one place every result
+   * passes through - which means the student gets exactly what the teacher got, by construction and
+   * not by keeping two copies in step. The step immediately before an observe() is always the
+   * result step the tool just journalled (every tool writes its step and then observes); a `tool`
+   * kind means the handler observed without journalling a result, and nothing is attached.
+   *
+   * A look step already carries its numbered list as `marks`, and the two are the same information;
+   * a second copy would only double the record. Capped at the same 6,000 as marks, because that is
+   * what fits a small model's context beside the goal and the catalogue.
+   */
+  const CONTENT_CAP = 6000;
+  const remember = (text) => {
+    try {
+      const last = job.steps[job.steps.length - 1];
+      if (!last || last.kind === 'tool' || last.kind === 'you' || last.marks || last.content) return;
+      jobsStore.annotate(job, last, { content: String(text == null ? '' : text).slice(0, CONTENT_CAP) });
+    } catch (e) { /* a note about the page must never stop the page being read */ }
+  };
+  const observe = (text) => { messages.push({ role: 'tool', content: String(text).slice(0, 6000) }); remember(text); };
   /*
    * DATA GETS A BIGGER BUDGET THAN PROSE. The 6000 above is right for a page of text; it is wrong for
    * a JSON feed or three hundred extracted rows, and truncating those is exactly the failure that sent
@@ -1128,6 +1160,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   const observeData = (text) => {
     const s = String(text == null ? '' : text);
     messages.push({ role: 'tool', content: s.length > DATA_CAP ? s.slice(0, DATA_CAP) + `\n… (${s.length - DATA_CAP} more characters — return less: fewer fields, fewer rows, or a narrower pick)` : s });
+    remember(s);
   };
 
   /*

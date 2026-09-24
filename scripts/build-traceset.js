@@ -94,10 +94,14 @@ function main() {
    * recording — but it is the single best predictor of whether index-bearing calls will improve.
    */
   const withMarks = built.train.filter((t) => (t.observed || []).some((o) => o.marks)).length;
+  /* Turns whose most recent observation carries what the page said. This is the number the
+     scheduler waits on: a round drawn from a set with few of these is a round on painted cards. */
+  const withContent = built.train.filter((t) => { const o = (t.observed || []); const l = o[o.length - 1]; return l && (l.content || l.marks); }).length;
   const indexTurns = built.train.filter((t) => t.action && t.action.args && t.action.args.index !== undefined).length;
   const indexWithMarks = built.train.filter((t) => t.action && t.action.args && t.action.args.index !== undefined
     && (t.observed || []).some((o) => o.marks)).length;
   say(`turns carrying the numbered list: ${withMarks} of ${built.train.length}`);
+  say(`turns that can see the page they decide on: ${withContent} of ${built.train.length}`);
   say(`index-bearing turns that can actually be learnt: ${indexWithMarks} of ${indexTurns}`);
 
   /* The previous manifest, so preflight can see what changed rather than only what is. */
@@ -137,7 +141,7 @@ function main() {
 
   const manifest = {
     ...m,
-    marks: { turnsWithMarks: withMarks, indexTurns, indexWithMarks },
+    marks: { turnsWithMarks: withMarks, turnsWithContent: withContent, indexTurns, indexWithMarks },
     promptedWith: { tools: TOOLS.length, perRole: true },
   };
   fs.writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 2));
