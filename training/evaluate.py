@@ -370,7 +370,7 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
                 args_hits += 1
         else:
             confusion[f"{want} -> {got}"] += 1
-        if (i + 1) % 25 == 0:
+        if (i + 1) % 10 == 0:
             rate = (i + 1) / (time.time() - started)
             note(f"  {i+1}/{len(rows)}  agreement {100*hits/(i+1):.1f}%  {rate:.2f} turns/s")
 
