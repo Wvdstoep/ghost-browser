@@ -29,7 +29,13 @@ const ENOUGH_NEW = 200;
 
 /** A round that has said nothing for this long is not holding the slot any more. Matches the
  *  staleness rule the device rows use, so the screen and the scheduler never disagree. */
-const SILENT_MS = 30 * 60 * 1000;
+/*
+ * Seventy-five minutes, not thirty. A CPU round spends its first hour in the exam, and the exam
+ * reported every 25 turns at ~25 s a turn - ten minutes apart when the machine is free and half an
+ * hour when it is not. Thirty minutes read a live round as dead and started a second one on the
+ * same laptop, and the two halved each other. The exam now reports every ten turns as well.
+ */
+const SILENT_MS = 75 * 60 * 1000;
 
 /**
  * How much of the set has actually been trained on, across every round that reported it.
