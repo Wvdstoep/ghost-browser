@@ -135,18 +135,18 @@ describe('promotion', () => {
     /* 1.0 is a model reading the page. The threshold is there for the collapse, not to police a
        model that slightly over-reaches for a common tool. */
     const r = finished({ result: { agreement_pct: 58.9, collapse: { tool: 'open', said_pct: 14.0, correct_pct: 14.0, ratio: 1.0, distinct: 22 } } });
-    expect(promote(r.id)).toEqual({ promoted: r.id });
+    expect(promote(r.id)).toMatchObject({ promoted: r.id });
   });
 
   it('does not refuse a round measured before anyone counted this', () => {
     /* Absent is not refused. Locking out every earlier round on a number nobody took would be a
        new bug wearing a gate's clothes. */
     const r = finished({ result: { agreement_pct: 58.9 } });
-    expect(promote(r.id)).toEqual({ promoted: r.id });
+    expect(promote(r.id)).toMatchObject({ promoted: r.id });
   });
   it('promotes a measured win and records what it beat', () => {
     const r = finished();
-    expect(promote(r.id)).toEqual({ promoted: r.id });
+    expect(promote(r.id)).toMatchObject({ promoted: r.id });
     const live = current();
     expect(live.adapter).toBe('gb-role-lora-v1');
     expect(live.agreement).toBe(58.9);

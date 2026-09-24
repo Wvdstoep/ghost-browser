@@ -45,14 +45,52 @@ const writeJson = (p, v) => { ensure(); fs.writeFileSync(p + '.tmp', JSON.string
 
 const allRounds = () => readJson(ROUNDS(), []);
 
+/* ── the pending dispatch ─────────────────────────────────────────────────────────────────────
+ *
+ * THE HUB OWNS THE SCOPE; THE DEVICE NEVER HEARS OF IT. The planner chooses what the next round
+ * trains (base, a platform, a role) and writes it here at dispatch. The device fetches its slice
+ * and its paper - both are drawn for the pending scope - and then registers the round, which
+ * takes the scope with it. No installer changes, no flag on the trainer, and a GPU rental works
+ * the same way. A pending older than PENDING_MS is a dispatch nobody picked up.
+ */
+const PENDING = () => path.join(DIR(), 'pending.json');
+const PENDING_MS = 3 * 60 * 60 * 1000;
+const platforms = require('./trainScopes');
+const normScope = (s) => { const sc = platforms.parse(s || 'base'); return { level: sc.level, name: sc.name, key: sc.key }; };
+
+function setPending({ scope = null, device = '', base = '' } = {}) {
+  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), at: new Date().toISOString() };
+  writeJson(PENDING(), p);
+  return p;
+}
+function peekPending(now = Date.now()) {
+  const p = readJson(PENDING(), null);
+  if (!p || !p.at) return null;
+  if (now - (Date.parse(p.at) || 0) > PENDING_MS) return null;
+  return p;
+}
+function takePending(now = Date.now()) {
+  const p = peekPending(now);
+  try { fs.unlinkSync(PENDING()); } catch { /* none */ }
+  return p;
+}
+/** The scope a round trains, or the pending one when the round is not registered yet. */
+function scopeOfRound(id) {
+  if (id) { const r = allRounds().find((x) => x.id === id); if (r) return normScope(r.scope || 'base'); }
+  const p = peekPending();
+  return p ? normScope(p.scope) : null;
+}
+
 /**
  * A round starts when a device takes it, not when it is dispatched.
  *
  * The difference matters: a round recorded at dispatch and never picked up looks identical to one
  * that ran and vanished, and telling those apart is the whole job of a status page.
  */
-function startRound({ device = '', base = '', turns = 0, note = '', recipe = null } = {}) {
+function startRound({ device = '', base = '', turns = 0, note = '', recipe = null, scope = null } = {}) {
+  const pend = scope ? null : takePending();
   const r = {
+    scope: normScope(scope || (pend && pend.scope) || 'base'),
     id: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     startedAt: new Date().toISOString(),
     endedAt: null,
@@ -208,21 +246,57 @@ function promote(roundId) {
         + `(${c.ratio}x, and anything over ${MAX_COLLAPSE}x is guessing rather than reading)`,
     };
   }
+  /* A PAPER TOO SMALL TO MEAN ANYTHING. A platform with four exam turns can score 100% by luck;
+     nothing is promoted on fewer than MIN_PAPER. Absent is not refused (older rounds). */
+  const paper = Number(r.result.turns);
+  if (Number.isFinite(paper) && paper > 0 && paper < MIN_PAPER) {
+    return { error: `its paper held only ${paper} turn(s) — ${MIN_PAPER} are needed before a score means anything` };
+  }
   r.promoted = true;
   writeJson(ROUNDS(), rows);
-  writeJson(CURRENT(), {
+  /*
+   * THE PROMOTION MAP. One entry per scope (platforms.js): base, each platform, each role. The
+   * base entry is also written at the top level, the shape everything read before the map
+   * existed, so nothing that asks "what serves" has to learn a new answer.
+   */
+  const scope = normScope(r.scope || 'base');
+  const entry = {
     roundId: r.id,
     adapter: r.adapter || '',
     base: r.base,
     agreement: r.result.agreement_pct,
     beat: r.baseline.agreement_pct,
+    paper: Number.isFinite(paper) ? paper : null,
     promotedAt: new Date().toISOString(),
     device: r.device,
-  });
-  return { promoted: r.id };
+    scope,
+  };
+  const cur = readJson(CURRENT(), null) || {};
+  const scopes = { ...(cur.scopes || {}), [scope.key]: entry };
+  writeJson(CURRENT(), scope.key === 'base' ? { ...cur, ...entry, scopes } : { ...cur, scopes });
+  return { promoted: r.id, scope: scope.key };
 }
 
+const MIN_PAPER = 30;
+
 const current = () => readJson(CURRENT(), null);
+
+/**
+ * THE ADAPTER A SCOPE CHAINS FROM: its own, else its parent's, else base's, else nothing. A role
+ * round starts from the platform adapter when there is one, so it learns the job on top of the
+ * platform's habits instead of relearning the platform.
+ */
+function adapterFor(scope) {
+  const cur = current();
+  const map = (cur && cur.scopes) || {};
+  let s = normScope(scope || 'base');
+  for (let guard = 0; s && guard < 4; guard++) {
+    const e = map[s.key] || (s.key === 'base' && cur && cur.adapter ? cur : null);
+    if (e && e.adapter) return { adapter: e.adapter, from: s.key, roundId: e.roundId || '' };
+    s = platforms.parentOf(s);
+  }
+  return { adapter: '', from: '', roundId: '' };
+}
 
 /* ── the owner's switch ──────────────────────────────────────────────────────────────────────── */
 
@@ -309,6 +383,7 @@ function byDevice(now = Date.now()) {
 
     out[r.device] = {
       roundId: r.id,
+      scope: r.scope || null,
       status: r.status,
       stale,
       silentForMin: r.status === 'running' && heard ? Math.floor((now - heard) / 60000) : null,
@@ -324,7 +399,6 @@ function byDevice(now = Date.now()) {
          arguments, and how far the loudest answer is from how often it is right. */
       args: r.result && r.result.args_agreement_pct != null ? r.result.args_agreement_pct : null,
       baselineArgs: r.baseline && r.baseline.args_agreement_pct != null ? r.baseline.args_agreement_pct : null,
-      collapse: r.result && r.result.collapse && typeof r.result.collapse.ratio === number ? r.result.collapse.ratio : null,
       collapseTool: r.result && r.result.collapse ? String(r.result.collapse.tool || '') : '',
       unusable: r.result && r.result.unusable_pct != null ? r.result.unusable_pct : null,
       perTool: r.result && r.result.per_tool ? Object.entries(r.result.per_tool).slice(0, 24).map(([tool, v]) => ({ tool, right: v.right, seen: v.seen, pct: v.pct })) : [],
@@ -384,6 +458,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
     serving: current(),
     rounds: rounds.slice(0, 20).map((r) => ({
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
+      scope: r.scope || null,
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
@@ -431,4 +506,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };

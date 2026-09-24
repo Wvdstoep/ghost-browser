@@ -60,7 +60,7 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -116,7 +116,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   const fresh = Number(corpus.usableSinceLastRound) || 0;
 
   const device = (trainers || []).find((t) => t.online);
-  const go = (why) => ({
+  const go = (why, scope = null) => ({
     run: true,
     why,
     device: device.name,
@@ -124,9 +124,23 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     /* Carry on from what is SERVING, not from the last round that finished. A round that made the
        model worse is not promoted, and chaining from it anyway would push that damage into every
        round after it. Starting from the serving adapter costs a bad round exactly one round. */
-    base: (serving && serving.adapter) || '',
-    coverage: { seen, total },
+    base: scope ? (scope.adapter || scope.parentAdapter || '') : ((serving && serving.adapter) || ''),
+    coverage: scope ? { seen: scope.seen || 0, total: scope.sighted || 0 } : { seen, total },
+    scope: scope ? { level: scope.level, name: scope.name || '', key: scope.key } : null,
   });
+
+  /*
+   * WHICH SCOPE, when the caller measured them (platforms.js): base until base has an adapter,
+   * then a platform or a role that holds a slice of sighted turns and has no adapter of its own,
+   * then whichever has the most untrained turns. A scope is chained from its own serving adapter,
+   * else its parent's, so a bad platform round costs the platform one round and base nothing.
+   */
+  if (Array.isArray(scopes) && scopes.length) {
+    const p = pickScope(scopes, sliceTurns);
+    if (p.pick) return go(p.why, p.pick);
+    if (fresh >= ENOUGH_NEW) return go(`${fresh} new usable run(s) since the last round`, scopes.find((s) => s.key === 'base') || null);
+    return no(`every scope is covered and only ${fresh} new usable run(s) have arrived — a round wants ${ENOUGH_NEW}`);
+  }
 
   if (total > 0 && seen < total) {
     return go(`${total - seen} of ${total} turns in the set have not been trained on yet`);
@@ -137,4 +151,35 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   return no(`the set is covered and only ${fresh} new usable run(s) have arrived — a round wants ${ENOUGH_NEW}`);
 }
 
-module.exports = { decide, covered, ENOUGH_NEW, SILENT_MS };
+/** Turns trained on within one scope, summed from what each round of it said it trained. */
+function coveredFor(rounds, key = 'base') {
+  let n = 0;
+  for (const r of rounds || []) {
+    const k = (r.scope && r.scope.key) || 'base';
+    if (k === key) n += Number(r.trained) || 0;
+  }
+  return n;
+}
+
+const label = (s) => (s.key === 'base' ? 'base' : `${s.name} (${s.level})`);
+
+/**
+ * The scope the next round trains. Pure; `scopes` rows carry sighted, seen, adapter, parentAdapter.
+ * @returns {{ pick: object|null, why: string }}
+ */
+function pickScope(scopes, sliceTurns = 0) {
+  const rows = (scopes || []).map((s) => ({ ...s, untrained: Math.max(0, (Number(s.sighted) || 0) - (Number(s.seen) || 0)) }));
+  const base = rows.find((s) => s.key === 'base');
+  if (base && !base.adapter && base.untrained > 0) {
+    return { pick: base, why: `base: ${base.untrained} of ${base.sighted} sighted turns not trained on yet, and nothing serves yet` };
+  }
+  const stand = rows.filter((s) => s.key !== 'base' && (Number(s.sighted) || 0) >= Math.max(1, sliceTurns));
+  const rank = (s) => (s.level === 'platform' ? 0 : 1);
+  const fresh = stand.filter((s) => !s.adapter && s.untrained > 0).sort((a, b) => rank(a) - rank(b) || b.sighted - a.sighted);
+  if (fresh.length) return { pick: fresh[0], why: `${label(fresh[0])}: ${fresh[0].sighted} sighted turns and no adapter of its own yet` };
+  const any = [base, ...stand].filter(Boolean).filter((s) => s.untrained > 0).sort((a, b) => b.untrained - a.untrained);
+  if (any.length) return { pick: any[0], why: `${label(any[0])}: ${any[0].untrained} of ${any[0].sighted} sighted turns not trained on yet` };
+  return { pick: null, why: 'every scope is covered' };
+}
+
+module.exports = { decide, covered, coveredFor, pickScope, ENOUGH_NEW, SILENT_MS };

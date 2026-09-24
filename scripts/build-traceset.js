@@ -28,6 +28,10 @@ const path = require('path');
 const traceset = require('../src/traceset');
 const preflight = require('../src/preflight');
 const { TOOLS } = require('../src/agent');
+const platforms = require('../src/trainScopes');
+const platformMap = require('../src/platformMap');
+/* The authored roles too, so a role file's site decides its platform here as it does live. */
+try { roles.useExternal(require('../src/userRoles')); } catch (e) { /* built-in roles only */ }
 const roles = require('../src/roles');
 
 const BASE = process.env.PROFILE_DIR || '/profiles';
@@ -134,7 +138,7 @@ function main() {
        looks complete. The training script reads whatever is there and cannot tell. */
     /* The same filter the live agent applies, so the prompt a turn was built with is the prompt the
        model will meet. */
-    fs.writeFileSync(`${p}.tmp`, traceset.toJsonl(turns, { tools: TOOLS, toolsFor: (r) => roles.toolsFor(r, TOOLS) }));
+    fs.writeFileSync(`${p}.tmp`, traceset.toJsonl(turns, { tools: TOOLS, toolsFor: (r) => roles.toolsFor(r, TOOLS), platformFor: (r) => platforms.platformOf(r), notesFor: (r) => platformMap.textFor(r) }));
     fs.renameSync(`${p}.tmp`, p);
     say(`${name}: ${turns.length} turns`);
   };

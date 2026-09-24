@@ -38,6 +38,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const platforms = require('./trainScopes');
 
 const DIR = () => path.join(process.env.PROFILE_DIR || '/profiles', 'training');
 const LEDGER = () => path.join(DIR(), 'slices.json');
@@ -121,7 +122,19 @@ function ledgerFor(builtAt) {
  * @param roundId  who it went to, for the record
  * @returns { jsonl, count, tools, remaining, exhausted }
  */
-function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}) {
+/*
+ * A SCOPE, WHEN THE ROUND HAS ONE (platforms.js). A platform round draws only that platform's
+ * lines; a role round only that role's; base draws everything. The ledger marks a line WITH the
+ * scope that took it, so the same line is drawn once per scope and never twice for one - the base
+ * adapter and the facebook adapter both learn from a Facebook turn, each in its own round.
+ */
+const keyOf = (scope) => (scope ? platforms.parse(scope).key : 'base');
+const marksOf = (v) => String(v == null ? '' : v).split(',').filter(Boolean);
+const takenBy = (mark, key) => marksOf(mark).some((m) => { const bar = m.indexOf('|'); return (bar < 0 ? 'base' : m.slice(0, bar)) === key; });
+const withMark = (mark, key, roundId) => [...marksOf(mark), `${key}|${roundId || 1}`].join(',');
+
+function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null } = {}) {
+  const key = keyOf(scope);
   const lines = [];
   const raw = fs.readFileSync(file, 'utf8');
   /* Split once; the file is large but this runs a handful of times a day, not per request. */
@@ -140,9 +153,13 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
 
   /* Group the ones still available, by tool. */
   const byTool = new Map();
+  let pool = 0;
+  let takenHere = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (taken[i]) continue;
     if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
+    if (scope && !platforms.matches(scope, lines[i])) continue;
+    pool++;
+    if (taken[i] && takenBy(taken[i], key)) { takenHere++; continue; }
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);
@@ -155,7 +172,7 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
   for (const idxs of byTool.values()) idxs.sort((a, b) => rankOf(gradeOf(lines[a])) - rankOf(gradeOf(lines[b])));
 
   const available = [...byTool.values()].reduce((n, v) => n + v.length, 0);
-  if (!available) return { jsonl: '', count: 0, tools: {}, remaining: 0, exhausted: true };
+  if (!available) return { jsonl: '', count: 0, tools: {}, remaining: 0, exhausted: true, scope: key, pool };
 
   /*
    * A quota per tool: its real share of what is left, but never fewer than FLOOR and never more
@@ -212,7 +229,7 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
     if (picked.length === before) break;
   }
 
-  for (const i of picked) taken[i] = roundId || 1;
+  for (const i of picked) taken[i] = withMark(taken[i], key, roundId);
   ledger.taken = taken;
   ledger.handed = Object.keys(taken).length;
   writeJson(LEDGER(), ledger);
@@ -224,7 +241,9 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
     jsonl: picked.map((i) => lines[i]).join('\n'),
     count: picked.length,
     tools,
-    remaining: lines.length - ledger.handed,
+    remaining: Math.max(0, pool - takenHere - picked.length),
+    scope: key,
+    pool,
     /* Nothing left means the set has been through once. The planner turns to new data at that
        point rather than starting over on turns the model has already seen. */
     exhausted: picked.length === 0,
@@ -232,9 +251,12 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN } = {}
 }
 
 /** How much of this set has been handed out — the honest basis for "is the corpus covered". */
-function progress(builtAt, total) {
+function progress(builtAt, total, scope = null) {
   const l = ledgerFor(builtAt);
-  return { handed: l.handed || 0, total: Number(total) || 0, builtAt };
+  const key = keyOf(scope);
+  let handed = 0;
+  for (const v of Object.values(l.taken || {})) if (takenBy(v, key)) handed++;
+  return { handed, total: Number(total) || 0, builtAt, scope: key };
 }
 
 /** Forget the marks and start the set again — an explicit act, never a side effect of a build. */
@@ -262,8 +284,9 @@ function reset(builtAt) { writeJson(LEDGER(), { builtAt, taken: {}, handed: 0 })
  * Unlike the training draw there is no ledger and no gold preference: an exam is not consumed, and
  * scoring only on the tidiest turns would flatter the model.
  */
-function exam({ file, want = 150 } = {}) {
+function exam({ file, want = 150, scope = null } = {}) {
   const NL = String.fromCharCode(10);
+  const key = keyOf(scope);
   const lines = fs.readFileSync(file, 'utf8').split(NL).filter((l) => l.trim());
 
   /* The paper is sighted too, for the same reason as the slice: a blind question measures guessing. */
@@ -271,17 +294,21 @@ function exam({ file, want = 150 } = {}) {
   const byTool = new Map();
   for (let i = 0; i < lines.length; i++) {
     if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
+    if (scope && !platforms.matches(scope, lines[i])) continue;
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);
     byTool.get(tool).push(i);
   }
-  if (!byTool.size) return { jsonl: '', count: 0, tools: {} };
+  if (!byTool.size) return { jsonl: '', count: 0, tools: {}, scope: key };
 
   /* A seeded shuffle, so the same set always produces the same exam. Math.random here would mean
      two rounds an hour apart were marked on different papers and the difference reported as
      progress. */
+  /* Base keeps the seed it always had; every other scope gets its own, so a platform's paper is
+     as fixed as base's and never the same rows in the same order. */
   let seed = 7;
+  if (key !== 'base') for (const c of key) seed = (seed * 31 + c.charCodeAt(0)) % 2147483647;
   const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
   const tools = [...byTool.keys()].sort();
   for (const tl of tools) {
@@ -289,7 +316,8 @@ function exam({ file, want = 150 } = {}) {
     for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   }
 
-  const total = lines.length;
+  /* Shares over the scope's own pool, not the whole file: a platform's paper is shaped like the platform. */
+  const total = [...byTool.values()].reduce((n, v) => n + v.length, 0);
   const cap = Math.max(FLOOR, Math.floor(want * CAP_SHARE));
   const need = new Map();
   for (const tl of tools) {
@@ -325,7 +353,7 @@ function exam({ file, want = 150 } = {}) {
 
   const counted = {};
   for (const i of picked) { const tl = toolOf(lines[i]); counted[tl] = (counted[tl] || 0) + 1; }
-  return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted };
+  return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted, scope: key };
 }
 
-module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
+module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };

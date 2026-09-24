@@ -15,13 +15,15 @@
 const fs = require('fs');
 const { toolOf } = require('./slice');
 
+const platforms = require('./trainScopes');
+
 const SIGHTED = '"sighted":true';
 const TIER = /"tier":"(gold|silver|bronze|void)"/;
 const JOB = /"jobId":"([^"]+)"/;
 
 /** One pass over a jsonl set. */
 function scan(path) {
-  const out = { total: 0, sighted: 0, perTool: {}, tiers: { gold: 0, silver: 0, bronze: 0, void: 0 }, sightedTiers: { gold: 0, silver: 0, bronze: 0, void: 0 }, jobIds: new Set() };
+  const out = { total: 0, sighted: 0, perTool: {}, perPlatform: {}, perRole: {}, tiers: { gold: 0, silver: 0, bronze: 0, void: 0 }, sightedTiers: { gold: 0, silver: 0, bronze: 0, void: 0 }, jobIds: new Set() };
   let text = '';
   try { text = fs.readFileSync(path, 'utf8'); } catch { return out; }
   for (const line of text.split('\n')) {
@@ -34,6 +36,13 @@ function scan(path) {
     if (job) out.jobIds.add(job);
     const row = out.perTool[tool] || (out.perTool[tool] = { all: 0, sighted: 0, gold: 0 });
     row.all++;
+    /* Per platform and per role too - the scopes a round can train (platforms.js). */
+    const role = platforms.roleOfLine(line);
+    const plat = platforms.platformOfLine(line);
+    const pr = out.perRole[role] || (out.perRole[role] = { all: 0, sighted: 0, platform: plat });
+    const pp = out.perPlatform[plat] || (out.perPlatform[plat] = { all: 0, sighted: 0 });
+    pr.all++; pp.all++;
+    if (sighted) { pr.sighted++; pp.sighted++; }
     out.tiers[tier] = (out.tiers[tier] || 0) + 1;
     if (sighted) {
       out.sighted++;

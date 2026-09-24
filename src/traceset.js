@@ -239,6 +239,25 @@ function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHis
 
 /* ── the set ────────────────────────────────────────────────────────────────────────────────── */
 
+/*
+ * THE EXAM IS CUT PER ROLE, BY JOB.
+ *
+ * One hash over every job put fifteen percent of the whole corpus aside and left a role with six
+ * jobs no paper at all - measured on the set of 2026-09-24: the seo roles had four exam turns
+ * between them and the gig roles none - so a platform round could train and never be marked.
+ * Each role now gives its own share of its own jobs, in a fixed order, so a paper exists for
+ * every role with four jobs or more and the same jobs sit on the same side on every rebuild.
+ */
+function splitByRole(kept, evalFraction, train, evalSet) {
+  const byRole = new Map();
+  for (const k of kept) { if (!byRole.has(k.role)) byRole.set(k.role, []); byRole.get(k.role).push(k); }
+  for (const rows of byRole.values()) {
+    rows.sort((a, b) => hash(a.job.id) - hash(b.job.id));
+    const n = evalFraction > 0 && rows.length >= 4 ? Math.max(1, Math.round(rows.length * evalFraction)) : 0;
+    rows.forEach((k, i) => (i < n ? evalSet : train).push({ job: k.job, outcome: k.outcome }));
+  }
+}
+
 /** Deterministic hash, so the same job lands in the same split on every rebuild. */
 function hash(s) {
   let h = 2166136261;
@@ -286,6 +305,7 @@ function build(jobs, deps = {}, opts = {}) {
   const evalSet = [];
   const reject = [];
   const perRole = {};
+  const kept = [];
   for (const { job, outcome } of labelled) {
     /*
      * VOID IS DROPPED ON THE FLOOR, in both directions.
@@ -308,8 +328,9 @@ function build(jobs, deps = {}, opts = {}) {
     const role = String(job.role || 'general');
     perRole[role] = (perRole[role] || 0) + 1;
     if (perRole[role] > perRoleCap) continue;
-    (hash(job.id) < evalFraction ? evalSet : train).push({ job, outcome });
+    kept.push({ job, outcome, role });
   }
+  splitByRole(kept, evalFraction, train, evalSet);
 
   /* Why each dropped turn was dropped, so the exclusion can be checked rather than trusted. */
   const dropped = {};
@@ -500,7 +521,8 @@ function build(jobs, deps = {}, opts = {}) {
  * requiring it from the builder makes a cycle; handing the catalogue in also lets a test build a
  * set without loading the entire agent.
  */
-function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}) {
+function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null, platformFor = null, notesFor = null } = {}) {
+  const platformOf = platformFor || require('./trainScopes').platformOf;
   /* Built once per role rather than once per turn: the catalogue is identical for every turn of a
      role and there are tens of thousands of turns. */
   const cache = new Map();
@@ -519,15 +541,15 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null } = {}
        * would be the same train-and-serve mismatch as omitting it, one layer down, and it teaches
        * the model to consider tools that will not be on offer when it runs.
        */
-      { role: 'system', content: localPrompt.systemFor({ role: t.role, site: t.site, tools: forRole(t.role), playbook: playbookFor ? playbookFor(t.role) : '' }) },
+      { role: 'system', content: localPrompt.systemFor({ role: t.role, site: t.site, tools: forRole(t.role), playbook: playbookFor ? playbookFor(t.role) : '', notes: notesFor ? notesFor(t.role) : '' }) },
       { role: 'user', content: localPrompt.userFor({ goal: t.goal, observed: t.observed }) },
       { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: t.action.args }) },
     ],
     /* `sighted`: the decision had a page or a numbered list to read - the same fact the manifest
        counts as turnsWithContent, written per turn so coverage can be read per tool off the file. */
-    meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, at: t.at,
+    meta: { jobId: t.jobId, tier: t.tier, grade: t.grade, verified: t.verified, role: t.role, platform: platformOf(t.role), at: t.at,
       sighted: (t.observed || []).some((o) => !!(o && (o.content || o.marks))), step: t.step || 'unknown', ...(t.reason ? { reason: t.reason } : {}) },
   })).join('\n');
 }
 
-module.exports = { build, turnsOf, toJsonl, scrubText, scrubValue, mislabelled, stepVerdict, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
+module.exports = { build, turnsOf, toJsonl, splitByRole, scrubText, scrubValue, mislabelled, stepVerdict, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };

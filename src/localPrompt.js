@@ -90,7 +90,7 @@ function catalogue(tools) {
  * hand and change between rounds; behaviour that lives in the prompt can be corrected this
  * afternoon, while behaviour baked into an adapter waits for a night of training.
  */
-function systemFor({ role = 'general', site = '', tools = [], playbook = '' } = {}) {
+function systemFor({ role = 'general', site = '', tools = [], playbook = '', notes = '' } = {}) {
   const who = `You are Ghost Browser working as ${role}${site ? ` in the ${site} profile` : ''}.`;
   const lines = [
     who,
@@ -106,6 +106,8 @@ function systemFor({ role = 'general', site = '', tools = [], playbook = '' } = 
     '{"tool":"<name>","args":{...}}',
   ];
   if (playbook) lines.push('', 'FOR THIS ROLE', String(playbook).trim());
+  /* The platform map (platformMap.js): where things are on this platform, as measured. */
+  if (notes) lines.push('', String(notes).trim());
   return lines.join('\n');
 }
 
