@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { decide, vet, gapsFrom, askFor, take, push, stop, setOn, state, busyFrom, WALK_SILENT_MS, CAP_PER_HOUR, QUEUE_MAX } from '../src/harvest.js';
+import { decide, vet, gapsFrom, askFor, take, push, stop, setOn, state, busyFrom, liveFrom, WALK_SILENT_MS, CAP_PER_HOUR, QUEUE_MAX, PARALLEL } from '../src/harvest.js';
 
 let dir;
 beforeEach(() => {
@@ -281,5 +281,29 @@ describe('the queue as a record of what was collected', () => {
   it('starts switched off, because nothing should begin spending on its own', () => {
     expect(state({}).on).toBe(false);
     expect(state({}).plan.run).toBe(false);
+  });
+});
+
+describe('several walks at once', () => {
+  const at = (ms) => new Date(ms).toISOString();
+  const now = Date.UTC(2026, 8, 24, 8, 0, 0);
+  const walk = (profile, ago) => ({ status: 'running', profile, createdAt: at(now - ago), steps: [{ at: at(now - ago) }] });
+
+  it('counts the live walks and names the profiles they hold', () => {
+    const l = liveFrom([walk('default', 1000), walk('hn', 2000), walk('livetest', 40 * 60000)], now);
+    expect(l.count).toBe(2);
+    expect(l.profiles.sort()).toEqual(['default', 'hn']);
+  });
+
+  it('runs while there is width left, and waits at the width', () => {
+    const queue = ['Find the ten cheapest bakfiets listings on marktplaats.nl and record each'];
+    expect(decide({ on: true, live: PARALLEL - 1, queue }).run).toBe(true);
+    const d = decide({ on: true, live: PARALLEL, queue });
+    expect(d.run).toBe(false);
+    expect(d.why).toMatch(/already running/);
+  });
+
+  it('scales the hourly guard to the width, so width is not throttled by the old cap', () => {
+    expect(CAP_PER_HOUR).toBe(12 * PARALLEL);
   });
 });
