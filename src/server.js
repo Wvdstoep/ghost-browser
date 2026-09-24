@@ -1640,10 +1640,29 @@ app.post('/v1/training/rounds/:id/end', authed, (req, res) => {
  * its own baseline on the frozen evaluation split, so a worse adapter cannot reach production on
  * the strength of being the most recent thing to finish.
  */
-app.post('/v1/training/rounds/:id/promote', authed, (req, res) => {
+app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
   const r = training.promote(req.params.id);
   if (r.error) return res.status(400).json(r);
-  res.json(r);
+  /*
+   * A PROMOTION IS ONLY A POINTER UNTIL SOMETHING SERVES IT. The adapter lives on the laptop
+   * that trained it, so that laptop is asked to merge, convert and upload it (export_model.py);
+   * when the file arrives and the sidecar has it, the tag becomes the served model - in the
+   * shadow first, never straight into driving. The ask is best-effort and says what happened.
+   */
+  let exportAsk = { asked: false, why: '' };
+  try {
+    const round = training.allRounds().find((x) => x.id === req.params.id) || {};
+    const tag = `gb-general-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
+    const dev = (deviceHub.deviceList() || []).find((d) => d.online && String(d.name || '').toLowerCase() === String(round.device || '').toLowerCase());
+    if (!round.adapter) exportAsk.why = 'the round recorded no adapter path';
+    else if (!dev) exportAsk.why = `${round.device || 'the machine that trained it'} is not online to export it`;
+    else {
+      const out = await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_export', body: { adapter: round.adapter, tag, base: round.base || '', roundId: round.id } }, 30000);
+      exportAsk = { asked: !!(out && out.started), why: out && out.error ? out.error : '', tag, device: dev.name };
+    }
+    log.info(`training: promoted ${round.id}; export ${exportAsk.asked ? `asked of ${dev && dev.name} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+  } catch (e) { exportAsk = { asked: false, why: e.message }; }
+  res.json({ ...r, export: exportAsk });
 });
 
 /* ── THE LOOP STARTS ITSELF ────────────────────────────────────────────────────────────────────
@@ -1968,6 +1987,14 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
     fsx.writeFileSync(p, JSON.stringify(all, null, 1));
   } catch (e) { /* the list is a courtesy */ }
   log.info(`training: ${tag} is now a model on the sidecar (${Math.round(stat.size / 1e6)} MB)`);
+  /* Serve it - in the shadow, where it can only be measured. A person moves it to canary. */
+  try {
+    const before = settingsStore.read();
+    const mode = before.studentMode === 'off' ? 'shadow' : before.studentMode;
+    settingsStore.write({ ...before, studentModel: tag, studentMode: mode });
+    if (before.studentModel !== tag) shadow.reset(tag);
+    log.info(`training: serving ${tag} in ${mode}`);
+  } catch (e) { log.warn(`training: could not switch serving to ${tag}: ${e.message}`); }
   return { ...record, server: text.slice(0, 200) };
 }
 app.post('/v1/training/models/:tag/create', authed, async (req, res) => {
@@ -2429,7 +2456,7 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
  * and the setup is only automatic on the machine that happened to be built first.
  */
 app.get('/v1/training/script/:name', authed, (req, res) => {
-  const ok = ['train_round.py', 'evaluate.py'];
+  const ok = ['train_round.py', 'evaluate.py', 'export_model.py'];
   if (!ok.includes(req.params.name)) return res.status(404).json({ error: 'no such script' });
   const p = require('path').join(__dirname, '..', 'training', req.params.name);
   if (!require('fs').existsSync(p)) return res.status(404).json({ error: 'not in this build' });
