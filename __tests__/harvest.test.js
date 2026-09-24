@@ -307,3 +307,30 @@ describe('several walks at once', () => {
     expect(CAP_PER_HOUR).toBe(12 * PARALLEL);
   });
 });
+
+describe('a spent allowance', () => {
+  const queue = ['Find the ten cheapest bakfiets listings on marktplaats.nl and record each'];
+
+  it('waits while no key is usable, and says so without switching off', () => {
+    const d = decide({ on: true, queue, keys: { total: 2, usable: 0 } });
+    expect(d.run).toBe(false);
+    expect(d.why).toMatch(/allowance is spent/);
+    expect(d.why).toMatch(/resumes by itself/);
+  });
+
+  it('runs as soon as one key is usable again', () => {
+    expect(decide({ on: true, queue, keys: { total: 2, usable: 1 } }).run).toBe(true);
+  });
+
+  it('does not mistake an unconfigured ring for a spent one', () => {
+    expect(decide({ on: true, queue, keys: { total: 0, usable: 0 } }).run).toBe(true);
+    expect(decide({ on: true, queue, keys: null }).run).toBe(true);
+  });
+
+  it('carries the ring on the state so the screen can say it', () => {
+    setOn(true);
+    const s = state({ keys: { total: 2, usable: 0 } });
+    expect(s.keys).toEqual({ total: 2, usable: 0 });
+    expect(s.plan.run).toBe(false);
+  });
+});

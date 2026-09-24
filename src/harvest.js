@@ -297,11 +297,25 @@ function busyFrom(all, now = Date.now(), silentMs = WALK_SILENT_MS) {
  * WHETHER TO START A RUN RIGHT NOW. A pure function of what is known, so it is testable and so the
  * screen and the loop can never disagree about the reason.
  */
-function decide({ on: isOn = false, busy = false, live = 0, parallel = PARALLEL, queue = [], recent = [], capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
+function decide({ on: isOn = false, busy = false, live = 0, parallel = PARALLEL, queue = [], recent = [], capPerHour = CAP_PER_HOUR, keys = null, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
   if (!isOn) return no('collection is switched off');
   /* The browser is one browser. Two walks in a profile is the thing startWalk already waits out,
      and queueing behind it here would only move the wait somewhere less visible. */
+  /*
+   * NO WALK ON A SPENT ALLOWANCE.
+   *
+   * When every key in the ring is resting, a walk fails on its first call, ends void, and the
+   * tick starts another one a minute later - a night of that is a list of forty failed runs and
+   * not one turn. Nothing wrong reaches the set (a thrown call is dropped by the builder), but
+   * the screen fills with failures that look like the tool is broken. So the collector waits
+   * while the ring reports nothing usable, and resumes on its own: a spent key rests for half
+   * an hour and is then tried again, which is how the walks find out the allowance came back.
+   * The switch stays ON - this is waiting, not stopping.
+   */
+  if (keys && keys.total > 0 && keys.usable === 0) {
+    return no(`the model allowance is spent (0 of ${keys.total} keys usable) — waiting, resumes by itself when a key works again`);
+  }
   if (busy) return no('a run is using the browser');
   if (live >= parallel) return no(`${live} walk(s) already running, and the width is ${parallel}`);
   const inHour = (recent || []).filter((t) => now - t < 3600000).length;
@@ -361,9 +375,9 @@ function stop(why) {
 }
 
 /** Everything the screen needs, in one read. */
-function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_PER_HOUR, now = Date.now() } = {}) {
+function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_PER_HOUR, keys = null, now = Date.now() } = {}) {
   const s = load();
-  const plan = decide({ on: s.on, busy, live, parallel, queue: s.queue, recent: s.recent, capPerHour, now });
+  const plan = decide({ on: s.on, busy, live, parallel, queue: s.queue, recent: s.recent, capPerHour, keys, now });
   return {
     on: !!s.on,
     queued: (s.queue || []).length,
@@ -375,6 +389,8 @@ function state({ busy = false, live = 0, parallel = PARALLEL, capPerHour = CAP_P
     collected: (s.history || []).length,
     aiming: s.aiming || [],
     stoppedBecause: s.stoppedBecause || '',
+    /* The ring, so the screen can say 'waiting on the allowance' instead of 'on' with nothing happening. */
+    keys: keys ? { total: Number(keys.total) || 0, usable: Number(keys.usable) || 0 } : null,
     plan,
     recent: (s.history || []).slice(-8).reverse(),
   };

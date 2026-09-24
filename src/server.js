@@ -1980,7 +1980,7 @@ setInterval(() => {
       const PUBLIC = String(process.env.HARVEST_PROFILES || 'default,ghostbrowser,livetest,hn').split(',').map((x) => x.trim()).filter(Boolean);
       const alive = harvest.liveFrom(jobs.jobs.values());
       const free = PUBLIC.filter((p) => !alive.profiles.includes(p) && !profileBusy(p));
-      const plan = harvest.decide({ on: true, live: alive.count, queue: s.queue, recent: s.recent });
+      const plan = harvest.decide({ on: true, live: alive.count, queue: s.queue, recent: s.recent, keys: agent.keyState(settingsStore.read()) });
       if (!plan.run) return;
       if (!free.length) return;
       /*
@@ -2057,17 +2057,17 @@ function harvestRuns(limit = 40) {
 
 /** The toggle. Off by default, and nothing here starts spending on its own. */
 app.get('/v1/harvest/state', authed, (_req, res) => {
-  try { res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }), ...harvestRuns(40) }); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/harvest/on', authed, (req, res) => {
   const v = harvest.setOn(!!(req.body || {}).on);
   log.info(`training: collecting data by itself is ${v ? 'ON' : 'off'}`);
-  res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }), ...harvestRuns(40) });
+  res.json({ ...harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }), ...harvestRuns(40) });
 });
 /** Ask for a batch now — the owner wanting to see what it would choose, without waiting a minute. */
 app.post('/v1/harvest/refill', authed, async (req, res) => {
   const out = await refillPrompts((req.body || {}).want);
-  res.json({ ...out, state: harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count }) });
+  res.json({ ...out, state: harvest.state({ busy: false, live: harvest.liveFrom(jobs.jobs.values()).count, keys: agent.keyState(settingsStore.read()) }) });
 });
 
 /** The owner allowing, or forbidding, one machine to train. Default is forbidden. */
