@@ -2098,6 +2098,7 @@ function sizingNow(share = 1) {
 function scopesNow({ serving = null } = {}) {
   const pathx = require('path');
   const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
+  const fsx = require('fs');
   const train = coverage.cached(pathx.join(base, 'train.jsonl'));
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const all = training.allRounds();
@@ -2112,10 +2113,22 @@ function scopesNow({ serving = null } = {}) {
     if (name === 'general') continue;
     rows.push({ level: 'role', name, key: `role:${name}`, platform: v.platform || trainScopes.platformOf(name), sighted: v.sighted, all: v.all, exam: ((exam.perRole || {})[name] || {}).sighted || 0 });
   }
+  /* What the draw could still give each scope, from one pass over the set (slice.availability). */
+  let avail = {};
+  try {
+    let builtAt = '';
+    try { builtAt = JSON.parse(fsx.readFileSync(pathx.join(base, 'manifest.json'), 'utf8')).builtAt || ''; } catch (e) { builtAt = ''; }
+    avail = require('./slice').availability({ file: pathx.join(base, 'train.jsonl'), builtAt, scopes: rows.map((r) => r.key) });
+  } catch (e) { avail = {}; }
   for (const r of rows) {
     /* Learned - trained on by an adapter that passed the gates - not merely trained on. */
     r.seen = require('./learned').count(r.key);
     r.attempted = trainingPlan.coveredFor(all, r.key);
+    const a = avail[r.key];
+    if (a) { r.pool = a.pool; r.free = a.free; r.taken = a.taken; }
+    /* The newest measured round of this scope was refused at the gates: not retried on the same data. */
+    const newest = all.find((x) => ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result && !x.merge || (x.merge && ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result));
+    r.refused = !!(newest && newest.discarded && !newest.promoted);
     const own = training.adapterFor(r);
     r.adapter = own.from === r.key ? own.adapter : '';
     /* No promoted adapter of its own: the best sound unpromoted one is the next start. */
