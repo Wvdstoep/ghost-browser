@@ -29,6 +29,8 @@ const ENOUGH_NEW = 200;
 /* What the trainer trains at from nothing. The hub sends a smaller rate to a round that continues
    from an adapter (server.js CONTINUE_LR); this is the other side of that comparison. */
 const FRESH_LR = 2e-4;
+/* What the exam lets the student say. Mirrors train_round.ANSWER_TOKENS; see evaluate.py --max-new. */
+const ANSWER_TOKENS = 320;
 
 /**
  * Does a refusal still bar this scope?
@@ -40,11 +42,14 @@ const FRESH_LR = 2e-4;
  *    nor the paper it was measured against are the ones it failed on;
  *  - the method: the learning rate the hub would send now is not the one in that round's recipe.
  *    The first platform round was refused for continuing from base at the full rate, which this
- *    hub no longer does, and that refusal should not outlive the bug that caused it.
+ *    hub no longer does, and that refusal should not outlive the bug that caused it;
+ *  - the measurement: the exam's answer budget. A round refused on an exam that cut every answer
+ *    off at 48 tokens was refused on a measurement this hub no longer makes. A round from before
+ *    the budget was recorded carries none, which says the same thing.
  *
  * Anything else - same set, same rate - stays refused, which is the whole point of the rule.
  */
-function refusalStands({ round = null, builtAt = '', nextLr = 0 } = {}) {
+function refusalStands({ round = null, builtAt = '', nextLr = 0, nextAnswer = 0 } = {}) {
   if (!round || !round.discarded || round.promoted) return false;
   const ranAt = Date.parse(round.startedAt || '') || 0;
   const setAt = Date.parse(builtAt || '') || 0;
@@ -52,6 +57,9 @@ function refusalStands({ round = null, builtAt = '', nextLr = 0 } = {}) {
   const was = Number(round.recipe && round.recipe.lr) || 0;
   const now = Number(nextLr) || 0;
   if (was && now && Math.abs(was - now) > now * 0.05) return false;
+  const wasAnswer = Number(round.recipe && round.recipe.answerTokens) || 0;
+  const nowAnswer = Number(nextAnswer) || 0;
+  if (nowAnswer && wasAnswer !== nowAnswer) return false;
   return true;
 }
 
@@ -376,4 +384,5 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
 
 module.exports = {
   refusalStands,
-  FRESH_LR, MERGE_TRIES, SCOPE_FLOOR, PAPER_FLOOR, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
+  FRESH_LR,
+  ANSWER_TOKENS, MERGE_TRIES, SCOPE_FLOOR, PAPER_FLOOR, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
