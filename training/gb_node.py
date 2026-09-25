@@ -115,7 +115,7 @@ def caps():
         "trainerHome": HOME,
         "trainerMissing": [] if g else ["no GPU in this session"],
         "trainerCanSetUp": False,
-        "features": ["train_round", "train_stop", "train_status", "train_export"],
+        "features": ["train_round", "train_stop", "train_status", "train_export", "train_log"],
         "gpu": g,
         "node": KIND,
     }
@@ -141,6 +141,15 @@ def status():
     p = ROUND["proc"]
     return {"ready": bool(gpu_name()), "freeGb": free_gb(), "home": HOME, "gpu": gpu_name(),
             "missing": caps()["trainerMissing"], "running": bool(p and p.poll() is None), "node": KIND}
+
+
+def log_tail(lines=80):
+    try:
+        with open(os.path.join(HOME, "last-round.log"), "r", encoding="utf-8", errors="replace") as fh:
+            data = fh.read()
+        return "\n".join(data.splitlines()[-int(lines):])
+    except Exception as e:
+        return f"(no round log: {e})"
 
 
 def round_id_from_log():
@@ -170,8 +179,13 @@ def watch(p):
         r = next((x for x in st.get("rounds", []) if x.get("id") == rid), None)
         if not r or r.get("status") != "running":
             return
-        # The last checkpoint is on the hub already (uploaded as it went); the retry continues from it.
-        req("POST", f"/v1/training/rounds/{rid}/end", {"status": "failed", "why": f"the trainer process died on this node with exit code {code}", "adapter": f"hub:{rid}-last"})
+        # The last checkpoint is on the hub when one was uploaded as it went; then the retry continues from it.
+        tail = log_tail(30)
+        uploaded = "checkpoint handed to the hub" in tail
+        last = [ln for ln in tail.splitlines() if ln.strip()][-6:]
+        req("POST", f"/v1/training/rounds/{rid}/end", {"status": "failed",
+            "why": (f"the trainer process died on this node with exit code {code}: " + " | ".join(last))[:400],
+            **({"adapter": f"hub:{rid}-last"} if uploaded else {})})
         say(f"round {rid} died with exit code {code} — reported to the hub")
     except Exception as e:
         print(f"watch: {e}", flush=True)
@@ -193,10 +207,28 @@ def run_round(body):
         cmd += ["--adapter", base]
     env = dict(os.environ, GB_HUB=HUB, GB_TOKEN=TOKEN, GB_DEVICE=NAME, GB_CKPT_HUB="1",
                PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    # The trainer's lines go to the round log AND to this process's stdout, so a session's own
+    # log view (Modal's Logs tab) shows the training as it goes and the traceback when it dies.
     logf = open(os.path.join(HOME, "last-round.log"), "wb")
-    ROUND["proc"] = subprocess.Popen(cmd, cwd=HOME, stdout=logf, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+    ROUND["proc"] = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
     ROUND["started"] = time.time()
     ROUND["log"] = logf
+
+    def tee(proc, fh):
+        try:
+            for line in iter(proc.stdout.readline, b""):
+                fh.write(line)
+                fh.flush()
+                sys.stdout.write(line.decode("utf-8", "replace"))
+                sys.stdout.flush()
+        except Exception:
+            pass
+        finally:
+            try:
+                fh.close()
+            except Exception:
+                pass
+    threading.Thread(target=tee, args=(ROUND["proc"], logf), daemon=True).start()
     LAST_WORK["at"] = time.time()
     threading.Thread(target=watch, args=(ROUND["proc"],), daemon=True).start()
     say(f"started a training round ({body.get('hours', 6)}h) on {gpu_name() or 'no GPU'}")
@@ -248,6 +280,8 @@ def exec_path(path, body):
         return stop_round(body)
     if path == "/v1/train_export":
         return export_model(body)
+    if path == "/v1/train_log":
+        return {"lines": log_tail(int(body.get("lines", 80) or 80))}
     if path == "/v1/info_device":
         return {"platform": "cluster", "name": NAME, "node": KIND, "gpu": gpu_name()}
     if path == "/v1/train_setup":

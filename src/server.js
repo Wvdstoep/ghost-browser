@@ -3329,6 +3329,13 @@ app.post('/v1/training/trainers/:deviceId', authed, (req, res) => {
  * in the first place. It refuses on a full disk rather than failing half way through a
  * two-gigabyte download, and it reports what it is doing as it goes.
  */
+/* The tail of a machine's round log, from the machine (a node answers /v1/train_log; a laptop app that has it too). */
+app.get('/v1/training/trainers/:deviceId/log', authed, async (req, res) => {
+  try {
+    const out = await deviceHub.runCommand(req.params.deviceId, { path: '/v1/train_log', body: { lines: Math.min(400, Number(req.query.lines) || 80) } }, 20000);
+    res.json({ ok: true, lines: (out && out.lines) || '', error: out && out.error ? out.error : '' });
+  } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
+});
 app.post('/v1/training/trainers/:deviceId/setup', authed, async (req, res) => {
   try {
     const out = await deviceHub.runCommand(req.params.deviceId, { path: '/v1/train_setup', body: {} }, 30000);
