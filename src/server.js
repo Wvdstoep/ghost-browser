@@ -3173,9 +3173,11 @@ app.get('/v1/training/slice', authed, (req, res) => {
     const s = require('./slice').draw({
       file, builtAt: manifest.builtAt,
       want: (() => { const asked = Math.min(5000, Math.max(50, Number(req.query.turns) || 700)); const p = training.peekPending(); return p && p.turns > 0 && !p.merge ? Math.min(asked, Math.max(20, p.turns)) : asked; })(),
-      roundId: String(req.query.round || ''),
+      /* The round's id once registered; before that, the pending share of the machine asking, so
+         the ledger says which share of which batch holds each line. */
+      roundId: String(req.query.round || '') || (() => { const p = training.peekPending(String(req.query.device || '')); return p ? `${p.batch || 'single'}@${p.device}` : ''; })(),
       /* The round's scope, or the pending dispatch's when the round is not registered yet. */
-      scope: training.scopeOfRound(String(req.query.round || '')),
+      scope: training.scopeOfRound(String(req.query.round || ''), String(req.query.device || '')),
     });
     res.set('X-Slice-Count', String(s.count));
     res.set('X-Slice-Remaining', String(s.remaining));
@@ -3204,7 +3206,7 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
      * which is 15% of what a round trains on, did not appear at all. A round could fix its entire
      * tool distribution and be marked almost solely on one research tool.
      */
-    const s = require('./slice').exam({ file, want, scope: training.scopeOfRound(String(req.query.round || '')) });
+    const s = require('./slice').exam({ file, want, scope: training.scopeOfRound(String(req.query.round || ''), String(req.query.device || '')) });
     res.set('X-Exam-Count', String(s.count));
     res.set('X-Exam-Scope', String(s.scope || 'base'));
     /* The paper's identity: the set it came from. A rebuilt set is a new paper and a new baseline. */

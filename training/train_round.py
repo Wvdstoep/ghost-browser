@@ -650,10 +650,11 @@ def main():
         # A sighted turn is ~2,700 tokens and takes about 100 s a pass on this CPU - forty an hour, not
         # a hundred. The controller's gate uses the same figure.
         want = args.slice or (10000 if use_cuda else max(120, int(args.hours * 40 / args.epochs)))
-        got = hub.fetch(f"/v1/training/slice?turns={want}", train_path)
+        who = urllib.parse.quote(hub.device or "")
+        got = hub.fetch(f"/v1/training/slice?turns={want}&device={who}", train_path)
         if got > 0:
             print(f"the controller handed over {got} turns", flush=True)
-        ev = hub.fetch(f"/v1/training/evalslice?turns={args.eval_turns}", eval_path)
+        ev = hub.fetch(f"/v1/training/evalslice?turns={args.eval_turns}&device={who}", eval_path)
         if ev > 0:
             print(f"and {ev} turns to score on", flush=True)
         paper_id = hub.last_header("x-exam-paper")
