@@ -265,3 +265,36 @@ describe('a GPU node is cut for a GPU until it has spoken', () => {
     expect(sizing.secPerTurnFor('Laptop', [], { gpu: false })).toBe(sizing.DEFAULT_SEC);
   });
 });
+
+describe('which scope deserves an adapter', () => {
+  const { pickScope, SCOPE_FLOOR, PAPER_FLOOR } = require('../src/trainingPlan');
+  const base = { key: 'base', level: 'base', name: '', sighted: 4110, exam: 602, free: 0, adapter: 'hub:r-base' };
+  const rows = [
+    base,
+    { key: 'platform:google', level: 'platform', name: 'google', sighted: 2491, exam: 355, free: 2491, adapter: '' },
+    { key: 'platform:youtube', level: 'platform', name: 'youtube', sighted: 54, exam: 6, free: 54, adapter: '' },
+    { key: 'platform:studio', level: 'platform', name: 'studio', sighted: 487, exam: 18, free: 487, adapter: '' },
+    { key: 'role:research.reviews', level: 'role', name: 'research.reviews', sighted: 1120, exam: 201, free: 1120, adapter: '' },
+    { key: 'role:reddit-draft-forhire-poster-v7', level: 'role', name: 'x', sighted: 19, exam: 0, free: 19, adapter: '' },
+  ];
+  it('picks a platform on its own size and paper, whatever the machine could chew', () => {
+    /* A GPU slice of 4,400 turns used to exclude every scope in the map. */
+    const p = pickScope(rows, 4400);
+    expect(p.pick.key).toBe('platform:google');
+    expect(pickScope(rows, 55).pick.key).toBe('platform:google');
+  });
+  it('a scope whose paper is too small to believe is never trained', () => {
+    const thin = rows.filter((s) => s.key !== 'platform:google' && s.key !== 'role:research.reviews');
+    expect(pickScope(thin, 55).pick).toBe(null);
+    expect(PAPER_FLOOR).toBe(30);
+    expect(SCOPE_FLOOR).toBe(100);
+  });
+  it('platforms come before roles, and the biggest first', () => {
+    const p = pickScope(rows.filter((s) => s.key !== 'platform:google'), 55);
+    expect(p.pick.key).toBe('role:research.reviews');
+  });
+  it('a scope that already has its own adapter is not retrained while another has none', () => {
+    const served = rows.map((s) => (s.key === 'platform:google' ? { ...s, adapter: 'hub:r-g', free: 0 } : s));
+    expect(pickScope(served, 55).pick.key).toBe('role:research.reviews');
+  });
+});

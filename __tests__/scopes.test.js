@@ -167,7 +167,7 @@ describe('the exam is cut per role, by job', () => {
 describe('which scope the next round trains', () => {
   const scopes = () => ([
     { level: 'base', name: '', key: 'base', sighted: 1700, seen: 0, adapter: '', parentAdapter: '' },
-    { level: 'platform', name: 'facebook', key: 'platform:facebook', sighted: 100, seen: 0, adapter: '', parentAdapter: '' },
+    { level: 'platform', name: 'facebook', key: 'platform:facebook', sighted: 60, seen: 0, adapter: '', parentAdapter: '' },
     { level: 'platform', name: 'google', key: 'platform:google', sighted: 1500, seen: 0, adapter: '', parentAdapter: '' },
     { level: 'role', name: 'research.reviews', key: 'role:research.reviews', sighted: 989, seen: 0, adapter: '', parentAdapter: '' },
   ]);
@@ -176,11 +176,11 @@ describe('which scope the next round trains', () => {
     expect(p.pick.key).toBe('base');
     expect(p.why).toContain('nothing serves yet');
   });
-  it('then the largest platform that holds a slice and has no adapter — a thin one waits', () => {
+  it('then the largest platform with turns of its own and no adapter — a thin one waits', () => {
     const s = scopes(); s[0].adapter = 'base-v1'; s[0].seen = 1700;
     const p = pickScope(s, 120);
     expect(p.pick.key).toBe('platform:google');
-    /* facebook has 100 sighted turns and a slice is 120: it rides with base for now. */
+    /* facebook has 60 sighted turns and a scope wants SCOPE_FLOOR of them: it rides with base. */
     const s2 = scopes(); s2[0].adapter = 'base-v1'; s2[0].seen = 1700; s2[2].adapter = 'g-v1'; s2[2].seen = 1500; s2[3].adapter = 'r-v1'; s2[3].seen = 989;
     const p2 = pickScope(s2, 120);
     expect(p2.pick).toBe(null);
@@ -201,7 +201,7 @@ describe('which scope the next round trains', () => {
   });
   it('then whichever has the most untrained turns, and waits when every scope is covered', () => {
     const s = scopes();
-    s[0].adapter = 'b'; s[0].seen = 1000; s[1].seen = 100; s[2].adapter = 'g'; s[2].seen = 1400; s[3].adapter = 'r'; s[3].seen = 989;
+    s[0].adapter = 'b'; s[0].seen = 1000; s[1].seen = 60; s[2].adapter = 'g'; s[2].seen = 1400; s[3].adapter = 'r'; s[3].seen = 989;
     expect(pickScope(s, 120).pick.key).toBe('base');
     const covered = scopes().map((x) => ({ ...x, adapter: 'a', seen: x.sighted }));
     const d = decide({
