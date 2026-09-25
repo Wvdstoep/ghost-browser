@@ -305,3 +305,27 @@ describe('the recipe and the validation curve', () => {
     expect(state({}).rounds.find((x) => x.id === r.id).recipe).toBeNull();
   });
 });
+
+describe('a baseline is a number under conditions', () => {
+  const training = require('../src/training');
+
+  it('the answer budget is part of the key', () => {
+    const at48 = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 48 });
+    const at320 = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320 });
+    expect(at48).not.toBe(at320);
+    expect(at320).toContain('a320');
+  });
+
+  it('a key from before the budget existed keeps its old shape, so it is never handed back', () => {
+    const old = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354 });
+    expect(old).not.toContain('|a');
+    expect(old).not.toBe(training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320 }));
+  });
+
+  it('everything else still separates two numbers', () => {
+    const a = training.baselineKey({ scope: 'base', base: 'hub:r-1', paper: 'p1', turns: 354, answer: 320 });
+    const b = training.baselineKey({ scope: 'platform:google', base: 'hub:r-1', paper: 'p1', turns: 354, answer: 320 });
+    const c = training.baselineKey({ scope: 'base', base: 'hub:r-2', paper: 'p1', turns: 354, answer: 320 });
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+});

@@ -1789,7 +1789,8 @@ async function mergeIfReady(roundId) {
  * with the number if it has it. A round that measured one tells the hub so the next does not.
  */
 app.get('/v1/training/baseline', authed, (req, res) => {
-  const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0 };
+  /* `answer` is the exam's answer budget - part of what the number means. See training.baselineKey. */
+  const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0, answer: req.query.answer || 0 };
   const b = training.baselineFor(q);
   if (b) return res.json({ known: true, key: training.baselineKey(q), baseline: b, measure: false, by: '' });
   /* Not known: the first machine asking claims the measurement; the others are told who has it. */
@@ -1798,8 +1799,9 @@ app.get('/v1/training/baseline', authed, (req, res) => {
 });
 app.post('/v1/training/baseline', authed, (req, res) => {
   const b = req.body || {};
-  const kept = training.rememberBaseline({ scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0 }, b.baseline);
-  res.json({ ok: !!kept, key: training.baselineKey({ scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0 }) });
+  const q = { scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0, answer: b.answer || 0 };
+  const kept = training.rememberBaseline(q, b.baseline);
+  res.json({ ok: !!kept, key: training.baselineKey(q) });
 });
 
 /* A round's adapter, handed to the hub by the machine that trained it (a few tens of MB). */
@@ -3058,10 +3060,13 @@ async function trialTick() {
     /* The rented card first: a trial on a laptop's processor would take most of a day. */
     const dev = able.find((d) => d.caps.gpu) || able[0];
     if (!dev) return;
-    log.info(`[students] trial of ${want} on ${dev.name || dev.deviceId}`);
+    /* A candidate is a model and the adapter it wears; `base` is how the node names the second. */
+    const c = students.candidate(want);
+    if (!c) { students.shift(want); return; }
+    log.info(`[students] trial of ${c.name} (${c.model}${c.adapter ? ` wearing ${c.adapter}` : ' bare'}) on ${dev.name || dev.deviceId}`);
     const reply = await deviceHub.runCommand(dev.deviceId, {
       path: '/v1/train_round',
-      body: { model: want, measureOnly: true, hours: 1 },
+      body: { model: c.model, base: c.adapter || '', measureOnly: true, hours: 1 },
     }, 30000);
     const said = reply && typeof reply === 'object' ? reply : {};
     if (said.error || said.ok === false || said.started === false) {

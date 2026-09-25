@@ -197,6 +197,9 @@ import tempfile
 EXAM_CHILD = None
 
 
+ANSWER_TOKENS = 320   # what serving gives the student; the exam gives it the same. See evaluate.py.
+
+
 def measure(model_id, adapter, data, limit, note=print, dtype=""):
     """Score a model in a SEPARATE PROCESS, and read the answer back as JSON.
 
@@ -212,7 +215,8 @@ def measure(model_id, adapter, data, limit, note=print, dtype=""):
     out = os.path.join(tempfile.gettempdir(), f"gb-eval-{os.getpid()}-{int(time.time())}.json")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "evaluate.py"),
-           "--model", model_id, "--data", data, "--limit", str(limit), "--out", out]
+           "--model", model_id, "--data", data, "--limit", str(limit), "--out", out,
+           "--max-new", str(ANSWER_TOKENS)]
     if adapter:
         cmd += ["--adapter", adapter]
     # A CANDIDATE BIGGER THAN THE INCUMBENT CANNOT BE MEASURED IN FLOAT32 - four billion parameters
@@ -361,7 +365,11 @@ class Hub:
         if not paper or not self.base:
             return None, True, ""
         try:
-            q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns, "device": self.device})
+            # The ANSWER BUDGET is part of what a number means: the same model on the same paper
+            # scores differently when its answer is cut off, so a baseline taken under another
+            # budget is a different measurement and must not be handed back as this one.
+            q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns,
+                                        "answer": ANSWER_TOKENS, "device": self.device})
             req = urllib.request.Request(f"{self.base}/v1/training/baseline?{q}", headers={"Authorization": f"Bearer {self.token}"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 out = json.loads(r.read().decode("utf-8"))
@@ -375,7 +383,8 @@ class Hub:
         if not paper:
             return
         try:
-            self._post("/v1/training/baseline", {"scope": scope, "base": start, "paper": paper, "turns": turns, "baseline": baseline})
+            self._post("/v1/training/baseline", {"scope": scope, "base": start, "paper": paper, "turns": turns,
+                                                 "answer": ANSWER_TOKENS, "baseline": baseline})
         except Exception:
             pass
 
@@ -747,6 +756,8 @@ def main():
         "lr": args.lr, "warmup": args.warmup, "schedule": "cosine",
         "epochs": args.epochs, "batch": args.batch, "accum": args.accum, "maxLen": args.max_len,
         "hoursCeiling": args.hours, "validateTurns": args.validate_turns, "patience": args.patience,
+        # What the exam let it say. A score under a different budget is a different score.
+        "answerTokens": ANSWER_TOKENS,
     }
 
     train_path = os.path.join(args.data, "train.jsonl")
@@ -797,31 +808,6 @@ def main():
         paper_id = hub.last_header("x-exam-paper")
         paper_scope = hub.last_header("x-exam-scope") or "base"
 
-    # ── A STUDENT TRIAL ──────────────────────────────────────────────────────────────────────────
-    #
-    # The same paper, bare, for every candidate, and the number decides. The baseline CACHE is
-    # skipped on purpose: it is keyed by the adapter a round starts from, not by the model
-    # underneath it, so asking it here would hand back the incumbent's score for every candidate.
-    if args.measure_only:
-        hub.start(args.model, 0, dict(recipe, trial=True))
-        if tok_error:
-            hub.note(f"trial: {args.model} could not be loaded - {tok_error}")
-            hub.end("failed", None, None, "", f"could not load {args.model}")
-            return 1
-        # ONE PRECISION FOR THE WHOLE FIELD, so the four numbers compare to each other. bfloat16
-        # on a card, float32 only where there is no card and the candidate is small enough to care.
-        trial_dtype = "bfloat16" if use_cuda else "float32"
-        hub.note(f"trial: scoring {args.model} bare on the {paper_scope} paper in {trial_dtype}, training nothing")
-        result = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note, dtype=trial_dtype)
-        if not result:
-            hub.end("failed", None, None, "", "the measurement produced nothing")
-            return 1
-        hub.note(f"trial: {result['agreement_pct']}% agreement over {result['turns']} turns")
-        hub.end("done", None, result, "", f"{result['agreement_pct']}% as a bare student", trained=0, paper=paper_id)
-        print(json.dumps({"trial": args.model, "agreement_pct": result.get("agreement_pct"),
-                          "turns": result.get("turns")}, indent=1), flush=True)
-        return 0
-
     if not os.path.isfile(train_path):
         print(f"no turns to train on at {train_path}")
         return 2
@@ -856,6 +842,9 @@ def main():
     # once. Averaging two LoRA adapters trained from one starting point on disjoint data is the
     # plain federated average, and on a CPU it is the one way two laptops make one model faster
     # without touching what a turn carries.
+    # What this round was ASKED to start from, before the name becomes a directory. A trial is
+    # identified by it: three candidates share one model and differ only in what they wear.
+    adapter_name = str(args.adapter or "")
     merge_names = []
     if args.adapter and str(args.adapter).startswith("merge:") and hub.base:
         merge_names = [x.strip()[4:] if x.strip().startswith("hub:") else x.strip() for x in str(args.adapter)[6:].split(",") if x.strip()]
@@ -885,6 +874,36 @@ def main():
         if got is None:
             print("starting from the base", flush=True)
         args.adapter = got
+
+    # ── A STUDENT TRIAL ──────────────────────────────────────────────────────────────────────────
+    #
+    # The same paper, bare, for every candidate, and the number decides. The baseline CACHE is
+    # skipped on purpose: it is keyed by the adapter a round starts from, not by the model
+    # underneath it, so asking it here would hand back the incumbent's score for every candidate.
+    if args.measure_only:
+        hub.start(args.model, 0, dict(recipe, trial=True, adapter=adapter_name))
+        wearing = f" wearing {adapter_name}" if adapter_name else " bare"
+        if tok_error:
+            hub.note(f"trial: {args.model} could not be loaded - {tok_error}")
+            hub.end("failed", None, None, "", f"could not load {args.model}")
+            return 1
+        if adapter_name and not args.adapter:
+            hub.note(f"trial: {adapter_name} is not on the hub - nothing to measure")
+            hub.end("failed", None, None, "", f"the hub has no {adapter_name}")
+            return 1
+        # ONE PRECISION FOR THE WHOLE FIELD, so the four numbers compare to each other. bfloat16
+        # on a card, float32 only where there is no card and the candidate is small enough to care.
+        trial_dtype = "bfloat16" if use_cuda else "float32"
+        hub.note(f"trial: scoring {args.model}{wearing} on the {paper_scope} paper in {trial_dtype}, training nothing")
+        result = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note, dtype=trial_dtype)
+        if not result:
+            hub.end("failed", None, None, "", "the measurement produced nothing")
+            return 1
+        hub.note(f"trial: {result['agreement_pct']}% agreement over {result['turns']} turns")
+        hub.end("done", None, result, "", f"{result['agreement_pct']}% on this paper{wearing}", trained=0, paper=paper_id)
+        print(json.dumps({"trial": args.model, "agreement_pct": result.get("agreement_pct"),
+                          "turns": result.get("turns")}, indent=1), flush=True)
+        return 0
 
     # Raw lines only. 141 MB of text is fine to hold; 141 MB parsed into dicts, beside a model, is
     # not — and the failure mode is the process simply disappearing.
