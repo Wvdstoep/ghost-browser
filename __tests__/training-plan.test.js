@@ -329,3 +329,40 @@ describe('the scope with the most to teach goes first', () => {
     expect(p.why).toMatch(/refused at the gates/);
   });
 });
+
+describe('a refusal is about one attempt', () => {
+  const { refusalStands, FRESH_LR } = require('../src/trainingPlan');
+  const refused = {
+    startedAt: '2026-09-25T14:00:00.000Z',
+    discarded: true,
+    promoted: false,
+    recipe: { lr: 2e-4, epochs: 3 },
+  };
+
+  it('bars a retry on the same set at the same rate', () => {
+    expect(refusalStands({ round: refused, builtAt: '2026-09-25T09:00:00.000Z', nextLr: FRESH_LR })).toBe(true);
+  });
+
+  it('lapses when the set was rebuilt after that round started', () => {
+    expect(refusalStands({ round: refused, builtAt: '2026-09-25T18:58:04.000Z', nextLr: FRESH_LR })).toBe(false);
+  });
+
+  it('lapses when the hub would no longer send that learning rate', () => {
+    expect(refusalStands({ round: refused, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5 })).toBe(false);
+  });
+
+  it('holds when the rate moved only by rounding', () => {
+    expect(refusalStands({ round: refused, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 2.01e-4 })).toBe(true);
+  });
+
+  it('a promoted round is no refusal at all', () => {
+    expect(refusalStands({ round: { ...refused, promoted: true }, builtAt: '', nextLr: FRESH_LR })).toBe(false);
+    expect(refusalStands({ round: null })).toBe(false);
+  });
+
+  it('a round with no recipe is judged on its data alone', () => {
+    const bare = { startedAt: '2026-09-25T14:00:00.000Z', discarded: true, promoted: false };
+    expect(refusalStands({ round: bare, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5 })).toBe(true);
+    expect(refusalStands({ round: bare, builtAt: '2026-09-25T18:58:04.000Z', nextLr: 4e-5 })).toBe(false);
+  });
+});
