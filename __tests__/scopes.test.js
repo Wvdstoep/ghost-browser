@@ -985,3 +985,57 @@ describe('the checkpoint travels', () => {
     }
   });
 });
+
+describe('a round that ended without its turns gives them back', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  let dir, file;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-release-'));
+    process.env.PROFILE_DIR = dir;
+    fs.mkdirSync(path.join(dir, 'traceset'), { recursive: true });
+    file = path.join(dir, 'traceset', 'train.jsonl');
+    const rows = [];
+    for (let i = 0; i < 30; i++) rows.push(JSON.stringify({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' + i }, { role: 'assistant', content: JSON.stringify({ tool: i % 2 ? 'open' : 'click', args: {} }) }], meta: { jobId: `j-${Math.floor(i / 3)}`, at: i % 3, tier: 'gold', role: 'general', platform: 'web', sighted: true } }));
+    fs.writeFileSync(file, rows.join('\n'));
+    delete require.cache[require.resolve('../src/learned')];
+    delete require.cache[require.resolve('../src/slice')];
+    delete require.cache[require.resolve('../src/training')];
+  });
+  afterEach(() => { delete process.env.PROFILE_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
+  it('a discarded lone round frees its lines for the next draw of the same build; a live share keeps its own', () => {
+    const slice = require('../src/slice');
+    const training = require('../src/training');
+    training.setPending({ scope: 'base', device: 'Modal T4', share: 1, turns: 20 });
+    const d1 = slice.draw({ file, builtAt: 'b1', want: 20, roundId: 'single@Modal T4', scope: 'base' });
+    expect(d1.count).toBe(20);
+    const a = training.startRound({ device: 'Modal T4', turns: 20 });
+    /* Another machine's share in the same build. */
+    training.setPending({ scope: 'base', device: 'Laptop', batch: 'b-9', share: 2, turns: 5 });
+    const d2 = slice.draw({ file, builtAt: 'b1', want: 5, roundId: 'b-9@Laptop', scope: 'base' });
+    expect(d2.count).toBe(5);
+    /* Only 5 left for anyone now. */
+    expect(slice.draw({ file, builtAt: 'b1', want: 30, roundId: 'r-probe', scope: 'base' }).count).toBe(5);
+    slice.release({ scope: 'base', marks: ['r-probe'] });
+    /* The lone round is discarded: its 20 come back; the laptop share's 5 do not. */
+    const disc = training.discardRound(a.id);
+    expect(disc.released).toBe(20);
+    const d3 = slice.draw({ file, builtAt: 'b1', want: 30, roundId: 'r-next', scope: 'base' });
+    expect(d3.count).toBe(25);
+    expect(slice.progress('b1', 30, 'base').handed).toBe(30);
+  });
+  it('a stopped share and a dead round free their lines too', () => {
+    const slice = require('../src/slice');
+    const training = require('../src/training');
+    training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 10 });
+    slice.draw({ file, builtAt: 'b1', want: 10, roundId: 'b-1@A', scope: 'base' });
+    const a = training.startRound({ device: 'A', turns: 10 });
+    training.setPending({ scope: 'base', device: 'B', batch: 'b-1', share: 2, turns: 10 });
+    slice.draw({ file, builtAt: 'b1', want: 10, roundId: 'b-1@B', scope: 'base' });
+    const b = training.startRound({ device: 'B', turns: 10 });
+    expect(slice.draw({ file, builtAt: 'b1', want: 30, roundId: 'r-probe', scope: 'base' }).count).toBe(10);
+    slice.release({ scope: 'base', marks: ['r-probe'] });
+    expect(training.stopRound(a.id).released).toBe(10);
+    expect(training.endRound(b.id, { status: 'failed', why: 'died' }).released).toBe(10);
+    expect(slice.draw({ file, builtAt: 'b1', want: 30, roundId: 'r-next', scope: 'base' }).count).toBe(30);
+  });
+});
