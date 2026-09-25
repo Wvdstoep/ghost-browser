@@ -1060,3 +1060,52 @@ describe('a round that ended without its number gives up its claim', () => {
     }
   });
 });
+
+describe('the planner counts what the draw can give', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  let dir, file;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-avail-'));
+    process.env.PROFILE_DIR = dir;
+    fs.mkdirSync(path.join(dir, 'traceset'), { recursive: true });
+    file = path.join(dir, 'traceset', 'train.jsonl');
+    const rows = [];
+    for (let i = 0; i < 40; i++) rows.push(JSON.stringify({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' + i }, { role: 'assistant', content: JSON.stringify({ tool: i % 2 ? 'open' : 'click', args: {} }) }], meta: { jobId: `j-${Math.floor(i / 4)}`, at: i % 4, tier: 'gold', role: i < 10 ? 'facebook.scout' : 'general', platform: i < 10 ? 'facebook' : 'web', sighted: true } }));
+    fs.writeFileSync(file, rows.join('\n'));
+    delete require.cache[require.resolve('../src/learned')];
+    delete require.cache[require.resolve('../src/slice')];
+    delete require.cache[require.resolve('../src/training')];
+  });
+  afterEach(() => { delete process.env.PROFILE_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
+  it('free = pool minus learned minus taken, per scope', () => {
+    const slice = require('../src/slice');
+    const learned = require('../src/learned');
+    let a = slice.availability({ file, builtAt: 'b1', scopes: ['base', 'platform:facebook'] });
+    expect(a.base).toEqual({ pool: 40, learned: 0, taken: 0, free: 40 });
+    expect(a['platform:facebook'].pool).toBe(10);
+    const d = slice.draw({ file, builtAt: 'b1', want: 8, roundId: 'r-a', scope: 'base' });
+    a = slice.availability({ file, builtAt: 'b1', scopes: ['base'] });
+    expect(a.base.taken).toBe(8);
+    expect(a.base.free).toBe(32);
+    learned.record({ key: 'base', roundId: 'r-a', lines: d.jsonl.split('\n') });
+    a = slice.availability({ file, builtAt: 'b1', scopes: ['base', 'platform:facebook'] });
+    expect(a.base.learned).toBe(8);
+    expect(a.base.free).toBe(32);
+    expect(a['platform:facebook'].learned).toBe(0);
+    /* A new build: the taken marks are gone, the learned ones are not. */
+    a = slice.availability({ file, builtAt: 'b2', scopes: ['base'] });
+    expect(a.base).toMatchObject({ learned: 8, taken: 0, free: 32 });
+  });
+  it('the planner uses free when it has it, and a refused scope waits for new data', () => {
+    const { pickScope, ENOUGH_NEW } = require('../src/trainingPlan');
+    const scopes = [{ key: 'base', level: 'base', name: '', sighted: 3923, seen: 2430, free: 0, adapter: 'hub:r-base', paper: 495 }];
+    expect(pickScope(scopes, 40).pick).toBe(null);
+    const more = [{ key: 'base', level: 'base', name: '', sighted: 3923, seen: 2430, free: 300, adapter: 'hub:r-base', paper: 495 }];
+    expect(pickScope(more, 40).pick.key).toBe('base');
+    const refused = [{ key: 'base', level: 'base', name: '', sighted: 3923, seen: 0, free: 2430, adapter: '', refused: true, paper: 495 }];
+    const w = pickScope(refused, 40, { fresh: 3 });
+    expect(w.pick).toBe(null);
+    expect(w.why).toMatch(/refused at the gates/);
+    expect(pickScope(refused, 40, { fresh: ENOUGH_NEW }).pick.key).toBe('base');
+  });
+});

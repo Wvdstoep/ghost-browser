@@ -255,6 +255,33 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
   };
 }
 
+/**
+ * WHAT THE DRAW COULD STILL GIVE, per scope: the pool (sighted lines the scope matches) minus the
+ * learned ones minus those taken in this build. One pass over the file for every scope asked, so
+ * the planner's rows cost one read. The planner counts THIS as untrained, not the sighted total.
+ */
+function availability({ file, builtAt, scopes = [] } = {}) {
+  const out = {};
+  let lines = [];
+  try { lines = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()); } catch { for (const s of scopes) out[keyOf(s)] = { pool: 0, learned: 0, taken: 0, free: 0 }; return out; }
+  const ledger = ledgerFor(builtAt);
+  const taken = ledger.taken || {};
+  const sightedOnly = lines.some((l) => l.includes(SIGHTED));
+  const want = scopes.map((s) => ({ scope: s, key: keyOf(s), done: learned.setFor(keyOf(s)), pool: 0, learned: 0, taken: 0 }));
+  for (let i = 0; i < lines.length; i++) {
+    if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
+    let id = null;
+    for (const w of want) {
+      if (w.scope && w.key !== 'base' && !platforms.matches(w.scope, lines[i])) continue;
+      w.pool++;
+      if (w.done.size) { if (id === null) id = learned.idOf(lines[i]); if (w.done.has(id)) { w.learned++; continue; } }
+      if (taken[i] && takenBy(taken[i], w.key)) w.taken++;
+    }
+  }
+  for (const w of want) out[w.key] = { pool: w.pool, learned: w.learned, taken: w.taken, free: Math.max(0, w.pool - w.learned - w.taken) };
+  return out;
+}
+
 /** How much of this set has been handed out — the honest basis for "is the corpus covered". */
 function progress(builtAt, total, scope = null) {
   const l = ledgerFor(builtAt);
@@ -390,4 +417,4 @@ function exam({ file, want = 150, scope = null } = {}) {
   return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted, scope: key };
 }
 
-module.exports = { draw, exam, progress, reset, release, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
+module.exports = { draw, exam, progress, reset, release, availability, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };

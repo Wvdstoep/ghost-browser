@@ -254,7 +254,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     if (baseRow && !baseRow.adapter && ((Number(baseRow.sighted) || 0) - (Number(baseRow.seen) || 0)) > 0 && busyScopes.has('base')) {
       return no('base is being trained — a platform or a role round waits until base has an adapter');
     }
-    const p = pickScope(scopes.filter((s) => !busyScopes.has(s.key)), sliceTurns);
+    const p = pickScope(scopes.filter((s) => !busyScopes.has(s.key)), sliceTurns, { fresh });
     if (p.pick) return go(p.why, p.pick);
     if (alive.length) return no(`${alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`).join(', ')} running — nothing else holds a slice of its own yet`);
     if (fresh >= ENOUGH_NEW) return go(`${fresh} new usable run(s) since the last round`, scopes.find((s) => s.key === 'base') || null);
@@ -286,8 +286,18 @@ const label = (s) => (s.key === 'base' ? 'base' : `${s.name} (${s.level})`);
  * The scope the next round trains. Pure; `scopes` rows carry sighted, seen, adapter, parentAdapter.
  * @returns {{ pick: object|null, why: string }}
  */
-function pickScope(scopes, sliceTurns = 0) {
-  const rows = (scopes || []).map((s) => ({ ...s, untrained: Math.max(0, (Number(s.sighted) || 0) - (Number(s.seen) || 0)) }));
+function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
+  /*
+   * UNTRAINED = WHAT THE DRAW CAN STILL GIVE (slice.availability: pool minus learned minus taken),
+   * when the caller measured it; the sighted total minus learned otherwise. And a scope whose
+   * newest measured round was REFUSED at the gates is not retried on the same data: it counts as
+   * covered until ENOUGH_NEW usable runs have arrived, like any covered scope.
+   */
+  const rows = (scopes || []).map((s) => {
+    const free = typeof s.free === 'number' ? s.free : Math.max(0, (Number(s.sighted) || 0) - (Number(s.seen) || 0));
+    const refusedWait = !!s.refused && fresh < ENOUGH_NEW;
+    return { ...s, untrained: refusedWait ? 0 : free, refusedWait };
+  });
   const base = rows.find((s) => s.key === 'base');
   /*
    * BASE FIRST, ALWAYS. Nothing else is trained until base has an adapter: a platform or a role
@@ -304,6 +314,8 @@ function pickScope(scopes, sliceTurns = 0) {
   if (fresh.length) return { pick: fresh[0], why: `${label(fresh[0])}: ${fresh[0].sighted} sighted turns and no adapter of its own yet` };
   const any = [base, ...stand].filter(Boolean).filter((s) => s.untrained > 0).sort((a, b) => b.untrained - a.untrained);
   if (any.length) return { pick: any[0], why: `${label(any[0])}: ${any[0].untrained} of ${any[0].sighted} sighted turns not trained on yet` };
+  const waiting = rows.filter((s) => s.refusedWait);
+  if (waiting.length) return { pick: null, why: `${waiting.map(label).join(', ')} refused at the gates on this data — waiting for ${ENOUGH_NEW} new usable runs (${fresh} so far)` };
   return { pick: null, why: 'every scope is covered' };
 }
 
