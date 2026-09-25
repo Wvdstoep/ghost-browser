@@ -71,6 +71,8 @@ const CAP_SHARE = 0.15;
  * marathons their surplus.
  */
 const PER_RUN = 12;
+/* The weight weakness.js gives a tool that is never right; a second copy is for tools near it. */
+const WORST_ENOUGH = 3;
 
 const readJson = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } };
 const writeJson = (p, v) => {
@@ -134,7 +136,7 @@ const marksOf = (v) => String(v == null ? '' : v).split(',').filter(Boolean);
 const takenBy = (mark, key) => marksOf(mark).some((m) => { const bar = m.indexOf('|'); return (bar < 0 ? 'base' : m.slice(0, bar)) === key; });
 const withMark = (mark, key, roundId) => [...marksOf(mark), `${key}|${roundId || 1}`].join(',');
 
-function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null } = {}) {
+function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null, weights = null } = {}) {
   const key = keyOf(scope);
   const lines = [];
   const raw = fs.readFileSync(file, 'utf8');
@@ -186,9 +188,20 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
    * reading are what you mostly do, which is true and is the single most reliable signal in the set.
    */
   const cap = Math.max(FLOOR, Math.floor(want * CAP_SHARE));
+  /*
+   * AND A BIGGER SHARE FOR WHAT THE MODEL GETS WRONG (weakness.js). A tool's natural share is how
+   * often it appears; its weight is how often the model that serves this scope fails it. The
+   * shares are re-normalised so the round is still `want` turns, and the cap still holds, so a
+   * failing tool is trained harder without becoming the whole round.
+   */
+  const weightOf = (tool) => { const w = weights && Number(weights[tool]); return Number.isFinite(w) && w > 0 ? w : 1; };
+  let weighted = 0;
+  for (const [tool, idxs] of byTool) weighted += idxs.length * weightOf(tool);
   const quota = new Map();
   for (const [tool, idxs] of byTool) {
-    const share = Math.round(want * (idxs.length / available));
+    const natural = idxs.length / available;
+    const skewed = weighted > 0 ? (idxs.length * weightOf(tool)) / weighted : natural;
+    const share = Math.round(want * skewed);
     quota.set(tool, Math.min(idxs.length, Math.max(Math.min(FLOOR, idxs.length), Math.min(share, cap))));
   }
 
@@ -234,17 +247,44 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
     if (picked.length === before) break;
   }
 
+  /*
+   * AND AGAIN, FOR WHAT THE MODEL GETS WRONG. The turns above are every turn this scope still had;
+   * when the round can hold more than that (a GPU asks for thousands), the failing tools' turns are
+   * repeated rather than the round being short. Twice more at most, in proportion to the weight, so
+   * `open` at three times its weight is seen three times where `read` is seen once - and three
+   * epochs make that nine passes against three. Duplicates are drawn from the picked turns only, so
+   * nothing unlearned is spent twice and the ledger still marks each line once.
+   */
+  const extra = [];
+  if (picked.length && picked.length < want && weights && Object.keys(weights).length) {
+    const byWeight = picked
+      .map((i) => ({ i, w: weightOf(toolOf(lines[i])) }))
+      .filter((x) => x.w > 1.05)
+      .sort((a, b) => b.w - a.w);
+    for (let copy = 0; copy < 2 && extra.length + picked.length < want; copy++) {
+      for (const { i, w } of byWeight) {
+        if (extra.length + picked.length >= want) break;
+        /* The second copy only for the tools that fail hardest. */
+        if (copy === 1 && w < (1 + (WORST_ENOUGH - 1) * 0.6)) continue;
+        extra.push(i);
+      }
+    }
+  }
+
   for (const i of picked) taken[i] = withMark(taken[i], key, roundId);
   ledger.taken = taken;
   ledger.handed = Object.keys(taken).length;
   writeJson(LEDGER(), ledger);
 
+  const all = [...picked, ...extra];
   const tools = {};
-  for (const i of picked) { const tl = toolOf(lines[i]); tools[tl] = (tools[tl] || 0) + 1; }
+  for (const i of all) { const tl = toolOf(lines[i]); tools[tl] = (tools[tl] || 0) + 1; }
 
   return {
-    jsonl: picked.map((i) => lines[i]).join('\n'),
-    count: picked.length,
+    jsonl: all.map((i) => lines[i]).join('\n'),
+    count: all.length,
+    fresh: picked.length,
+    repeated: extra.length,
     tools,
     remaining: Math.max(0, pool - takenHere - picked.length),
     scope: key,

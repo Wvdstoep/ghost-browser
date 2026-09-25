@@ -3465,6 +3465,14 @@ app.get('/v1/training/slice', authed, (req, res) => {
     const file = pathx.join(base, 'traceset', 'train.jsonl');
     if (!require('fs').existsSync(file)) return res.status(404).json({ error: 'the set has not been built yet' });
     const manifest = JSON.parse(require('fs').readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8'));
+    /* What this scope's model gets wrong, so the draw can train it (weakness.js). */
+    const scopeKey = training.scopeOfRound(String(req.query.round || ''), String(req.query.device || ''));
+    const weights = (() => {
+      try {
+        const key = require('./trainScopes').parse(scopeKey || 'base').key;
+        return require('./weakness').forScope({ rounds: training.allRounds(), shadow: shadow.all(), model: (settingsStore.read().studentModels || {})[key] || '', key });
+      } catch (e) { return null; }
+    })();
     const s = require('./slice').draw({
       file, builtAt: manifest.builtAt,
       want: (() => { const asked = Math.min(5000, Math.max(50, Number(req.query.turns) || 700)); const p = training.peekPending(); return p && p.turns > 0 && !p.merge ? Math.min(asked, Math.max(20, p.turns)) : asked; })(),
@@ -3472,7 +3480,8 @@ app.get('/v1/training/slice', authed, (req, res) => {
          the ledger says which share of which batch holds each line. */
       roundId: String(req.query.round || '') || (() => { const p = training.peekPending(String(req.query.device || '')); return p ? `${p.batch || 'single'}@${p.device}` : ''; })(),
       /* The round's scope, or the pending dispatch's when the round is not registered yet. */
-      scope: training.scopeOfRound(String(req.query.round || ''), String(req.query.device || '')),
+      scope: scopeKey,
+      weights,
     });
     res.set('X-Slice-Count', String(s.count));
     res.set('X-Slice-Remaining', String(s.remaining));
