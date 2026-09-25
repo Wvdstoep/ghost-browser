@@ -1580,6 +1580,7 @@ app.put('/v1/profiles/:name/settings', authed, async (req, res) => {
  * round runs on whichever connected device says it can train.
  */
 const training = require('./training');
+const students = require('./students');
 const corpusLib = require('./corpus');
 
 app.get('/v1/training/state', authed, async (_req, res) => {
@@ -1637,6 +1638,8 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
+      /* The field of candidate students and what each scored on this paper - see students.js. */
+      students: (() => { try { return students.list(training.allRounds()); } catch (e) { return null; } })(),
       gpu: gpuView(),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2170,7 +2173,7 @@ function scopesNow({ serving = null } = {}) {
     const a = avail[r.key];
     if (a) { r.pool = a.pool; r.free = a.free; r.taken = a.taken; }
     /* The newest measured round of this scope, and whether its refusal still bars a retry. */
-    const newest = all.find((x) => ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result && !x.merge || (x.merge && ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result));
+    const newest = all.filter((x) => !students.isTrial(x)).find((x) => ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result && !x.merge || (x.merge && ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result));
     const own = training.adapterFor(r);
     r.adapter = own.from === r.key ? own.adapter : '';
     /* No promoted adapter of its own: the best sound unpromoted one is the next start. */
@@ -3037,6 +3040,38 @@ const trainingTick = () => {
     buildSet((ok) => { if (ok) dispatchAll().catch(() => {}); });
   } catch (e) { /* a scheduler that throws must not take the browser with it */ }
 };
+/*
+ * ONE TRIAL AT A TIME, AND NEVER BESIDE A ROUND.
+ *
+ * A trial is cheap but it is not free: it holds the rented card for as long as it takes to answer
+ * three hundred questions. So it waits for a machine that is doing nothing at all - no round
+ * running anywhere, no share dispatched and unclaimed - and takes the queue one at a time. It
+ * never starts a round; it cannot, because a measure-only round asks for no turns.
+ */
+async function trialTick() {
+  try {
+    const want = students.next();
+    if (!want) return;
+    const busy = training.allRounds().some((r) => r.status === 'running') || training.pendingList().length > 0;
+    if (busy) return;
+    const able = (deviceHub.deviceList() || []).filter((d) => d.online && d.caps && d.caps.trainer);
+    /* The rented card first: a trial on a laptop's processor would take most of a day. */
+    const dev = able.find((d) => d.caps.gpu) || able[0];
+    if (!dev) return;
+    log.info(`[students] trial of ${want} on ${dev.name || dev.deviceId}`);
+    const reply = await deviceHub.runCommand(dev.deviceId, {
+      path: '/v1/train_round',
+      body: { model: want, measureOnly: true, hours: 1 },
+    }, 30000);
+    const said = reply && typeof reply === 'object' ? reply : {};
+    if (said.error || said.ok === false || said.started === false) {
+      log.warn(`[students] ${dev.name || dev.deviceId} refused the trial of ${want}: ${said.error || 'no reason given'}`);
+      return;
+    }
+    students.shift(want);
+  } catch (e) { log.warn(`[students] ${e.message}`); }
+}
+setInterval(() => { trialTick().catch(() => {}); }, 60 * 1000).unref?.();
 setInterval(trainingTick, 10 * 60 * 1000);
 /* And once soon after boot: a deploy restarts the clock, and a share waiting for the tick must not wait ten more minutes for it. */
 setTimeout(trainingTick, 60 * 1000).unref?.();
@@ -3465,6 +3500,29 @@ app.get('/v1/training/trainers/:deviceId/log', authed, async (req, res) => {
     const out = await deviceHub.runCommand(req.params.deviceId, { path: '/v1/train_log', body: { lines: Math.min(400, Number(req.query.lines) || 80) } }, 20000);
     res.json({ ok: true, lines: (out && out.lines) || '', error: out && out.error ? out.error : '' });
   } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
+});
+/*
+ * ── CHOOSING THE STUDENT ────────────────────────────────────────────────────────────────────────
+ *
+ * Every candidate sits the same paper, bare, and the numbers decide. A trial trains nothing and
+ * claims no turns, so these are safe to run against a corpus that is not growing. What a trial
+ * settles and what it does not is written at the top of students.js.
+ */
+app.get('/v1/training/students', authed, (req, res) => {
+  try { res.json(students.list(training.allRounds())); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/v1/training/students/trial', authed, (req, res) => {
+  const body = req.body || {};
+  const want = Array.isArray(body.models) && body.models.length ? body.models : students.CANDIDATES.map((c) => c.id);
+  try {
+    const queued = students.queue(want);
+    log.info(`[students] queued for trial: ${queued.join(', ')}`);
+    trialTick().catch(() => {});
+    res.json({ queued });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/v1/training/students/clear', authed, (req, res) => {
+  res.json({ queued: students.clear() });
 });
 app.post('/v1/training/trainers/:deviceId/setup', authed, async (req, res) => {
   try {
