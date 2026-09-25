@@ -166,17 +166,7 @@ function stepVerdict(steps, i) {
   if (s0.judged && s0.judged.verdict === 'good') return { verdict: 'good', why: 'the teacher judged it good', reason: String(s0.judged.reason || '') };
   return { verdict: 'unknown', why: '', reason: '' };
 }
-/*
- * HOW MUCH OF THE PAGE A TURN CARRIES, AND WHY IT SHRANK.
- *
- * Measured on the night of 24 Sep 2026: a sighted turn was about 2,700 tokens and a CPU pass over
- * one took a hundred seconds, so a twelve-hour round reached a few dozen turns. Two thirds of that
- * prompt was page text nobody needs in full - the decision is taken on the top of the page, the
- * numbered list and the last few lines. Cutting the page to 1,800 characters roughly halves the
- * prompt and therefore the hours. The same numbers are the student's at serving (student.js), so
- * the model is asked exactly what it was taught on.
- */
-function turnsOf(job, { maxObs = 400, maxMarks = 2500, maxContent = 1800, maxHistory = 6, keepThrown = false, onDrop = null, judgedOnly = false } = {}) {
+function turnsOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6, keepThrown = false, onDrop = null, judgedOnly = false } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const goal = scrubText(String((job && job.goal) || ''));
   if (!goal) return [];
