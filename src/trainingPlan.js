@@ -90,6 +90,17 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
+/**
+ * WHAT A PLATFORM OR A ROLE NEEDS BEFORE IT IS WORTH ITS OWN ADAPTER.
+ *
+ * Not "as much as this machine could chew in its hours": that was the old rule, and on a GPU it
+ * excluded every scope in the map. A scope needs enough turns to learn something (SCOPE_FLOOR)
+ * and a paper large enough that a score on it could ever be believed - the same thirty turns the
+ * promotion gate asks for, so a scope that could never be promoted is never trained either.
+ */
+const SCOPE_FLOOR = 100;
+const PAPER_FLOOR = 30;
+
 /** How many merge rounds may die on one batch before its scope is opened again. */
 const MERGE_TRIES = 3;
 
@@ -308,7 +319,9 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
   if (base && !base.adapter && base.untrained > 0) {
     return { pick: base, why: `base: ${base.untrained} of ${base.sighted} sighted turns not trained on yet, and nothing serves yet` };
   }
-  const stand = rows.filter((s) => s.key !== 'base' && (Number(s.sighted) || 0) >= Math.max(1, sliceTurns));
+  const stand = rows.filter((s) => s.key !== 'base'
+    && (Number(s.sighted) || 0) >= SCOPE_FLOOR
+    && (typeof s.exam !== 'number' || s.exam >= PAPER_FLOOR));
   const rank = (s) => (s.level === 'platform' ? 0 : 1);
   const unowned = stand.filter((s) => !s.adapter && s.untrained > 0).sort((a, b) => rank(a) - rank(b) || b.sighted - a.sighted);
   if (unowned.length) return { pick: unowned[0], why: `${label(unowned[0])}: ${unowned[0].sighted} sighted turns and no adapter of its own yet` };
@@ -319,4 +332,4 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
   return { pick: null, why: 'every scope is covered' };
 }
 
-module.exports = { MERGE_TRIES, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
+module.exports = { MERGE_TRIES, SCOPE_FLOOR, PAPER_FLOOR, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
