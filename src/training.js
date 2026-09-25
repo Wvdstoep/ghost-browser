@@ -377,6 +377,27 @@ function endRound(id, { status = 'done', baseline = null, result = null, why = '
  */
 const MAX_COLLAPSE = 2.0;
 
+/**
+ * The turns a promoted round learned: the lines it (or, for a merge, its shares) drew in the
+ * current build, read off the slice ledger by their marks, and written to the learned ledger by
+ * their own identity. The set is not rebuilt while a batch is open, so the build the shares drew
+ * from is the build still on disk when the merge is promoted.
+ */
+function recordLearned(r, rows = allRounds()) {
+  const learned = require('./learned');
+  const key = (r.scope && r.scope.key) || 'base';
+  const members = r.merge ? rows.filter((x) => x.mergedInto === r.id && !x.merge) : [r];
+  const marks = [];
+  for (const m of members) {
+    marks.push(m.id);
+    if (m.batch) marks.push(`${m.batch}@${m.device}`);
+    marks.push(`single@${m.device}`);
+  }
+  const ledger = readJson(path.join(DIR(), 'slices.json'), null);
+  const file = path.join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl');
+  return learned.recordFromLedger({ key, roundId: r.id, marks, file, ledger });
+}
+
 function promote(roundId) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === roundId);
@@ -417,6 +438,9 @@ function promote(roundId) {
   }
   r.promoted = true;
   r.promotedAt = new Date().toISOString();
+  writeJson(ROUNDS(), rows);
+  /* Now, and only now, the turns it trained on are learned. */
+  try { r.learned = recordLearned(r, rows); } catch (e) { r.learned = { added: 0, matched: 0, error: e.message }; }
   writeJson(ROUNDS(), rows);
   /*
    * THE PROMOTION MAP. One entry per scope (platforms.js): base, each platform, each role. The
@@ -667,8 +691,11 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
     /* The switch, and how much of the set has been learned from so far — the two numbers that say
        whether this loop is running itself or waiting for somebody. */
     auto: autoOn(),
-    covered: rounds.reduce((n, r) => n + (Number(r.trained) || 0), 0),
+    /* LEARNED: turns trained on by an adapter that passed the gates. ATTEMPTED: turns every
+       finished round trained on, kept or not - the number that used to be shown as learned. */
+    covered: require('./learned').count('base'),
+    attempted: rounds.reduce((n, r) => n + (Number(r.trained) || 0), 0),
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
