@@ -850,3 +850,26 @@ describe('continue from a sound adapter, and the bar stays what serves', () => {
     expect(d.base).toBe('hub:r-ok');
   });
 });
+
+describe('a discarded round', () => {
+  it('is never a warm start', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-discard-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'A', turns: 20 });
+      training.endRound(r.id, { baseline: { agreement_pct: 7, turns: 150 }, result: { agreement_pct: 8, turns: 150 }, adapter: '/x', trained: 20, paper: 'P' });
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+      expect(training.warmStartFor('base')).toMatchObject({ roundId: r.id });
+      expect(training.discardRound(r.id).discarded).toBe(true);
+      expect(training.warmStartFor('base')).toBe(null);
+      expect(training.state().rounds.find((x) => x.id === r.id).discarded).toBe(true);
+      expect(training.discardRound('r-nope')).toBe(null);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});
