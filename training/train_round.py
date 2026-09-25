@@ -319,6 +319,25 @@ class Hub:
             fh.write(chr(10).join(rows))
         return len(rows)
 
+    def upload_adapter(self, adapter_dir):
+        # The best adapter, as one tgz, to PUT /v1/training/rounds/<id>/adapter - tens of MB.
+        if not (self.base and self.round_id and os.path.isdir(adapter_dir)):
+            return
+        try:
+            import tarfile, io as _io
+            buf = _io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+                for f in os.listdir(adapter_dir):
+                    tf.add(os.path.join(adapter_dir, f), arcname=f)
+            data = buf.getvalue()
+            req = urllib.request.Request(f"{self.base}/v1/training/rounds/{self.round_id}/adapter", data=data, method="PUT",
+                                         headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(data))})
+            with urllib.request.urlopen(req, timeout=1800) as r:
+                r.read()
+            print(f"adapter handed to the hub as hub:{self.round_id} ({len(data) / 1e6:.0f} MB)", flush=True)
+        except Exception as e:
+            print(f"[the adapter stays here only: {e}]", flush=True)
+
     def end(self, status, baseline, result, adapter, why="", trained=0, drawSeed=None):
         if self.round_id:
             self._post(f"/v1/training/rounds/{self.round_id}/end", {
@@ -617,26 +636,62 @@ def main():
     # ── AN ADAPTER THAT LIVES ON THE HUB ─────────────────────────────────────────────────────────
     # A rented machine hands its adapter back to the hub as its last act, and the next round - on
     # any machine - chains from it by name. `hub:<name>` is fetched into ./adapters/<name> here.
-    if args.adapter and str(args.adapter).startswith("hub:") and hub.base:
-        name = str(args.adapter)[4:].strip()
+    def fetch_hub_adapter(name):
+        # `hub:<name>` fetched into ./adapters/<name>; the directory, or None when the hub has none.
         into = os.path.join(args.out, "adapters", name)
-        if not os.path.isfile(os.path.join(into, "adapter_config.json")):
-            import tarfile
-            os.makedirs(into, exist_ok=True)
-            tgz = into + ".tgz"
-            req = urllib.request.Request(f"{hub.base}/v1/training/adapters/{name}", headers={"Authorization": f"Bearer {hub.token}"})
-            try:
-                with urllib.request.urlopen(req, timeout=600) as r, open(tgz, "wb") as fh:
-                    for chunk in iter(lambda: r.read(1 << 20), b""):
-                        fh.write(chunk)
-                with tarfile.open(tgz, "r:gz") as tf:
-                    tf.extractall(into)
-                print(f"fetched adapter {name} from the hub", flush=True)
-            except Exception as e:
-                print(f"could not fetch adapter {name} from the hub ({e}) — starting from the base", flush=True)
-                args.adapter = None
-        if args.adapter:
-            args.adapter = into
+        if os.path.isfile(os.path.join(into, "adapter_config.json")):
+            return into
+        import tarfile
+        os.makedirs(into, exist_ok=True)
+        tgz = into + ".tgz"
+        req = urllib.request.Request(f"{hub.base}/v1/training/adapters/{name}", headers={"Authorization": f"Bearer {hub.token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r, open(tgz, "wb") as fh:
+                for chunk in iter(lambda: r.read(1 << 20), b""):
+                    fh.write(chunk)
+            with tarfile.open(tgz, "r:gz") as tf:
+                tf.extractall(into)
+            print(f"fetched adapter {name} from the hub", flush=True)
+            return into
+        except Exception as e:
+            print(f"could not fetch adapter {name} from the hub ({e})", flush=True)
+            return None
+
+    # ── TWO HALVES INTO ONE ──────────────────────────────────────────────────────────────────────
+    # `merge:hub:a,hub:b`: two machines trained the two halves of one slice from the same start;
+    # this round averages their adapters weight for weight, trains nothing, and takes the exam
+    # once. Averaging two LoRA adapters trained from one starting point on disjoint data is the
+    # plain federated average, and on a CPU it is the one way two laptops make one model faster
+    # without touching what a turn carries.
+    merge_names = []
+    if args.adapter and str(args.adapter).startswith("merge:") and hub.base:
+        merge_names = [x.strip()[4:] if x.strip().startswith("hub:") else x.strip() for x in str(args.adapter)[6:].split(",") if x.strip()]
+        dirs = [fetch_hub_adapter(n) for n in merge_names]
+        if len(dirs) < 2 or any(d is None for d in dirs):
+            print("merge: not every half is on the hub — nothing to merge", flush=True)
+            return 2
+        import shutil
+        from safetensors.torch import load_file, save_file
+        merged = os.path.join(args.out, "adapters", "merged-" + "-".join(n[-4:] for n in merge_names) + "-" + str(int(time.time())))
+        os.makedirs(merged, exist_ok=True)
+        shutil.copy(os.path.join(dirs[0], "adapter_config.json"), os.path.join(merged, "adapter_config.json"))
+        tensors = [load_file(os.path.join(d, "adapter_model.safetensors")) for d in dirs]
+        keys = set(tensors[0].keys())
+        for tt in tensors[1:]:
+            if set(tt.keys()) != keys:
+                print("merge: the halves have different shapes — they were not trained from one start", flush=True)
+                return 2
+        avg = {k: (sum(tt[k].float() for tt in tensors) / len(tensors)).to(tensors[0][k].dtype) for k in keys}
+        save_file(avg, os.path.join(merged, "adapter_model.safetensors"))
+        print(f"merged {len(dirs)} adapters into {merged}", flush=True)
+        args.adapter = merged
+        args.epochs = 0.0
+        recipe["merged"] = merge_names
+    elif args.adapter and str(args.adapter).startswith("hub:") and hub.base:
+        got = fetch_hub_adapter(str(args.adapter)[4:].strip())
+        if got is None:
+            print("starting from the base", flush=True)
+        args.adapter = got
 
     # Raw lines only. 141 MB of text is fine to hold; 141 MB parsed into dicts, beside a model, is
     # not — and the failure mode is the process simply disappearing.
@@ -657,7 +712,21 @@ def main():
     # mathematically the base model (its B matrices start at zero), so measuring the base is exactly
     # measuring this round's starting point — no model needs to exist in this process yet.
     baseline = None
-    if not args.skip_baseline:
+    if merge_names:
+        # The halves measured their common start on this paper already; the merged adapter is
+        # measured AGAINST that, never against itself.
+        try:
+            req = urllib.request.Request(f"{hub.base}/v1/training/state", headers={"Authorization": f"Bearer {hub.token}"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                rows = json.loads(r.read().decode("utf-8")).get("rounds", [])
+            for row in rows:
+                if row.get("id") == merge_names[0] and row.get("baseline") is not None:
+                    baseline = {"agreement_pct": float(row["baseline"]), "turns": args.eval_turns, "from": merge_names[0]}
+                    hub.note(f"merge: the halves scored their start at {baseline['agreement_pct']}% — measuring the average against that")
+                    break
+        except Exception as e:
+            hub.note(f"merge: could not read the halves' baseline ({e})")
+    elif not args.skip_baseline:
         baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
         if baseline:
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
@@ -902,7 +971,7 @@ def main():
 
     # The last state is checked too: a round that stopped on the clock may have ended on its best
     # weights, and if it did not, the best checkpoint on disk is the one that gets measured.
-    if val_ds is not None:
+    if val_ds is not None and not merge_names:
         check_now(final=True)
     if best is None:
         save_best()
@@ -937,6 +1006,7 @@ def main():
         json.dump(summary, fh, indent=1)
 
     hub.end("done", baseline, result, adapter_dir, why, trained=seen, drawSeed=draw_seed)
+    hub.upload_adapter(adapter_dir)
     print(json.dumps({k: v for k, v in summary.items() if k not in ("baseline", "result")}, indent=1))
     print(f"\nadapter: {adapter_dir}")
     print("Promotion is a separate step on the controller, and it refuses a round that did not win.")

@@ -251,6 +251,25 @@ describe('which scope the next round trains', () => {
     expect(decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [crashed[0]], trainers: [two[1]], auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 }).run).toBe(true);
   });
 
+  it('TWO MACHINES TAKE THE TWO HALVES OF ONE SCOPE, and a third would not', () => {
+    const s = scopes();
+    const two = [{ name: 'WojMagEmi', deviceId: 'd1', online: true }, { name: 'Karolina', deviceId: 'd2', online: true }];
+    const now = new Date().toISOString();
+    const live = [{ id: 'r-half-a', status: 'running', device: 'KAROLINA', startedAt: now, lastAt: now, scope: { key: 'base' } }];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: live, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120 });
+    expect(d.run).toBe(true);
+    expect(d.scope.key).toBe('base');
+    expect(d.device).toBe('WojMagEmi');
+    expect(d.pairOf).toBe('r-half-a');
+    /* Both halves running: base is closed, the next free machine gets the next scope. */
+    const both = live.concat([{ id: 'r-half-b', status: 'running', device: 'WOJMAGEMI', startedAt: now, lastAt: now, scope: { key: 'base' } }]);
+    const three = two.concat([{ name: 'Third', deviceId: 'd3', online: true }]);
+    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: both, trainers: three, auto: true, serving: null, scopes: s, sliceTurns: 120 });
+    expect(d2.run).toBe(true);
+    expect(d2.scope.key).toBe('platform:google');
+    expect(d2.pairOf).toBe('');
+  });
+
   it('sums coverage per scope, and counts rounds from before the scopes as base', () => {
     const rounds = [{ trained: 100 }, { trained: 50, scope: { key: 'platform:facebook' } }, { trained: 20, scope: { key: 'base' } }];
     expect(coveredFor(rounds, 'base')).toBe(120);
@@ -305,6 +324,23 @@ describe('the pending dispatch and the promotion map', () => {
     expect(training.adapterFor('role:research.reviews')).toMatchObject({ adapter: `a-${b.id}`, from: 'base' });
     expect(training.adapterFor('platform:google').from).toBe('base');
   });
+  it('a pair is remembered on both halves, and the merge is due once both are done and on the hub', () => {
+    training.setPending({ scope: 'base', device: 'a' });
+    const a = training.startRound({ device: 'A', turns: 100 });
+    training.setPending({ scope: 'base', device: 'b', pairOf: a.id });
+    const b = training.startRound({ device: 'B', turns: 100 });
+    expect(b.pairOf).toBe(a.id);
+    expect(training.allRounds().find((x) => x.id === a.id).pairWith).toBe(b.id);
+    expect(training.pairReadyToMerge(a.id)).toBe(null);
+    training.endRound(a.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 9, turns: 150 }, adapter: 'pa', trained: 100 });
+    training.endRound(b.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 8, turns: 150 }, adapter: 'pb', trained: 100 });
+    expect(training.pairReadyToMerge(a.id)).toBe(null);
+    training.setAdapterHub(a.id, `hub:${a.id}`); training.setAdapterHub(b.id, `hub:${b.id}`);
+    const pair = training.pairReadyToMerge(b.id);
+    expect(pair.a.id).toBe(b.id); expect(pair.b.id).toBe(a.id);
+    expect(training.pairReadyToMerge(a.id)).toBe(null);
+  });
+
   it('REFUSES A WIN ON A PAPER OF FOUR TURNS', () => {
     const r = training.startRound({ device: 'l', scope: 'platform:seo' });
     training.endRound(r.id, { baseline: { agreement_pct: 0, turns: 4 }, result: { agreement_pct: 100, turns: 4 }, adapter: 'a' });

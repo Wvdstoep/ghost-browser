@@ -1661,10 +1661,61 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
    * machine that trained it. A round that fails a gate is kept and says why; nothing else changes.
    */
   let promotion = null;
-  if (r.status === 'done' && r.result && r.baseline) {
+  const half = !!(r.pairOf || r.pairWith);
+  if (r.status === 'done' && r.result && r.baseline && !half) {
     try { promotion = await promoteAndExport(r.id, 'by itself'); } catch (e) { promotion = { error: e.message }; }
   }
-  res.json({ ...r, promotion });
+  res.json({ ...r, promotion, half });
+  /* Half of a pair: the merge is due once both halves are done and their adapters are on the hub
+     (the upload arrives right after this call, so the check runs on the upload too). */
+  if (half) setTimeout(() => { mergeIfReady(r.id).catch((e) => log.warn(`training: merge check — ${e.message}`)); }, 5000);
+});
+
+/**
+ * TWO HALVES INTO ONE. When both rounds of a pair are done and on the hub, a free machine is
+ * handed a merge round: `merge:hub:<a>,hub:<b>` as its base. train_round.py averages the two
+ * adapters, trains nothing, takes the exam once against the halves' baseline, hands the merged
+ * adapter back, and that round is the one put to the gates.
+ */
+async function mergeIfReady(roundId) {
+  const pair = training.pairReadyToMerge(roundId);
+  if (!pair) return null;
+  const { usable } = planNow();
+  const dev = usable.find((t) => t.online && String(t.name || '').toLowerCase() === String(pair.a.device || '').toLowerCase())
+    || usable.find((t) => t.online);
+  if (!dev) { log.warn(`training: merge of ${pair.a.id} + ${pair.b.id} waits — no machine is online`); return null; }
+  const base = `merge:${pair.a.adapterHub},${pair.b.adapterHub}`;
+  training.setPending({ scope: pair.a.scope || 'base', device: dev.name, base, merge: true });
+  try {
+    await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_round', body: { base, hours: 1 } }, 30000);
+    log.info(`training: merging ${pair.a.id} and ${pair.b.id} on ${dev.name}`);
+    return { device: dev.name, base };
+  } catch (e) {
+    log.warn(`training: ${dev.name} would not take the merge — ${e.message}`);
+    return null;
+  }
+}
+
+/* A round's adapter, handed to the hub by the machine that trained it (a few tens of MB). */
+app.put('/v1/training/rounds/:id/adapter', authed, (req, res) => {
+  const fsx = require('fs'); const pathx = require('path');
+  const id = String(req.params.id || '').replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!id || !training.allRounds().some((r) => r.id === id)) return res.status(404).json({ error: 'no such round' });
+  const dir = pathx.join(MODELS_DIR(), 'adapters');
+  try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) { return res.status(500).json({ error: e.message }); }
+  const file = pathx.join(dir, `${id}.tgz`);
+  const out = fsx.createWriteStream(`${file}.part`);
+  let bytes = 0;
+  req.on('data', (b) => { bytes += b.length; });
+  req.pipe(out);
+  out.on('finish', () => {
+    fsx.renameSync(`${file}.part`, file);
+    training.setAdapterHub(id, `hub:${id}`);
+    log.info(`training: adapter of ${id} is on the hub (${Math.round(bytes / 1e6)} MB)`);
+    res.json({ ok: true, name: id, bytes });
+    setTimeout(() => { mergeIfReady(id).catch((e) => log.warn(`training: merge check — ${e.message}`)); }, 1000);
+  });
+  out.on('error', (e) => res.status(500).json({ error: e.message }));
 });
 
 /**
@@ -2537,7 +2588,7 @@ async function dispatchRound({ force = false } = {}) {
     if (hard) return { ...plan, forced: true };
   }
   /* The scope this round trains, written down for the device to draw against (training.js). */
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '' });
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', pairOf: plan.pairOf || '' });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
@@ -2579,7 +2630,7 @@ async function dispatchRound({ force = false } = {}) {
        */
       body: { base, hours: trainHoursNow() },
     }, 30000);
-    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}`);
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${plan.pairOf ? ` (the other half of ${plan.pairOf}'s slice)` : ''}`);
     return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
