@@ -49,6 +49,12 @@ const DEFAULTS = {
   trainShare: 'time',
   /* A shadow trial for a round refused on score alone - off: refused is discarded (the owner's rule). */
   trialInShadow: false,
+  /* Modal (a GPU node the hub starts by itself): the owner's token, the GPU, and whether the hub
+     keeps a node up whenever there is something to learn. */
+  modalTokenId: '',
+  modalTokenSecret: '',
+  modalGpu: 'T4',
+  modalAuto: false,
   gpuProvider: 'runpod',
   gpuKey: '',
   gpuOwner: '',              // who saved the key - the rented machine reports as their device
@@ -133,6 +139,10 @@ function write(input = {}) {
   if ([3, 6, 12, 24].includes(Number(input.trainHours))) out.trainHours = Number(input.trainHours);
   if (['time', 'work'].includes(input.trainShare)) out.trainShare = input.trainShare;
   if (typeof input.trialInShadow === 'boolean') out.trialInShadow = input.trialInShadow;
+  if (typeof input.modalTokenId === 'string') out.modalTokenId = input.modalTokenId.trim().slice(0, 120);
+  if (typeof input.modalTokenSecret === 'string') out.modalTokenSecret = input.modalTokenSecret.trim().slice(0, 200);
+  if (['T4', 'L4', 'A10G', 'A100'].includes(input.modalGpu)) out.modalGpu = input.modalGpu;
+  if (typeof input.modalAuto === 'boolean') out.modalAuto = input.modalAuto;
   if (typeof input.gpuKey === 'string') out.gpuKey = input.gpuKey.trim().slice(0, 200);
   if (typeof input.gpuOwner === 'string') out.gpuOwner = input.gpuOwner.trim().slice(0, 120);
   if (typeof input.gpuHub === 'string' && /^https?:\/\/[^\s]+$/.test(input.gpuHub.trim())) out.gpuHub = input.gpuHub.trim().replace(/\/+$/, '');

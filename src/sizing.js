@@ -10,6 +10,7 @@
  * it reported last time, with a tenth kept back for the checkpoints and the validation points.
  */
 const DEFAULT_SEC = 90;   // seconds per sighted turn-pass on the laptops measured so far
+const DEFAULT_GPU_SEC = 1.5; // and on a rented GPU (a T4 with the 0.5B student), until it reports its own
 const EPOCHS = 3;
 const MIN_TURNS = 20;     // below this a round is noise, whatever the hours say
 const SAFETY = 0.9;
@@ -30,13 +31,13 @@ function speedOf(line) {
 }
 
 /** The last speed a machine reported (rounds newest first), else the default. */
-function secPerTurnFor(device, rounds = []) {
+function secPerTurnFor(device, rounds = [], { gpu = false } = {}) {
   const d = String(device || '').toLowerCase();
   for (const r of rounds || []) {
     if (String(r.device || '').toLowerCase() !== d) continue;
     if (Number(r.secPerTurn) > 0) return Number(r.secPerTurn);
   }
-  return DEFAULT_SEC;
+  return gpu ? DEFAULT_GPU_SEC : DEFAULT_SEC;
 }
 
 /** The typical speed across the machines seen lately - the median of the last reports, else the default. */
@@ -59,4 +60,4 @@ function forSettings({ hours = 0, mode = 'time', share = 1, secPerTurn = DEFAULT
   return { mode: mode === 'work' ? 'work' : 'time', share: n, hours: Number(hours) || 0, hoursEach, turnsEach, batchTurns: turnsEach * n, epochs: EPOCHS, secPerTurn: Number(secPerTurn) > 0 ? Number(secPerTurn) : DEFAULT_SEC };
 }
 
-module.exports = { DEFAULT_SEC, EPOCHS, MIN_TURNS, SAFETY, turnsFor, speedOf, secPerTurnFor, typicalSpeed, forSettings };
+module.exports = { DEFAULT_SEC, DEFAULT_GPU_SEC, EPOCHS, MIN_TURNS, SAFETY, turnsFor, speedOf, secPerTurnFor, typicalSpeed, forSettings };

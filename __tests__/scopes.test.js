@@ -961,3 +961,27 @@ describe('a round knows its hours and mode', () => {
     }
   });
 });
+
+describe('the checkpoint travels', () => {
+  it('a part=last upload is remembered apart from the final adapter', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-ckpt-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'Modal T4', turns: 200 });
+      training.setAdapterHub(r.id, `hub:${r.id}-last`, 'last');
+      let row = training.allRounds().find((x) => x.id === r.id);
+      expect(row.adapterLast).toBe(`hub:${r.id}-last`);
+      expect(row.adapterHub).toBeUndefined();
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+      row = training.allRounds().find((x) => x.id === r.id);
+      expect(row.adapterHub).toBe(`hub:${r.id}`);
+      expect(training.state().rounds.find((x) => x.id === r.id).adapterLast).toBe(`hub:${r.id}-last`);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});
