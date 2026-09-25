@@ -133,6 +133,8 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
   };
   const rows = allRounds();
   if (!r.batch && r.share > 1 && !r.merge) r.batch = r.id;
+  /* The shares this merge round averages now point at it. */
+  if (r.merge && r.batch) for (const x of rows) if (x.batch === r.batch && !x.merge) x.mergedInto = r.id;
   rows.unshift(r);
   writeJson(ROUNDS(), rows.slice(0, 200));
   return r;
@@ -175,13 +177,36 @@ function setAdapterHub(id, name) {
 function batchReadyToMerge(id) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
-  if (!r || !r.batch || r.mergedInto) return null;
+  /* A merge that is running or done owns its members; one that died, or 'pending', does not. */
+  const owned = (v) => !!v && v !== 'pending' && rows.some((x) => x.id === v && x.merge && (x.status === 'running' || x.status === 'done'));
+  if (!r || !r.batch || owned(r.mergedInto)) return null;
   const members = rows.filter((x) => x.batch === r.batch && !x.merge);
   if (members.length < 2) return null;
-  if (members.some((m) => m.mergedInto || m.status !== 'done' || !m.adapterHub)) return null;
+  if (members.some((m) => owned(m.mergedInto) || m.status !== 'done' || !m.adapterHub)) return null;
+  if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) return null;
+  /* A merge round already running or pending on this batch: not twice. */
+  if (rows.some((x) => x.merge && x.batch === r.batch && x.status === 'running')) return null;
+  if (pendingList().some((p) => p.merge && p.batch === r.batch)) return null;
   for (const m of members) m.mergedInto = 'pending';
   writeJson(ROUNDS(), rows);
   return members;
+}
+/** Batches whose shares are all in and whose merge has not happened - one member id each, for the tick to retry. */
+function batchesAwaitingMerge() {
+  const rows = allRounds();
+  const out = [];
+  const seen = new Set();
+  for (const r of rows) {
+    if (!r.batch || r.merge || seen.has(r.batch)) continue;
+    seen.add(r.batch);
+    const members = rows.filter((x) => x.batch === r.batch && !x.merge);
+    if (members.length < 2 || members.some((m) => m.status !== 'done' || !m.adapterHub)) continue;
+    if (rows.some((x) => x.merge && x.batch === r.batch && (x.status === 'running' || x.status === 'done'))) continue;
+    if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) continue;
+    if (pendingList().some((p) => p.merge && p.batch === r.batch)) continue;
+    out.push(r.id);
+  }
+  return out;
 }
 /** A round that shares its scope with others in a batch - not promoted on its own. */
 function inBatch(r) { return !!(r && r.batch && !r.merge && allRounds().filter((x) => x.batch === r.batch && !x.merge).length > 1); }
@@ -243,10 +268,40 @@ function checkRound(id, point = {}) {
  * split; this only records it. Promotion is a separate, explicit act — a round that finished is not
  * a round that won, and conflating them is how a worse model reaches production quietly.
  */
+/**
+ * STOPPED BY THE OWNER. The hub marks the round first, so the machine's late calls cannot revive
+ * it: its notes are answered with `stop`, and its end call, if one comes, keeps the adapter it
+ * carries and nothing else. The machine's pending share, if it had not started, is dropped too.
+ */
+function stopRound(id, why = 'stopped by the owner') {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  if (r.status !== 'running') return r;
+  r.status = 'stopped';
+  r.endedAt = new Date().toISOString();
+  r.why = String(why || 'stopped by the owner').slice(0, 400);
+  writeJson(ROUNDS(), rows);
+  dropPending(r.device);
+  return r;
+}
+/** The pending share of one machine, dropped (by name, case does not matter). */
+function dropPending(device = '') {
+  const list = pendingList().filter((x) => !same(x.device, device));
+  writeJson(PENDING(), list);
+  return list;
+}
+
 function endRound(id, { status = 'done', baseline = null, result = null, why = '', adapter = '', trained = 0, drawSeed = null } = {}) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
+  /* A stopped round stays stopped: the machine's end call, arriving after the owner's stop, may
+     add the adapter it saved and nothing else. */
+  if (r.status === 'stopped' && status !== 'stopped') {
+    if (adapter) { r.adapter = String(adapter).slice(0, 200); writeJson(ROUNDS(), rows); }
+    return r;
+  }
   r.endedAt = new Date().toISOString();
   r.status = status;
   r.baseline = baseline;
@@ -580,4 +635,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };

@@ -193,6 +193,10 @@ import sys
 import tempfile
 
 
+# The exam subprocess while one runs, so a stop can end it with its parent.
+EXAM_CHILD = None
+
+
 def measure(model_id, adapter, data, limit, note=print):
     """Score a model in a SEPARATE PROCESS, and read the answer back as JSON.
 
@@ -222,6 +226,8 @@ def measure(model_id, adapter, data, limit, note=print):
     # fails would then report nothing about why, which is the one moment the text is worth having.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace", bufsize=1, env=env)
+    global EXAM_CHILD
+    EXAM_CHILD = proc
     tail = []
     for line in proc.stdout:
         line = line.rstrip()
@@ -229,6 +235,7 @@ def measure(model_id, adapter, data, limit, note=print):
         if "/" in line and "agreement" in line:
             note(line.strip())
     proc.wait()
+    EXAM_CHILD = None
     if proc.returncode != 0:
         note(f"measurement failed ({proc.returncode}): {' | '.join(tail)[-200:]}")
         return None
@@ -288,13 +295,27 @@ class Hub:
     def check(self, point):
         """One validation point: {step, turns, valLoss, trainLoss, best, lr}. The curve the screen draws."""
         if self.round_id:
-            self._post(f"/v1/training/rounds/{self.round_id}/check", point)
+            self._heed(self._post(f"/v1/training/rounds/{self.round_id}/check", point))
 
     def note(self, line):
         """One line of progress. Printed always, sent when there is somewhere to send it."""
         print(f"  {line}", flush=True)
         if self.round_id:
-            self._post(f"/v1/training/rounds/{self.round_id}/note", {"line": line})
+            self._heed(self._post(f"/v1/training/rounds/{self.round_id}/note", {"line": line}))
+
+    def _heed(self, got):
+        """The hub answers every note; `stop` means the owner ended this round. Leave now: the exam
+        child first, then this process, with status 0 so the machine reports no crash."""
+        if isinstance(got, dict) and got.get("stop"):
+            print("  stopped by the owner — leaving the round", flush=True)
+            global EXAM_CHILD
+            child = EXAM_CHILD
+            if child is not None:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            raise SystemExit(0)
 
     def fetch(self, path, into):
         """Pull a file from the controller. Returns the number of lines written, or -1.

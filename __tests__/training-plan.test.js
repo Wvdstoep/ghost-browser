@@ -155,3 +155,49 @@ describe('no round on painted cards', () => {
     expect(decide({ ...ready(), sighted: null, sliceTurns: 3600 }).run).toBe(true);
   });
 });
+
+describe('a batch is closed once it has its machines', () => {
+  const { decide } = require('../src/trainingPlan');
+  const now = new Date().toISOString();
+  const two = [{ name: 'KAROLINA', online: true }, { name: 'WOJMAGEMI', online: true }];
+  const s = [{ key: 'base', level: 'base', name: '', sighted: 2000, seen: 0, adapter: '', paper: 150 }];
+  const corpus = { usableSinceLastRound: 0, scanning: false };
+  it('does not hand a third share of a two-machine batch to the machine whose share finished', () => {
+    const rounds = [
+      { id: 'r-a', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-a', result: 12, baseline: 5 },
+      { id: 'r-b', status: 'running', device: 'KAROLINA', startedAt: now, lastAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2 },
+    ];
+    const d = decide({ corpus, dataset: { train: 12000 }, rounds, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(d.run).toBe(false);
+    expect(d.why).toMatch(/base is being trained/);
+  });
+  it('holds the scope while the merge round runs, and while it is pending', () => {
+    const rounds = [
+      { id: 'r-a', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-a', mergedInto: 'r-m' },
+      { id: 'r-b', status: 'done', device: 'KAROLINA', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-b', mergedInto: 'r-m' },
+      { id: 'r-m', status: 'running', device: 'WOJMAGEMI', startedAt: now, lastAt: now, scope: { key: 'base' }, batch: 'r-a', share: 1, merge: true },
+    ];
+    const d = decide({ corpus, dataset: { train: 12000 }, rounds, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(d.run).toBe(false);
+    const pend = [{ device: 'WOJMAGEMI', scope: { key: 'base', level: 'base', name: '' }, batch: 'r-a', share: 1, merge: true, at: now }];
+    const d2 = decide({ corpus, dataset: { train: 12000 }, rounds: rounds.slice(0, 2), trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2, pending: pend });
+    expect(d2.run).toBe(false);
+  });
+  it('waits for the merge when every share is in and none has started', () => {
+    const rounds = [
+      { id: 'r-a', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-a', mergedInto: 'pending' },
+      { id: 'r-b', status: 'done', device: 'KAROLINA', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-b', mergedInto: 'pending' },
+    ];
+    const d = decide({ corpus, dataset: { train: 12000 }, rounds, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(d.run).toBe(false);
+  });
+  it('opens the scope again once the merge round is done', () => {
+    const rounds = [
+      { id: 'r-a', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-a', mergedInto: 'r-m' },
+      { id: 'r-b', status: 'done', device: 'KAROLINA', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-b', mergedInto: 'r-m' },
+      { id: 'r-m', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 1, merge: true, result: 12, baseline: 5 },
+    ];
+    const d = decide({ corpus, dataset: { train: 12000 }, rounds, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(d.run).toBe(true);
+  });
+});

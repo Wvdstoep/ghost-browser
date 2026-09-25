@@ -1646,13 +1646,53 @@ app.post('/v1/training/rounds', authed, (req, res) => {
 app.post('/v1/training/rounds/:id/note', authed, (req, res) => {
   const r = training.noteRound(req.params.id, (req.body || {}).line);
   if (!r) return res.status(404).json({ error: 'no such round' });
-  res.json({ ok: true });
+  /* `stop`: the round is no longer running here - the machine leaves it. A stopped round's
+     machine may never have received the stop command (an older app, a laptop that was offline for
+     a minute); its next note tells it. */
+  res.json({ ok: true, stop: r.status !== 'running' });
 });
 /* A validation point while it trains - the curve, not a line of prose. */
 app.post('/v1/training/rounds/:id/check', authed, (req, res) => {
   const r = training.checkRound(req.params.id, req.body || {});
   if (!r) return res.status(404).json({ error: 'no such round' });
-  res.json({ ok: true, checks: (r.validation || []).length, bestValLoss: r.bestValLoss == null ? null : r.bestValLoss });
+  res.json({ ok: true, stop: r.status !== 'running', checks: (r.validation || []).length, bestValLoss: r.bestValLoss == null ? null : r.bestValLoss });
+});
+/**
+ * STOP. The owner's word ends a round on any machine: the hub marks it stopped, drops the
+ * machine's pending share, and tells the machine to kill its trainer. A machine that cannot be
+ * told (offline, an app without the command) leaves by itself on its next progress note, which
+ * the hub answers with `stop`. Nothing is promoted from a stopped round; its saved checkpoint is
+ * kept on the machine and travels with the next round on that scope.
+ */
+async function stopRound(id, why) {
+  const r = training.stopRound(id, why);
+  if (!r) return null;
+  let told = false, error = '';
+  try {
+    const { usable } = planNow();
+    const dev = (usable || []).find((t) => String(t.name || '').toLowerCase() === String(r.device || '').toLowerCase());
+    if (dev && dev.deviceId) { await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_stop', body: { round: id } }, 15000); told = true; }
+    else error = 'machine not connected — it stops on its next progress note';
+  } catch (e) { error = e.message; }
+  log.info(`training: round ${id} on ${r.device} stopped by the owner${told ? ' (machine told)' : ` (${error})`}`);
+  return { round: r, told, error };
+}
+app.post('/v1/training/rounds/:id/stop', authed, async (req, res) => {
+  try {
+    const out = await stopRound(req.params.id, (req.body || {}).why || 'stopped by the owner');
+    if (!out) return res.status(404).json({ error: 'no such round' });
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+/* Every running round and every pending share, stopped. */
+app.post('/v1/training/stop', authed, async (req, res) => {
+  try {
+    const ids = training.allRounds().filter((r) => r.status === 'running').map((r) => r.id);
+    const out = [];
+    for (const id of ids) { const o = await stopRound(id, (req.body || {}).why || 'stopped by the owner'); if (o) out.push(o); }
+    training.clearPending();
+    res.json({ ok: true, stopped: out.map((o) => ({ id: o.round.id, device: o.round.device, told: o.told, error: o.error })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
   const r = training.endRound(req.params.id, req.body || {});
@@ -1688,8 +1728,10 @@ async function mergeIfReady(roundId) {
   const dev = usable.find((t) => t.online && String(t.name || '').toLowerCase() === String(first.device || '').toLowerCase())
     || usable.find((t) => t.online);
   if (dev == null) { log.warn(`training: merge of ${members.map((m) => m.id).join(' + ')} waits — no machine is online`); return null; }
+  const busy = training.allRounds().some((r) => r.status === 'running' && String(r.device || '').toLowerCase() === String(dev.name || '').toLowerCase());
+  if (busy) { log.warn(`training: merge of ${members.map((m) => m.id).join(' + ')} waits — ${dev.name} is still on a round`); return null; }
   const base = `merge:${members.map((m) => m.adapterHub).join(',')}`;
-  training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true });
+  training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true, batch: first.batch || '' });
   try {
     await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_round', body: { base, hours: 1 } }, 30000);
     log.info(`training: merging ${members.map((m) => m.id).join(' + ')} on ${dev.name}`);
@@ -2720,6 +2762,9 @@ const trainingTick = () => {
      * batch must come from one build. The set is rebuilt only when nothing is running or pending;
      * otherwise the free machines are handed their shares of the build that is already in use.
      */
+    /* A batch whose shares are in and whose merge never started (no machine was free when the
+       last share arrived) is merged first: the merge is the batch's last step, not a new round. */
+    for (const id of training.batchesAwaitingMerge()) mergeIfReady(id).catch((e) => log.warn(`training: merge retry — ${e.message}`));
     const open = training.allRounds().some((r) => r.status === 'running') || training.pendingList().length > 0;
     if (open) { dispatchAll().catch(() => {}); return; }
     /* Every free machine in one pass: the second laptop gets its share now, not in ten minutes. */
