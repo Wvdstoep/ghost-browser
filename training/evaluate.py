@@ -342,6 +342,10 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
     args_hits = 0
     per_role = defaultdict(lambda: [0, 0])   # role -> [right, seen]
     started = time.time()
+    # THE GPU, WHEN THERE IS ONE. Same float32 maths as on a laptop - the numbers stay comparable -
+    # but a node's CPU is a sliver, and a 500-turn exam took hours there before this line.
+    if torch.cuda.is_available():
+        model_obj = model_obj.to("cuda")
     device = next(model_obj.parameters()).device
 
     for i, row in enumerate(rows):
