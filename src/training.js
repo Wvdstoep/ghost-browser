@@ -134,7 +134,7 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
   const rows = allRounds();
   if (!r.batch && r.share > 1 && !r.merge) r.batch = r.id;
   /* The shares this merge round averages now point at it. */
-  if (r.merge && r.batch) for (const x of rows) if (x.batch === r.batch && !x.merge) x.mergedInto = r.id;
+  if (r.merge && r.batch) for (const x of rows) if (x.batch === r.batch && !x.merge && x.mergedInto !== 'left out') x.mergedInto = r.id;
   rows.unshift(r);
   writeJson(ROUNDS(), rows.slice(0, 200));
   return r;
@@ -208,9 +208,23 @@ function batchReadyToMerge(id) {
   /* A merge round already running or pending on this batch: not twice. */
   if (rows.some((x) => x.merge && x.batch === r.batch && x.status === 'running')) return null;
   if (pendingList().some((p) => p.merge && p.batch === r.batch)) return null;
-  for (const m of members) m.mergedInto = 'pending';
+  if (members.some((m) => m.mergedInto === 'abandoned')) return null;
+  /*
+   * A COLLAPSED SHARE IS LEFT OUT OF THE AVERAGE. Each share took its own exam; one that collapsed
+   * onto a tool (over MAX_COLLAPSE) would poison the average of the sound ones. It stays on the hub,
+   * marked, and the merge is of the rest. A batch whose every share collapsed is abandoned: the
+   * scope opens for a fresh batch from the same start, and nothing is promoted from it.
+   */
+  const collapsed = (m) => !!(m.result && m.result.collapse && typeof m.result.collapse.ratio === 'number' && m.result.collapse.ratio > MAX_COLLAPSE);
+  const sound = members.filter((m) => !collapsed(m));
+  if (!sound.length) {
+    for (const m of members) m.mergedInto = 'abandoned';
+    writeJson(ROUNDS(), rows);
+    return null;
+  }
+  for (const m of members) m.mergedInto = collapsed(m) ? 'left out' : 'pending';
   writeJson(ROUNDS(), rows);
-  return members;
+  return sound;
 }
 /** Batches whose shares are all in and whose merge has not happened - one member id each, for the tick to retry. */
 function batchesAwaitingMerge() {
@@ -222,6 +236,7 @@ function batchesAwaitingMerge() {
     seen.add(r.batch);
     const members = rows.filter((x) => x.batch === r.batch && !x.merge);
     if (members.length < 2 || members.some((m) => m.status !== 'done' || !m.adapterHub)) continue;
+    if (members.some((m) => m.mergedInto === 'abandoned')) continue;
     if (rows.some((x) => x.merge && x.batch === r.batch && (x.status === 'running' || x.status === 'done'))) continue;
     if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) continue;
     if (pendingList().some((p) => p.merge && p.batch === r.batch)) continue;
