@@ -42,6 +42,9 @@ const CRASHES_TO_REST = 2;
 const REST_WINDOW_MS = 60 * 60 * 1000;
 const REST_MS = 60 * 60 * 1000;
 
+/* How many machines may train one scope at once, each on its own half of the slice. */
+const PAIR = 2;
+
 /** Devices (lower-case names) that should not be handed a round right now, with why. */
 function restingDevices(rounds, now = Date.now()) {
   const byDevice = new Map();
@@ -112,7 +115,15 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     return heard && (now - heard) < SILENT_MS;
   });
   const busyDevices = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
-  const busyScopes = new Set(alive.map((r) => ((r.scope && r.scope.key) || 'base')));
+  /*
+   * TWO MACHINES, ONE SCOPE. A scope with one live round is not busy: a second free machine
+   * takes the other half of its slice (the ledger keeps the halves disjoint) and the two adapters
+   * are merged when both are in. Only a scope already worked by PAIR machines is closed.
+   */
+  const liveOn = {};
+  for (const r of alive) { const k = (r.scope && r.scope.key) || 'base'; liveOn[k] = (liveOn[k] || 0) + 1; }
+  const busyScopes = new Set(Object.keys(liveOn).filter((k) => liveOn[k] >= PAIR));
+  const pairFor = (key) => { const r = alive.find((x) => ((x.scope && x.scope.key) || 'base') === key); return r ? r.id : ''; };
   const withScopes = Array.isArray(scopes) && scopes.length > 0;
   if (alive.length && !withScopes) return no(`a round is already running on ${alive[0].device || 'a device'}`);
 
@@ -173,6 +184,8 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     base: scope ? (scope.adapter || scope.parentAdapter || '') : ((serving && serving.adapter) || ''),
     coverage: scope ? { seen: scope.seen || 0, total: scope.sighted || 0 } : { seen, total },
     scope: scope ? { level: scope.level, name: scope.name || '', key: scope.key } : null,
+    /* The live round this one pairs with on the same scope, when there is one. */
+    pairOf: scope ? pairFor(scope.key) : '',
   });
 
   /*
@@ -231,4 +244,4 @@ function pickScope(scopes, sliceTurns = 0, { basePending = false } = {}) {
   return { pick: null, why: 'every scope is covered' };
 }
 
-module.exports = { decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS };
+module.exports = { decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };

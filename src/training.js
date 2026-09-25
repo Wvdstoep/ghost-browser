@@ -58,8 +58,8 @@ const PENDING_MS = 3 * 60 * 60 * 1000;
 const platforms = require('./trainScopes');
 const normScope = (s) => { const sc = platforms.parse(s || 'base'); return { level: sc.level, name: sc.name, key: sc.key }; };
 
-function setPending({ scope = null, device = '', base = '' } = {}) {
-  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), at: new Date().toISOString() };
+function setPending({ scope = null, device = '', base = '', pairOf = '', merge = false } = {}) {
+  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), pairOf: String(pairOf || ''), merge: !!merge, at: new Date().toISOString() };
   writeJson(PENDING(), p);
   return p;
 }
@@ -91,6 +91,10 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
   const pend = scope ? null : takePending();
   const r = {
     scope: normScope(scope || (pend && pend.scope) || 'base'),
+    /* Half of a pair: the live round on the same scope this one shares the slice with. */
+    pairOf: (pend && pend.pairOf) || '',
+    /* A merge round: takes the exam on the average of two halves, trains nothing. */
+    merge: !!(pend && pend.merge),
     id: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     startedAt: new Date().toISOString(),
     endedAt: null,
@@ -109,9 +113,35 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
     why: '',
   };
   const rows = allRounds();
+  if (r.pairOf) { const other = rows.find((x) => x.id === r.pairOf); if (other) other.pairWith = r.id; }
   rows.unshift(r);
   writeJson(ROUNDS(), rows.slice(0, 200));
   return r;
+}
+
+/** The hub's own copy of a round's adapter, by name (`hub:<round id>`), for a merge on any machine. */
+function setAdapterHub(id, name) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  r.adapterHub = String(name || '');
+  writeJson(ROUNDS(), rows);
+  return r;
+}
+
+/** Both halves of a pair are done and on the hub: the merge is due. Marks them so it happens once. */
+function pairReadyToMerge(id) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r || r.mergedInto) return null;
+  const otherId = r.pairOf || r.pairWith;
+  if (!otherId) return null;
+  const o = rows.find((x) => x.id === otherId);
+  if (!o || o.mergedInto) return null;
+  if (r.status !== 'done' || o.status !== 'done' || !r.adapterHub || !o.adapterHub) return null;
+  r.mergedInto = 'pending'; o.mergedInto = 'pending';
+  writeJson(ROUNDS(), rows);
+  return { a: r, b: o };
 }
 
 /** Progress from the device while it works — one line, so the UI is never silent for an hour. */
@@ -460,6 +490,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
     rounds: rounds.slice(0, 20).map((r) => ({
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
+      pairOf: r.pairOf || r.pairWith || '', merge: !!r.merge, mergedInto: r.mergedInto || '',
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
@@ -507,4 +538,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, pairReadyToMerge, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
