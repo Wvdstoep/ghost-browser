@@ -324,6 +324,15 @@ function stopRound(id, why = 'stopped by the owner') {
   dropPending(r.device);
   return r;
 }
+/** A round tried in the shadow under this tag, without promotion. */
+function markTrial(id, tag) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  r.trial = String(tag || '');
+  writeJson(ROUNDS(), rows);
+  return r;
+}
 /** The pending share of one machine, dropped (by name, case does not matter). */
 function dropPending(device = '') {
   const list = pendingList().filter((x) => !same(x.device, device));
@@ -331,7 +340,7 @@ function dropPending(device = '') {
   return list;
 }
 
-function endRound(id, { status = 'done', baseline = null, result = null, why = '', adapter = '', trained = 0, drawSeed = null } = {}) {
+function endRound(id, { status = 'done', baseline = null, result = null, why = '', adapter = '', trained = 0, drawSeed = null, paper = '' } = {}) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
@@ -356,6 +365,7 @@ function endRound(id, { status = 'done', baseline = null, result = null, why = '
    */
   r.trained = Number(trained) || 0;
   if (drawSeed != null) r.drawSeed = Number(drawSeed);
+  if (paper) r.paper = String(paper).slice(0, 80);
   if (adapter) r.adapter = String(adapter).slice(0, 200);
   writeJson(ROUNDS(), rows);
   return r;
@@ -401,6 +411,47 @@ function recordLearned(r, rows = allRounds()) {
   return learned.recordFromLedger({ key, roundId: r.id, marks, file, ledger });
 }
 
+/** The serving model's score on the round's paper (bare when nothing serves the scope), if measured. */
+function servingBar(r) {
+  if (!r || !r.paper || !r.result) return null;
+  const key = (r.scope && r.scope.key) || 'base';
+  const serving = adapterFor(key);
+  const start = serving.adapter || '';
+  if (String(r.base || '') === start) return null;   // it measured what serves already
+  return baselineFor({ scope: key, base: start, paper: r.paper, turns: Number(r.result.turns) || 0 });
+}
+
+/**
+ * CONTINUE FROM A SOUND ADAPTER. A scope with no promoted adapter does not start every round from
+ * the bare model: its best unpromoted adapter that is SOUND - measured, no collapse, not below its
+ * own start - is the next round's start, so short rounds add up instead of repeating. A share of a
+ * batch is not a candidate (its merge is); a collapsed or a worse-than-start adapter never is.
+ */
+function warmStartFor(scope) {
+  const key = normScope(scope || 'base').key;
+  const rows = allRounds();
+  for (const r of rows) {
+    if (((r.scope && r.scope.key) || 'base') !== key) continue;
+    if (r.status !== 'done' || !r.adapterHub || r.promoted) continue;
+    if (r.batch && !r.merge) continue;   // a share: its merge carries the batch
+    if (!r.result || !r.baseline) continue;
+    const c = r.result.collapse;
+    if (c && typeof c.ratio === 'number' && c.ratio > MAX_COLLAPSE) continue;
+    if (Number(r.result.agreement_pct) < Number(r.baseline.agreement_pct)) continue;
+    return { adapter: r.adapterHub, roundId: r.id, score: Number(r.result.agreement_pct) };
+  }
+  return null;
+}
+
+/** Whether a tag may take a scope's slot in the serving map: yes when the slot is empty or held by a model that was not promoted. */
+function slotFree(key, existingTag, models = []) {
+  if (!existingTag) return true;
+  const rec = (models || []).find((m) => m && m.tag === existingTag);
+  if (!rec || !rec.roundId) return true;
+  const r = allRounds().find((x) => x.id === rec.roundId);
+  return !(r && r.promoted);
+}
+
 function promote(roundId) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === roundId);
@@ -409,6 +460,17 @@ function promote(roundId) {
   if (!r.result || !r.baseline) return { error: 'that round has no measurement, so there is nothing to promote on' };
   if (Number(r.result.agreement_pct) <= Number(r.baseline.agreement_pct)) {
     return { error: `it did not beat the baseline (${r.result.agreement_pct}% against ${r.baseline.agreement_pct}%)` };
+  }
+  /*
+   * THE BAR STAYS WHAT SERVES. A round that continued from a sound but unpromoted adapter measured
+   * its start, not the model that serves; beating a weak start is not a reason to serve. When the
+   * serving (or bare) model's score on the SAME paper is known - the hub keeps every measured
+   * baseline by paper - the round has to beat that too. Unknown is not refused: an older paper
+   * has no such number, and the start comparison is all there is.
+   */
+  const bar = servingBar(r);
+  if (bar && Number(r.result.agreement_pct) <= Number(bar.agreement_pct)) {
+    return { error: `it beat its start (${r.baseline.agreement_pct}%) but not what serves: ${r.result.agreement_pct}% against ${bar.agreement_pct}% on the same paper` };
   }
   /*
    * A COLLAPSED MODEL BEATS ITS BASELINE AND IS STILL WORSE THAN NOTHING.
@@ -651,6 +713,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
       batch: r.batch || '', share: r.share || 1, merge: !!r.merge, mergedInto: r.mergedInto || '',
+      paper: r.paper || '', trial: r.trial || '',
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
@@ -701,4 +764,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };

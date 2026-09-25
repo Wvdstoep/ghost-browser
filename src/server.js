@@ -1706,11 +1706,14 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
    * machine that trained it. A round that fails a gate is kept and says why; nothing else changes.
    */
   let promotion = null;
+  let trial = null;
   const half = training.inBatch(r);
   if (r.status === 'done' && r.result && r.baseline && !half) {
     try { promotion = await promoteAndExport(r.id, 'by itself'); } catch (e) { promotion = { error: e.message }; }
+    /* Refused on score alone: into the shadow as a trial, where the ledger decides. */
+    if (promotion && promotion.error) { try { trial = await trialInShadow(r, promotion.error); } catch (e) { trial = { trial: false, why: e.message }; } }
   }
-  res.json({ ...r, promotion, half });
+  res.json({ ...r, promotion, trial, half });
   /* Half of a pair: the merge is due once both halves are done and their adapters are on the hub
      (the upload arrives right after this call, so the check runs on the upload too). */
   if (half) setTimeout(() => { mergeIfReady(r.id).catch((e) => log.warn(`training: merge check — ${e.message}`)); }, 5000);
@@ -1801,24 +1804,53 @@ app.put('/v1/training/rounds/:id/adapter', authed, (req, res) => {
  * map under the round's scope - in the shadow first, never straight into driving. The ask is
  * best-effort and says what happened; a machine that has gone to sleep is asked again by a tap.
  */
+/** Ask the machine that trained a round to export its adapter as one model the sidecar can serve. */
+async function askExport(round, tag) {
+  let exportAsk = { asked: false, why: '' };
+  const dev = (deviceHub.deviceList() || []).find((d) => d.online && String(d.name || '').toLowerCase() === String(round.device || '').toLowerCase());
+  if (!round.adapter) exportAsk.why = 'the round recorded no adapter path';
+  else if (String(round.adapter).startsWith('hub:')) exportAsk.why = 'the machine exported it itself';
+  else if (!dev) exportAsk.why = `${round.device || 'the machine that trained it'} is not online to export it`;
+  else {
+    const out = await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_export', body: { adapter: round.adapter, tag, base: round.base || '', roundId: round.id } }, 30000);
+    exportAsk = { asked: !!(out && out.started), why: out && out.error ? out.error : '', tag, device: dev.name };
+  }
+  return exportAsk;
+}
+const tagFor = (round) => `gb-${trainScopes.slug(round.scope || 'base')}-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
+
 async function promoteAndExport(roundId, how = 'by hand') {
   const r = training.promote(roundId);
   if (r.error) { log.info(`training: ${roundId} not promoted ${how} — ${r.error}`); return r; }
   let exportAsk = { asked: false, why: '' };
   try {
     const round = training.allRounds().find((x) => x.id === roundId) || {};
-    const tag = `gb-${trainScopes.slug(round.scope || 'base')}-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
-    const dev = (deviceHub.deviceList() || []).find((d) => d.online && String(d.name || '').toLowerCase() === String(round.device || '').toLowerCase());
-    if (!round.adapter) exportAsk.why = 'the round recorded no adapter path';
-    else if (String(round.adapter).startsWith('hub:')) exportAsk.why = 'the machine exported it itself';
-    else if (!dev) exportAsk.why = `${round.device || 'the machine that trained it'} is not online to export it`;
-    else {
-      const out = await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_export', body: { adapter: round.adapter, tag, base: round.base || '', roundId: round.id } }, 30000);
-      exportAsk = { asked: !!(out && out.started), why: out && out.error ? out.error : '', tag, device: dev.name };
-    }
-    log.info(`training: promoted ${round.id} ${how} (${r.scope}); export ${exportAsk.asked ? `asked of ${dev && dev.name} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+    const tag = tagFor(round);
+    exportAsk = await askExport(round, tag);
+    log.info(`training: promoted ${round.id} ${how} (${r.scope}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
   } catch (e) { exportAsk = { asked: false, why: e.message }; }
   return { ...r, how, export: exportAsk };
+}
+
+/*
+ * A SHADOW TRIAL. A round that failed the gates on SCORE alone - measured, no collapse - is not
+ * served, and so the tail of the chain (export, the sidecar, the shadow ledger against the
+ * teacher) never ran for it. Now it is exported and put in the shadow all the same: there it
+ * answers beside the teacher on real jobs and can only be measured, never drive. Autopilot moves
+ * it on only when the ledger says so (200 steps at 55% agreement, then judged jobs). It never
+ * takes the map slot of a promoted model, and nothing chains from it unless it is sound.
+ */
+async function trialInShadow(round, why) {
+  const r = training.allRounds().find((x) => x.id === round.id) || round;
+  if (!r || r.status !== 'done' || !r.result || !r.adapter) return { trial: false, why: 'nothing measured to try' };
+  const c = r.result.collapse;
+  if (c && typeof c.ratio === 'number' && c.ratio > training.MAX_COLLAPSE) return { trial: false, why: 'collapsed — not even in the shadow' };
+  if (!/did not beat|not what serves|paper held only/.test(String(why || ''))) return { trial: false, why };
+  const tag = tagFor(r);
+  const exportAsk = await askExport(r, tag);
+  training.markTrial(r.id, tag);
+  log.info(`training: ${r.id} goes to the shadow as a trial (${why}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+  return { trial: true, tag, export: exportAsk };
 }
 
 app.post('/v1/training/rounds/:id/promote', authed, async (req, res) => {
@@ -2051,6 +2083,10 @@ function scopesNow({ serving = null } = {}) {
     r.attempted = trainingPlan.coveredFor(all, r.key);
     const own = training.adapterFor(r);
     r.adapter = own.from === r.key ? own.adapter : '';
+    /* No promoted adapter of its own: the best sound unpromoted one is the next start. */
+    const warm = r.adapter ? null : training.warmStartFor(r.key);
+    r.warmStart = warm ? warm.adapter : '';
+    r.warmStartRound = warm ? warm.roundId : '';
     const parent = trainScopes.parentOf(r);
     r.parentAdapter = parent ? training.adapterFor(parent).adapter : '';
     r.model = models[r.key] || '';
@@ -2316,10 +2352,18 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
     const round = training.allRounds().find((x) => x.id === roundId) || null;
     const key = trainScopes.parse((round && round.scope) || 'base').key;
     const mode = before.studentMode === 'off' ? 'shadow' : before.studentMode;
-    const models = { ...(before.studentModels || {}), [key]: tag };
-    settingsStore.write({ ...before, studentModels: models, studentMode: mode, ...(key === 'base' ? { studentModel: tag } : {}) });
-    shadow.reset(tag);
-    log.info(`training: serving ${tag} for ${key} (${mode}${before.autopilot === false ? '' : ', autopilot'})`);
+    /* A trial (not promoted) never takes the slot of a promoted model: it waits for the next slot. */
+    const existing = (before.studentModels || {})[key] || '';
+    const promotedNow = !!(round && round.promoted);
+    const listed = (() => { try { return JSON.parse(fsx.readFileSync(pathx.join(process.env.PROFILE_DIR || '/profiles', 'training', 'models.json'), 'utf8')); } catch (e) { return []; } })();
+    if (!promotedNow && !training.slotFree(key, existing, listed)) {
+      log.info(`training: ${tag} stays off the map — ${existing} serves ${key} and was promoted; the trial is on the sidecar for a hand switch`);
+    } else {
+      const models = { ...(before.studentModels || {}), [key]: tag };
+      settingsStore.write({ ...before, studentModels: models, studentMode: mode, ...(key === 'base' ? { studentModel: tag } : {}) });
+      shadow.reset(tag);
+      log.info(`training: serving ${tag} for ${key} (${mode}${before.autopilot === false ? '' : ', autopilot'}${promotedNow ? '' : ', a trial'})`);
+    }
   } catch (e) { log.warn(`training: could not switch serving to ${tag}: ${e.message}`); }
   return { ...record, server: text.slice(0, 200) };
 }

@@ -797,3 +797,56 @@ describe('learned, not trained on', () => {
     expect(d.why).toMatch(/1000 of 1000/);
   });
 });
+
+describe('continue from a sound adapter, and the bar stays what serves', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  let dir, training;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-warm-'));
+    process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    training = require('../src/training');
+  });
+  afterEach(() => { delete process.env.PROFILE_DIR; delete require.cache[require.resolve('../src/training')]; fs.rmSync(dir, { recursive: true, force: true }); });
+  const finish = (r, { before, after, ratio = 1.0, paper = 'P1' }) => {
+    training.endRound(r.id, { baseline: { agreement_pct: before, turns: 150 }, result: { agreement_pct: after, turns: 150, collapse: { tool: 'look', ratio } }, adapter: '/x', trained: 20, paper });
+    training.setAdapterHub(r.id, `hub:${r.id}`);
+  };
+  it('picks the newest sound unpromoted adapter: not a collapsed one, not one below its start, not a share', () => {
+    const bad = training.startRound({ device: 'A', turns: 20 }); finish(bad, { before: 7, after: 9, ratio: 3.5 });
+    const worse = training.startRound({ device: 'A', turns: 20 }); finish(worse, { before: 7, after: 5 });
+    const ok = training.startRound({ device: 'A', turns: 20 }); finish(ok, { before: 7, after: 7 });
+    training.setPending({ scope: 'base', device: 'B', batch: 'b-9', share: 2, turns: 20 });
+    const share = training.startRound({ device: 'B', turns: 20 }); finish(share, { before: 7, after: 12 });
+    expect(training.warmStartFor('base')).toMatchObject({ adapter: `hub:${ok.id}`, roundId: ok.id });
+    expect(training.warmStartFor('platform:google')).toBe(null);
+  });
+  it('a round that beat its warm start but not the bare model on the same paper is refused; one that beat both is promoted', () => {
+    training.rememberBaseline({ scope: 'base', base: '', paper: 'P1', turns: 150 }, { agreement_pct: 9, turns: 150 });
+    const warm = training.startRound({ device: 'A', turns: 20, base: 'hub:r-warm' }); finish(warm, { before: 6, after: 8 });
+    expect(training.promote(warm.id).error).toMatch(/not what serves: 8% against 9%/);
+    const good = training.startRound({ device: 'A', turns: 20, base: 'hub:r-warm' }); finish(good, { before: 6, after: 11 });
+    expect(training.promote(good.id).error).toBeUndefined();
+    /* Another paper: no number for the bare model, the start comparison is all there is. */
+    const other = training.startRound({ device: 'A', turns: 20, base: 'hub:r-warm' }); finish(other, { before: 6, after: 8, paper: 'P2' });
+    expect(training.servingBar(training.allRounds().find((r) => r.id === other.id))).toBe(null);
+  });
+  it('a trial never takes the slot of a promoted model', () => {
+    const p = training.startRound({ device: 'A', turns: 20 }); finish(p, { before: 5, after: 12 });
+    expect(training.promote(p.id).error).toBeUndefined();
+    const models = [{ tag: 'gb-base-promoted', roundId: p.id }, { tag: 'gb-base-old', roundId: 'r-gone' }];
+    expect(training.slotFree('base', 'gb-base-promoted', models)).toBe(false);
+    expect(training.slotFree('base', 'gb-base-old', models)).toBe(true);
+    expect(training.slotFree('base', '', models)).toBe(true);
+    const t = training.startRound({ device: 'A', turns: 20 }); finish(t, { before: 5, after: 4 });
+    expect(training.markTrial(t.id, 'gb-base-trial').trial).toBe('gb-base-trial');
+    expect(training.state().rounds.find((r) => r.id === t.id).trial).toBe('gb-base-trial');
+  });
+  it('the planner starts a scope from its sound adapter when nothing is promoted', () => {
+    const { decide } = require('../src/trainingPlan');
+    const s = [{ key: 'base', level: 'base', name: '', sighted: 2000, seen: 0, adapter: '', warmStart: 'hub:r-ok', paper: 150 }];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [], trainers: [{ name: 'A', online: true }], auto: true, serving: null, scopes: s, sliceTurns: 40, share: 1 });
+    expect(d.run).toBe(true);
+    expect(d.base).toBe('hub:r-ok');
+  });
+});

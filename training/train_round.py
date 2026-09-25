@@ -394,10 +394,12 @@ class Hub:
         except Exception as e:
             print(f"[the adapter stays here only: {e}]", flush=True)
 
-    def end(self, status, baseline, result, adapter, why="", trained=0, drawSeed=None):
+    def end(self, status, baseline, result, adapter, why="", trained=0, drawSeed=None, paper=""):
         if self.round_id:
             self._post(f"/v1/training/rounds/{self.round_id}/end", {
                 "status": status, "baseline": baseline, "result": result, "adapter": adapter,
+                # The paper it sat, so the hub can hold it to what serves on the same paper.
+                "paper": paper or "",
                 "why": why,
                 # What it TRAINED, not what was available to it. Coverage is summed from this, and
                 # summing the other number would report the corpus finished after one night.
@@ -1088,7 +1090,7 @@ def main():
     result = measure(args.model, adapter_dir, eval_path, args.eval_turns, hub.note)
     if not result:
         hub.note("the after-measurement did not complete — the adapter is saved and unmeasured")
-        hub.end("done", baseline, None, adapter_dir, "trained, but not measured", trained=seen, drawSeed=draw_seed)
+        hub.end("done", baseline, None, adapter_dir, "trained, but not measured", trained=seen, drawSeed=draw_seed, paper=paper_id)
         return 0
 
     won = baseline is not None and result["agreement_pct"] > baseline["agreement_pct"]
@@ -1107,7 +1109,7 @@ def main():
     with open(os.path.join(out_dir, "round.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=1)
 
-    hub.end("done", baseline, result, adapter_dir, why, trained=seen, drawSeed=draw_seed)
+    hub.end("done", baseline, result, adapter_dir, why, trained=seen, drawSeed=draw_seed, paper=paper_id)
     hub.upload_adapter(adapter_dir)
     print(json.dumps({k: v for k, v in summary.items() if k not in ("baseline", "result")}, indent=1))
     print(f"\nadapter: {adapter_dir}")
