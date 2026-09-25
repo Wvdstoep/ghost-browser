@@ -1151,3 +1151,32 @@ describe('what serves is named so any machine can fetch it', () => {
     }
   });
 });
+
+describe('a start nobody can reach is not a start', () => {
+  it('a local path belongs to the machine that made it', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-reach-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'Modal L4', turns: 100 });
+      training.endRound(r.id, { baseline: { agreement_pct: 6, turns: 495 }, result: { agreement_pct: 20, turns: 495 }, adapter: '/root/gb-train/rounds/round-1/adapter', trained: 100 });
+      expect(training.promote(r.id).error).toBeUndefined();
+      /* No upload landed: the map keeps the path, and it names the machine that has it. */
+      const entry = training.current();
+      expect(entry.adapter).toBe('/root/gb-train/rounds/round-1/adapter');
+      const owner = training.allRounds().find((x) => x.adapter === entry.adapter);
+      expect(owner.device).toBe('Modal L4');
+      /* With an upload it is a hub name, which any machine can fetch. */
+      const r2 = training.startRound({ device: 'Modal L4', turns: 100 });
+      training.endRound(r2.id, { baseline: { agreement_pct: 20, turns: 495 }, result: { agreement_pct: 26, turns: 495 }, adapter: '/root/gb-train/rounds/round-2/adapter', trained: 100 });
+      training.setAdapterHub(r2.id, `hub:${r2.id}`);
+      expect(training.promote(r2.id).error).toBeUndefined();
+      expect(training.current().adapter).toBe(`hub:${r2.id}`);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

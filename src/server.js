@@ -1810,6 +1810,47 @@ app.put('/v1/training/rounds/:id/adapter', authed, (req, res) => {
   const part = String(req.query.part || '') === 'last' ? 'last' : '';
   const name = part ? `${id}-last` : id;
   const file = pathx.join(dir, `${name}.tgz`);
+  /*
+   * IN PIECES, WHEN THE MACHINE IS FAR AWAY. A single sixty-five-megabyte body from a rented
+   * session dies part way through more often than it lands. `?chunk=i&of=n` writes piece i and,
+   * on the last one, joins them - the same shape the model upload has always used.
+   */
+  const of = Math.max(0, Number(req.query.of) || 0);
+  const chunk = Math.max(0, Number(req.query.chunk) || 0);
+  if (of > 1) {
+    if (chunk >= of) return res.status(400).json({ error: `piece ${chunk} of ${of} is not a piece` });
+    const pdir = `${file}.parts`;
+    try { fsx.mkdirSync(pdir, { recursive: true }); } catch (e) { return res.status(500).json({ error: e.message }); }
+    const pfile = pathx.join(pdir, `part-${String(chunk).padStart(4, '0')}`);
+    const pout = fsx.createWriteStream(`${pfile}.tmp`);
+    let pbytes = 0;
+    req.on('data', (b) => { pbytes += b.length; });
+    req.pipe(pout);
+    pout.on('finish', () => {
+      try { fsx.renameSync(`${pfile}.tmp`, pfile); } catch (e) { return res.status(500).json({ error: e.message }); }
+      const have = (() => { try { return fsx.readdirSync(pdir).filter((f) => /^part-\d+$/.test(f)).length; } catch (e) { return 0; } })();
+      if (have < of) return res.json({ ok: true, name, piece: chunk, of, have, bytes: pbytes });
+      /* Every piece is here: join them in order, then the file is the adapter. */
+      try {
+        const out = fsx.createWriteStream(`${file}.part`);
+        let total = 0;
+        for (let i = 0; i < of; i++) {
+          const buf = fsx.readFileSync(pathx.join(pdir, `part-${String(i).padStart(4, '0')}`));
+          total += buf.length;
+          out.write(buf);
+        }
+        out.end(() => {
+          fsx.renameSync(`${file}.part`, file);
+          try { fsx.rmSync(pdir, { recursive: true, force: true }); } catch (e) { /* spent */ }
+          training.setAdapterHub(id, `hub:${name}`, part);
+          log.info(`training: ${part ? 'checkpoint' : 'adapter'} of ${id} is on the hub in ${of} piece(s) (${Math.round(total / 1e6)} MB)`);
+          res.json({ ok: true, name, bytes: total, pieces: of, joined: true });
+        });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    pout.on('error', (e) => res.status(500).json({ error: e.message }));
+    return;
+  }
   const out = fsx.createWriteStream(`${file}.part`);
   let bytes = 0;
   req.on('data', (b) => { bytes += b.length; });
@@ -2815,6 +2856,19 @@ async function dispatchRound({ force = false } = {}) {
    * Twelve hours of a laptop are not thrown away for a crash in the eleventh.
    */
   let base = dev.base || '';
+  /*
+   * A START NOBODY CAN REACH IS NOT A START. `hub:<round>` travels to any machine; a directory on
+   * the laptop or the rented session that trained it does not, and a round told to continue from
+   * one that is not there dies at load. Another machine starts from the parent instead, and says so.
+   */
+  if (base && !/^(hub:|merge:)/.test(String(base))) {
+    const owner = training.allRounds().find((r) => r.adapter === base || r.adapterLocal === base);
+    const mine = owner && String(owner.device || '').toLowerCase() === String(dev.device || '').toLowerCase();
+    if (!mine) {
+      log.warn(`training: ${dev.device} cannot continue from ${String(base).slice(0, 60)} (it lives on ${owner ? owner.device : 'another machine'}) — starting from the bare model`);
+      base = '';
+    }
+  }
   let carried = '';
   if (!base) {
     const key = (plan.scope && plan.scope.key) || 'base';

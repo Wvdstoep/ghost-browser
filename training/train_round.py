@@ -387,6 +387,37 @@ class Hub:
                 for f in os.listdir(adapter_dir):
                     tf.add(os.path.join(adapter_dir, f), arcname=f)
             data = buf.getvalue()
+            # IN PIECES. One sixty-five-megabyte body from a rented session dies part way through
+            # more often than it lands; sixteen-megabyte pieces, each retried, always land.
+            piece = 16 * 1024 * 1024
+            n = (len(data) + piece - 1) // piece
+            if n > 1:
+                q = "&part=last" if part == "last" else ""
+                for i in range(n):
+                    body = data[i * piece:(i + 1) * piece]
+                    r = urllib.request.Request(
+                        f"{self.base}/v1/training/rounds/{self.round_id}/adapter?chunk={i}&of={n}{q}",
+                        data=body, method="PUT",
+                        headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(body))})
+                    pause, tries = 4, 0
+                    while True:
+                        try:
+                            with urllib.request.urlopen(r, timeout=600) as resp:
+                                resp.read()
+                            break
+                        except Exception as e:
+                            tries += 1
+                            if tries >= 4:
+                                raise
+                            print(f"  [piece {i + 1}/{n} did not land ({e}) — again in {pause}s]", flush=True)
+                            time.sleep(pause)
+                            pause = min(30, pause * 2)
+                            r = urllib.request.Request(
+                                f"{self.base}/v1/training/rounds/{self.round_id}/adapter?chunk={i}&of={n}{q}",
+                                data=body, method="PUT",
+                                headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(body))})
+                print(f"{'checkpoint' if part == 'last' else 'adapter'} handed to the hub as hub:{self.round_id}{'-last' if part == 'last' else ''} in {n} piece(s) ({len(data) / 1e6:.0f} MB)", flush=True)
+                return
             suffix = "?part=last" if part == "last" else ""
             req = urllib.request.Request(f"{self.base}/v1/training/rounds/{self.round_id}/adapter{suffix}", data=data, method="PUT",
                                          headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(data))})
