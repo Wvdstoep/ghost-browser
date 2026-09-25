@@ -1627,6 +1627,9 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       scopes: now.scopes,
       platformMap: platformMap.state(),
       practice: practiceState(),
+      /* Shares handed out and not registered yet - a machine fetching its slice. */
+      pending: training.pendingList(),
+      machinesShare: now.share,
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
@@ -2703,7 +2706,7 @@ app.post('/v1/training/dispatch', authed, async (req, res) => {
  * places with lids that close; "train when there is something to learn and a machine free to learn
  * it" is true at any hour and needs no timezone.
  */
-setInterval(() => {
+const trainingTick = () => {
   try {
     if (!training.autoOn()) return;
     const { plan } = planNow();
@@ -2711,10 +2714,21 @@ setInterval(() => {
        late as possible so a round learns from everything recorded up to the moment it starts. */
     if (/no training set/.test(plan.why || '')) { buildSet(null); return; }
     if (!plan.run) return;
+    /*
+     * NO REBUILD WHILE A BATCH IS OPEN. A rebuilt set starts a fresh slice ledger, so a second
+     * share drawn after a rebuild could hold the same turns as the first - the two shares of one
+     * batch must come from one build. The set is rebuilt only when nothing is running or pending;
+     * otherwise the free machines are handed their shares of the build that is already in use.
+     */
+    const open = training.allRounds().some((r) => r.status === 'running') || training.pendingList().length > 0;
+    if (open) { dispatchAll().catch(() => {}); return; }
     /* Every free machine in one pass: the second laptop gets its share now, not in ten minutes. */
     buildSet((ok) => { if (ok) dispatchAll().catch(() => {}); });
   } catch (e) { /* a scheduler that throws must not take the browser with it */ }
-}, 10 * 60 * 1000);
+};
+setInterval(trainingTick, 10 * 60 * 1000);
+/* And once soon after boot: a deploy restarts the clock, and a share waiting for the tick must not wait ten more minutes for it. */
+setTimeout(trainingTick, 60 * 1000).unref?.();
 
 /*
  * ── COLLECTING TRAINING DATA BY ITSELF ─────────────────────────────────────────────────────────
