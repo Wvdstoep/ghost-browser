@@ -322,11 +322,25 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
   const stand = rows.filter((s) => s.key !== 'base'
     && (Number(s.sighted) || 0) >= SCOPE_FLOOR
     && (typeof s.exam !== 'number' || s.exam >= PAPER_FLOOR));
+  /*
+   * THE MOST TO TEACH GOES FIRST. Unlearned turns are the only thing that makes a round worth its
+   * hours: the first platform round trained on turns base had already learned and came out below
+   * its own start. So every scope stands in one queue ordered by what it has never shown the
+   * model, and a scope with no adapter of its own only wins a near tie - within a quarter - where
+   * it has everything to gain and the other has already been round once.
+   */
   const rank = (s) => (s.level === 'platform' ? 0 : 1);
-  const unowned = stand.filter((s) => !s.adapter && s.untrained > 0).sort((a, b) => rank(a) - rank(b) || b.sighted - a.sighted);
-  if (unowned.length) return { pick: unowned[0], why: `${label(unowned[0])}: ${unowned[0].sighted} sighted turns and no adapter of its own yet` };
-  const any = [base, ...stand].filter(Boolean).filter((s) => s.untrained > 0).sort((a, b) => b.untrained - a.untrained);
-  if (any.length) return { pick: any[0], why: `${label(any[0])}: ${any[0].untrained} of ${any[0].sighted} sighted turns not trained on yet` };
+  const queue = [base, ...stand].filter(Boolean).filter((s) => s.untrained > 0)
+    .sort((a, b) => b.untrained - a.untrained || rank(a) - rank(b));
+  if (queue.length) {
+    const top = queue[0];
+    const near = queue.find((s) => !s.adapter && s.untrained >= top.untrained * 0.75);
+    const pick = near || top;
+    const why = pick.adapter
+      ? `${label(pick)}: ${pick.untrained} of ${pick.sighted} sighted turns not trained on yet`
+      : `${label(pick)}: ${pick.untrained} turns it has never seen and no adapter of its own yet`;
+    return { pick, why };
+  }
   const waiting = rows.filter((s) => s.refusedWait);
   if (waiting.length) return { pick: null, why: `${waiting.map(label).join(', ')} refused at the gates on this data — waiting for ${ENOUGH_NEW} new usable runs (${fresh} so far)` };
   return { pick: null, why: 'every scope is covered' };
