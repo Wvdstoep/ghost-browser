@@ -390,15 +390,39 @@ class Hub:
             suffix = "?part=last" if part == "last" else ""
             req = urllib.request.Request(f"{self.base}/v1/training/rounds/{self.round_id}/adapter{suffix}", data=data, method="PUT",
                                          headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(data))})
-            with urllib.request.urlopen(req, timeout=1800) as r:
-                r.read()
+            deadline = time.time() + (15 * 60 if part != "last" else 3 * 60)
+            pause = 5
+            while True:
+                try:
+                    with urllib.request.urlopen(req, timeout=1800) as r:
+                        r.read()
+                    break
+                except Exception as e:
+                    if time.time() > deadline:
+                        raise
+                    print(f"  [hub not taking the {'checkpoint' if part == 'last' else 'adapter'} ({e}) — again in {pause}s]", flush=True)
+                    time.sleep(pause)
+                    pause = min(60, pause * 2)
             print(f"{'checkpoint' if part == 'last' else 'adapter'} handed to the hub as hub:{self.round_id}{'-last' if part == 'last' else ''} ({len(data) / 1e6:.0f} MB)", flush=True)
         except Exception as e:
             print(f"[the adapter stays here only: {e}]", flush=True)
 
+    def _post_retry(self, path, body, minutes=15):
+        """A post that must land: the hub rolls for a minute on every deploy, and a round's end or
+        its adapter arriving in that minute must not be lost. Growing pauses, up to `minutes`."""
+        deadline = time.time() + minutes * 60
+        pause = 5
+        while True:
+            got = self._post(path, body)
+            if got is not None or not self.base or time.time() > deadline:
+                return got
+            print(f"  [hub not answering {path} — again in {pause}s]", flush=True)
+            time.sleep(pause)
+            pause = min(60, pause * 2)
+
     def end(self, status, baseline, result, adapter, why="", trained=0, drawSeed=None, paper=""):
         if self.round_id:
-            self._post(f"/v1/training/rounds/{self.round_id}/end", {
+            self._post_retry(f"/v1/training/rounds/{self.round_id}/end", {
                 "status": status, "baseline": baseline, "result": result, "adapter": adapter,
                 # The paper it sat, so the hub can hold it to what serves on the same paper.
                 "paper": paper or "",
