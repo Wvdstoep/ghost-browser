@@ -73,6 +73,8 @@ const CAP_SHARE = 0.15;
 const PER_RUN = 12;
 /* The weight weakness.js gives a tool that is never right; a second copy is for tools near it. */
 const WORST_ENOUGH = 3;
+/* A learned turn is drawn again when its tool is right less than half the time. */
+const AGAIN_AT = 2;
 
 const readJson = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } };
 const writeJson = (p, v) => {
@@ -143,6 +145,8 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
   /* Split once; the file is large but this runs a handful of times a day, not per request. */
   for (const ln of raw.split('\n')) { if (ln.trim()) lines.push(ln); }
 
+  /* The weight of a tool, before the pool is grouped - the skip above needs it. */
+  const weightOf0 = (tool) => { const w = weights && Number(weights[tool]); return Number.isFinite(w) && w > 0 ? w : 1; };
   const ledger = ledgerFor(builtAt);
   const taken = ledger.taken || {};
   /* Learned turns - trained on by an adapter that passed the gates - are never drawn again for
@@ -166,7 +170,12 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
     if (scope && !platforms.matches(scope, lines[i])) continue;
     pool++;
     if (taken[i] && takenBy(taken[i], key)) { takenHere++; continue; }
-    if (done.size && done.has(learned.idOf(lines[i]))) { takenHere++; continue; }
+    /*
+     * LEARNED MEANS LEARNED. A turn a promoted adapter trained on is not drawn again - unless the
+     * model still fails its tool (weight at or above AGAIN_AT: right less than half the time).
+     * Skipping the examples of the thing it cannot do is how a failure becomes permanent.
+     */
+    if (done.size && done.has(learned.idOf(lines[i])) && weightOf0(toolOf(lines[i])) < AGAIN_AT) { takenHere++; continue; }
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);
