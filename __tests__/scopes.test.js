@@ -381,7 +381,10 @@ describe('the pending dispatch and the promotion map', () => {
     training.setAdapterHub(a.id, `hub:${a.id}`); training.setAdapterHub(b.id, `hub:${b.id}`);
     const members = training.batchReadyToMerge(b.id);
     expect(members.map((m) => m.id).sort()).toEqual([a.id, b.id].sort());
+    /* Not twice: once a merge is pending on the batch, the batch is not ready again. */
+    training.setPending({ scope: 'base', device: 'merger', base: `merge:hub:${a.id},hub:${b.id}`, merge: true, batch: a.id });
     expect(training.batchReadyToMerge(a.id)).toBe(null);
+    training.dropPending('merger');
     /* A machine that shared a scope nobody joined is an ordinary round: no batch, no merge. */
     training.setPending({ scope: 'platform:google', device: 'c', share: 1 });
     const c = training.startRound({ device: 'C', turns: 100 });
@@ -531,5 +534,89 @@ describe('a void run contributes exactly the steps somebody judged good', () => 
     expect(out.eval.some((t) => t.jobId === 'v1')).toBe(false);
     expect(out.train.some((t) => t.jobId === 'v2')).toBe(false);
     expect(out.manifest.droppedTurns['a step in a void run nobody judged good']).toBe(2);
+  });
+});
+
+describe('the merge round and its batch', () => {
+  it('carries the batch id, points the shares at itself, and is listed for retry only until it starts', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-merge-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 60 });
+      const a = training.startRound({ device: 'A', turns: 60 });
+      training.setPending({ scope: 'base', device: 'B', batch: 'b-1', share: 2, turns: 60 });
+      const b = training.startRound({ device: 'B', turns: 60 });
+      for (const r of [a, b]) { training.endRound(r.id, { status: 'done', result: 10, baseline: 5 }); training.setAdapterHub(r.id, `hub:${r.id}`); }
+      expect(training.batchesAwaitingMerge()).toHaveLength(1);
+      expect([a.id, b.id]).toContain(training.batchesAwaitingMerge()[0]);
+      const members = training.batchReadyToMerge(a.id);
+      expect(members.map((m) => m.id).sort()).toEqual([a.id, b.id].sort());
+      training.setPending({ scope: 'base', device: 'A', base: `merge:hub:${a.id},hub:${b.id}`, merge: true, batch: 'b-1' });
+      expect(training.batchesAwaitingMerge()).toEqual([]);
+      expect(training.batchReadyToMerge(a.id)).toBeNull();
+      const m = training.startRound({ device: 'A', base: `merge:hub:${a.id},hub:${b.id}` });
+      expect(m.merge).toBe(true);
+      expect(m.batch).toBe('b-1');
+      const rows = training.allRounds();
+      expect(rows.find((r) => r.id === a.id).mergedInto).toBe(m.id);
+      expect(rows.find((r) => r.id === b.id).mergedInto).toBe(m.id);
+      expect(training.batchesAwaitingMerge()).toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});
+
+describe('stopping a round', () => {
+  it('marks it stopped, drops its pending share, and a late end call cannot revive it', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-stop-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 60 });
+      const a = training.startRound({ device: 'A', turns: 60 });
+      training.setPending({ scope: 'base', device: 'B', batch: 'b-1', share: 2, turns: 60 });
+      expect(training.pendingList().map((p) => p.device)).toEqual(['B']);
+      const s = training.stopRound(a.id, 'stopped by the owner');
+      expect(s.status).toBe('stopped');
+      expect(s.why).toBe('stopped by the owner');
+      /* The machine's late end call: the adapter is kept, the status is not. */
+      const e = training.endRound(a.id, { status: 'done', result: { agreement_pct: 9, turns: 150 }, baseline: { agreement_pct: 5, turns: 150 }, adapter: 'ckpt-1', trained: 20 });
+      expect(e.status).toBe('stopped');
+      expect(e.adapter).toBe('ckpt-1');
+      expect(e.result).toBe(null);
+      expect(training.stopRound(a.id).status).toBe('stopped');
+      /* Only the stopped machine's share is dropped. */
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 60 });
+      training.dropPending('a');
+      expect(training.pendingList().map((p) => p.device)).toEqual(['B']);
+      expect(training.stopRound('r-nope')).toBe(null);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+  it('a failed merge is retried, and three failed merges free the scope', () => {
+    const { decide, MERGE_TRIES } = require('../src/trainingPlan');
+    const now = new Date().toISOString();
+    const two = [{ name: 'KAROLINA', online: true }, { name: 'WOJMAGEMI', online: true }];
+    const s = [{ key: 'base', level: 'base', name: '', sighted: 2000, seen: 0, adapter: '', paper: 150 }];
+    const corpus = { usableSinceLastRound: 0, scanning: false };
+    const members = [
+      { id: 'r-a', status: 'done', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-a', mergedInto: 'r-m1' },
+      { id: 'r-b', status: 'done', device: 'KAROLINA', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 2, adapterHub: 'hub:r-b', mergedInto: 'r-m1' },
+    ];
+    const dead = (i) => ({ id: `r-m${i}`, status: 'failed', device: 'WOJMAGEMI', startedAt: now, lastAt: now, endedAt: now, scope: { key: 'base' }, batch: 'r-a', share: 1, merge: true, why: 'died' });
+    const one = decide({ corpus, dataset: { train: 12000 }, rounds: members.concat([dead(1)]), trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(one.run).toBe(false);
+    const three = decide({ corpus, dataset: { train: 12000 }, rounds: members.concat([1, 2, 3].map(dead)), trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(MERGE_TRIES).toBe(3);
+    expect(three.run).toBe(true);
   });
 });

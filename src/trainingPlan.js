@@ -90,6 +90,9 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
+/** How many merge rounds may die on one batch before its scope is opened again. */
+const MERGE_TRIES = 3;
+
 function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, pending = [], now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
@@ -123,7 +126,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   const started = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
   for (const p of pending || []) {
     if (!p || !p.device || started.has(String(p.device).toLowerCase())) continue;
-    alive.push({ id: p.batch || `pending:${p.device}`, device: p.device, scope: p.scope, batch: p.batch || '', pending: true });
+    alive.push({ id: p.batch || `pending:${p.device}`, device: p.device, scope: p.scope, batch: p.batch || '', merge: !!p.merge, pending: true });
   }
   const busyDevices = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
   /*
@@ -134,6 +137,37 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   const liveOn = {};
   for (const r of alive) { const k = (r.scope && r.scope.key) || 'base'; liveOn[k] = (liveOn[k] || 0) + 1; }
   const busyScopes = new Set(Object.keys(liveOn).filter((k) => liveOn[k] >= Math.max(1, Number(share) || 1)));
+  /*
+   * A BATCH IS CLOSED ONCE IT HAS ITS MACHINES. A share that finishes early frees its machine,
+   * and with one live round left on the scope the count above would call the scope open and hand
+   * the free machine a THIRD share of the same batch - another round before the merge could
+   * start. A batch made for N machines is full at N members, running, done or pending; its scope
+   * stays busy until the merge has run. A merge round, running or pending, holds its scope too:
+   * the next batch on that scope starts from the merged adapter, not beside it.
+   */
+  const membersOf = (batch) => {
+    const ids = new Set((rounds || []).filter((x) => (x.batch === batch || x.id === batch) && !x.merge).map((x) => x.id));
+    for (const p of pending || []) if (p && p.batch === batch && !p.merge && !ids.has(`pending:${p.device}`)) ids.add(`pending:${String(p.device || '').toLowerCase()}`);
+    return ids.size;
+  };
+  const shareOf = (batch) => {
+    const got = Math.max(0, ...(rounds || []).filter((x) => (x.batch === batch || x.id === batch) && !x.merge).map((x) => Number(x.share) || 0), ...(pending || []).filter((p) => p && p.batch === batch).map((p) => Number(p.share) || 0));
+    return got > 0 ? got : Math.max(1, Number(share) || 1);
+  };
+  for (const r of alive) {
+    const k = (r.scope && r.scope.key) || 'base';
+    if (r.merge) { busyScopes.add(k); continue; }
+    if (r.batch && membersOf(r.batch) >= shareOf(r.batch)) busyScopes.add(k);
+  }
+  /* A batch whose shares are all in and not merged yet: its scope waits for the merge. */
+  for (const r of rounds || []) {
+    if (!r.batch || r.merge || r.status !== 'done' || !r.adapterHub) continue;
+    const merges = (rounds || []).filter((x) => x.merge && x.batch === r.batch);
+    const merged = merges.some((x) => x.status === 'done');
+    /* Three merges that died free the scope: better a fresh batch than a scope held for ever. */
+    const givenUp = merges.filter((x) => x.status === 'failed' || x.status === 'stopped').length >= MERGE_TRIES;
+    if (!merged && !givenUp) busyScopes.add((r.scope && r.scope.key) || 'base');
+  }
   /* The batch a new round on this scope joins: the live round's batch, which is its own id when it started one. */
   const batchFor = (key) => { const r = alive.find((x) => ((x.scope && x.scope.key) || 'base') === key); return r ? (r.batch || r.id) : ''; };
   const withScopes = Array.isArray(scopes) && scopes.length > 0;
@@ -272,4 +306,4 @@ function pickScope(scopes, sliceTurns = 0) {
   return { pick: null, why: 'every scope is covered' };
 }
 
-module.exports = { decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
+module.exports = { MERGE_TRIES, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
