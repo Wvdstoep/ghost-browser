@@ -70,6 +70,8 @@ const CAP_SHARE = 0.15;
  * The median run is twelve turns. Capping there gives every run its fair say and costs only the
  * marathons their surplus.
  */
+/* How much of its natural share a tool keeps however weak its neighbours are. See the draw. */
+const REHEARSE = 0.6;
 const PER_RUN = 12;
 /* The weight weakness.js gives a tool that is never right; a second copy is for tools near it. */
 const WORST_ENOUGH = 3;
@@ -210,7 +212,14 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
   for (const [tool, idxs] of byTool) {
     const natural = idxs.length / available;
     const skewed = weighted > 0 ? (idxs.length * weightOf(tool)) / weighted : natural;
-    const share = Math.round(want * skewed);
+    /*
+     * AND A FLOOR UNDER WHAT IT ALREADY KNOWS. Weighting a weak tool up weights a strong one down,
+     * and the round that proved it took `dig` from 82.5% to 2.5% while lifting the three tools it
+     * was aimed at - one forgotten tool cost more than the whole round gained. However weak its
+     * neighbours, a tool keeps REHEARSE of the share its own frequency earns it. The budget is
+     * fixed, so what it keeps comes off the commonest tools, which have thousands of examples.
+     */
+    const share = Math.round(want * Math.max(skewed, natural * REHEARSE));
     quota.set(tool, Math.min(idxs.length, Math.max(Math.min(FLOOR, idxs.length), Math.min(share, cap))));
   }
 
@@ -483,4 +492,5 @@ function exam({ file, want = 150, scope = null, perRun = PER_RUN } = {}) {
   return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted, scope: key };
 }
 
-module.exports = { draw, exam, progress, reset, release, availability, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
+module.exports = {
+  REHEARSE, draw, exam, progress, reset, release, availability, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
