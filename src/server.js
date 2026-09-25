@@ -2158,9 +2158,9 @@ function scopesNow({ serving = null } = {}) {
   }
   /* What the draw could still give each scope, from one pass over the set (slice.availability). */
   let avail = {};
+  let builtAt = '';
+  try { builtAt = JSON.parse(fsx.readFileSync(pathx.join(base, 'manifest.json'), 'utf8')).builtAt || ''; } catch (e) { builtAt = ''; }
   try {
-    let builtAt = '';
-    try { builtAt = JSON.parse(fsx.readFileSync(pathx.join(base, 'manifest.json'), 'utf8')).builtAt || ''; } catch (e) { builtAt = ''; }
     avail = require('./slice').availability({ file: pathx.join(base, 'train.jsonl'), builtAt, scopes: rows.map((r) => r.key) });
   } catch (e) { avail = {}; }
   for (const r of rows) {
@@ -2169,9 +2169,8 @@ function scopesNow({ serving = null } = {}) {
     r.attempted = trainingPlan.coveredFor(all, r.key);
     const a = avail[r.key];
     if (a) { r.pool = a.pool; r.free = a.free; r.taken = a.taken; }
-    /* The newest measured round of this scope was refused at the gates: not retried on the same data. */
+    /* The newest measured round of this scope, and whether its refusal still bars a retry. */
     const newest = all.find((x) => ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result && !x.merge || (x.merge && ((x.scope && x.scope.key) || 'base') === r.key && x.status === 'done' && x.result));
-    r.refused = !!(newest && newest.discarded && !newest.promoted);
     const own = training.adapterFor(r);
     r.adapter = own.from === r.key ? own.adapter : '';
     /* No promoted adapter of its own: the best sound unpromoted one is the next start. */
@@ -2182,6 +2181,16 @@ function scopesNow({ serving = null } = {}) {
     r.parentAdapter = parent ? training.adapterFor(parent).adapter : '';
     r.model = models[r.key] || '';
     r.stage = r.model ? autopilot.stageOf(ledgers[r.model]) : null;
+    /*
+     * REFUSED ON WHAT, EXACTLY. Not retried on the same data with the same method - but a set
+     * rebuilt since, or a learning rate this hub would no longer send, is neither. See
+     * trainingPlan.refusalStands.
+     */
+    r.refused = trainingPlan.refusalStands({
+      round: newest,
+      builtAt,
+      nextLr: (r.adapter || r.warmStart || r.parentAdapter) ? CONTINUE_LR : trainingPlan.FRESH_LR,
+    });
   }
   return rows;
 }

@@ -234,17 +234,30 @@ def run_round(body):
     # The trainer's lines go to the round log AND to this process's stdout, so a session's own
     # log view (Modal's Logs tab) shows the training as it goes and the traceback when it dies.
     logf = open(os.path.join(HOME, "last-round.log"), "wb")
+    # A first line the moment the round starts, so an empty log means the tee never ran rather than
+    # leaving nobody able to tell that from a trainer that printed nothing.
+    logf.write(("starting: " + " ".join(cmd) + os.linesep).encode("utf-8", "replace"))
+    logf.flush()
     ROUND["proc"] = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
     ROUND["started"] = time.time()
     ROUND["log"] = logf
 
     def tee(proc, fh):
+        # Two destinations, two guards. A detached session's stdout is a pipe nobody reads and it
+        # can break at any line; when it did, the one exception took the FILE down with it and the
+        # round log stayed empty for the whole run. Neither destination may end the other.
         try:
             for line in iter(proc.stdout.readline, b""):
-                fh.write(line)
-                fh.flush()
-                sys.stdout.write(line.decode("utf-8", "replace"))
-                sys.stdout.flush()
+                try:
+                    fh.write(line)
+                    fh.flush()
+                except Exception:
+                    pass
+                try:
+                    sys.stdout.write(line.decode("utf-8", "replace"))
+                    sys.stdout.flush()
+                except Exception:
+                    pass
         except Exception:
             pass
         finally:

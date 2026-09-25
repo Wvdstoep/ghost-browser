@@ -26,6 +26,34 @@
 /** Below this, a round is not worth a machine: the adapter barely moves and the measurement cannot
  *  tell the difference from noise. Only applies once the corpus has been covered. */
 const ENOUGH_NEW = 200;
+/* What the trainer trains at from nothing. The hub sends a smaller rate to a round that continues
+   from an adapter (server.js CONTINUE_LR); this is the other side of that comparison. */
+const FRESH_LR = 2e-4;
+
+/**
+ * Does a refusal still bar this scope?
+ *
+ * Only while the attempt would be the same attempt. A round is refused on DATA and on a METHOD,
+ * and either of them changing makes the next round a new question rather than a retry:
+ *
+ *  - the data: the set was rebuilt after that round started, so neither the turns it trained on
+ *    nor the paper it was measured against are the ones it failed on;
+ *  - the method: the learning rate the hub would send now is not the one in that round's recipe.
+ *    The first platform round was refused for continuing from base at the full rate, which this
+ *    hub no longer does, and that refusal should not outlive the bug that caused it.
+ *
+ * Anything else - same set, same rate - stays refused, which is the whole point of the rule.
+ */
+function refusalStands({ round = null, builtAt = '', nextLr = 0 } = {}) {
+  if (!round || !round.discarded || round.promoted) return false;
+  const ranAt = Date.parse(round.startedAt || '') || 0;
+  const setAt = Date.parse(builtAt || '') || 0;
+  if (ranAt && setAt && setAt > ranAt) return false;
+  const was = Number(round.recipe && round.recipe.lr) || 0;
+  const now = Number(nextLr) || 0;
+  if (was && now && Math.abs(was - now) > now * 0.05) return false;
+  return true;
+}
 
 /** A round that has said nothing for this long is not holding the slot any more. Matches the
  *  staleness rule the device rows use, so the screen and the scheduler never disagree. */
@@ -346,4 +374,6 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
   return { pick: null, why: 'every scope is covered' };
 }
 
-module.exports = { MERGE_TRIES, SCOPE_FLOOR, PAPER_FLOOR, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
+module.exports = {
+  refusalStands,
+  FRESH_LR, MERGE_TRIES, SCOPE_FLOOR, PAPER_FLOOR, decide, covered, coveredFor, pickScope, restingDevices, ENOUGH_NEW, SILENT_MS, CRASHES_TO_REST, REST_MS, PAIR };
