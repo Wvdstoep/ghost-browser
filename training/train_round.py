@@ -570,6 +570,31 @@ class Turns(Dataset):
         return {"input_ids": f_ids, "labels": labels}
 
 
+def answer_loss(model, ids, mask, labels):
+    """The cross-entropy over the answer tokens only, without float32 logits for every position.
+
+    The prompt is ~2,600 tokens and the answer ~60; the model's own loss builds the full-vocabulary
+    logits for all 4,096 positions (2.5 GB in float32) plus the copies the cross-entropy makes, which
+    is what ran out of memory on a 24 GB card at the first step. Here the transformer runs as usual
+    (LoRA layers and gradient checkpointing included), the head is applied to the labelled
+    positions alone, and the loss is the same mean over the same tokens the model would compute.
+    Falls back to the model's loss when the architecture is not the usual (inner model + lm_head).
+    """
+    base = model.get_base_model() if hasattr(model, "get_base_model") else model
+    inner = getattr(base, "model", None)
+    head = getattr(base, "lm_head", None)
+    if inner is None or head is None or not callable(head):
+        return model(input_ids=ids, attention_mask=mask, labels=labels).loss
+    hidden = inner(input_ids=ids, attention_mask=mask).last_hidden_state
+    h = hidden[:, :-1, :]
+    y = labels[:, 1:]
+    sel = y != -100
+    if not bool(sel.any()):
+        return model(input_ids=ids, attention_mask=mask, labels=labels).loss
+    logits = head(h[sel])
+    return torch.nn.functional.cross_entropy(logits.float(), y[sel])
+
+
 def collate(batch, pad):
     n = max(len(b["input_ids"]) for b in batch)
     ids, labels, mask = [], [], []
@@ -921,9 +946,9 @@ def main():
         with torch.no_grad():
             for i in range(len(val_ds)):
                 ids, labels, mask = collate([val_ds[i]], tok.pad_token_id)
-                out = model(input_ids=ids.to(device), attention_mask=mask.to(device), labels=labels.to(device))
-                if torch.isfinite(out.loss):
-                    tot += float(out.loss.item())
+                vloss = answer_loss(model, ids.to(device), mask.to(device), labels.to(device))
+                if torch.isfinite(vloss):
+                    tot += float(vloss.item())
                     n += 1
         model.train()
         return (tot / n) if n else None
@@ -979,16 +1004,16 @@ def main():
                 done = True
                 break
             ids, labels, mask = ids.to(device), labels.to(device), mask.to(device)
-            out = model(input_ids=ids, attention_mask=mask, labels=labels)
+            loss = answer_loss(model, ids, mask, labels)
             # Even with the filter above, one NaN reaching backward() destroys every LoRA weight
             # for the rest of the night, and nothing downstream would say so. Cheap to check.
-            if not torch.isfinite(out.loss):
+            if not torch.isfinite(loss):
                 skipped += 1
                 continue
-            (out.loss / args.accum).backward()
+            (loss / args.accum).backward()
             micro += 1
             seen += ids.shape[0]
-            losses.append(float(out.loss.item()))
+            losses.append(float(loss.item()))
 
             if micro % args.accum == 0:
                 torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1.0)
