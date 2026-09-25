@@ -1661,7 +1661,7 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
    * machine that trained it. A round that fails a gate is kept and says why; nothing else changes.
    */
   let promotion = null;
-  const half = !!(r.pairOf || r.pairWith);
+  const half = training.inBatch(r);
   if (r.status === 'done' && r.result && r.baseline && !half) {
     try { promotion = await promoteAndExport(r.id, 'by itself'); } catch (e) { promotion = { error: e.message }; }
   }
@@ -1678,17 +1678,18 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
  * adapter back, and that round is the one put to the gates.
  */
 async function mergeIfReady(roundId) {
-  const pair = training.pairReadyToMerge(roundId);
-  if (!pair) return null;
+  const members = training.batchReadyToMerge(roundId);
+  if (!members) return null;
   const { usable } = planNow();
-  const dev = usable.find((t) => t.online && String(t.name || '').toLowerCase() === String(pair.a.device || '').toLowerCase())
+  const first = members[0];
+  const dev = usable.find((t) => t.online && String(t.name || '').toLowerCase() === String(first.device || '').toLowerCase())
     || usable.find((t) => t.online);
-  if (dev == null) { log.warn(`training: merge of ${pair.a.id} + ${pair.b.id} waits — no machine is online`); return null; }
-  const base = `merge:${pair.a.adapterHub},${pair.b.adapterHub}`;
-  training.setPending({ scope: pair.a.scope || 'base', device: dev.name, base, merge: true });
+  if (dev == null) { log.warn(`training: merge of ${members.map((m) => m.id).join(' + ')} waits — no machine is online`); return null; }
+  const base = `merge:${members.map((m) => m.adapterHub).join(',')}`;
+  training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true });
   try {
     await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_round', body: { base, hours: 1 } }, 30000);
-    log.info(`training: merging ${pair.a.id} and ${pair.b.id} on ${dev.name}`);
+    log.info(`training: merging ${members.map((m) => m.id).join(' + ')} on ${dev.name}`);
     return { device: dev.name, base };
   } catch (e) {
     log.warn(`training: ${dev.name} would not take the merge — ${e.message}`);
@@ -2066,9 +2067,12 @@ function planNow() {
   const usable = trainers.filter((x) => x.able && (gpuFlow ? !!x.virtual : (!x.virtual && training.trainerOn(x.deviceId))));
   const ready = readinessNow({ corpus: st.corpus, serving: st.serving });
   const scopes = scopesNow({ serving: st.serving });
+  /* How many machines may share one scope: every online usable machine in split mode, one in scopes mode. */
+  const share = Math.max(1, usable.filter((x) => x.online).length);
   return {
-    scopes,
+    scopes, share,
     plan: trainingPlan.decide({
+      share,
       corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
       trainers: usable, auto: training.autoOn(), serving: st.serving,
       readiness: ready.readiness,
@@ -2255,7 +2259,7 @@ app.post('/v1/training/models/:tag/create', authed, async (req, res) => {
 function gpuView() {
   const cfg = settingsStore.read();
   const s = gpu.state();
-  return { trainOn: cfg.trainOn || 'laptop', trainHours: trainHoursNow(), provider: cfg.gpuProvider || 'runpod', keySet: !!cfg.gpuKey, keyHint: cfg.gpuKey ? `…${String(cfg.gpuKey).slice(-4)}` : '',
+  return { trainOn: cfg.trainOn || 'laptop', trainHours: trainHoursNow(), trainShare: cfg.trainShare === 'work' ? 'work' : 'time', machines: (() => { try { return planNow().share; } catch (e) { return 1; } })(), provider: cfg.gpuProvider || 'runpod', keySet: !!cfg.gpuKey, keyHint: cfg.gpuKey ? `…${String(cfg.gpuKey).slice(-4)}` : '',
     gpuType: cfg.gpuType || gpu.DEFAULT_TYPE, cloud: cfg.gpuCloud || 'COMMUNITY', maxHours: Number(cfg.gpuMaxHours) || 2, hub: cfg.gpuHub || '', types: gpu.GPU_TYPES,
     pod: s.pod ? { ...s.pod, token: undefined, notes: (s.pod.notes || []).slice(-12) } : null, last: s.last ? { ...s.last, token: undefined } : null, history: s.history };
 }
@@ -2267,6 +2271,7 @@ app.post('/v1/training/gpu', authed, (req, res) => {
     const patch = {};
     if (typeof b.trainOn === 'string') patch.trainOn = b.trainOn;
     if (b.trainHours != null) patch.trainHours = Number(b.trainHours);
+    if (typeof b.trainShare === 'string') patch.trainShare = b.trainShare;
     if (typeof b.key === 'string' && b.key.trim()) {
       patch.gpuKey = b.key;
       patch.gpuOwner = String((req.client && req.client.owner) || before.gpuOwner || '');
@@ -2588,7 +2593,17 @@ async function dispatchRound({ force = false } = {}) {
     if (hard) return { ...plan, forced: true };
   }
   /* The scope this round trains, written down for the device to draw against (training.js). */
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', pairOf: plan.pairOf || '' });
+  /*
+   * THE BATCH AND THE HOURS FOLLOW THE MODE. `time`: the round length is the batch's, so each of
+   * N machines runs 1/N of it on 1/N of the turns and the batch is done in 1/N of the time.
+   * `work`: each machine runs the full round length, the batch is N times the turns.
+   */
+  const share = Math.max(1, plan.share || 1);
+  const mode = settingsStore.read().trainShare === 'work' ? 'work' : 'time';
+  const hoursEach = mode === 'time' ? trainHoursNow() / share : trainHoursNow();
+  const batchTurns = Math.max(120, Math.round((mode === 'time' ? trainHoursNow() : trainHoursNow() * share) * 40 / 3));
+  const perMachine = Math.max(20, Math.ceil(batchTurns / share));
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch: plan.batch || '', share: plan.share || 1, turns: perMachine });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
@@ -2628,10 +2643,10 @@ async function dispatchRound({ force = false } = {}) {
        * Still an env var, because a machine that has to close its lid at midnight needs a shorter
        * one and that is a property of the machine, not of the method.
        */
-      body: { base, hours: trainHoursNow() },
+      body: { base, hours: Math.max(0.5, Math.round(hoursEach * 4) / 4) },
     }, 30000);
-    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${plan.pairOf ? ` (the other half of ${plan.pairOf}'s slice)` : ''}`);
-    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, forced: !!force };
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${plan.batch ? ` (joins batch ${plan.batch}, ${plan.share} machines)` : ''}`);
+    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, batch: plan.batch || '', share, mode, hours: hoursEach, turns: perMachine, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
     return { run: false, why: `${dev.device} would not take it: ${e.message}` };
@@ -3104,7 +3119,7 @@ app.get('/v1/training/slice', authed, (req, res) => {
     const manifest = JSON.parse(require('fs').readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8'));
     const s = require('./slice').draw({
       file, builtAt: manifest.builtAt,
-      want: Math.min(5000, Math.max(50, Number(req.query.turns) || 700)),
+      want: (() => { const asked = Math.min(5000, Math.max(50, Number(req.query.turns) || 700)); const p = training.peekPending(); return p && p.turns > 0 && !p.merge ? Math.min(asked, Math.max(20, p.turns)) : asked; })(),
       roundId: String(req.query.round || ''),
       /* The round's scope, or the pending dispatch's when the round is not registered yet. */
       scope: training.scopeOfRound(String(req.query.round || '')),

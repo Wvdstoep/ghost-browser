@@ -221,18 +221,18 @@ describe('which scope the next round trains', () => {
     expect(d.device).toBe('Second');
     /* Two machines share one scope now: the second takes the other half of google's slice. */
     expect(d.scope.key).toBe('platform:google');
-    expect(d.pairOf).toBe(running[0].id);
+    expect(d.batch).toBe(running[0].id);
     /* One machine, one round: the same picture with only the busy laptop waits and says why. */
     const one = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: running, trainers: [two[0]], auto: true, serving: { adapter: 'base-v1' }, scopes: s, sliceTurns: 120 });
     expect(one.run).toBe(false);
     expect(one.why).toContain('busy');
-    /* Base running on the first machine: the second takes the other half of base as its pair. */
+    /* Base running on the first machine: the second takes the other share of base. */
     const fresh = scopes();
     const baseRunning = [{ id: 'r-b1', status: 'running', device: 'WOJMAGEMI', startedAt: new Date().toISOString(), lastAt: new Date().toISOString(), scope: { key: 'base' } }];
-    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: baseRunning, trainers: two, auto: true, serving: null, scopes: fresh, sliceTurns: 120 });
+    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: baseRunning, trainers: two, auto: true, serving: null, scopes: fresh, sliceTurns: 120, share: 2 });
     expect(d2.run).toBe(true);
     expect(d2.scope.key).toBe('base');
-    expect(d2.pairOf).toBe('r-b1');
+    expect(d2.batch).toBe('r-b1');
     expect(d2.device).toBe('Second');
   });
 
@@ -259,18 +259,25 @@ describe('which scope the next round trains', () => {
     const two = [{ name: 'WojMagEmi', deviceId: 'd1', online: true }, { name: 'Karolina', deviceId: 'd2', online: true }];
     const now = new Date().toISOString();
     const live = [{ id: 'r-half-a', status: 'running', device: 'KAROLINA', startedAt: now, lastAt: now, scope: { key: 'base' } }];
-    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: live, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120 });
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: live, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
     expect(d.run).toBe(true);
     expect(d.scope.key).toBe('base');
     expect(d.device).toBe('WojMagEmi');
-    expect(d.pairOf).toBe('r-half-a');
-    /* Both halves running: base is closed, the next free machine gets the next scope. */
-    const both = live.concat([{ id: 'r-half-b', status: 'running', device: 'WOJMAGEMI', startedAt: now, lastAt: now, scope: { key: 'base' } }]);
+    expect(d.batch).toBe('r-half-a');
+    /* Two of two on base and no base adapter yet: a third machine WAITS for base - never Google first. */
+    const both = live.concat([{ id: 'r-half-b', status: 'running', device: 'WOJMAGEMI', startedAt: now, lastAt: now, scope: { key: 'base' }, batch: 'r-half-a' }]);
     const three = two.concat([{ name: 'Third', deviceId: 'd3', online: true }]);
-    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: both, trainers: three, auto: true, serving: null, scopes: s, sliceTurns: 120 });
-    expect(d2.run).toBe(true);
-    expect(d2.scope.key).toBe('platform:google');
-    expect(d2.pairOf).toBe('');
+    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: both, trainers: three, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+    expect(d2.run).toBe(false);
+    expect(d2.why).toContain('base is being trained');
+    /* With three allowed to share, the third joins base. */
+    const d3 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: both, trainers: three, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 3 });
+    expect(d3.scope.key).toBe('base');
+    expect(d3.batch).toBe('r-half-a');
+    /* Once base has an adapter, the machines move on to the next scope, sharing it the same way. */
+    const served = scopes(); served[0].adapter = 'base-v1'; served[0].seen = 1700;
+    const g = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [], trainers: two, auto: true, serving: { adapter: 'base-v1' }, scopes: served, sliceTurns: 120, share: 2 });
+    expect(g.scope.key).toBe('platform:google');
   });
 
   it('sums coverage per scope, and counts rounds from before the scopes as base', () => {
@@ -327,21 +334,27 @@ describe('the pending dispatch and the promotion map', () => {
     expect(training.adapterFor('role:research.reviews')).toMatchObject({ adapter: `a-${b.id}`, from: 'base' });
     expect(training.adapterFor('platform:google').from).toBe('base');
   });
-  it('a pair is remembered on both halves, and the merge is due once both are done and on the hub', () => {
-    training.setPending({ scope: 'base', device: 'a' });
-    const a = training.startRound({ device: 'A', turns: 100 });
-    training.setPending({ scope: 'base', device: 'b', pairOf: a.id });
-    const b = training.startRound({ device: 'B', turns: 100 });
-    expect(b.pairOf).toBe(a.id);
-    expect(training.allRounds().find((x) => x.id === a.id).pairWith).toBe(b.id);
-    expect(training.pairReadyToMerge(a.id)).toBe(null);
-    training.endRound(a.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 9, turns: 150 }, adapter: 'pa', trained: 100 });
-    training.endRound(b.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 8, turns: 150 }, adapter: 'pb', trained: 100 });
-    expect(training.pairReadyToMerge(a.id)).toBe(null);
+  it('a batch is remembered on every member, and the merge is due once all are done and on the hub', () => {
+    training.setPending({ scope: 'base', device: 'a', share: 2, turns: 60 });
+    const a = training.startRound({ device: 'A', turns: 60 });
+    expect(a.batch).toBe(a.id);
+    training.setPending({ scope: 'base', device: 'b', batch: a.id, share: 2, turns: 60 });
+    const b = training.startRound({ device: 'B', turns: 60 });
+    expect(b.batch).toBe(a.id);
+    expect(training.inBatch(a)).toBe(true);
+    expect(training.batchReadyToMerge(a.id)).toBe(null);
+    training.endRound(a.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 9, turns: 150 }, adapter: 'pa', trained: 60 });
+    training.endRound(b.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 8, turns: 150 }, adapter: 'pb', trained: 60 });
+    expect(training.batchReadyToMerge(a.id)).toBe(null);
     training.setAdapterHub(a.id, `hub:${a.id}`); training.setAdapterHub(b.id, `hub:${b.id}`);
-    const pair = training.pairReadyToMerge(b.id);
-    expect(pair.a.id).toBe(b.id); expect(pair.b.id).toBe(a.id);
-    expect(training.pairReadyToMerge(a.id)).toBe(null);
+    const members = training.batchReadyToMerge(b.id);
+    expect(members.map((m) => m.id).sort()).toEqual([a.id, b.id].sort());
+    expect(training.batchReadyToMerge(a.id)).toBe(null);
+    /* A machine that shared a scope nobody joined is an ordinary round: no batch, no merge. */
+    training.setPending({ scope: 'platform:google', device: 'c', share: 1 });
+    const c = training.startRound({ device: 'C', turns: 100 });
+    expect(c.batch).toBe('');
+    expect(training.inBatch(c)).toBe(false);
   });
 
   it('REFUSES A WIN ON A PAPER OF FOUR TURNS', () => {

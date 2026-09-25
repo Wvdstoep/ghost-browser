@@ -58,8 +58,8 @@ const PENDING_MS = 3 * 60 * 60 * 1000;
 const platforms = require('./trainScopes');
 const normScope = (s) => { const sc = platforms.parse(s || 'base'); return { level: sc.level, name: sc.name, key: sc.key }; };
 
-function setPending({ scope = null, device = '', base = '', pairOf = '', merge = false } = {}) {
-  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), pairOf: String(pairOf || ''), merge: !!merge, at: new Date().toISOString() };
+function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false } = {}) {
+  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, at: new Date().toISOString() };
   writeJson(PENDING(), p);
   return p;
 }
@@ -91,8 +91,10 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
   const pend = scope ? null : takePending();
   const r = {
     scope: normScope(scope || (pend && pend.scope) || 'base'),
-    /* Half of a pair: the live round on the same scope this one shares the slice with. */
-    pairOf: (pend && pend.pairOf) || '',
+    /* The batch this round belongs to: the first round of a shared scope starts one (its own
+       id, filled in below); every later machine on that scope joins it. share = how many. */
+    batch: (pend && pend.batch) || '',
+    share: (pend && pend.share) || 1,
     /* A merge round: takes the exam on the average of two halves, trains nothing. */
     merge: !!(pend && pend.merge),
     id: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -113,7 +115,7 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
     why: '',
   };
   const rows = allRounds();
-  if (r.pairOf) { const other = rows.find((x) => x.id === r.pairOf); if (other) other.pairWith = r.id; }
+  if (!r.batch && r.share > 1 && !r.merge) r.batch = r.id;
   rows.unshift(r);
   writeJson(ROUNDS(), rows.slice(0, 200));
   return r;
@@ -129,20 +131,24 @@ function setAdapterHub(id, name) {
   return r;
 }
 
-/** Both halves of a pair are done and on the hub: the merge is due. Marks them so it happens once. */
-function pairReadyToMerge(id) {
+/**
+ * Every member of a batch is done and on the hub: the merge is due. A batch with one member (a
+ * machine that shared a scope nobody joined) is not merged - it is an ordinary round. Marks the
+ * members so the merge happens once.
+ */
+function batchReadyToMerge(id) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
-  if (!r || r.mergedInto) return null;
-  const otherId = r.pairOf || r.pairWith;
-  if (!otherId) return null;
-  const o = rows.find((x) => x.id === otherId);
-  if (!o || o.mergedInto) return null;
-  if (r.status !== 'done' || o.status !== 'done' || !r.adapterHub || !o.adapterHub) return null;
-  r.mergedInto = 'pending'; o.mergedInto = 'pending';
+  if (!r || !r.batch || r.mergedInto) return null;
+  const members = rows.filter((x) => x.batch === r.batch && !x.merge);
+  if (members.length < 2) return null;
+  if (members.some((m) => m.mergedInto || m.status !== 'done' || !m.adapterHub)) return null;
+  for (const m of members) m.mergedInto = 'pending';
   writeJson(ROUNDS(), rows);
-  return { a: r, b: o };
+  return members;
 }
+/** A round that shares its scope with others in a batch - not promoted on its own. */
+function inBatch(r) { return !!(r && r.batch && !r.merge && allRounds().filter((x) => x.batch === r.batch && !x.merge).length > 1); }
 
 /** Progress from the device while it works — one line, so the UI is never silent for an hour. */
 function noteRound(id, line) {
@@ -490,7 +496,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
     rounds: rounds.slice(0, 20).map((r) => ({
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
-      pairOf: r.pairOf || r.pairWith || '', merge: !!r.merge, mergedInto: r.mergedInto || '',
+      batch: r.batch || '', share: r.share || 1, merge: !!r.merge, mergedInto: r.mergedInto || '',
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
@@ -538,4 +544,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, pairReadyToMerge, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, batchReadyToMerge, inBatch, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };

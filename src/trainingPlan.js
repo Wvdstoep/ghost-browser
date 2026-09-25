@@ -90,7 +90,7 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -122,8 +122,9 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
    */
   const liveOn = {};
   for (const r of alive) { const k = (r.scope && r.scope.key) || 'base'; liveOn[k] = (liveOn[k] || 0) + 1; }
-  const busyScopes = new Set(Object.keys(liveOn).filter((k) => liveOn[k] >= PAIR));
-  const pairFor = (key) => { const r = alive.find((x) => ((x.scope && x.scope.key) || 'base') === key); return r ? r.id : ''; };
+  const busyScopes = new Set(Object.keys(liveOn).filter((k) => liveOn[k] >= Math.max(1, Number(share) || 1)));
+  /* The batch a new round on this scope joins: the live round's batch, which is its own id when it started one. */
+  const batchFor = (key) => { const r = alive.find((x) => ((x.scope && x.scope.key) || 'base') === key); return r ? (r.batch || r.id) : ''; };
   const withScopes = Array.isArray(scopes) && scopes.length > 0;
   if (alive.length && !withScopes) return no(`a round is already running on ${alive[0].device || 'a device'}`);
 
@@ -185,7 +186,9 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     coverage: scope ? { seen: scope.seen || 0, total: scope.sighted || 0 } : { seen, total },
     scope: scope ? { level: scope.level, name: scope.name || '', key: scope.key } : null,
     /* The live round this one pairs with on the same scope, when there is one. */
-    pairOf: scope ? pairFor(scope.key) : '',
+    batch: scope ? batchFor(scope.key) : '',
+    /* How many machines share this scope's batch, counting this one. */
+    share: Math.max(1, Number(share) || 1),
   });
 
   /*
@@ -195,7 +198,17 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
    * else its parent's, so a bad platform round costs the platform one round and base nothing.
    */
   if (withScopes) {
-    const p = pickScope(scopes.filter((s) => !busyScopes.has(s.key)), sliceTurns, { basePending: busyScopes.has('base') });
+    /*
+     * BASE FIRST, ALWAYS. Nothing else is trained until base has an adapter: a platform or a
+     * role adapter chains from base, and one trained before base exists chains from nothing. When
+     * every machine allowed on base is already on it, a further machine waits for it rather than
+     * starting a platform on the bare model.
+     */
+    const baseRow = scopes.find((s) => s.key === 'base');
+    if (baseRow && !baseRow.adapter && ((Number(baseRow.sighted) || 0) - (Number(baseRow.seen) || 0)) > 0 && busyScopes.has('base')) {
+      return no('base is being trained — a platform or a role round waits until base has an adapter');
+    }
+    const p = pickScope(scopes.filter((s) => !busyScopes.has(s.key)), sliceTurns);
     if (p.pick) return go(p.why, p.pick);
     if (alive.length) return no(`${alive.map((r) => `${(r.scope && r.scope.key) || 'base'} on ${r.device}`).join(', ')} running — nothing else holds a slice of its own yet`);
     if (fresh >= ENOUGH_NEW) return go(`${fresh} new usable run(s) since the last round`, scopes.find((s) => s.key === 'base') || null);
@@ -227,12 +240,16 @@ const label = (s) => (s.key === 'base' ? 'base' : `${s.name} (${s.level})`);
  * The scope the next round trains. Pure; `scopes` rows carry sighted, seen, adapter, parentAdapter.
  * @returns {{ pick: object|null, why: string }}
  */
-function pickScope(scopes, sliceTurns = 0, { basePending = false } = {}) {
+function pickScope(scopes, sliceTurns = 0) {
   const rows = (scopes || []).map((s) => ({ ...s, untrained: Math.max(0, (Number(s.sighted) || 0) - (Number(s.seen) || 0)) }));
   const base = rows.find((s) => s.key === 'base');
-  /* Base first while nothing serves - unless base is being trained right now on another machine,
-     in which case the second machine may start on a platform and chain from base when it lands. */
-  if (base && !base.adapter && base.untrained > 0 && !basePending) {
+  /*
+   * BASE FIRST, ALWAYS. Nothing else is trained until base has an adapter: a platform or a role
+   * adapter chains from base, and one trained before base exists chains from nothing. When base
+   * is being trained on every machine allowed to share it, a further machine waits for it rather
+   * than starting a platform on the bare model.
+   */
+  if (base && !base.adapter && base.untrained > 0) {
     return { pick: base, why: `base: ${base.untrained} of ${base.sighted} sighted turns not trained on yet, and nothing serves yet` };
   }
   const stand = rows.filter((s) => s.key !== 'base' && (Number(s.sighted) || 0) >= Math.max(1, sliceTurns));
