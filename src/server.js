@@ -1632,6 +1632,8 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       machinesShare: now.share,
       /* What the next batch will be for these settings and machines: hours and turns each, at three epochs. */
       sizing: now.sizing,
+      /* GPU nodes: the joins minted, whether each is online, and the Modal state - one source for the Studio. */
+      nodes: (() => { try { const cfg = settingsStore.read(); const list = (deviceHub.deviceList() || []); const js = nodes.joins().map((j) => { const d = list.find((x) => x.deviceId === j.deviceId); return { ...j, url: nodes.joinUrl(j), line: nodes.pasteLine(j), online: !!(d && d.online), lastSeen: d ? d.lastSeen : 0, gpu: d && d.caps ? d.caps.gpu : '' }; }); return { joins: js, modal: { ...nodes.modalState(), ready: nodes.modalReady(), configured: !!(cfg.modalTokenId && cfg.modalTokenSecret), tokenHint: cfg.modalTokenId ? `…${String(cfg.modalTokenId).slice(-4)}` : '', gpu: cfg.modalGpu || 'T4', auto: !!cfg.modalAuto, online: js.some((j) => j.kind === 'modal' && j.online) } }; } catch (e) { return null; } })(),
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
