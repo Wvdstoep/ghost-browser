@@ -201,3 +201,57 @@ describe('a batch is closed once it has its machines', () => {
     expect(d.run).toBe(true);
   });
 });
+
+describe('the batch is cut to the hours at three epochs', () => {
+  const sizing = require('../src/sizing');
+  it('turns follow from hours and speed; the epochs never give', () => {
+    expect(sizing.EPOCHS).toBe(3);
+    /* 1.5 h at 87.5 s a turn: 1.5*3600*0.9 / (87.5*3) = 18.5 -> the floor of 20 */
+    expect(sizing.turnsFor({ hours: 1.5, secPerTurn: 87.5 })).toBe(20);
+    /* 12 h at 90 s: 12*3600*0.9/(90*3) = 144 */
+    expect(sizing.turnsFor({ hours: 12, secPerTurn: 90 })).toBe(144);
+    /* 3 h at 90 s: 36 */
+    expect(sizing.turnsFor({ hours: 3 })).toBe(36);
+    expect(sizing.turnsFor({ hours: 0 })).toBe(sizing.MIN_TURNS);
+  });
+  it('reads the speed off the trainer lines', () => {
+    expect(sizing.speedOf('at 87.5s a turn the hours allow 3 of 12 planned steps — schedule shortened')).toBe(87.5);
+    expect(sizing.speedOf('32/180 turn-passes · epoch 1/3 · step 2/3 (0/16 turns into the next) · loss 1.61 · lr 2.00e-04 · 48 min in, about 42 min left, 3.8 GB')).toBe(90);
+    expect(sizing.speedOf('3/180 turn-passes · epoch 1/3 · step 0/12 · loss 1.8 · 2 min in, about 88 min left')).toBe(null);
+    expect(sizing.speedOf('10/150  agreement 0.0%  0.06 turns/s')).toBe(null);
+  });
+  it('a machine gets its own speed, the batch the typical one, and the mode splits the hours', () => {
+    const rounds = [
+      { id: 'r3', device: 'Karolina', secPerTurn: 120 },
+      { id: 'r2', device: 'WojMagEmi', secPerTurn: 87.5 },
+      { id: 'r1', device: 'WojMagEmi', secPerTurn: 200 },
+    ];
+    expect(sizing.secPerTurnFor('wojmagemi', rounds)).toBe(87.5);
+    expect(sizing.secPerTurnFor('Third', rounds)).toBe(sizing.DEFAULT_SEC);
+    expect(sizing.typicalSpeed(rounds)).toBe(120);
+    const time = sizing.forSettings({ hours: 3, mode: 'time', share: 2, secPerTurn: 90 });
+    expect(time).toMatchObject({ hoursEach: 1.5, turnsEach: 20, batchTurns: 40, epochs: 3 });
+    const work = sizing.forSettings({ hours: 3, mode: 'work', share: 2, secPerTurn: 90 });
+    expect(work).toMatchObject({ hoursEach: 3, turnsEach: 36, batchTurns: 72 });
+    const long = sizing.forSettings({ hours: 12, mode: 'work', share: 2, secPerTurn: 90 });
+    expect(long.turnsEach).toBe(144);
+  });
+  it('a round remembers the speed its lines report', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-speed-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'WojMagEmi', turns: 60 });
+      training.noteRound(r.id, '3/180 turn-passes · epoch 1/3 · step 0/12 · loss 1.8 · 2 min in, about 88 min left');
+      expect(training.allRounds().find((x) => x.id === r.id).secPerTurn).toBeUndefined();
+      training.noteRound(r.id, 'at 87.5s a turn the hours allow 3 of 12 planned steps — schedule shortened');
+      expect(training.allRounds().find((x) => x.id === r.id).secPerTurn).toBe(87.5);
+      expect(sizing.secPerTurnFor('WOJMAGEMI', training.allRounds())).toBe(87.5);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

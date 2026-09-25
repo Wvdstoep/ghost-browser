@@ -253,6 +253,9 @@ function noteRound(id, line) {
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
   r.lines = [...(r.lines || []), { at: new Date().toISOString(), text: String(line || '').slice(0, 300) }].slice(-40);
+  /* The machine's speed, read off the line, so the next share is cut to what it can pass three times. */
+  const sp = require('./sizing').speedOf(line);
+  if (sp) r.secPerTurn = Math.round(sp * 10) / 10;
   writeJson(ROUNDS(), rows);
   return r;
 }

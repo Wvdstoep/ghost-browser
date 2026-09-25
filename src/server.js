@@ -1630,6 +1630,8 @@ app.get('/v1/training/state', authed, async (_req, res) => {
       /* Shares handed out and not registered yet - a machine fetching its slice. */
       pending: training.pendingList(),
       machinesShare: now.share,
+      /* What the next batch will be for these settings and machines: hours and turns each, at three epochs. */
+      sizing: now.sizing,
       resight: resight.state(),
       judge: judge.state(),
       student: await servingState(),
@@ -2013,6 +2015,12 @@ function trainHoursNow() {
   if ([3, 6, 12, 24].includes(s)) return s;
   return Number(process.env.TRAIN_HOURS || 0) || 12;
 }
+const trainModeNow = () => (settingsStore.read().trainShare === 'work' ? 'work' : 'time');
+/* The batch for the owner's settings and the machines online: turns each and in all, at three epochs. */
+function sizingNow(share = 1) {
+  const sizing = require('./sizing');
+  return sizing.forSettings({ hours: trainHoursNow(), mode: trainModeNow(), share, secPerTurn: sizing.typicalSpeed(training.allRounds()) });
+}
 
 /*
  * THE SCOPES A ROUND CAN TRAIN, MEASURED (platforms.js): base, every platform the set has seen,
@@ -2051,13 +2059,13 @@ function scopesNow({ serving = null } = {}) {
   return rows;
 }
 
-function readinessNow({ corpus = {}, serving = null } = {}) {
+function readinessNow({ corpus = {}, serving = null, share = 1 } = {}) {
   const pathx = require('path');
   const base = pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset');
   const train = coverage.cached(pathx.join(base, 'train.jsonl'));
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
-  const sliceTurns = Math.max(120, Math.round(trainHoursNow() * 40 / 3));
+  const sliceTurns = sizingNow(share).batchTurns;
   const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
@@ -2133,10 +2141,10 @@ function planNow() {
   }
   const st = training.state({ corpus, manifest, trainers });
   const usable = trainers.filter((x) => x.able && (gpuFlow ? !!x.virtual : (!x.virtual && training.trainerOn(x.deviceId))));
-  const ready = readinessNow({ corpus: st.corpus, serving: st.serving });
-  const scopes = scopesNow({ serving: st.serving });
   /* How many machines may share one scope: every online usable machine in split mode, one in scopes mode. */
   const share = Math.max(1, usable.filter((x) => x.online).length);
+  const ready = readinessNow({ corpus: st.corpus, serving: st.serving, share });
+  const scopes = scopesNow({ serving: st.serving });
   return {
     scopes, share,
     plan: trainingPlan.decide({
@@ -2157,9 +2165,9 @@ function planNow() {
        * treats as unknown rather than as zero.
        */
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
-      sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)),
+      sliceTurns: sizingNow(share).batchTurns,
     }),
-    trainers, usable, readiness: ready.readiness, coverage: ready.coverage,
+    trainers, usable, readiness: ready.readiness, coverage: ready.coverage, sizing: sizingNow(share),
   };
 }
 
@@ -2411,7 +2419,7 @@ app.get('/v1/training/adapters/:name', authed, (req, res) => {
 
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
-  try { res.json({ scopes: scopesNow({ serving: training.current() }), platformMap: platformMap.state(), sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) }); }
+  try { const now = planNow(); res.json({ scopes: now.scopes, platformMap: platformMap.state(), sliceTurns: now.sizing.batchTurns, sizing: now.sizing }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/v1/training/platform-map', authed, (req, res) => {
@@ -2674,8 +2682,16 @@ async function dispatchRound({ force = false } = {}) {
      registered joins the same batch; a round that starts one alone keeps this id as well. */
   const batch = plan.batch || (share > 1 ? `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}` : '');
   const hoursEach = mode === 'time' ? trainHoursNow() / share : trainHoursNow();
-  const batchTurns = Math.max(120, Math.round((mode === 'time' ? trainHoursNow() : trainHoursNow() * share) * 40 / 3));
-  const perMachine = Math.max(20, Math.ceil(batchTurns / share));
+  /*
+   * THE SHARE IS CUT TO THE MACHINE'S HOURS AT THREE EPOCHS, from the speed it reported on its
+   * last round (sizing.js). The batch had a floor of 120 turns; on a CPU a 1.5 h share cannot
+   * pass 60 turns three times, and the trainer shortened its schedule to 3 of 12 steps. The
+   * epochs are not what gives; the turns are.
+   */
+  const sizing = require('./sizing');
+  const speed = sizing.secPerTurnFor(plan.device, training.allRounds());
+  const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
+  const batchTurns = perMachine * share;
   training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
@@ -2725,7 +2741,7 @@ async function dispatchRound({ force = false } = {}) {
       log.warn(`training: ${dev.device} would not take the round — ${said.error || 'it said no'}`);
       return { run: false, why: `${dev.device} would not take it: ${said.error || 'it said no'}` };
     }
-    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${batch ? ` (batch ${batch}, ${share} machines, ${Math.round(hoursEach * 100) / 100} h each)` : ''}`);
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${batch ? ` (batch ${batch}, ${share} machines, ${Math.round(hoursEach * 100) / 100} h each)` : ''} — ${perMachine} turns at ${speed} s a turn, ${sizing.EPOCHS} epochs`);
     return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, batch, share, mode, hours: hoursEach, turns: perMachine, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
