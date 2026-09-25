@@ -897,3 +897,43 @@ describe('refused is discarded', () => {
     }
   });
 });
+
+describe('a batch with a dead share', () => {
+  it('merges the shares that made it, and abandons a batch where none did', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-dead-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 60 });
+      const a = training.startRound({ device: 'A', turns: 60 });
+      training.setPending({ scope: 'base', device: 'B', batch: 'b-1', share: 2, turns: 60 });
+      const b = training.startRound({ device: 'B', turns: 60 });
+      training.endRound(a.id, { baseline: { agreement_pct: 7, turns: 150 }, result: { agreement_pct: 5, turns: 150 }, adapter: '/x', trained: 48 });
+      training.setAdapterHub(a.id, `hub:${a.id}`);
+      /* B still running: nothing yet. */
+      expect(training.batchReadyToMerge(a.id)).toBe(null);
+      expect(training.batchesAwaitingMerge()).toEqual([]);
+      /* B dies on a full disk: the merge is of A alone. */
+      training.endRound(b.id, { status: 'failed', why: 'the trainer process died' });
+      expect(training.batchesAwaitingMerge()).toHaveLength(1);
+      const members = training.batchReadyToMerge(a.id);
+      expect(members.map((m) => m.id)).toEqual([a.id]);
+      expect(training.allRounds().find((r) => r.id === b.id).mergedInto).toBe('left out');
+      /* A batch where every share died is abandoned. */
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-2', share: 2, turns: 60 });
+      const c = training.startRound({ device: 'A', turns: 60 });
+      training.setPending({ scope: 'base', device: 'B', batch: 'b-2', share: 2, turns: 60 });
+      const d = training.startRound({ device: 'B', turns: 60 });
+      training.endRound(c.id, { status: 'failed', why: 'died' });
+      training.stopRound(d.id);
+      expect(training.batchReadyToMerge(c.id)).toBe(null);
+      expect(training.allRounds().find((r) => r.id === c.id).mergedInto).toBe('abandoned');
+      expect(training.batchesAwaitingMerge()).toHaveLength(1);   // b-1 still awaits its merge
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

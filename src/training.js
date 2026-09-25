@@ -201,14 +201,25 @@ function batchReadyToMerge(id) {
   /* A merge that is running or done owns its members; one that died, or 'pending', does not. */
   const owned = (v) => !!v && v !== 'pending' && rows.some((x) => x.id === v && x.merge && (x.status === 'running' || x.status === 'done'));
   if (!r || !r.batch || owned(r.mergedInto)) return null;
-  const members = rows.filter((x) => x.batch === r.batch && !x.merge);
-  if (members.length < 2) return null;
-  if (members.some((m) => owned(m.mergedInto) || m.status !== 'done' || !m.adapterHub)) return null;
+  const all = rows.filter((x) => x.batch === r.batch && !x.merge);
+  if (all.length < 2) return null;
+  /* A share still running holds the batch; one that died or was stopped (a full disk, a crash)
+     is LEFT OUT, and the merge is of the shares that made it - one alone if that is all. */
+  if (all.some((m) => m.status === 'running')) return null;
+  const dead = all.filter((m) => m.status === 'failed' || m.status === 'stopped');
+  const members = all.filter((m) => m.status === 'done');
+  if (members.some((m) => owned(m.mergedInto) || !m.adapterHub)) return null;
   if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) return null;
   /* A merge round already running or pending on this batch: not twice. */
   if (rows.some((x) => x.merge && x.batch === r.batch && x.status === 'running')) return null;
   if (pendingList().some((p) => p.merge && p.batch === r.batch)) return null;
-  if (members.some((m) => m.mergedInto === 'abandoned')) return null;
+  if (all.some((m) => m.mergedInto === 'abandoned')) return null;
+  for (const m of dead) m.mergedInto = 'left out';
+  if (!members.length) {
+    for (const m of all) m.mergedInto = 'abandoned';
+    writeJson(ROUNDS(), rows);
+    return null;
+  }
   /*
    * A COLLAPSED SHARE IS LEFT OUT OF THE AVERAGE. Each share took its own exam; one that collapsed
    * onto a tool (over MAX_COLLAPSE) would poison the average of the sound ones. It stays on the hub,
@@ -234,9 +245,11 @@ function batchesAwaitingMerge() {
   for (const r of rows) {
     if (!r.batch || r.merge || seen.has(r.batch)) continue;
     seen.add(r.batch);
-    const members = rows.filter((x) => x.batch === r.batch && !x.merge);
-    if (members.length < 2 || members.some((m) => m.status !== 'done' || !m.adapterHub)) continue;
-    if (members.some((m) => m.mergedInto === 'abandoned')) continue;
+    const all = rows.filter((x) => x.batch === r.batch && !x.merge);
+    if (all.length < 2 || all.some((m) => m.status === 'running')) continue;
+    const members = all.filter((m) => m.status === 'done');
+    if (!members.length || members.some((m) => !m.adapterHub)) continue;
+    if (all.some((m) => m.mergedInto === 'abandoned')) continue;
     if (rows.some((x) => x.merge && x.batch === r.batch && (x.status === 'running' || x.status === 'done'))) continue;
     if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) continue;
     if (pendingList().some((p) => p.merge && p.batch === r.batch)) continue;
