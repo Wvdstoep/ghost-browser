@@ -268,6 +268,35 @@ function progress(builtAt, total, scope = null) {
 function reset(builtAt) { writeJson(LEDGER(), { builtAt, taken: {}, handed: 0 }); }
 
 /**
+ * A ROUND THAT ENDED WITHOUT ITS TURNS GIVES THEM BACK. Stopped, discarded or dead, its lines are
+ * free for the next round of the same build; only the marks that name this round (its id, its
+ * share `<batch>@<device>`, or `single@<device>`) go, and only for its scope. Case does not matter.
+ * Returns how many lines were released.
+ */
+function release({ scope = null, marks = [] } = {}) {
+  const l = readJson(LEDGER(), null);
+  if (!l || !l.taken) return 0;
+  const key = keyOf(scope);
+  const want = new Set((marks || []).map((m) => String(m).toLowerCase()));
+  let n = 0;
+  for (const [i, v] of Object.entries(l.taken)) {
+    const kept = marksOf(v).filter((m) => {
+      const bar = m.indexOf('|');
+      const k = bar < 0 ? 'base' : m.slice(0, bar);
+      const who = (bar < 0 ? m : m.slice(bar + 1)).toLowerCase();
+      return !(k === key && want.has(who));
+    });
+    if (kept.length !== marksOf(v).length) {
+      n++;
+      if (kept.length) l.taken[i] = kept.join(','); else delete l.taken[i];
+    }
+  }
+  l.handed = Object.keys(l.taken).length;
+  writeJson(LEDGER(), l);
+  return n;
+}
+
+/**
  * THE EXAM — a sample of the evaluation split, not the top of it.
  *
  * The scoring turns used to be the FIRST N rows of eval.jsonl. The split is cut by job, which is
@@ -361,4 +390,4 @@ function exam({ file, want = 150, scope = null } = {}) {
   return { jsonl: picked.map((i) => lines[i]).join(NL), count: picked.length, tools: counted, scope: key };
 }
 
-module.exports = { draw, exam, progress, reset, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };
+module.exports = { draw, exam, progress, reset, release, toolOf, jobOf, isGold, keyOf, takenBy, LEDGER, FLOOR, CAP_SHARE, PER_RUN, SIGHTED };

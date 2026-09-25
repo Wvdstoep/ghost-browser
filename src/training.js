@@ -339,8 +339,21 @@ function stopRound(id, why = 'stopped by the owner') {
   r.why = String(why || 'stopped by the owner').slice(0, 400);
   writeJson(ROUNDS(), rows);
   dropPending(r.device);
+  r.released = releaseTurns(r);
   return r;
 }
+/** The marks a round's draws carry in the slice ledger: its id, its share, or a lone round on its machine. */
+function marksOf(r) {
+  const out = [r.id];
+  if (r.batch) out.push(`${r.batch}@${r.device}`);
+  out.push(`single@${r.device}`);
+  return out;
+}
+/** A round that ended without its turns gives them back to the build (slice.js). */
+function releaseTurns(r) {
+  try { return require('./slice').release({ scope: (r.scope && r.scope.key) || 'base', marks: marksOf(r) }); } catch (e) { return 0; }
+}
+
 /**
  * DISCARDED BY THE OWNER. The round stays on the page with its numbers, but nothing chains from
  * it and its model leaves the serving map (server.js): a chain test's adapter is not the start of
@@ -353,6 +366,7 @@ function discardRound(id) {
   r.discarded = true;
   r.discardedAt = new Date().toISOString();
   writeJson(ROUNDS(), rows);
+  r.released = releaseTurns(r);
   return r;
 }
 /** A round tried in the shadow under this tag, without promotion. */
@@ -397,6 +411,8 @@ function endRound(id, { status = 'done', baseline = null, result = null, why = '
   r.trained = Number(trained) || 0;
   if (drawSeed != null) r.drawSeed = Number(drawSeed);
   if (paper) r.paper = String(paper).slice(0, 80);
+  /* A round that died gives its turns back: the retry, on any machine, draws them again. */
+  if (status === 'failed') r.released = releaseTurns(r);
   if (adapter) r.adapter = String(adapter).slice(0, 200);
   writeJson(ROUNDS(), rows);
   return r;
