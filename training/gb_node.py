@@ -265,6 +265,12 @@ def main():
     say(f"online — {gpu_name() or 'no GPU'}, {free_gb()} GB free")
     last_register = time.time()
     while True:
+        # LEAVE WHEN IDLE, WHATEVER THE HUB SAYS. A rented session costs while it lives; a node
+        # that could not reach the hub for a quarter of an hour with nothing running leaves too.
+        busy = ROUND["proc"] is not None and ROUND["proc"].poll() is None
+        if not busy and IDLE_EXIT > 0 and time.time() - LAST_WORK["at"] > IDLE_EXIT:
+            say(f"nothing asked for {IDLE_EXIT // 60} min — leaving to save the session")
+            return 0
         # The hub forgets every device when its pod rolls: register again every five minutes
         # whatever the poll says, and at once when the poll answers with an HTTP error.
         if time.time() - last_register > 300:
@@ -286,10 +292,6 @@ def main():
             time.sleep(3)
             continue
         text = raw.decode("utf-8", "replace").strip() if raw else ""
-        busy = ROUND["proc"] is not None and ROUND["proc"].poll() is None
-        if not busy and IDLE_EXIT > 0 and time.time() - LAST_WORK["at"] > IDLE_EXIT:
-            say(f"nothing asked for {IDLE_EXIT // 60} min — leaving to save the session")
-            return 0
         if not text or text == "null":
             continue
         try:

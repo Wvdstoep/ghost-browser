@@ -122,7 +122,7 @@ function modalStop({ tokenId, tokenSecret, app, cwd = path.join(__dirname, '..')
     if (!modalReady() || !app) return resolve({ ok: false, error: !app ? 'no Modal app to stop' : 'no Modal client' });
     const env = { ...process.env, MODAL_TOKEN_ID: tokenId, MODAL_TOKEN_SECRET: tokenSecret, HOME: process.env.HOME || '/tmp' };
     let out = '';
-    const p = spawn(MODAL_BIN(), ['app', 'stop', app], { cwd, env });
+    const p = spawn(MODAL_BIN(), ['app', 'stop', '--yes', app], { cwd, env });
     p.stdout.on('data', (b) => { out += b.toString(); });
     p.stderr.on('data', (b) => { out += b.toString(); });
     p.on('error', (e) => resolve({ ok: false, error: e.message }));
