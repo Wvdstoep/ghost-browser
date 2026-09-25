@@ -264,7 +264,7 @@ class Hub:
     def __init__(self, base, token, device):
         self.base = (base or "").rstrip("/")
         self.token = token or ""
-        self.device = device or os.environ.get("COMPUTERNAME") or "unknown"
+        self.device = device or os.environ.get("GB_DEVICE") or os.environ.get("COMPUTERNAME") or "unknown"
         self.round_id = None
 
     def _post(self, path, body):
@@ -375,8 +375,9 @@ class Hub:
         except Exception:
             pass
 
-    def upload_adapter(self, adapter_dir):
+    def upload_adapter(self, adapter_dir, part=""):
         # The best adapter, as one tgz, to PUT /v1/training/rounds/<id>/adapter - tens of MB.
+        # part="last": the checkpoint as the round goes, so a session cut short is continued.
         if not (self.base and self.round_id and os.path.isdir(adapter_dir)):
             return
         try:
@@ -386,11 +387,12 @@ class Hub:
                 for f in os.listdir(adapter_dir):
                     tf.add(os.path.join(adapter_dir, f), arcname=f)
             data = buf.getvalue()
-            req = urllib.request.Request(f"{self.base}/v1/training/rounds/{self.round_id}/adapter", data=data, method="PUT",
+            suffix = "?part=last" if part == "last" else ""
+            req = urllib.request.Request(f"{self.base}/v1/training/rounds/{self.round_id}/adapter{suffix}", data=data, method="PUT",
                                          headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/gzip", "Content-Length": str(len(data))})
             with urllib.request.urlopen(req, timeout=1800) as r:
                 r.read()
-            print(f"adapter handed to the hub as hub:{self.round_id} ({len(data) / 1e6:.0f} MB)", flush=True)
+            print(f"{'checkpoint' if part == 'last' else 'adapter'} handed to the hub as hub:{self.round_id}{'-last' if part == 'last' else ''} ({len(data) / 1e6:.0f} MB)", flush=True)
         except Exception as e:
             print(f"[the adapter stays here only: {e}]", flush=True)
 
@@ -1020,6 +1022,9 @@ def main():
                 try:
                     model.save_pretrained(last_dir)
                     hub.note(f"saved the latest adapter at {seen} turns")
+                    # A node has no disk that outlives its session: the checkpoint goes to the hub.
+                    if os.environ.get("GB_CKPT_HUB") == "1":
+                        hub.upload_adapter(last_dir, part="last")
                 except Exception as e:
                     hub.note(f"could not save mid-round: {e}")
                 last_save = time.time()

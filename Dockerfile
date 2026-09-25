@@ -28,6 +28,10 @@ RUN set -eux;     arch="$(dpkg --print-architecture)";     case "$arch" in amd64
 # asset. This is what lets GhostBrowser film itself: a live tour of the console becomes an MP4 clip
 # that goes straight into an edit. apt here, not a static binary — ffmpeg pulls a web of codecs.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# The Modal client, for the GPU nodes the hub starts by itself (nodes.js). Its own venv: the
+# image's python is Ubuntu's and refuses pip installs into the system.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/modal && /opt/modal/bin/pip install --no-cache-dir modal
 
 # PulseAudio — so a page can be HEARD. Nothing runs at start: a screen recording starts its own
 # private sound server with one null sink (recorder/sidecar.js), points its own Chromium at it,

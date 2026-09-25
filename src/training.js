@@ -184,11 +184,12 @@ function claimBaseline(q, device = '', now = Date.now()) {
 }
 
 /** The hub's own copy of a round's adapter, by name (`hub:<round id>`), for a merge on any machine. */
-function setAdapterHub(id, name) {
+function setAdapterHub(id, name, part = '') {
   const rows = allRounds();
   const r = rows.find((x) => x.id === id);
   if (!r) return null;
-  r.adapterHub = String(name || '');
+  if (part === 'last') r.adapterLast = String(name || '');
+  else r.adapterHub = String(name || '');
   writeJson(ROUNDS(), rows);
   return r;
 }
@@ -209,8 +210,8 @@ function batchReadyToMerge(id) {
   /* A share still running holds the batch; one that died or was stopped (a full disk, a crash)
      is LEFT OUT, and the merge is of the shares that made it - one alone if that is all. */
   if (all.some((m) => m.status === 'running')) return null;
-  const dead = all.filter((m) => m.status === 'failed' || m.status === 'stopped');
-  const members = all.filter((m) => m.status === 'done');
+  const dead = all.filter((m) => m.status === 'failed' || m.status === 'stopped' || m.discarded);
+  const members = all.filter((m) => m.status === 'done' && !m.discarded);
   if (members.some((m) => owned(m.mergedInto) || !m.adapterHub)) return null;
   if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) return null;
   /* A merge round already running or pending on this batch: not twice. */
@@ -250,7 +251,7 @@ function batchesAwaitingMerge() {
     seen.add(r.batch);
     const all = rows.filter((x) => x.batch === r.batch && !x.merge);
     if (all.length < 2 || all.some((m) => m.status === 'running')) continue;
-    const members = all.filter((m) => m.status === 'done');
+    const members = all.filter((m) => m.status === 'done' && !m.discarded);
     if (!members.length || members.some((m) => !m.adapterHub)) continue;
     if (all.some((m) => m.mergedInto === 'abandoned')) continue;
     if (rows.some((x) => x.merge && x.batch === r.batch && (x.status === 'running' || x.status === 'done'))) continue;
@@ -743,7 +744,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
       batch: r.batch || '', share: r.share || 1, merge: !!r.merge, mergedInto: r.mergedInto || '',
-      paper: r.paper || '', trial: r.trial || '', discarded: !!r.discarded, hours: r.hours || 0, mode: r.mode || '',
+      paper: r.paper || '', trial: r.trial || '', discarded: !!r.discarded, hours: r.hours || 0, mode: r.mode || '', adapterLast: r.adapterLast || '',
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,

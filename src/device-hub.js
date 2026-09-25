@@ -46,6 +46,8 @@ function mountDeviceHub(app, authed) {
       realIp: !!c.realIp,         // has a residential/stealth exit IP
       profiles: arr(c.profiles),  // browser profiles held locally
       features: arr(c.features),  // named primitives, e.g. upload_file, drag_xy, native_tap
+      gpu: String(c.gpu || '').slice(0, 80),        // a training node's GPU, e.g. 'Tesla T4'
+      node: String(c.node || '').slice(0, 20),      // a training node's kind: modal, colab, kaggle, gpu
 
       /*
        * CAN THIS MACHINE TRAIN, AND IF NOT, WHAT IS IT MISSING.

@@ -255,3 +255,13 @@ describe('the batch is cut to the hours at three epochs', () => {
     }
   });
 });
+
+describe('a GPU node is cut for a GPU until it has spoken', () => {
+  const sizing = require('../src/sizing');
+  it('takes the whole corpus on its first round', () => {
+    expect(sizing.secPerTurnFor('Modal T4', [], { gpu: true })).toBe(sizing.DEFAULT_GPU_SEC);
+    expect(sizing.turnsFor({ hours: 6, secPerTurn: sizing.DEFAULT_GPU_SEC })).toBeGreaterThan(3690);
+    expect(sizing.secPerTurnFor('Modal T4', [{ device: 'Modal T4', secPerTurn: 0.9 }], { gpu: true })).toBe(0.9);
+    expect(sizing.secPerTurnFor('Laptop', [], { gpu: false })).toBe(sizing.DEFAULT_SEC);
+  });
+});

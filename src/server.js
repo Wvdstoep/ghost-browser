@@ -1804,16 +1804,19 @@ app.put('/v1/training/rounds/:id/adapter', authed, (req, res) => {
   if (!id || !training.allRounds().some((r) => r.id === id)) return res.status(404).json({ error: 'no such round' });
   const dir = pathx.join(MODELS_DIR(), 'adapters');
   try { fsx.mkdirSync(dir, { recursive: true }); } catch (e) { return res.status(500).json({ error: e.message }); }
-  const file = pathx.join(dir, `${id}.tgz`);
+  /* ?part=last: the checkpoint as the round goes, so a session cut short is continued from it. */
+  const part = String(req.query.part || '') === 'last' ? 'last' : '';
+  const name = part ? `${id}-last` : id;
+  const file = pathx.join(dir, `${name}.tgz`);
   const out = fsx.createWriteStream(`${file}.part`);
   let bytes = 0;
   req.on('data', (b) => { bytes += b.length; });
   req.pipe(out);
   out.on('finish', () => {
     fsx.renameSync(`${file}.part`, file);
-    training.setAdapterHub(id, `hub:${id}`);
-    log.info(`training: adapter of ${id} is on the hub (${Math.round(bytes / 1e6)} MB)`);
-    res.json({ ok: true, name: id, bytes });
+    training.setAdapterHub(id, `hub:${name}`, part);
+    log.info(`training: ${part ? 'checkpoint' : 'adapter'} of ${id} is on the hub (${Math.round(bytes / 1e6)} MB)`);
+    res.json({ ok: true, name, bytes });
     setTimeout(() => { mergeIfReady(id).catch((e) => log.warn(`training: merge check — ${e.message}`)); }, 1000);
   });
   out.on('error', (e) => res.status(500).json({ error: e.message }));
@@ -2179,6 +2182,8 @@ function planNow() {
       .map((d) => ({
         name: d.name || d.deviceId, deviceId: d.deviceId, online: !!d.online,
         able: !!(d.caps && d.caps.trainer),
+        gpu: String((d.caps && d.caps.gpu) || ''),
+        node: String((d.caps && d.caps.node) || ''),
         freeGb: (d.caps && d.caps.trainerFreeGb) || 0,
         home: (d.caps && d.caps.trainerHome) || '',
         missing: (d.caps && d.caps.trainerMissing) || [],
@@ -2763,7 +2768,8 @@ async function dispatchRound({ force = false } = {}) {
    * epochs are not what gives; the turns are.
    */
   const sizing = require('./sizing');
-  const speed = sizing.secPerTurnFor(plan.device, training.allRounds());
+  const gpuNode = !!((deviceHub.deviceList() || []).find((d) => String(d.name || '').toLowerCase() === String(plan.device || '').toLowerCase() && d.caps && d.caps.gpu));
+  const speed = sizing.secPerTurnFor(plan.device, training.allRounds(), { gpu: gpuNode });
   const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
   const batchTurns = perMachine * share;
   training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode });
@@ -2780,12 +2786,20 @@ async function dispatchRound({ force = false } = {}) {
   let carried = '';
   if (!base) {
     const key = (plan.scope && plan.scope.key) || 'base';
-    const prev = training.allRounds().find((r) => ['failed', 'stopped'].includes(r.status)
-      && ((r.scope && r.scope.key) || 'base') === key
-      && String(r.device || '').toLowerCase() === String(dev.device || '').toLowerCase()
-      && r.adapter && !/^hub:/.test(String(r.adapter))
-      && (Date.parse(r.endedAt || '') || 0) > Date.now() - 24 * 3600 * 1000);
-    if (prev) { base = prev.adapter; carried = prev.id; }
+    /*
+     * THE CHECKPOINT TRAVELS. From the same machine, its local path; from any machine, the
+     * checkpoint the round uploaded as it went (a GPU session that was cut short leaves nothing
+     * on disk, so a node uploads every half hour). A stopped round is not continued.
+     */
+    const sameDevice = (r) => String(r.device || '').toLowerCase() === String(dev.device || '').toLowerCase();
+    const recent = (r) => (Date.parse(r.endedAt || '') || 0) > Date.now() - 24 * 3600 * 1000;
+    const prev = training.allRounds().find((r) => r.status === 'failed' && !r.discarded
+      && ((r.scope && r.scope.key) || 'base') === key && recent(r)
+      && ((sameDevice(r) && r.adapter && !/^hub:/.test(String(r.adapter))) || r.adapterLast || (r.adapter && /^hub:/.test(String(r.adapter)))));
+    if (prev) {
+      base = (sameDevice(prev) && prev.adapter && !/^hub:/.test(String(prev.adapter))) ? prev.adapter : (prev.adapterLast || prev.adapter);
+      carried = prev.id;
+    }
   }
   try {
     const reply = await deviceHub.runCommand(dev.deviceId, {
@@ -2846,8 +2860,30 @@ app.post('/v1/training/dispatch', authed, async (req, res) => {
  * places with lids that close; "train when there is something to learn and a machine free to learn
  * it" is true at any hour and needs no timezone.
  */
+/*
+ * MODAL BY ITSELF. With the auto switch on, the hub keeps one Modal node up whenever the loop is
+ * on and there is something to learn - the node leaves when idle, and it is not restarted within
+ * an hour of a start that got no round, so a loop that is waiting for data does not burn credit.
+ */
+async function modalTick() {
+  const cfg = settingsStore.read();
+  if (!cfg.modalAuto || !cfg.modalTokenId || !cfg.modalTokenSecret || !training.autoOn()) return;
+  const st = nodes.modalState();
+  if (st.starting) return;
+  const list = (deviceHub.deviceList() || []);
+  const online = list.some((d) => d.online && d.caps && d.caps.node === 'modal');
+  if (online) return;
+  const lastStart = Date.parse(st.lastStart || '') || 0;
+  const ranSince = training.allRounds().some((r) => String(r.device || '').startsWith('Modal') && (Date.parse(r.startedAt || '') || 0) > lastStart);
+  if (lastStart && !ranSince && Date.now() - lastStart < 60 * 60 * 1000) return;
+  const { scopes } = planNow();
+  const want = (scopes || []).some((s) => (Number(s.sighted) || 0) - (Number(s.seen) || 0) > 0);
+  if (!want) return;
+  await modalStartNow(null, 'by itself — something to learn and no node online');
+}
 const trainingTick = () => {
   try {
+    modalTick().catch((e) => log.warn(`training: modal tick — ${e.message}`));
     if (!training.autoOn()) return;
     const { plan } = planNow();
     /* The set has to exist before anything can be decided about it, and it should be rebuilt as
@@ -3366,8 +3402,100 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
  * connected" true. Without this the second machine needs somebody to walk over with a USB stick,
  * and the setup is only automatic on the machine that happened to be built first.
  */
+/*
+ * ── GPU NODES ────────────────────────────────────────────────────────────────────────────────
+ * A machine made of a Python session with a GPU (nodes.js). The owner mints a join code; the
+ * script for it comes with the hub, a device token and a name filled in; the session runs it and
+ * is a machine. Modal is started from here with the owner's token.
+ */
+const nodes = require('./nodes');
+const publicUrlOf = (req) => {
+  const env = String(process.env.GHOST_PUBLIC_URL || '').trim();
+  if (env) return env.replace(/\/+$/, '');
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  return `${proto}://${req.get('host')}`;
+};
+app.post('/v1/training/nodes/join', authed, (req, res) => {
+  const owner = req.client && req.client.owner; if (!owner) return res.status(401).json({ error: 'sign in first' });
+  const b = req.body || {};
+  const kind = nodes.KINDS.includes(b.kind) ? b.kind : 'gpu';
+  const deviceId = `node-${kind}-${require('crypto').randomBytes(6).toString('hex')}`;
+  const name = String(b.name || '').trim().slice(0, 60) || `${nodes.LABEL[kind]} node`;
+  const rec = deviceTokens.mint(keys, { owner, deviceId, name });
+  const j = nodes.mintJoin({ kind, name: rec.name, token: rec.token, deviceId: rec.deviceId, owner, publicUrl: publicUrlOf(req) });
+  /* A node is allowed to train the moment it is joined: the join is the consent. */
+  training.setTrainer(rec.deviceId, true);
+  log.info(`training: ${kind} node "${j.name}" joined by ${owner}`);
+  res.json({ ok: true, code: j.code, kind, name: j.name, deviceId: rec.deviceId, url: nodes.joinUrl(j), line: nodes.pasteLine(j) });
+});
+app.get('/v1/training/node.py', (req, res) => {
+  const j = nodes.joinFor(String(req.query.join || ''));
+  if (!j) return res.status(404).type('text/plain').send('# no such join code, or it expired - mint a new one on the Machines page\n');
+  nodes.useJoin(j.code);
+  res.type('text/x-python').send(nodes.scriptFor(j, j.publicUrl || publicUrlOf(req)));
+});
+app.get('/v1/training/nodes', authed, (req, res) => {
+  const cfg = settingsStore.read();
+  const list = (deviceHub.deviceList() || []);
+  const js = nodes.joins().map((j) => {
+    const d = list.find((x) => x.deviceId === j.deviceId);
+    return { ...j, url: nodes.joinUrl(j), line: nodes.pasteLine(j), online: !!(d && d.online), lastSeen: d ? d.lastSeen : 0, gpu: d && d.caps ? d.caps.gpu : '' };
+  });
+  res.json({
+    joins: js,
+    modal: { ...nodes.modalState(), ready: nodes.modalReady(), configured: !!(cfg.modalTokenId && cfg.modalTokenSecret), tokenHint: cfg.modalTokenId ? `…${String(cfg.modalTokenId).slice(-4)}` : '', gpu: cfg.modalGpu || 'T4', auto: !!cfg.modalAuto,
+      online: js.some((j) => j.kind === 'modal' && j.online) },
+    publicUrl: publicUrlOf(req),
+  });
+});
+app.delete('/v1/training/nodes/:code', authed, (req, res) => {
+  const j = nodes.revokeJoin(req.params.code);
+  if (!j) return res.status(404).json({ error: 'no such join' });
+  try { deviceTokens.revoke(keys, j.owner, j.deviceId); } catch (e) { /* the token may be gone already */ }
+  res.json({ ok: true, revoked: j.code });
+});
+/* Modal: the token, the GPU and the auto switch; start and stop. */
+app.post('/v1/training/nodes/modal', authed, (req, res) => {
+  const b = req.body || {};
+  const patch = {};
+  if (typeof b.tokenId === 'string') patch.modalTokenId = b.tokenId;
+  if (typeof b.tokenSecret === 'string') patch.modalTokenSecret = b.tokenSecret;
+  if (typeof b.gpu === 'string') patch.modalGpu = b.gpu;
+  if (typeof b.auto === 'boolean') patch.modalAuto = b.auto;
+  const after = settingsStore.write({ ...settingsStore.read(), ...patch });
+  log.info(`training: modal settings — ${Object.keys(patch).join(', ')}`);
+  res.json({ ok: true, configured: !!(after.modalTokenId && after.modalTokenSecret), gpu: after.modalGpu, auto: !!after.modalAuto });
+});
+async function modalStartNow(req, why = 'by hand') {
+  const cfg = settingsStore.read();
+  const owner = (req && req.client && req.client.owner) || nodes.modalState().owner || '';
+  if (!owner) return { ok: false, error: 'no owner to mint the node for — start it once from the Studio' };
+  const deviceId = `node-modal-${require('crypto').randomBytes(6).toString('hex')}`;
+  const rec = deviceTokens.mint(keys, { owner, deviceId, name: `Modal ${cfg.modalGpu || 'T4'}` });
+  const publicUrl = req ? publicUrlOf(req) : (nodes.modalState().publicUrl || '');
+  const j = nodes.mintJoin({ kind: 'modal', name: rec.name, token: rec.token, deviceId, owner, publicUrl });
+  training.setTrainer(deviceId, true);
+  nodes.modalPatch({ owner, publicUrl, starting: new Date().toISOString(), lastError: '', code: j.code, deviceId });
+  const out = await nodes.modalStart({ tokenId: cfg.modalTokenId, tokenSecret: cfg.modalTokenSecret, joinUrl: nodes.joinUrl(j, publicUrl), gpu: cfg.modalGpu || 'T4' });
+  nodes.modalPatch(out.ok ? { app: out.app || '', lastStart: new Date().toISOString(), starting: '', lastError: '' } : { starting: '', lastError: out.error || `modal run exited ${out.code}` });
+  log.info(`training: modal node ${out.ok ? 'started' : 'NOT started'} ${why}${out.app ? ` (app ${out.app})` : ''}${out.ok ? '' : ` — ${out.error || ''} ${String(out.out || '').slice(-300).replace(/\s+/g, ' ')}`}`);
+  return out;
+}
+app.post('/v1/training/nodes/modal/start', authed, async (req, res) => {
+  try { res.json(await modalStartNow(req, 'by hand')); } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.post('/v1/training/nodes/modal/stop', authed, async (req, res) => {
+  const cfg = settingsStore.read();
+  const st = nodes.modalState();
+  try {
+    const out = await nodes.modalStop({ tokenId: cfg.modalTokenId, tokenSecret: cfg.modalTokenSecret, app: st.app });
+    if (out.ok) nodes.modalPatch({ app: '', stoppedAt: new Date().toISOString() });
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.get('/v1/training/script/:name', authed, (req, res) => {
-  const ok = ['train_round.py', 'evaluate.py', 'export_model.py'];
+  const ok = ['train_round.py', 'evaluate.py', 'export_model.py', 'gb_node.py', 'gb_modal.py'];
   if (!ok.includes(req.params.name)) return res.status(404).json({ error: 'no such script' });
   const p = require('path').join(__dirname, '..', 'training', req.params.name);
   if (!require('fs').existsSync(p)) return res.status(404).json({ error: 'not in this build' });
