@@ -1937,7 +1937,7 @@ function readinessNow({ corpus = {}, serving = null } = {}) {
   const train = coverage.cached(pathx.join(base, 'train.jsonl'));
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
-  const sliceTurns = Math.max(120, Math.round(trainHoursNow() * 40 / 3));
+  const sliceTurns = Math.max(120, Math.round(trainHoursNow() * 90 / 2));
   const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
@@ -2032,7 +2032,7 @@ function planNow() {
        * treats as unknown rather than as zero.
        */
       sighted: (manifest && manifest.marks && typeof manifest.marks.turnsWithContent === 'number') ? manifest.marks.turnsWithContent : null,
-      sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)),
+      sliceTurns: Math.max(120, Math.round(trainHoursNow() * 90 / 2)),
     }),
     trainers, usable, readiness: ready.readiness, coverage: ready.coverage,
   };
@@ -2285,7 +2285,7 @@ app.get('/v1/training/adapters/:name', authed, (req, res) => {
 
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
-  try { res.json({ scopes: scopesNow({ serving: training.current() }), platformMap: platformMap.state(), sliceTurns: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) }); }
+  try { res.json({ scopes: scopesNow({ serving: training.current() }), platformMap: platformMap.state(), sliceTurns: Math.max(120, Math.round(trainHoursNow() * 90 / 2)) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.get('/v1/training/platform-map', authed, (req, res) => {
@@ -2695,7 +2695,7 @@ async function refillPrompts(want) {
       const cov = coverage.cached(require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl'));
       const list = roles.list().map((r) => ({ name: r.name, platform: trainScopes.platformOf(r.name), label: r.label, description: r.description, prompt: r.prompt }));
       roleNames = new Set(list.map((r) => String(r.name).toLowerCase()));
-      roleGaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) });
+      roleGaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 90 / 2)) });
     } catch (e) { roleGaps = []; }
     const s = harvest.load();
     const messages = harvest.askFor({ gaps, roleGaps, history: s.history || [], want: Math.max(4, Math.min(20, Number(want) || 8)) });
@@ -2850,7 +2850,7 @@ setInterval(() => {
       /* The thin roles, and which of them has a signed-in platform to practise on. */
       const cov = coverage.cached(require('path').join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl'));
       const list = roles.list().map((r) => ({ name: r.name, platform: trainScopes.platformOf(r.name), label: r.label, description: r.description, prompt: r.prompt }));
-      const gaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 40 / 3)) });
+      const gaps = harvest.roleGapsFrom({ perRole: cov.perRole || {}, roles: list, floor: Math.max(120, Math.round(trainHoursNow() * 90 / 2)) });
       const plan = practice.planFor({ gaps, logins: loginsNow(), perRole: s.perRole || {} });
       if (!plan.role) return;
       /* Tasks for that role, asked once and kept per role. */

@@ -17,7 +17,8 @@ const localPrompt = require('./localPrompt');
 const traceset = require('./traceset');
 
 /** The observations a decision can see right now - the same window a training turn gets. */
-function observedOf(job, { maxObs = 600, maxMarks = 6000, maxContent = 6000, maxHistory = 6 } = {}) {
+/* The same window the set is built with (traceset.turnsOf) - parity is the whole point. */
+function observedOf(job, { maxObs = 400, maxMarks = 2500, maxContent = 1800, maxHistory = 6 } = {}) {
   const steps = Array.isArray(job && job.steps) ? job.steps : [];
   const history = [];
   for (const s of steps) {
