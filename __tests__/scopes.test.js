@@ -1039,3 +1039,24 @@ describe('a round that ended without its turns gives them back', () => {
     expect(slice.draw({ file, builtAt: 'b1', want: 30, roundId: 'r-next', scope: 'base' }).count).toBe(30);
   });
 });
+
+describe('a round that ended without its number gives up its claim', () => {
+  it('the next machine to ask measures', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-claimrel-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const q = { scope: 'base', base: '', paper: 'P', turns: 495 };
+      expect(training.claimBaseline(q, 'Modal T4').mine).toBe(true);
+      expect(training.claimBaseline(q, 'Modal L4').mine).toBe(false);
+      const r = training.startRound({ device: 'Modal T4', turns: 100 });
+      training.endRound(r.id, { status: 'failed', why: 'died' });
+      expect(training.claimBaseline(q, 'Modal L4').mine).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

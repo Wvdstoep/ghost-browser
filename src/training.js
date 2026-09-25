@@ -170,6 +170,15 @@ function rememberBaseline(q, baseline) {
  * and is spent the moment the number arrives.
  */
 const CLAIM_MS = 3 * 60 * 60 * 1000;
+/** A machine's claims, given up: its round ended without the number. Returns how many. */
+function releaseClaims(device = '') {
+  const all = readJson(BASELINES(), {}) || {};
+  const claims = all._claims && typeof all._claims === 'object' ? all._claims : {};
+  let n = 0;
+  for (const [k, c] of Object.entries(claims)) if (c && same(c.device, device)) { delete claims[k]; n++; }
+  if (n) { all._claims = claims; writeJson(BASELINES(), all); }
+  return n;
+}
 function claimBaseline(q, device = '', now = Date.now()) {
   const key = baselineKey(q);
   const all = readJson(BASELINES(), {}) || {};
@@ -349,8 +358,9 @@ function marksOf(r) {
   out.push(`single@${r.device}`);
   return out;
 }
-/** A round that ended without its turns gives them back to the build (slice.js). */
+/** A round that ended without its turns gives them back to the build (slice.js), and its machine gives up its baseline claims. */
 function releaseTurns(r) {
+  try { releaseClaims(r.device); } catch (e) { /* a claim is a courtesy */ }
   try { return require('./slice').release({ scope: (r.scope && r.scope.key) || 'base', marks: marksOf(r) }); } catch (e) { return 0; }
 }
 
@@ -811,4 +821,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, discardRound, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { releaseClaims, MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, discardRound, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
