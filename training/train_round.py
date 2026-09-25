@@ -1061,6 +1061,7 @@ def main():
     # The last state is checked too: a round that stopped on the clock may have ended on its best
     # weights, and if it did not, the best checkpoint on disk is the one that gets measured.
     if val_ds is not None and not merge_names:
+        hub.note(f"final check: validation loss over {len(val_ds)} held-out turn(s) — a few minutes, then the exam")
         check_now(final=True)
     if best is None:
         save_best()
