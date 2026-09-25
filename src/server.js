@@ -1843,13 +1843,16 @@ async function promoteAndExport(roundId, how = 'by hand') {
 async function trialInShadow(round, why) {
   const r = training.allRounds().find((x) => x.id === round.id) || round;
   if (!r || r.status !== 'done' || !r.result || !r.adapter) return { trial: false, why: 'nothing measured to try' };
+  /* Collapsed too: the shadow cannot act, the ledger against the teacher is the honest measure of
+     it, and the exam's collapse figure stays on the round as the warning. Every measured adapter
+     goes through the whole chain; only what DRIVES is gated. */
   const c = r.result.collapse;
-  if (c && typeof c.ratio === 'number' && c.ratio > training.MAX_COLLAPSE) return { trial: false, why: 'collapsed — not even in the shadow' };
-  if (!/did not beat|not what serves|paper held only/.test(String(why || ''))) return { trial: false, why };
+  const collapsed = !!(c && typeof c.ratio === 'number' && c.ratio > training.MAX_COLLAPSE);
+  if (!/did not beat|not what serves|paper held only|collapsed/.test(String(why || ''))) return { trial: false, why };
   const tag = tagFor(r);
   const exportAsk = await askExport(r, tag);
   training.markTrial(r.id, tag);
-  log.info(`training: ${r.id} goes to the shadow as a trial (${why}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+  log.info(`training: ${r.id} goes to the shadow as a trial${collapsed ? ' — COLLAPSED on the exam, shadow only' : ''} (${why}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
   return { trial: true, tag, export: exportAsk };
 }
 
