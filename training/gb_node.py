@@ -224,6 +224,11 @@ def run_round(body):
     base = str(body.get("base") or "")
     if base:
         cmd += ["--adapter", base]
+    # A round that continues from an adapter is given a smaller step by the hub; the trainer's own
+    # default stands when nothing is sent.
+    lr = body.get("lr")
+    if lr:
+        cmd += ["--lr", str(lr)]
     env = dict(os.environ, GB_HUB=HUB, GB_TOKEN=TOKEN, GB_DEVICE=NAME, GB_CKPT_HUB="1",
                PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     # The trainer's lines go to the round log AND to this process's stdout, so a session's own
