@@ -98,12 +98,30 @@ def setup():
         say(f"installing {', '.join(missing)}")
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", *missing], check=False)
     fetch_scripts()
-    conv = os.path.join(HOME, "tools", "llama.cpp", "convert_hf_to_gguf.py")
+    # THE CONVERTER COMES WITH ITS OWN LIBRARY. `convert_hf_to_gguf.py` reads the gguf package that
+    # sits beside it in llama.cpp's tree (gguf-py); the single file against a pip release of another
+    # version fails on a symbol nobody expects. So: the tree, shallow, like a laptop's set-up. The
+    # single file stays as the fallback for a session without git.
+    tools = os.path.join(HOME, "tools")
+    conv = os.path.join(tools, "llama.cpp", "convert_hf_to_gguf.py")
     if not os.path.isfile(conv):
+        os.makedirs(tools, exist_ok=True)
+        try:
+            import shutil as _sh
+            _sh.rmtree(os.path.join(tools, "llama.cpp"), ignore_errors=True)
+            r = subprocess.run(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp", os.path.join(tools, "llama.cpp")],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if r.returncode != 0:
+                print(f"llama.cpp not cloned: {r.stdout[-300:]}", flush=True)
+        except Exception as e:
+            print(f"llama.cpp not cloned: {e}", flush=True)
+    if not os.path.isfile(conv):
+        os.makedirs(os.path.dirname(conv), exist_ok=True)
         try:
             urllib.request.urlretrieve("https://raw.githubusercontent.com/ggml-org/llama.cpp/master/convert_hf_to_gguf.py", conv)
         except Exception as e:
             print(f"converter not fetched: {e}", flush=True)
+    say("ready to export" if os.path.isfile(conv) else "no gguf converter — this node can train but not export")
 
 
 def caps():
@@ -134,6 +152,7 @@ def register():
 
 
 ROUND = {"proc": None, "started": 0.0, "log": None}
+EXPORT = {"proc": None}
 LAST_WORK = {"at": time.time()}
 
 
@@ -261,12 +280,41 @@ def export_model(body):
     script = os.path.join(HOME, "export_model.py")
     if not os.path.isfile(script):
         return {"started": False, "error": "the export script is not here"}
+    conv = os.path.join(HOME, "tools", "llama.cpp", "convert_hf_to_gguf.py")
+    if not os.path.isfile(conv):
+        setup()
+    if not os.path.isfile(conv):
+        return {"started": False, "error": "no gguf converter on this node"}
     cmd = [sys.executable, script, "--adapter", str(body.get("adapter", "")), "--tag", str(body.get("tag", "")),
            "--round", str(body.get("roundId", "")), "--hub", HUB, "--token", TOKEN]
     if body.get("base"):
         cmd += ["--base", str(body["base"])]
     logf = open(os.path.join(HOME, "last-export.log"), "wb")
-    subprocess.Popen(cmd, cwd=HOME, stdout=logf, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+    p = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
+    EXPORT["proc"] = p
+
+    def watch_export(proc, fh):
+        # An export that ran detached and said nothing left a promoted round with no model and no
+        # reason. Its lines go to this session's log and its end is reported like a round's.
+        tail = []
+        try:
+            for line in iter(proc.stdout.readline, b""):
+                fh.write(line)
+                fh.flush()
+                s = line.decode("utf-8", "replace").rstrip()
+                tail = (tail + [s])[-8:]
+                sys.stdout.write(s + "\n")
+                sys.stdout.flush()
+        except Exception:
+            pass
+        code = proc.wait()
+        LAST_WORK["at"] = time.time()
+        try:
+            fh.close()
+        except Exception:
+            pass
+        say(f"export of {body.get('tag', '')} {'done' if code == 0 else f'FAILED ({code}): ' + ' | '.join(tail)[-300:]}")
+    threading.Thread(target=watch_export, args=(p, logf), daemon=True).start()
     LAST_WORK["at"] = time.time()
     return {"started": True}
 
@@ -301,7 +349,7 @@ def main():
     while True:
         # LEAVE WHEN IDLE, WHATEVER THE HUB SAYS. A rented session costs while it lives; a node
         # that could not reach the hub for a quarter of an hour with nothing running leaves too.
-        busy = ROUND["proc"] is not None and ROUND["proc"].poll() is None
+        busy = (ROUND["proc"] is not None and ROUND["proc"].poll() is None) or (EXPORT["proc"] is not None and EXPORT["proc"].poll() is None)
         if not busy and IDLE_EXIT > 0 and time.time() - LAST_WORK["at"] > IDLE_EXIT:
             say(f"nothing asked for {IDLE_EXIT // 60} min — leaving to save the session")
             return 0
