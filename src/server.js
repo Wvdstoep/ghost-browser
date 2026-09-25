@@ -3050,12 +3050,28 @@ const trainingTick = () => {
  * running anywhere, no share dispatched and unclaimed - and takes the queue one at a time. It
  * never starts a round; it cannot, because a measure-only round asks for no turns.
  */
+/* The trial handed over most recently, until its round shows up. See the wait below. */
+const TRIAL_SENT = { id: '', at: 0 };
 async function trialTick() {
   try {
     const want = students.next();
     if (!want) return;
     const busy = training.allRounds().some((r) => r.status === 'running') || training.pendingList().length > 0;
     if (busy) return;
+    /*
+     * AND A TRIAL JUST SENT IS NOT A ROUND YET. The trainer registers only once it has the paper,
+     * which is seconds away, and until then "no round running" is true and this would hand the
+     * same machine a second candidate. So: wait for the round to appear, or ten minutes, whichever
+     * comes first - a trial that never registers must not block the queue for ever.
+     */
+    if (TRIAL_SENT.id && Date.now() - TRIAL_SENT.at < 10 * 60 * 1000) {
+      const c = students.candidate(TRIAL_SENT.id);
+      const showed = c && training.allRounds().some((r) => students.isTrial(r)
+        && String(r.recipe.base || '') === c.model
+        && String(r.recipe.adapter || '') === String(c.adapter || '')
+        && (Date.parse(r.startedAt || '') || 0) > TRIAL_SENT.at - 60000);
+      if (!showed) return;
+    }
     const able = (deviceHub.deviceList() || []).filter((d) => d.online && d.caps && d.caps.trainer);
     /* The rented card first: a trial on a laptop's processor would take most of a day. */
     const dev = able.find((d) => d.caps.gpu) || able[0];
@@ -3074,6 +3090,8 @@ async function trialTick() {
       return;
     }
     students.shift(want);
+    TRIAL_SENT.id = want;
+    TRIAL_SENT.at = Date.now();
   } catch (e) { log.warn(`[students] ${e.message}`); }
 }
 setInterval(() => { trialTick().catch(() => {}); }, 60 * 1000).unref?.();

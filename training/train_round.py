@@ -808,7 +808,9 @@ def main():
         paper_id = hub.last_header("x-exam-paper")
         paper_scope = hub.last_header("x-exam-scope") or "base"
 
-    if not os.path.isfile(train_path):
+    # A TRIAL NEVER ASKED FOR TURNS. It measures a candidate on the paper and trains nothing, so
+    # the absence of a training set is what it arranged, not a reason to refuse.
+    if not os.path.isfile(train_path) and not args.measure_only:
         print(f"no turns to train on at {train_path}")
         return 2
 
