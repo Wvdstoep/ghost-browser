@@ -2420,8 +2420,24 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
     const put = await fetch(`${host}/api/blobs/sha256:${digest}`, { method: 'POST', body: fsx.createReadStream(file), duplex: 'half', headers: { 'Content-Length': String(stat.size) } });
     if (!put.ok) throw new Error(`the model server refused the blob: ${put.status} ${(await put.text()).slice(0, 200)}`);
   }
+  /*
+   * THE TEMPLATE TRAVELS WITH THE MODEL. A GGUF handed over on its own is served with a passthrough
+   * template (`{{ .Prompt }}`): the markers the model was trained on never reach it, and it answers
+   * prose. The exam renders the template itself, so it reads a fine number while the served model
+   * is useless. This is the same template the student was trained with, and the stop tokens that
+   * end its turn.
+   */
+  const TEMPLATE = [
+    '{{- if .System }}<|im_start|>system',
+    '{{ .System }}<|im_end|>',
+    '{{ end }}<|im_start|>user',
+    '{{ .Prompt }}<|im_end|>',
+    '<|im_start|>assistant',
+    '{{ .Response }}',
+  ].join('\n');
   const made = await fetch(`${host}/api/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: tag, files: { [`${tag.replace(/:/g, '-')}.gguf`]: `sha256:${digest}` }, stream: false }) });
+    body: JSON.stringify({ model: tag, files: { [`${tag.replace(/:/g, '-')}.gguf`]: `sha256:${digest}` },
+      template: TEMPLATE, parameters: { stop: ['<|im_end|>', '<|im_start|>'], temperature: 0 }, stream: false }) });
   const text = await made.text();
   if (!made.ok) throw new Error(`create failed: ${made.status} ${text.slice(0, 300)}`);
   /*
@@ -2438,6 +2454,13 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
   if (!served.some((m) => bare(m) === bare(tag))) {
     throw new Error(`the model server took ${tag} and does not have it: ${text.slice(0, 200)}`);
   }
+  /* And that it holds the template: a passthrough one means every answer will be prose. */
+  try {
+    const shown = await (await fetch(`${host}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: tag }) })).json();
+    if (!String(shown.template || '').includes('<|im_start|>')) {
+      throw new Error(`${tag} is on the model server without its chat template — it would answer prose, not tool calls`);
+    }
+  } catch (e) { if (/without its chat template/.test(e.message)) throw e; }
   /* The file was only ever the way in. The server holds the blob now; the copy is 500 MB of a
      twelve-gigabyte store, and twenty exports would fill it. */
   try { fsx.unlinkSync(file); } catch (e) { /* already gone */ }

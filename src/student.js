@@ -124,7 +124,12 @@ function compare(teacher, student) {
  * pay only the prompt. On a CPU that prompt is the cost - tens of seconds - which is why the
  * shadow gets ninety seconds and a driving turn forty-five.
  */
-const OPTIONS = { num_ctx: 8192, temperature: 0, num_predict: 120 };
+/*
+ * ROOM TO FINISH THE SENTENCE. A hundred and twenty tokens is plenty for `look` or `click` and not
+ * enough for a `finish` that carries a summary: the answer was cut mid-string and arrived as
+ * broken JSON, which the exam counts as no answer at all. Three hundred is still a short answer.
+ */
+const OPTIONS = { num_ctx: 8192, temperature: 0, num_predict: 320 };
 async function ask({ chat, host, model, messages, signal, timeoutMs = 45000 }) {
   const r = await chat({ host, model, key: '', messages, tools: [], signal, timeoutMs, options: OPTIONS, keepAlive: '24h' });
   return String((r && r.content) || '');
