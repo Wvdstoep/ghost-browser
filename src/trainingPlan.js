@@ -228,7 +228,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     /* Carry on from what is SERVING, not from the last round that finished. A round that made the
        model worse is not promoted, and chaining from it anyway would push that damage into every
        round after it. Starting from the serving adapter costs a bad round exactly one round. */
-    base: scope ? (scope.adapter || scope.parentAdapter || '') : ((serving && serving.adapter) || ''),
+    base: scope ? (scope.adapter || scope.warmStart || scope.parentAdapter || '') : ((serving && serving.adapter) || ''),
     coverage: scope ? { seen: scope.seen || 0, total: scope.sighted || 0 } : { seen, total },
     scope: scope ? { level: scope.level, name: scope.name || '', key: scope.key } : null,
     /* The live round this one pairs with on the same scope, when there is one. */
