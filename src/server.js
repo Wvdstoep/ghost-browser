@@ -2195,6 +2195,7 @@ function scopesNow({ serving = null } = {}) {
       round: newest,
       builtAt,
       nextLr: (r.adapter || r.warmStart || r.parentAdapter) ? CONTINUE_LR : trainingPlan.FRESH_LR,
+      nextAnswer: trainingPlan.ANSWER_TOKENS,
     });
   }
   return rows;

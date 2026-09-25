@@ -355,6 +355,20 @@ describe('a refusal is about one attempt', () => {
     expect(refusalStands({ round: refused, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 2.01e-4 })).toBe(true);
   });
 
+  it('lapses when the exam no longer cuts the answer off where it did', () => {
+    /* Tonight's base round: refused on an exam that scored `finish` and `note` as garbage. */
+    const old48 = { ...refused, recipe: { lr: 4e-5, answerTokens: 48 } };
+    expect(refusalStands({ round: old48, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5, nextAnswer: 48 })).toBe(true);
+    expect(refusalStands({ round: old48, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5, nextAnswer: 320 })).toBe(false);
+  });
+
+  it('a round from before the budget was recorded was measured under the old one', () => {
+    const noBudget = { ...refused, recipe: { lr: 4e-5 } };
+    expect(refusalStands({ round: noBudget, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5, nextAnswer: 320 })).toBe(false);
+    /* And with nothing asked about the budget, the older rule stands unchanged. */
+    expect(refusalStands({ round: noBudget, builtAt: '2026-09-25T09:00:00.000Z', nextLr: 4e-5 })).toBe(true);
+  });
+
   it('a promoted round is no refusal at all', () => {
     expect(refusalStands({ round: { ...refused, promoted: true }, builtAt: '', nextLr: FRESH_LR })).toBe(false);
     expect(refusalStands({ round: null })).toBe(false);
