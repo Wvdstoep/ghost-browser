@@ -620,3 +620,38 @@ describe('stopping a round', () => {
     expect(three.run).toBe(true);
   });
 });
+
+describe('one measurer per start', () => {
+  it('the first machine to ask claims the baseline, the second is told who has it, the number spends the claim', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-claim-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const q = { scope: 'base', base: '', paper: '2026-09-25T04:00:00Z', turns: 150 };
+      const a = training.claimBaseline(q, 'WojMagEmi');
+      expect(a.mine).toBe(true);
+      expect(a.device).toBe('WojMagEmi');
+      const b = training.claimBaseline(q, 'Karolina');
+      expect(b.mine).toBe(false);
+      expect(b.device).toBe('WojMagEmi');
+      /* The claimant asking again is still the one. A caller without a name measures. */
+      expect(training.claimBaseline(q, 'wojmagemi').mine).toBe(true);
+      expect(training.claimBaseline(q, '').mine).toBe(true);
+      /* A claim older than three hours is dead: the next asker takes it over. */
+      const later = Date.now() + training.CLAIM_MS + 1000;
+      expect(training.claimBaseline(q, 'Karolina', later)).toMatchObject({ mine: true, device: 'Karolina' });
+      /* The number arrives: the claim is spent, the next asker is simply told the number. */
+      training.rememberBaseline(q, { agreement_pct: 5.6, turns: 150 });
+      expect(training.baselineFor(q).agreement_pct).toBe(5.6);
+      const all = JSON.parse(fs.readFileSync(path.join(dir, 'training', 'baselines.json'), 'utf8'));
+      expect(Object.keys(all._claims || {})).toEqual([]);
+      /* Another paper is another claim. */
+      expect(training.claimBaseline({ ...q, paper: 'other' }, 'Karolina').mine).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

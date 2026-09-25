@@ -1750,7 +1750,10 @@ async function mergeIfReady(roundId) {
 app.get('/v1/training/baseline', authed, (req, res) => {
   const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0 };
   const b = training.baselineFor(q);
-  res.json({ known: !!b, key: training.baselineKey(q), baseline: b });
+  if (b) return res.json({ known: true, key: training.baselineKey(q), baseline: b, measure: false, by: '' });
+  /* Not known: the first machine asking claims the measurement; the others are told who has it. */
+  const claim = training.claimBaseline(q, String(req.query.device || ''));
+  res.json({ known: false, key: training.baselineKey(q), baseline: null, measure: !!claim.mine, by: claim.device });
 });
 app.post('/v1/training/baseline', authed, (req, res) => {
   const b = req.body || {};
