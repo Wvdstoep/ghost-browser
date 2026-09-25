@@ -1697,6 +1697,22 @@ async function mergeIfReady(roundId) {
   }
 }
 
+/*
+ * THE BASELINE, ASKED BEFORE IT IS MEASURED. A round names its start (the adapter it chains
+ * from, or nothing) and its paper (the set it was built from and how many turns); the hub answers
+ * with the number if it has it. A round that measured one tells the hub so the next does not.
+ */
+app.get('/v1/training/baseline', authed, (req, res) => {
+  const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0 };
+  const b = training.baselineFor(q);
+  res.json({ known: !!b, key: training.baselineKey(q), baseline: b });
+});
+app.post('/v1/training/baseline', authed, (req, res) => {
+  const b = req.body || {};
+  const kept = training.rememberBaseline({ scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0 }, b.baseline);
+  res.json({ ok: !!kept, key: training.baselineKey({ scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0 }) });
+});
+
 /* A round's adapter, handed to the hub by the machine that trained it (a few tens of MB). */
 app.put('/v1/training/rounds/:id/adapter', authed, (req, res) => {
   const fsx = require('fs'); const pathx = require('path');
@@ -3177,6 +3193,8 @@ app.get('/v1/training/evalslice', authed, (req, res) => {
     const s = require('./slice').exam({ file, want, scope: training.scopeOfRound(String(req.query.round || '')) });
     res.set('X-Exam-Count', String(s.count));
     res.set('X-Exam-Scope', String(s.scope || 'base'));
+    /* The paper's identity: the set it came from. A rebuilt set is a new paper and a new baseline. */
+    try { res.set('X-Exam-Paper', String(JSON.parse(require('fs').readFileSync(pathx.join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'manifest.json'), 'utf8')).builtAt || '')); } catch (e) { /* no manifest, no paper id */ }
     res.set('X-Exam-Tools', JSON.stringify(s.tools).slice(0, 900));
     res.type('application/x-ndjson').send(s.jsonl);
   } catch (e) { res.status(500).json({ error: e.message }); }

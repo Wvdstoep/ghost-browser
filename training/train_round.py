@@ -40,6 +40,7 @@ import random
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
 
@@ -310,6 +311,8 @@ class Hub:
         try:
             with urllib.request.urlopen(req, timeout=300) as r:
                 data = r.read().decode("utf-8", "replace")
+                # The answer's headers say which paper this is (X-Exam-Paper) - kept for the baseline.
+                self._headers = {k.lower(): v for k, v in r.headers.items()}
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
             print(f"  [could not fetch {path}: {e}]", flush=True)
             return -1
@@ -318,6 +321,31 @@ class Hub:
         with open(into, "w", encoding="utf-8") as fh:
             fh.write(chr(10).join(rows))
         return len(rows)
+
+    def last_header(self, name):
+        return str((getattr(self, "_headers", {}) or {}).get(name.lower(), "") or "")
+
+    def baseline_known(self, scope, start, paper, turns):
+        # GET /v1/training/baseline: the number the hub already has for this start on this paper.
+        if not paper:
+            return None
+        try:
+            q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns})
+            req = urllib.request.Request(f"{self.base}/v1/training/baseline?{q}", headers={"Authorization": f"Bearer {self.token}"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                out = json.loads(r.read().decode("utf-8"))
+            b = out.get("baseline") if out.get("known") else None
+            return b if b and "agreement_pct" in b else None
+        except Exception:
+            return None
+
+    def baseline_tell(self, scope, start, paper, turns, baseline):
+        if not paper:
+            return
+        try:
+            self._post("/v1/training/baseline", {"scope": scope, "base": start, "paper": paper, "turns": turns, "baseline": baseline})
+        except Exception:
+            pass
 
     def upload_adapter(self, adapter_dir):
         # The best adapter, as one tgz, to PUT /v1/training/rounds/<id>/adapter - tens of MB.
@@ -628,6 +656,8 @@ def main():
         ev = hub.fetch(f"/v1/training/evalslice?turns={args.eval_turns}", eval_path)
         if ev > 0:
             print(f"and {ev} turns to score on", flush=True)
+        paper_id = hub.last_header("x-exam-paper")
+        paper_scope = hub.last_header("x-exam-scope") or "base"
 
     if not os.path.isfile(train_path):
         print(f"no turns to train on at {train_path}")
@@ -727,7 +757,17 @@ def main():
         except Exception as e:
             hub.note(f"merge: could not read the halves' baseline ({e})")
     elif not args.skip_baseline:
-        baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
+        # ONCE PER START, NOT ONCE PER ROUND. The same start on the same paper scores the same;
+        # the hub keeps the number and a round asks before it spends half an hour measuring.
+        start_name = str(args.adapter or "")
+        known = hub.baseline_known(paper_scope, start_name, paper_id, args.eval_turns) if hub.base else None
+        if known:
+            baseline = known
+            hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — known from an earlier round on this paper, not measured again")
+        else:
+            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
+            if baseline and hub.base:
+                hub.baseline_tell(paper_scope, start_name, paper_id, args.eval_turns, baseline)
         if baseline:
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
 

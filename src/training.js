@@ -138,6 +138,25 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
   return r;
 }
 
+/* ── the baseline cache ───────────────────────────────────────────────────────────────────── */
+const BASELINES = () => path.join(DIR(), 'baselines.json');
+const baselineKey = ({ scope = 'base', base = '', paper = '', turns = 0 } = {}) => `${normScope(scope).key}|${String(base || 'bare')}|${String(paper || '')}|${Number(turns) || 0}`;
+/** The known baseline for a start on a paper, or null. */
+function baselineFor(q) {
+  const all = readJson(BASELINES(), {}) || {};
+  return all[baselineKey(q)] || null;
+}
+/** Remember a measured baseline. A number measured twice is the newer one. */
+function rememberBaseline(q, baseline) {
+  if (!baseline || typeof baseline !== 'object' || !Number.isFinite(Number(baseline.agreement_pct))) return null;
+  const all = readJson(BASELINES(), {}) || {};
+  const keys = Object.keys(all);
+  if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete all[k];
+  all[baselineKey(q)] = { ...baseline, at: new Date().toISOString() };
+  writeJson(BASELINES(), all);
+  return all[baselineKey(q)];
+}
+
 /** The hub's own copy of a round's adapter, by name (`hub:<round id>`), for a merge on any machine. */
 function setAdapterHub(id, name) {
   const rows = allRounds();
@@ -561,4 +580,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, batchReadyToMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
