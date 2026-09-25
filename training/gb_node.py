@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -264,18 +265,27 @@ def main():
     say(f"online — {gpu_name() or 'no GPU'}, {free_gb()} GB free")
     last_register = time.time()
     while True:
-        try:
-            raw = req("GET", f"/v1/device/poll?deviceId={urllib.parse.quote(DEVICE)}", raw=True, timeout=90)
-        except Exception:
-            time.sleep(3)
-            continue
-        text = raw.decode("utf-8", "replace").strip() if raw else ""
+        # The hub forgets every device when its pod rolls: register again every five minutes
+        # whatever the poll says, and at once when the poll answers with an HTTP error.
         if time.time() - last_register > 300:
             try:
                 req("POST", "/v1/device/register", {"deviceId": DEVICE, "name": NAME, "caps": caps()})
             except Exception:
                 pass
             last_register = time.time()
+        try:
+            raw = req("GET", f"/v1/device/poll?deviceId={urllib.parse.quote(DEVICE)}", raw=True, timeout=90)
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 401, 403, 404, 410):
+                print(f"poll: {e.code} — registering again", flush=True)
+                register()
+                last_register = time.time()
+            time.sleep(3)
+            continue
+        except Exception:
+            time.sleep(3)
+            continue
+        text = raw.decode("utf-8", "replace").strip() if raw else ""
         busy = ROUND["proc"] is not None and ROUND["proc"].poll() is None
         if not busy and IDLE_EXIT > 0 and time.time() - LAST_WORK["at"] > IDLE_EXIT:
             say(f"nothing asked for {IDLE_EXIT // 60} min — leaving to save the session")
