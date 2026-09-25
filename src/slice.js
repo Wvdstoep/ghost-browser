@@ -39,6 +39,7 @@
 const fs = require('fs');
 const path = require('path');
 const platforms = require('./trainScopes');
+const learned = require('./learned');
 
 const DIR = () => path.join(process.env.PROFILE_DIR || '/profiles', 'training');
 const LEDGER = () => path.join(DIR(), 'slices.json');
@@ -142,6 +143,9 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
 
   const ledger = ledgerFor(builtAt);
   const taken = ledger.taken || {};
+  /* Learned turns - trained on by an adapter that passed the gates - are never drawn again for
+     this scope, in this build or any later one. The ledger above is per build; this is not. */
+  const done = learned.setFor(key);
 
   /*
    * SIGHTED TURNS ONLY, once the set has any. A blind turn - a decision recorded without the page
@@ -160,6 +164,7 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
     if (scope && !platforms.matches(scope, lines[i])) continue;
     pool++;
     if (taken[i] && takenBy(taken[i], key)) { takenHere++; continue; }
+    if (done.size && done.has(learned.idOf(lines[i]))) { takenHere++; continue; }
     const tool = toolOf(lines[i]);
     if (!tool) continue;
     if (!byTool.has(tool)) byTool.set(tool, []);

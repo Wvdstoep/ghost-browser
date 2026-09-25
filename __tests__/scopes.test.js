@@ -707,3 +707,93 @@ describe('a collapsed share is left out of the average', () => {
     } finally { restore(); }
   });
 });
+
+describe('learned, not trained on', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  let dir, file;
+  const EOL = '\n';
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-learned-'));
+    process.env.PROFILE_DIR = dir;
+    fs.mkdirSync(path.join(dir, 'traceset'), { recursive: true });
+    file = path.join(dir, 'traceset', 'train.jsonl');
+    const rows = [];
+    for (let i = 0; i < 40; i++) rows.push(JSON.stringify({ messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'u' + i }, { role: 'assistant', content: JSON.stringify({ tool: i % 2 ? 'open' : 'click', args: {} }) }], meta: { jobId: `j-${Math.floor(i / 4)}`, at: i % 4, tier: 'gold', role: 'general', platform: 'web', sighted: true } }));
+    fs.writeFileSync(file, rows.join(EOL));
+    delete require.cache[require.resolve('../src/learned')];
+    delete require.cache[require.resolve('../src/slice')];
+    delete require.cache[require.resolve('../src/training')];
+  });
+  afterEach(() => { delete process.env.PROFILE_DIR; fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('identifies a turn by its job and step, so the identity survives a rebuild', () => {
+    const learned = require('../src/learned');
+    const a = JSON.stringify({ messages: [], meta: { jobId: 'j-1', at: 3 } });
+    const b = JSON.stringify({ messages: [{ role: 'user', content: 'rebuilt differently' }], meta: { jobId: 'j-1', at: 3 } });
+    expect(learned.idOf(a)).toBe('j-1#3');
+    expect(learned.idOf(b)).toBe('j-1#3');
+    expect(learned.idOf('{"x":1}')).toMatch(/^h:/);
+  });
+
+  it('nothing is learned until a round is promoted; then its drawn turns are, and the draw skips them in the next build', () => {
+    const learned = require('../src/learned');
+    const slice = require('../src/slice');
+    const training = require('../src/training');
+    expect(learned.count('base')).toBe(0);
+    /* A share fetches before it registers: marked `<batch>@<device>` for base. */
+    training.setPending({ scope: 'base', device: 'WojMagEmi', batch: 'b-1', share: 2, turns: 10 });
+    const d1 = slice.draw({ file, builtAt: 'build-1', want: 10, roundId: 'b-1@WojMagEmi', scope: 'base' });
+    expect(d1.count).toBe(10);
+    const a = training.startRound({ device: 'WojMagEmi', turns: 10 });
+    training.setPending({ scope: 'base', device: 'Karolina', batch: 'b-1', share: 2, turns: 10 });
+    const d2 = slice.draw({ file, builtAt: 'build-1', want: 10, roundId: 'b-1@Karolina', scope: 'base' });
+    const b = training.startRound({ device: 'Karolina', turns: 10 });
+    for (const r of [a, b]) {
+      training.endRound(r.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 8, turns: 150 }, adapter: 'x', trained: 10 });
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+    }
+    /* Trained, not learned: the state says 0 learned and 20 attempted. */
+    expect(training.state().covered).toBe(0);
+    expect(training.state().attempted).toBe(20);
+    /* The merge is promoted: both shares' turns are learned. */
+    training.batchReadyToMerge(a.id);
+    training.setPending({ scope: 'base', device: 'WojMagEmi', base: `merge:hub:${a.id},hub:${b.id}`, merge: true, batch: 'b-1' });
+    const m = training.startRound({ device: 'WojMagEmi', base: `merge:hub:${a.id},hub:${b.id}` });
+    training.endRound(m.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 9, turns: 150 }, adapter: 'hub:merged', trained: 0 });
+    const p = training.promote(m.id);
+    expect(p.error).toBeUndefined();
+    expect(learned.count('base')).toBe(20);
+    expect(training.state().covered).toBe(20);
+    expect(training.allRounds().find((r) => r.id === m.id).learned).toMatchObject({ added: 20, matched: 20 });
+    /* A rebuilt set (new builtAt, fresh slice ledger): the learned turns are not drawn again. */
+    const d3 = slice.draw({ file, builtAt: 'build-2', want: 100, roundId: 'r-next', scope: 'base' });
+    expect(d3.count).toBe(20);
+    const drawn = new Set(d3.jsonl.split(EOL).map((l) => learned.idOf(l)));
+    for (const l of (d1.jsonl + EOL + d2.jsonl).split(EOL)) expect(drawn.has(learned.idOf(l))).toBe(false);
+    /* Another scope has learned nothing from it. */
+    expect(learned.count('platform:google')).toBe(0);
+  });
+
+  it('a round that failed the gates leaves nothing learned', () => {
+    const learned = require('../src/learned');
+    const slice = require('../src/slice');
+    const training = require('../src/training');
+    training.setPending({ scope: 'base', device: 'Solo', share: 1, turns: 10 });
+    slice.draw({ file, builtAt: 'build-1', want: 10, roundId: 'single@Solo', scope: 'base' });
+    const r = training.startRound({ device: 'Solo', turns: 10 });
+    training.endRound(r.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 4, turns: 150 }, adapter: 'x', trained: 10 });
+    expect(training.promote(r.id).error).toMatch(/did not beat/);
+    expect(learned.count('base')).toBe(0);
+    expect(training.state().attempted).toBe(10);
+  });
+
+  it('the planner counts learned turns as covered, not attempted ones', () => {
+    const { decide } = require('../src/trainingPlan');
+    const now = new Date().toISOString();
+    const rounds = [{ id: 'r-old', status: 'done', device: 'A', startedAt: now, lastAt: now, endedAt: now, trained: 870, result: { agreement_pct: 4 }, baseline: { agreement_pct: 5 } }];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 1000 }, rounds, trainers: [{ name: 'A', online: true }], auto: true, serving: null, learned: 0 });
+    expect(d.run).toBe(true);
+    expect(d.coverage).toEqual({ seen: 0, total: 1000 });
+    expect(d.why).toMatch(/1000 of 1000/);
+  });
+});

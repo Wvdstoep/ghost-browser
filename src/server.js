@@ -2038,7 +2038,9 @@ function scopesNow({ serving = null } = {}) {
     rows.push({ level: 'role', name, key: `role:${name}`, platform: v.platform || trainScopes.platformOf(name), sighted: v.sighted, all: v.all, exam: ((exam.perRole || {})[name] || {}).sighted || 0 });
   }
   for (const r of rows) {
-    r.seen = trainingPlan.coveredFor(all, r.key);
+    /* Learned - trained on by an adapter that passed the gates - not merely trained on. */
+    r.seen = require('./learned').count(r.key);
+    r.attempted = trainingPlan.coveredFor(all, r.key);
     const own = training.adapterFor(r);
     r.adapter = own.from === r.key ? own.adapter : '';
     const parent = trainScopes.parentOf(r);
@@ -2140,6 +2142,7 @@ function planNow() {
     plan: trainingPlan.decide({
       share,
       pending: training.pendingList(),
+      learned: require('./learned').count('base'),
       corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
       trainers: usable, auto: training.autoOn(), serving: st.serving,
       readiness: ready.readiness,

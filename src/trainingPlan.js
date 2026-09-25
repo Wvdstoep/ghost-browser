@@ -93,7 +93,7 @@ function covered(rounds) {
 /** How many merge rounds may die on one batch before its scope is opened again. */
 const MERGE_TRIES = 3;
 
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, pending = [], now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, pending = [], learned = null, now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -214,7 +214,8 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
    */
   if (readiness && readiness.ok === false) return no(readiness.why || 'the set is not ready');
 
-  const seen = covered(rounds);
+  /* Learned turns when the caller counted them (learned.js); the old sum of what rounds trained on otherwise. */
+  const seen = typeof learned === 'number' ? learned : covered(rounds);
   const total = Number(dataset.train) || 0;
   const fresh = Number(corpus.usableSinceLastRound) || 0;
 
