@@ -47,6 +47,8 @@ const DEFAULTS = {
        time  the round length is the batch's - two machines each run half of it, done in half the time
        work  every machine runs the full round length on its own share - twice the turns in the time */
   trainShare: 'time',
+  /* A shadow trial for a round refused on score alone - off: refused is discarded (the owner's rule). */
+  trialInShadow: false,
   gpuProvider: 'runpod',
   gpuKey: '',
   gpuOwner: '',              // who saved the key - the rented machine reports as their device
@@ -130,6 +132,7 @@ function write(input = {}) {
   if (['laptop', 'gpu'].includes(input.trainOn)) out.trainOn = input.trainOn;
   if ([3, 6, 12, 24].includes(Number(input.trainHours))) out.trainHours = Number(input.trainHours);
   if (['time', 'work'].includes(input.trainShare)) out.trainShare = input.trainShare;
+  if (typeof input.trialInShadow === 'boolean') out.trialInShadow = input.trialInShadow;
   if (typeof input.gpuKey === 'string') out.gpuKey = input.gpuKey.trim().slice(0, 200);
   if (typeof input.gpuOwner === 'string') out.gpuOwner = input.gpuOwner.trim().slice(0, 120);
   if (typeof input.gpuHub === 'string' && /^https?:\/\/[^\s]+$/.test(input.gpuHub.trim())) out.gpuHub = input.gpuHub.trim().replace(/\/+$/, '');

@@ -873,3 +873,27 @@ describe('a discarded round', () => {
     }
   });
 });
+
+describe('refused is discarded', () => {
+  it('a round refused at the gates is marked discarded and is no warm start', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-refused-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'A', turns: 20 });
+      training.endRound(r.id, { baseline: { agreement_pct: 7.33, turns: 150 }, result: { agreement_pct: 4, turns: 150 }, adapter: '/x', trained: 48, paper: 'P' });
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+      const p = training.promote(r.id);
+      expect(p.error).toMatch(/did not beat/);
+      /* What the end handler does with a refusal: */
+      training.discardRound(r.id);
+      expect(training.warmStartFor('base')).toBe(null);
+      expect(training.state().rounds.find((x) => x.id === r.id).discarded).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});
