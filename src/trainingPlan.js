@@ -161,7 +161,7 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
   }
   /* A batch whose shares are all in and not merged yet: its scope waits for the merge. */
   for (const r of rounds || []) {
-    if (!r.batch || r.merge || r.status !== 'done' || !r.adapterHub) continue;
+    if (!r.batch || r.merge || r.status !== 'done' || !r.adapterHub || r.mergedInto === 'abandoned') continue;
     const merges = (rounds || []).filter((x) => x.merge && x.batch === r.batch);
     const merged = merges.some((x) => x.status === 'done');
     /* Three merges that died free the scope: better a fresh batch than a scope held for ever. */

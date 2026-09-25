@@ -1730,6 +1730,8 @@ async function mergeIfReady(roundId) {
   if (dev == null) { log.warn(`training: merge of ${members.map((m) => m.id).join(' + ')} waits — no machine is online`); return null; }
   const busy = training.allRounds().some((r) => r.status === 'running' && String(r.device || '').toLowerCase() === String(dev.name || '').toLowerCase());
   if (busy) { log.warn(`training: merge of ${members.map((m) => m.id).join(' + ')} waits — ${dev.name} is still on a round`); return null; }
+  const leftOut = training.allRounds().filter((x) => x.batch === first.batch && !x.merge && x.mergedInto === 'left out');
+  if (leftOut.length) log.warn(`training: ${leftOut.map((m) => `${m.id} (${m.device})`).join(', ')} left out of the merge — collapsed on the exam`);
   const base = `merge:${members.map((m) => m.adapterHub).join(',')}`;
   training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true, batch: first.batch || '' });
   try {

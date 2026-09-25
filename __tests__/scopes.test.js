@@ -655,3 +655,55 @@ describe('one measurer per start', () => {
     }
   });
 });
+
+describe('a collapsed share is left out of the average', () => {
+  const setup = () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-collapse-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    const done = (r, ratio) => {
+      training.endRound(r.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 8, turns: 150, collapse: { tool: 'look', said_pct: 40, correct_pct: 10, ratio } }, adapter: 'x', trained: 60 });
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+    };
+    training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 60 });
+    const a = training.startRound({ device: 'A', turns: 60 });
+    training.setPending({ scope: 'base', device: 'B', batch: 'b-1', share: 2, turns: 60 });
+    const b = training.startRound({ device: 'B', turns: 60 });
+    const restore = () => { if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev; delete require.cache[require.resolve('../src/training')]; };
+    return { training, a, b, done, restore };
+  };
+  it('merges the sound share alone when the other collapsed', () => {
+    const { training, a, b, done, restore } = setup();
+    try {
+      done(a, 1.2); done(b, 3.6);
+      const members = training.batchReadyToMerge(a.id);
+      expect(members.map((m) => m.id)).toEqual([a.id]);
+      const rows = training.allRounds();
+      expect(rows.find((r) => r.id === b.id).mergedInto).toBe('left out');
+      training.setPending({ scope: 'base', device: 'A', base: `merge:hub:${a.id}`, merge: true, batch: 'b-1' });
+      const m = training.startRound({ device: 'A', base: `merge:hub:${a.id}` });
+      const after = training.allRounds();
+      expect(after.find((r) => r.id === a.id).mergedInto).toBe(m.id);
+      expect(after.find((r) => r.id === b.id).mergedInto).toBe('left out');
+    } finally { restore(); }
+  });
+  it('abandons a batch whose every share collapsed, and the planner opens the scope again', () => {
+    const { training, a, b, done, restore } = setup();
+    try {
+      done(a, 2.5); done(b, 3.6);
+      expect(training.batchReadyToMerge(a.id)).toBe(null);
+      const rows = training.allRounds();
+      expect(rows.find((r) => r.id === a.id).mergedInto).toBe('abandoned');
+      expect(rows.find((r) => r.id === b.id).mergedInto).toBe('abandoned');
+      expect(training.batchesAwaitingMerge()).toEqual([]);
+      expect(training.batchReadyToMerge(a.id)).toBe(null);
+      const { decide } = require('../src/trainingPlan');
+      const two = [{ name: 'A', online: true }, { name: 'B', online: true }];
+      const s = [{ key: 'base', level: 'base', name: '', sighted: 2000, seen: 0, adapter: '', paper: 150 }];
+      const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: rows, trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2 });
+      expect(d.run).toBe(true);
+    } finally { restore(); }
+  });
+});
