@@ -280,6 +280,22 @@ describe('which scope the next round trains', () => {
     expect(g.scope.key).toBe('platform:google');
   });
 
+  it('A DISPATCH NOBODY REGISTERED YET HOLDS ITS MACHINE AND ITS SCOPE, so the second share goes to the other laptop', () => {
+    const s = scopes();
+    const two = [{ name: 'WojMagEmi', deviceId: 'd1', online: true }, { name: 'Karolina', deviceId: 'd2', online: true }];
+    const pending = [{ device: 'WojMagEmi', scope: { key: 'base', level: 'base', name: '' }, batch: 'b-1', share: 2, at: new Date().toISOString() }];
+    const d = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [], trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2, pending });
+    expect(d.run).toBe(true);
+    expect(d.device).toBe('Karolina');
+    expect(d.scope.key).toBe('base');
+    expect(d.batch).toBe('b-1');
+    /* Both machines pending: nothing is free. */
+    const both = pending.concat([{ device: 'Karolina', scope: { key: 'base', level: 'base', name: '' }, batch: 'b-1', share: 2, at: new Date().toISOString() }]);
+    const d2 = decide({ corpus: { usableSinceLastRound: 0, scanning: false }, dataset: { train: 12000 }, rounds: [], trainers: two, auto: true, serving: null, scopes: s, sliceTurns: 120, share: 2, pending: both });
+    expect(d2.run).toBe(false);
+    expect(d2.why).toContain('busy');
+  });
+
   it('sums coverage per scope, and counts rounds from before the scopes as base', () => {
     const rounds = [{ trained: 100 }, { trained: 50, scope: { key: 'platform:facebook' } }, { trained: 20, scope: { key: 'base' } }];
     expect(coveredFor(rounds, 'base')).toBe(120);
@@ -308,16 +324,32 @@ describe('the pending dispatch and the promotion map', () => {
   it('a round takes the scope the hub wrote at dispatch, and the device never has to say it', () => {
     training.setPending({ scope: 'platform:facebook', device: 'laptop', base: 'b-v1' });
     expect(training.scopeOfRound('').key).toBe('platform:facebook');
-    const r = training.startRound({ device: 'WOJMAGEMI', turns: 30 });
+    const r = training.startRound({ device: 'LAPTOP', turns: 30 });
     expect(r.scope.key).toBe('platform:facebook');
     expect(training.scopeOfRound(r.id).key).toBe('platform:facebook');
     /* Taken: the next round without a dispatch is base. */
     expect(training.peekPending()).toBe(null);
     expect(training.startRound({ device: 'x' }).scope.key).toBe('base');
   });
+
+  it('one pending dispatch per machine: each round takes its own, whatever order they register in', () => {
+    training.setPending({ scope: 'base', device: 'WojMagEmi', batch: 'b-9', share: 2, turns: 60 });
+    training.setPending({ scope: 'base', device: 'Karolina', batch: 'b-9', share: 2, turns: 60 });
+    expect(training.pendingList().length).toBe(2);
+    const k = training.startRound({ device: 'KAROLINA', turns: 60 });
+    expect(k.batch).toBe('b-9');
+    expect(training.pendingList().map((p) => p.device)).toEqual(['WojMagEmi']);
+    const w = training.startRound({ device: 'WOJMAGEMI', turns: 60 });
+    expect(w.batch).toBe('b-9');
+    expect(training.pendingList().length).toBe(0);
+    /* A refusal clears the machine's entry. */
+    training.setPending({ scope: 'base', device: 'Karolina', batch: 'b-10', share: 2 });
+    training.clearPending('karolina');
+    expect(training.pendingList().length).toBe(0);
+  });
   it('a dispatch nobody picked up for three hours is not a scope for the next round', () => {
     training.setPending({ scope: 'role:facebook.scout', device: 'laptop' });
-    expect(training.peekPending(Date.now() + 4 * 3600 * 1000)).toBe(null);
+    expect(training.peekPending('', Date.now() + 4 * 3600 * 1000)).toBe(null);
   });
   it('promotion writes the scope into the map without touching the others, and base at the top level too', () => {
     const b = win();

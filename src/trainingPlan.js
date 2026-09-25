@@ -90,7 +90,7 @@ function covered(rounds) {
  * @param auto      the owner's switch. Off means off — no rule below overrides it.
  * @param serving   the adapter currently in service, to carry on from
  */
-function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, now = Date.now() } = {}) {
+function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto = true, serving = null, sighted = null, sliceTurns = 0, readiness = null, scopes = null, share = PAIR, pending = [], now = Date.now() } = {}) {
   const no = (why) => ({ run: false, why });
 
   /* The owner's switch comes first and is absolute. A machine that decides to train anyway because
@@ -114,6 +114,17 @@ function decide({ corpus = {}, dataset = null, rounds = [], trainers = [], auto 
     const heard = Date.parse((r.lastAt || r.startedAt) || '') || 0;
     return heard && (now - heard) < SILENT_MS;
   });
+  /*
+   * A DISPATCH NOBODY HAS REGISTERED YET IS A LIVE ROUND TOO. The laptop fetches scripts and a
+   * slice before it registers - a minute or two - and in that minute the planner saw the machine
+   * as free and handed it a second round. The pending dispatches (one per machine) hold their
+   * machine and their scope exactly like a running round, batch id and all.
+   */
+  const started = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
+  for (const p of pending || []) {
+    if (!p || !p.device || started.has(String(p.device).toLowerCase())) continue;
+    alive.push({ id: p.batch || `pending:${p.device}`, device: p.device, scope: p.scope, batch: p.batch || '', pending: true });
+  }
   const busyDevices = new Set(alive.map((r) => String(r.device || '').toLowerCase()));
   /*
    * TWO MACHINES, ONE SCOPE. A scope with one live round is not busy: a second free machine

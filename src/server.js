@@ -2073,6 +2073,7 @@ function planNow() {
     scopes, share,
     plan: trainingPlan.decide({
       share,
+      pending: training.pendingList(),
       corpus: st.corpus, dataset: manifest && manifest.turns, rounds: st.rounds,
       trainers: usable, auto: training.autoOn(), serving: st.serving,
       readiness: ready.readiness,
@@ -2600,10 +2601,13 @@ async function dispatchRound({ force = false } = {}) {
    */
   const share = Math.max(1, plan.share || 1);
   const mode = settingsStore.read().trainShare === 'work' ? 'work' : 'time';
+  /* The batch id is minted HERE, so a second machine handed its share before the first one has
+     registered joins the same batch; a round that starts one alone keeps this id as well. */
+  const batch = plan.batch || (share > 1 ? `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}` : '');
   const hoursEach = mode === 'time' ? trainHoursNow() / share : trainHoursNow();
   const batchTurns = Math.max(120, Math.round((mode === 'time' ? trainHoursNow() : trainHoursNow() * share) * 40 / 3));
   const perMachine = Math.max(20, Math.ceil(batchTurns / share));
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch: plan.batch || '', share: plan.share || 1, turns: perMachine });
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
@@ -2625,7 +2629,7 @@ async function dispatchRound({ force = false } = {}) {
     if (prev) { base = prev.adapter; carried = prev.id; }
   }
   try {
-    await deviceHub.runCommand(dev.deviceId, {
+    const reply = await deviceHub.runCommand(dev.deviceId, {
       path: '/v1/train_round',
       /*
        * TWELVE HOURS, NOT SIX, AND THE ROUND THAT PROVED IT SAID SO ITSELF.
@@ -2645,12 +2649,30 @@ async function dispatchRound({ force = false } = {}) {
        */
       body: { base, hours: Math.max(0.5, Math.round(hoursEach * 4) / 4) },
     }, 30000);
-    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${plan.batch ? ` (joins batch ${plan.batch}, ${plan.share} machines)` : ''}`);
-    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, batch: plan.batch || '', share, mode, hours: hoursEach, turns: perMachine, forced: !!force };
+    /* The machine answers whether it took the round; a refusal is a refusal, not a hand-over. */
+    const said = reply && typeof reply === 'object' ? reply : {};
+    if (said.error || said.ok === false) {
+      training.clearPending(dev.device);
+      log.warn(`training: ${dev.device} would not take the round — ${said.error || 'it said no'}`);
+      return { run: false, why: `${dev.device} would not take it: ${said.error || 'it said no'}` };
+    }
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}${batch ? ` (batch ${batch}, ${share} machines, ${Math.round(hoursEach * 100) / 100} h each)` : ''}`);
+    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, batch, share, mode, hours: hoursEach, turns: perMachine, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
     return { run: false, why: `${dev.device} would not take it: ${e.message}` };
   }
+}
+
+/** Hand a round to every machine that can take one right now, one after another, until the plan says no. */
+async function dispatchAll() {
+  const out = [];
+  for (let i = 0; i < 8; i++) {
+    const d = await dispatchRound({});
+    out.push(d);
+    if (!d.run) break;
+  }
+  return out;
 }
 
 app.post('/v1/training/dispatch', authed, async (req, res) => {
@@ -2673,7 +2695,8 @@ setInterval(() => {
        late as possible so a round learns from everything recorded up to the moment it starts. */
     if (/no training set/.test(plan.why || '')) { buildSet(null); return; }
     if (!plan.run) return;
-    buildSet((ok) => { if (ok) dispatchRound({}).catch(() => {}); });
+    /* Every free machine in one pass: the second laptop gets its share now, not in ten minutes. */
+    buildSet((ok) => { if (ok) dispatchAll().catch(() => {}); });
   } catch (e) { /* a scheduler that throws must not take the browser with it */ }
 }, 10 * 60 * 1000);
 

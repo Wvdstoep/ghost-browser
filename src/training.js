@@ -58,26 +58,43 @@ const PENDING_MS = 3 * 60 * 60 * 1000;
 const platforms = require('./trainScopes');
 const normScope = (s) => { const sc = platforms.parse(s || 'base'); return { level: sc.level, name: sc.name, key: sc.key }; };
 
+/*
+ * ONE PENDING DISPATCH PER MACHINE. Two laptops handed their shares in the same minute must both
+ * be remembered, and each round takes the entry for ITS machine when it registers. A dispatch
+ * that nobody picked up in PENDING_MS is dropped. The old single-entry file is read as a list.
+ */
+const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+function pendingList(now = Date.now()) {
+  const raw = readJson(PENDING(), null);
+  const list = Array.isArray(raw) ? raw : (raw && raw.at ? [raw] : []);
+  return list.filter((p) => p && p.at && now - (Date.parse(p.at) || 0) <= PENDING_MS);
+}
 function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false } = {}) {
   const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, at: new Date().toISOString() };
-  writeJson(PENDING(), p);
+  const list = pendingList().filter((x) => !same(x.device, p.device));
+  list.push(p);
+  writeJson(PENDING(), list);
   return p;
 }
-function peekPending(now = Date.now()) {
-  const p = readJson(PENDING(), null);
-  if (!p || !p.at) return null;
-  if (now - (Date.parse(p.at) || 0) > PENDING_MS) return null;
+/** The pending dispatch for a machine (by name, case does not matter), else the newest one. */
+function peekPending(device = '', now = Date.now()) {
+  const list = pendingList(now);
+  if (!list.length) return null;
+  if (device) { const mine = list.find((p) => same(p.device, device)); if (mine) return mine; }
+  return list[list.length - 1];
+}
+function takePending(device = '', now = Date.now()) {
+  const p = peekPending(device, now);
+  if (!p) return null;
+  writeJson(PENDING(), pendingList(now).filter((x) => x !== p && !(same(x.device, p.device) && x.at === p.at)));
   return p;
 }
-function takePending(now = Date.now()) {
-  const p = peekPending(now);
-  try { fs.unlinkSync(PENDING()); } catch { /* none */ }
-  return p;
-}
+/** Drop a machine's pending dispatch - it refused, or it registered. */
+function clearPending(device) { writeJson(PENDING(), pendingList().filter((x) => !same(x.device, device))); }
 /** The scope a round trains, or the pending one when the round is not registered yet. */
-function scopeOfRound(id) {
+function scopeOfRound(id, device = '') {
   if (id) { const r = allRounds().find((x) => x.id === id); if (r) return normScope(r.scope || 'base'); }
-  const p = peekPending();
+  const p = peekPending(device);
   return p ? normScope(p.scope) : null;
 }
 
@@ -88,7 +105,7 @@ function scopeOfRound(id) {
  * that ran and vanished, and telling those apart is the whole job of a status page.
  */
 function startRound({ device = '', base = '', turns = 0, note = '', recipe = null, scope = null } = {}) {
-  const pend = scope ? null : takePending();
+  const pend = scope ? null : takePending(device);
   const r = {
     scope: normScope(scope || (pend && pend.scope) || 'base'),
     /* The batch this round belongs to: the first round of a shared scope starts one (its own
@@ -544,4 +561,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, batchReadyToMerge, inBatch, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, setAdapterHub, batchReadyToMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
