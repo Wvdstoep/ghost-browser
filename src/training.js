@@ -572,7 +572,11 @@ function promote(roundId) {
   const scope = normScope(r.scope || 'base');
   const entry = {
     roundId: r.id,
-    adapter: r.adapter || '',
+    /* The hub's copy first: `hub:<round>` is a name every machine can fetch, and the next round of
+       this scope chains from it on whichever machine is free. The path on the machine that trained
+       it is the fallback, for a round whose upload never landed. */
+    adapter: r.adapterHub || r.adapter || '',
+    adapterLocal: r.adapter || '',
     base: r.base,
     agreement: r.result.agreement_pct,
     beat: r.baseline.agreement_pct,
