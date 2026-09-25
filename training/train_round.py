@@ -197,7 +197,7 @@ import tempfile
 EXAM_CHILD = None
 
 
-def measure(model_id, adapter, data, limit, note=print):
+def measure(model_id, adapter, data, limit, note=print, dtype=""):
     """Score a model in a SEPARATE PROCESS, and read the answer back as JSON.
 
     Not an optimisation — a correctness fix. Doing the measurement in this process and then training
@@ -215,7 +215,11 @@ def measure(model_id, adapter, data, limit, note=print):
            "--model", model_id, "--data", data, "--limit", str(limit), "--out", out]
     if adapter:
         cmd += ["--adapter", adapter]
-    note(f"measuring in a separate process ({limit} turns)")
+    # A CANDIDATE BIGGER THAN THE INCUMBENT CANNOT BE MEASURED IN FLOAT32 - four billion parameters
+    # is thirty gigabytes. Trials name their precision so all four numbers come off one setting.
+    if dtype:
+        cmd += ["--dtype", dtype]
+    note(f"measuring in a separate process ({limit} turns{', ' + dtype if dtype else ''})")
     # Streamed, not captured. Capturing means the parent learns nothing until the child exits, and a
     # measurement takes twenty-five minutes on this hardware — so the status page would sit on one
     # line for half an hour, which is the silence this whole surface exists to remove. Only the
@@ -615,7 +619,13 @@ class Turns(Dataset):
 
     def __getitem__(self, i):
         m = self.rows[i]["messages"]
-        prompt = self.tok.apply_chat_template(m[:2], tokenize=False, add_generation_prompt=True)
+        # `enable_thinking` is false for the same reason the exam sets it: a hybrid student would
+        # otherwise be TRAINED to open a reasoning block before its tool call. Templates that have
+        # never heard of the flag ignore it.
+        try:
+            prompt = self.tok.apply_chat_template(m[:2], tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        except Exception:
+            prompt = self.tok.apply_chat_template(m[:2], tokenize=False, add_generation_prompt=True)
         full = prompt + m[2]["content"] + self.tok.eos_token
         p_ids = self.tok(prompt, add_special_tokens=False)["input_ids"]
         f_ids = self.tok(full, add_special_tokens=False)["input_ids"][: self.max_len]
@@ -714,6 +724,8 @@ def main():
     ap.add_argument("--hub", default=os.environ.get("GB_HUB", ""))
     ap.add_argument("--token", default=os.environ.get("GB_TOKEN", ""))
     ap.add_argument("--device-name", default=os.environ.get("GB_DEVICE", ""))
+    ap.add_argument("--measure-only", action="store_true",
+                    help="a student trial: score this bare model on the scope's paper, train nothing, claim no turns")
     ap.add_argument("--skip-baseline", action="store_true",
                     help="only when the baseline for this exact base and eval split is already known")
     args = ap.parse_args()
@@ -743,9 +755,17 @@ def main():
     out_dir = os.path.join(args.out, f"round-{stamp}")
     os.makedirs(out_dir, exist_ok=True)
 
-    tok = AutoTokenizer.from_pretrained(args.model)
-    if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
+    tok, tok_error = None, ""
+    try:
+        tok = AutoTokenizer.from_pretrained(args.model)
+        if tok.pad_token is None:
+            tok.pad_token = tok.eos_token
+    except Exception as e:
+        # A trial reports a candidate it cannot even load, rather than dying before the round
+        # exists and leaving the screen with nothing to show. A real round still cannot start.
+        if not args.measure_only:
+            raise
+        tok_error = str(e)[:300]
 
     # ── how much fits in the night ───────────────────────────────────────────────────────────────
     # ── GET THIS ROUND'S WORK FROM THE CONTROLLER ────────────────────────────────────────────────
@@ -763,14 +783,44 @@ def main():
         # a hundred. The controller's gate uses the same figure.
         want = args.slice or (10000 if use_cuda else max(120, int(args.hours * 40 / args.epochs)))
         who = urllib.parse.quote(hub.device or "")
-        got = hub.fetch(f"/v1/training/slice?turns={want}&device={who}", train_path)
-        if got > 0:
-            print(f"the controller handed over {got} turns", flush=True)
+        if args.measure_only:
+            # A TRIAL TAKES NOTHING. The slice endpoint marks what it hands over as taken, and a
+            # round that trains nothing must not spend a single turn of the corpus.
+            print("a trial: asking for the paper only, no training turns", flush=True)
+        else:
+            got = hub.fetch(f"/v1/training/slice?turns={want}&device={who}", train_path)
+            if got > 0:
+                print(f"the controller handed over {got} turns", flush=True)
         ev = hub.fetch(f"/v1/training/evalslice?turns={args.eval_turns}&device={who}", eval_path)
         if ev > 0:
             print(f"and {ev} turns to score on", flush=True)
         paper_id = hub.last_header("x-exam-paper")
         paper_scope = hub.last_header("x-exam-scope") or "base"
+
+    # ── A STUDENT TRIAL ──────────────────────────────────────────────────────────────────────────
+    #
+    # The same paper, bare, for every candidate, and the number decides. The baseline CACHE is
+    # skipped on purpose: it is keyed by the adapter a round starts from, not by the model
+    # underneath it, so asking it here would hand back the incumbent's score for every candidate.
+    if args.measure_only:
+        hub.start(args.model, 0, dict(recipe, trial=True))
+        if tok_error:
+            hub.note(f"trial: {args.model} could not be loaded - {tok_error}")
+            hub.end("failed", None, None, "", f"could not load {args.model}")
+            return 1
+        # ONE PRECISION FOR THE WHOLE FIELD, so the four numbers compare to each other. bfloat16
+        # on a card, float32 only where there is no card and the candidate is small enough to care.
+        trial_dtype = "bfloat16" if use_cuda else "float32"
+        hub.note(f"trial: scoring {args.model} bare on the {paper_scope} paper in {trial_dtype}, training nothing")
+        result = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note, dtype=trial_dtype)
+        if not result:
+            hub.end("failed", None, None, "", "the measurement produced nothing")
+            return 1
+        hub.note(f"trial: {result['agreement_pct']}% agreement over {result['turns']} turns")
+        hub.end("done", None, result, "", f"{result['agreement_pct']}% as a bare student", trained=0, paper=paper_id)
+        print(json.dumps({"trial": args.model, "agreement_pct": result.get("agreement_pct"),
+                          "turns": result.get("turns")}, indent=1), flush=True)
+        return 0
 
     if not os.path.isfile(train_path):
         print(f"no turns to train on at {train_path}")

@@ -1,5 +1,7 @@
-# the browser's own state, not its source: logins, cookies, flows, roles, assets, run journals
-/profiles/
-node_modules/
-*.log
 .DS_Store
+*.log
+node_modules/
+/profiles/
+*.pyc
+__pycache__/
+# the browser's own state, not its source: logins, cookies, flows, roles, assets, run journals

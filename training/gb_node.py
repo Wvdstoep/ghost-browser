@@ -229,6 +229,13 @@ def run_round(body):
     lr = body.get("lr")
     if lr:
         cmd += ["--lr", str(lr)]
+    # A STUDENT TRIAL. The hub names a candidate and asks for a measurement only; the trainer then
+    # claims no turns and writes no adapter. Both are ignored by an ordinary round.
+    model = str(body.get("model") or "")
+    if model:
+        cmd += ["--model", model]
+    if body.get("measureOnly"):
+        cmd += ["--measure-only"]
     env = dict(os.environ, GB_HUB=HUB, GB_TOKEN=TOKEN, GB_DEVICE=NAME, GB_CKPT_HUB="1",
                PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     # The trainer's lines go to the round log AND to this process's stdout, so a session's own

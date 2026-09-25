@@ -23,6 +23,7 @@ is excellent at `look` and hopeless at `finish` averages out fine and never stop
 """
 import argparse
 import json
+import re
 import os
 import random
 import sys as _sys
@@ -105,9 +106,33 @@ def expected_tool(row):
 SEEN = "\n\nSEEN SO FAR:\n"
 
 
+def render(tok, messages):
+    """The prompt as this model's own template writes it.
+
+    NOT EVERY TEMPLATE TAKES A SYSTEM MESSAGE. Gemma's refuses one. The words matter, the envelope
+    does not, so a refused system message is folded into the first user message - the same prompt,
+    one turn - rather than the candidate being marked as unable to answer.
+    """
+    try:
+        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    except Exception:
+        folded, carry = [], ""
+        for m in messages:
+            if m.get("role") == "system":
+                carry = (carry + "\n\n" + m.get("content", "")).strip()
+                continue
+            if carry and m.get("role") == "user":
+                folded.append({"role": "user", "content": carry + "\n\n" + m.get("content", "")})
+                carry = ""
+            else:
+                folded.append(m)
+        if carry:
+            folded.append({"role": "user", "content": carry})
+        return tok.apply_chat_template(folded, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+
+
 def _tokens(tok, messages):
-    prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    return len(tok(prompt, add_special_tokens=False)["input_ids"])
+    return len(tok(render(tok, messages), add_special_tokens=False)["input_ids"])
 
 
 def fit_messages(tok, messages, max_len, answer_tokens=64):
@@ -218,9 +243,25 @@ def args_agree(want, got):
     return True
 
 
+THINK = re.compile(r'<think>.*?</think>\s*', re.S)
+
+
+def _unthink(text):
+    """A hybrid student's reasoning, removed before anything is read out of the answer.
+
+    Qwen3 opens a reasoning block unless its template is told not to. The flag is passed wherever
+    a prompt is rendered; this is the second lock, because what is measured is the tool the model
+    chose, not whether a flag reached it. An unclosed block - the answer cut off mid-thought -
+    leaves nothing to read, which is the honest outcome rather than a guess.
+    """
+    if not text or "<think>" not in text:
+        return text
+    return THINK.sub("", text)
+
+
 def predicted_call(text):
     """The tool name and its arguments out of whatever the model said, however untidily it said it."""
-    obj = _first_object(text)
+    obj = _first_object(_unthink(text))
     if not obj:
         return None, {}
     t = obj.get("tool") or obj.get("name")
@@ -289,7 +330,7 @@ def _collapse(said, per_tool, total):
 
 
 def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300, max_new=48,
-          model_obj=None, tok=None, trainable=False, note=print, max_len=4096):
+          model_obj=None, tok=None, trainable=False, note=print, max_len=4096, dtype="float32"):
     """Agreement with the gold trajectory, as a plain dict.
 
     `model_obj` lets a caller hand in a model it already has in memory — the training round scores
@@ -306,9 +347,23 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
     note(f"scoring {len(rows)} turns from {data}")
 
     if model_obj is None:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import transformers
+        from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
         tok = tok or AutoTokenizer.from_pretrained(model_id)
-        model_obj = AutoModelForCausalLM.from_pretrained(model_id, dtype=torch.float32)
+        want = torch.bfloat16 if str(dtype) == "bfloat16" else torch.float32
+        # THE MODEL'S OWN CONFIG SAYS WHAT CLASS IT IS. A multimodal wrapper such as Gemma 4's
+        # Gemma4ForConditionalGeneration is not a causal LM and AutoModelForCausalLM refuses it;
+        # loading the class the config names works for both and needs no list of exceptions.
+        model_obj = None
+        try:
+            arch = (getattr(AutoConfig.from_pretrained(model_id), "architectures", None) or [None])[0]
+            if arch and arch != "AutoModelForCausalLM" and hasattr(transformers, arch):
+                model_obj = getattr(transformers, arch).from_pretrained(model_id, dtype=want)
+                note(f"loaded as {arch} in {want}".replace("torch.", ""))
+        except Exception as e:
+            note(f"the named architecture did not load ({str(e)[:120]}) - trying the causal loader")
+        if model_obj is None:
+            model_obj = AutoModelForCausalLM.from_pretrained(model_id, dtype=want)
         if adapter:
             from peft import PeftModel
             model_obj = PeftModel.from_pretrained(model_obj, adapter)
@@ -354,7 +409,7 @@ def score(model_id, adapter=None, data=r"D:\gb-train\data\eval.jsonl", limit=300
             continue
         role = role_of(row)
         fitted, _cut = fit_messages(tok, row["messages"], max_len)
-        prompt = tok.apply_chat_template(fitted, tokenize=False, add_generation_prompt=True)
+        prompt = render(tok, fitted)
         ids = tok(prompt, return_tensors="pt", truncation=True, max_length=max_len).to(device)
         with torch.no_grad():
             out = model_obj.generate(**ids, max_new_tokens=max_new, do_sample=False,
@@ -416,10 +471,12 @@ def main():
     ap.add_argument("--limit", type=int, default=300)
     ap.add_argument("--max-new", type=int, default=48)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32",
+                    help="float32 is the rounds' own precision; a trial of a bigger candidate is measured in bfloat16")
     args = ap.parse_args()
 
     result = score(args.model, adapter=args.adapter, data=args.data,
-                   limit=args.limit, max_new=args.max_new)
+                   limit=args.limit, max_new=args.max_new, dtype=args.dtype)
     print(json.dumps(result, indent=1))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
