@@ -1109,3 +1109,45 @@ describe('the planner counts what the draw can give', () => {
     expect(pickScope(refused, 40, { fresh: ENOUGH_NEW }).pick.key).toBe('base');
   });
 });
+
+describe('what serves is named so any machine can fetch it', () => {
+  it('the map names the hub copy, and the next round of that scope chains from it', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-mapname-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'Modal L4', turns: 2430 });
+      training.endRound(r.id, { baseline: { agreement_pct: 6.7, turns: 495 }, result: { agreement_pct: 21, turns: 495 }, adapter: '/root/gb-train/rounds/round-1/adapter', trained: 2430, paper: 'P' });
+      training.setAdapterHub(r.id, `hub:${r.id}`);
+      expect(training.promote(r.id).error).toBeUndefined();
+      const got = training.adapterFor('base');
+      expect(got.adapter).toBe(`hub:${r.id}`);
+      expect(got.from).toBe('base');
+      /* A platform chains from base by the same name. */
+      expect(training.adapterFor('platform:google')).toMatchObject({ adapter: `hub:${r.id}`, from: 'base' });
+      /* The machine that has it can still be asked to export it. */
+      expect(training.current().adapterLocal).toBe('/root/gb-train/rounds/round-1/adapter');
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+  it('a round that never uploaded keeps its own path in the map', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-mapname2-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      const r = training.startRound({ device: 'WojMagEmi', turns: 100 });
+      training.endRound(r.id, { baseline: { agreement_pct: 5, turns: 150 }, result: { agreement_pct: 9, turns: 150 }, adapter: 'D:\\gb-train\\rounds\\x\\adapter', trained: 100 });
+      expect(training.promote(r.id).error).toBeUndefined();
+      expect(training.adapterFor('base').adapter).toBe('D:\\gb-train\\rounds\\x\\adapter');
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});
