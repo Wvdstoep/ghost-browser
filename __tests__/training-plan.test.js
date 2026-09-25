@@ -298,3 +298,34 @@ describe('which scope deserves an adapter', () => {
     expect(pickScope(served, 55).pick.key).toBe('role:research.reviews');
   });
 });
+
+describe('the scope with the most to teach goes first', () => {
+  const { pickScope } = require('../src/trainingPlan');
+  const base = { key: 'base', level: 'base', name: '', sighted: 4110, exam: 602, adapter: 'hub:r-base' };
+  const google = { key: 'platform:google', level: 'platform', name: 'google', sighted: 2491, exam: 355, adapter: '' };
+  const facebook = { key: 'platform:facebook', level: 'platform', name: 'facebook', sighted: 222, exam: 35, adapter: '' };
+  const reviews = { key: 'role:research.reviews', level: 'role', name: 'research.reviews', sighted: 1120, exam: 201, adapter: '' };
+
+  it('base with 1,680 unseen turns beats a fresh platform with 222', () => {
+    const p = pickScope([{ ...base, free: 1680 }, { ...facebook, free: 222 }], 100);
+    expect(p.pick.key).toBe('base');
+    expect(p.why).toContain('1680');
+  });
+
+  it('but a fresh scope wins a near tie, having everything to gain', () => {
+    const p = pickScope([{ ...base, free: 1800 }, { ...google, free: 1500 }], 100);
+    expect(p.pick.key).toBe('platform:google');
+    expect(p.why).toContain('never seen');
+  });
+
+  it('and when base is spent the biggest fresh scope goes', () => {
+    const p = pickScope([{ ...base, free: 0 }, { ...facebook, free: 222 }, { ...reviews, free: 1120 }], 100);
+    expect(p.pick.key).toBe('role:research.reviews');
+  });
+
+  it('a refused scope still waits for new data', () => {
+    const p = pickScope([{ ...base, free: 0 }, { ...google, free: 2491, refused: true }], 100, { fresh: 3 });
+    expect(p.pick).toBe(null);
+    expect(p.why).toMatch(/refused at the gates/);
+  });
+});
