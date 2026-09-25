@@ -527,13 +527,15 @@ def main():
     ap.add_argument("--hours", type=float, default=8.0, help="how long this device may spend training")
     ap.add_argument("--eval-turns", type=int, default=None,
                     help="exam size; 150 on a CPU (an exam costs 25 minutes there), 500 on a GPU")
-    ap.add_argument("--max-len", type=int, default=4096, help="a sighted turn is ~2,700 tokens; 4096 fits nine in ten, the rest are fitted (see Turns)")
+    ap.add_argument("--max-len", type=int, default=2048, help="a sighted turn is ~2,700 tokens; 4096 fits nine in ten, the rest are fitted (see Turns)")
     ap.add_argument("--batch", type=int, default=1)
     # ── THE RECIPE ───────────────────────────────────────────────────────────────────────────────
     # Two rounds ran with a flat 1e-4, batch 1, no warm-up, no schedule, no shuffle, and never saw
     # an example twice. Both collapsed. Each of these is the ordinary fix for one of those.
     ap.add_argument("--lr", type=float, default=2e-4, help="peak; 5%% linear warm-up then cosine to a tenth")
-    ap.add_argument("--epochs", type=float, default=3.0, help="passes over the slice; --hours is the ceiling, not the plan")
+    # TWO PASSES, NOT THREE, ON A CPU. A third pass over the same turns costs a third of the night
+    # and the validation curve flattened well before it on every round measured so far.
+    ap.add_argument("--epochs", type=float, default=2.0, help="passes over the slice; --hours is the ceiling, not the plan")
     ap.add_argument("--accum", type=int, default=16, help="gradient accumulation: effective batch = batch x accum")
     ap.add_argument("--warmup", type=float, default=0.05, help="share of the planned steps spent warming up")
     ap.add_argument("--lora-r", type=int, default=32)
@@ -602,7 +604,10 @@ def main():
         # and takes a full slice.
         # A sighted turn is ~2,700 tokens and takes about 100 s a pass on this CPU - forty an hour, not
         # a hundred. The controller's gate uses the same figure.
-        want = args.slice or (10000 if use_cuda else max(120, int(args.hours * 40 / args.epochs)))
+        # Forty turn-passes an hour was the figure with 2,700-token prompts. With the page cut to
+        # 1,800 characters a pass is about half that, so a CPU reaches ninety an hour; the slice
+        # follows, and a three-hour round is a real round again.
+        want = args.slice or (10000 if use_cuda else max(120, int(args.hours * 90 / args.epochs)))
         got = hub.fetch(f"/v1/training/slice?turns={want}", train_path)
         if got > 0:
             print(f"the controller handed over {got} turns", flush=True)
