@@ -1683,7 +1683,7 @@ async function mergeIfReady(roundId) {
   const { usable } = planNow();
   const dev = usable.find((t) => t.online && String(t.name || '').toLowerCase() === String(pair.a.device || '').toLowerCase())
     || usable.find((t) => t.online);
-  if (!dev) { log.warn(`training: merge of ${pair.a.id} + ${pair.b.id} waits — no machine is online`); return null; }
+  if (dev == null) { log.warn(`training: merge of ${pair.a.id} + ${pair.b.id} waits — no machine is online`); return null; }
   const base = `merge:${pair.a.adapterHub},${pair.b.adapterHub}`;
   training.setPending({ scope: pair.a.scope || 'base', device: dev.name, base, merge: true });
   try {
