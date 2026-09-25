@@ -73,6 +73,27 @@ function scrubValue(v, depth = 0) {
 
 /* ── turns ──────────────────────────────────────────────────────────────────────────────────── */
 
+/*
+ * A SHORT ANSWER IS AN ANSWER. The teacher ends a job with a report - `finish` carries a summary,
+ * `note` carries a page of findings - and the student was taught to reproduce it word for word
+ * inside a JSON string. It cannot: the answer is cut off mid-string and what arrives is not JSON,
+ * which is why `finish` and `note` scored zero on the first exam and a tenth of every answer was
+ * unusable. The report belongs to the judge, which reads the job's own journal; what the student
+ * has to learn is to CHOOSE `finish` and say briefly why. Four hundred characters is briefly.
+ */
+const REPORT_MAX = 400;
+const REPORT_FIELDS = { finish: ['summary'], note: ['text'] };
+function shortReport(tool, args) {
+  const fields = REPORT_FIELDS[String(tool || '')];
+  if (!fields || !args || typeof args !== 'object') return args || {};
+  const out = { ...args };
+  for (const f of fields) {
+    const v = out[f];
+    if (typeof v === 'string' && v.length > REPORT_MAX) out[f] = `${v.slice(0, REPORT_MAX).trimEnd()} …`;
+  }
+  return out;
+}
+
 const OBSERVE = new Set(['read', 'open', 'look', 'click', 'scroll', 'note', 'blocked']);
 
 /**
@@ -570,7 +591,7 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null, platf
        */
       { role: 'system', content: localPrompt.systemFor({ role: t.role, site: t.site, tools: forRole(t.role), playbook: playbookFor ? playbookFor(t.role) : '', notes: notesFor ? notesFor(t.role) : '' }) },
       { role: 'user', content: localPrompt.userFor({ goal: t.goal, observed: t.observed }) },
-      { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: t.action.args }) },
+      { role: 'assistant', content: JSON.stringify({ tool: t.action.tool, args: shortReport(t.action.tool, t.action.args) }) },
     ],
     /* `sighted`: the decision had a page or a numbered list to read - the same fact the manifest
        counts as turnsWithContent, written per turn so coverage can be read per tool off the file. */
@@ -579,4 +600,4 @@ function toJsonl(turns, { tools = [], toolsFor = null, playbookFor = null, platf
   })).join('\n');
 }
 
-module.exports = { build, turnsOf, toJsonl, splitByRole, scrubText, scrubValue, mislabelled, stepVerdict, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
+module.exports = { build, turnsOf, toJsonl, shortReport, REPORT_MAX, splitByRole, scrubText, scrubValue, mislabelled, stepVerdict, DROP_FIELDS, SCRUBS, OBSERVE, CONTENT_KINDS };
