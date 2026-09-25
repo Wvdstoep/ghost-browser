@@ -2541,6 +2541,23 @@ async function dispatchRound({ force = false } = {}) {
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
+  /*
+   * A RETRY CONTINUES FROM THE CHECKPOINT, NOT FROM ZERO. A round that died or was stopped on
+   * this machine, on this scope, within a day, and left its last checkpoint behind (the app
+   * reports the path when it reports the death) is where the next round on that machine starts.
+   * Twelve hours of a laptop are not thrown away for a crash in the eleventh.
+   */
+  let base = dev.base || '';
+  let carried = '';
+  if (!base) {
+    const key = (plan.scope && plan.scope.key) || 'base';
+    const prev = training.allRounds().find((r) => ['failed', 'stopped'].includes(r.status)
+      && ((r.scope && r.scope.key) || 'base') === key
+      && String(r.device || '').toLowerCase() === String(dev.device || '').toLowerCase()
+      && r.adapter && !/^hub:/.test(String(r.adapter))
+      && (Date.parse(r.endedAt || '') || 0) > Date.now() - 24 * 3600 * 1000);
+    if (prev) { base = prev.adapter; carried = prev.id; }
+  }
   try {
     await deviceHub.runCommand(dev.deviceId, {
       path: '/v1/train_round',
@@ -2560,10 +2577,10 @@ async function dispatchRound({ force = false } = {}) {
        * Still an env var, because a machine that has to close its lid at midnight needs a shorter
        * one and that is a property of the machine, not of the method.
        */
-      body: { base: dev.base || '', hours: trainHoursNow() },
+      body: { base, hours: trainHoursNow() },
     }, 30000);
-    log.info(`training: handed a round to ${dev.device} — ${plan.why}`);
-    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, forced: !!force };
+    log.info(`training: handed a round to ${dev.device} — ${plan.why}${carried ? ` (continuing from ${carried}'s checkpoint)` : ''}`);
+    return { run: true, why: plan.why, device: dev.device, scope: plan.scope || null, base, carried, forced: !!force };
   } catch (e) {
     log.warn(`training: ${dev.device} would not take the round — ${e.message}`);
     return { run: false, why: `${dev.device} would not take it: ${e.message}` };
