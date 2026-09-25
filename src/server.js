@@ -2191,7 +2191,9 @@ function readinessNow({ corpus = {}, serving = null, share = 1 } = {}) {
   const exam = coverage.cached(pathx.join(base, 'eval.jsonl'));
   const catalogue = (agent.TOOLS || []).map((x) => (x.function || x).name).filter(Boolean);
   const sliceTurns = sizingNow(share).batchTurns;
-  const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving });
+  /* What the model has not learned yet (learned.js): while there is any, thin tools do not stop a round. */
+  const workLeft = (() => { try { return Math.max(0, (train.sighted || 0) - require('./learned').count('base')); } catch (e) { return 0; } })();
+  const r = readiness.scoreOf({ coverage: train, exam: { overlap: coverage.overlap(train, exam) }, catalogue, sliceTurns, corpus, serving, workLeft });
   return { readiness: r, coverage: coverage.summary(train), sliceTurns };
 }
 

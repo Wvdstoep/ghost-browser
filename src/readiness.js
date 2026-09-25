@@ -39,7 +39,10 @@ const pct = (a, b) => (b > 0 ? Math.min(100, Math.round((100 * a) / b)) : 0);
  * @param corpus    { usableSinceLastRound }
  * @param serving   the adapter in service, or null before the first promotion
  */
-function scoreOf({ coverage = null, exam = null, catalogue = [], sliceTurns = 440, corpus = {}, serving = null } = {}) {
+function scoreOf({
+  /* Turns the model has not learned yet. While there are any, a thin catalogue is a warning:
+     the round in front of us still has something to teach, and rare tools are the collector's job. */
+  workLeft = 0, coverage = null, exam = null, catalogue = [], sliceTurns = 440, corpus = {}, serving = null } = {}) {
   const cov = coverage || { total: 0, sighted: 0, perTool: {}, sightedTiers: {} };
   const perTool = cov.perTool || {};
   const sighted = Number(cov.sighted) || 0;
@@ -63,12 +66,12 @@ function scoreOf({ coverage = null, exam = null, catalogue = [], sliceTurns = 44
   const topThin = top.filter((n) => (perTool[n].sighted || 0) < TOP_FLOOR);
   const covered = names.length - thin.length;
   push({
-    name: 'coverage', gate: !!serving, value: covered, threshold: names.length, ok: thin.length === 0 && topThin.length === 0,
+    name: 'coverage', gate: !!serving && !workLeft, value: covered, threshold: names.length, ok: thin.length === 0 && topThin.length === 0,
     score: names.length ? Math.round((100 * covered) / names.length) : 0,
     aim: [...new Set([...thin, ...topThin])].slice(0, 12),
     text: thin.length === 0 && topThin.length === 0
       ? `every tool has at least ${FLOOR} sighted examples and the common ten at least ${TOP_FLOOR}`
-      : `${thin.length} tool(s) have fewer than ${FLOOR} sighted examples${topThin.length ? `, and ${topThin.length} of the common ten fewer than ${TOP_FLOOR}` : ''} — aiming the collector at ${[...thin, ...topThin].slice(0, 4).join(', ') || 'them'}`,
+      : `${thin.length} tool(s) have fewer than ${FLOOR} sighted examples${topThin.length ? `, and ${topThin.length} of the common ten fewer than ${TOP_FLOOR}` : ''} — aiming the collector at ${[...thin, ...topThin].slice(0, 4).join(', ') || 'them'}${workLeft ? ` (a warning, not a stop: ${workLeft} turn(s) are still unlearned)` : ''}`,
   });
 
   /* 3. BALANCE — the loudest tool must not own the slice. Advisory for the same reason. */
