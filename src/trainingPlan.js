@@ -310,8 +310,8 @@ function pickScope(scopes, sliceTurns = 0, { fresh = 0 } = {}) {
   }
   const stand = rows.filter((s) => s.key !== 'base' && (Number(s.sighted) || 0) >= Math.max(1, sliceTurns));
   const rank = (s) => (s.level === 'platform' ? 0 : 1);
-  const fresh = stand.filter((s) => !s.adapter && s.untrained > 0).sort((a, b) => rank(a) - rank(b) || b.sighted - a.sighted);
-  if (fresh.length) return { pick: fresh[0], why: `${label(fresh[0])}: ${fresh[0].sighted} sighted turns and no adapter of its own yet` };
+  const unowned = stand.filter((s) => !s.adapter && s.untrained > 0).sort((a, b) => rank(a) - rank(b) || b.sighted - a.sighted);
+  if (unowned.length) return { pick: unowned[0], why: `${label(unowned[0])}: ${unowned[0].sighted} sighted turns and no adapter of its own yet` };
   const any = [base, ...stand].filter(Boolean).filter((s) => s.untrained > 0).sort((a, b) => b.untrained - a.untrained);
   if (any.length) return { pick: any[0], why: `${label(any[0])}: ${any[0].untrained} of ${any[0].sighted} sighted turns not trained on yet` };
   const waiting = rows.filter((s) => s.refusedWait);
