@@ -1731,8 +1731,16 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
   const half = training.inBatch(r);
   if (r.status === 'done' && r.result && r.baseline && !half) {
     try { promotion = await promoteAndExport(r.id, 'by itself'); } catch (e) { promotion = { error: e.message }; }
-    /* Refused on score alone: into the shadow as a trial, where the ledger decides. */
-    if (promotion && promotion.error) { try { trial = await trialInShadow(r, promotion.error); } catch (e) { trial = { trial: false, why: e.message }; } }
+    /*
+     * REFUSED IS DISCARDED. The owner's rule: a round that fails the gates is discarded right
+     * there - nothing chains from it, nothing serves it, not even in the shadow. The shadow is a
+     * stage for a model that passed. (A shadow trial for score-only refusals exists behind the
+     * trialInShadow setting, off by default.)
+     */
+    if (promotion && promotion.error) {
+      if (settingsStore.read().trialInShadow === true) { try { trial = await trialInShadow(r, promotion.error); } catch (e) { trial = { trial: false, why: e.message }; } }
+      else { training.discardRound(r.id); log.info(`training: ${r.id} discarded at the gates — ${promotion.error}`); }
+    }
   }
   res.json({ ...r, promotion, trial, half });
   /* Half of a pair: the merge is due once both halves are done and their adapters are on the hub
