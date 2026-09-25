@@ -145,7 +145,14 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
 
 /* ── the baseline cache ───────────────────────────────────────────────────────────────────── */
 const BASELINES = () => path.join(DIR(), 'baselines.json');
-const baselineKey = ({ scope = 'base', base = '', paper = '', turns = 0 } = {}) => `${normScope(scope).key}|${String(base || 'bare')}|${String(paper || '')}|${Number(turns) || 0}`;
+/*
+ * A BASELINE IS A NUMBER UNDER CONDITIONS, AND THE ANSWER BUDGET IS ONE OF THEM. The exam used to
+ * cut every answer off at 48 tokens, which scored `finish` and `note` as garbage however right they
+ * were. It gives 320 now, the same as serving - so a number measured under the old budget describes
+ * a different measurement and must never be handed back as this one. Old entries keep their old key
+ * and are simply never asked for again.
+ */
+const baselineKey = ({ scope = 'base', base = '', paper = '', turns = 0, answer = 0 } = {}) => `${normScope(scope).key}|${String(base || 'bare')}|${String(paper || '')}|${Number(turns) || 0}` + (Number(answer) ? `|a${Number(answer)}` : '');
 /** The known baseline for a start on a paper, or null. */
 function baselineFor(q) {
   const all = readJson(BASELINES(), {}) || {};

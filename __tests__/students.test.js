@@ -22,9 +22,9 @@ describe('choosing the student', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const trial = (model, pct, extra = {}) => ({
-    id: `r-${model.slice(-4)}`, status: 'done', endedAt: '2026-09-26T01:00:00.000Z',
-    recipe: { base: model, trial: true },
+  const trial = (model, pct, extra = {}, adapter = '') => ({
+    id: `r-${model.slice(-4)}${adapter.slice(-4)}`, status: 'done', endedAt: '2026-09-26T01:00:00.000Z',
+    recipe: { base: model, trial: true, adapter },
     result: { agreement_pct: pct, turns: 354, args_agreement_pct: pct / 2, unusable_pct: 5, collapse: { ratio: 1.2, tool: 'read' } },
     ...extra,
   });
@@ -37,7 +37,7 @@ describe('choosing the student', () => {
   it('the field is the family we already serve, and what waits says why', () => {
     const ids = students.CANDIDATES.map((c) => c.id);
     /* Every candidate serves through the ChatML template the export already writes. */
-    expect(ids.every((i) => i.startsWith('Qwen/'))).toBe(true);
+    expect(students.CANDIDATES.every((c) => c.model.startsWith('Qwen/'))).toBe(true);
     expect(ids).toContain('Qwen/Qwen3-1.7B');
     /* A different family is not refused, it is postponed - with the reason written down. */
     expect(students.LATER.map((c) => c.id)).toContain('google/gemma-4-E4B-it');
@@ -61,6 +61,21 @@ describe('choosing the student', () => {
     expect(students.next()).toBe('');
   });
 
+  it('two candidates on one model are told apart by what they wear', () => {
+    const rounds = [
+      trial('Qwen/Qwen2.5-0.5B-Instruct', 41.2, {}, 'hub:r-mugxfwm4-y0m6'),
+      trial('Qwen/Qwen2.5-0.5B-Instruct', 38.9, {}, 'hub:r-muhbyo1p-gzi9'),
+      trial('Qwen/Qwen2.5-0.5B-Instruct', 6.1),
+    ];
+    const out = students.list(rounds);
+    const by = (id) => out.candidates.find((c) => c.id === id).trial.agreement;
+    expect(by('ours:serving')).toBe(41.2);
+    expect(by('ours:refused')).toBe(38.9);
+    /* And the bare incumbent must not pick up either adapter's number. */
+    expect(by('Qwen/Qwen2.5-0.5B-Instruct')).toBe(6.1);
+    expect(out.leader.id).toBe('ours:serving');
+  });
+
   it('reads each candidate score off its own trial round and names the leader', () => {
     const rounds = [trial('Qwen/Qwen3-1.7B', 21.4), trial('Qwen/Qwen2.5-0.5B-Instruct', 6.1)];
     const out = students.list(rounds);
@@ -73,7 +88,7 @@ describe('choosing the student', () => {
   });
 
   it('a running trial is reported as running, not as a score', () => {
-    const rounds = [{ id: 'r-run', status: 'running', recipe: { base: 'Qwen/Qwen3-0.6B', trial: true }, result: null }];
+    const rounds = [{ id: 'r-run', status: 'running', recipe: { base: 'Qwen/Qwen3-0.6B', trial: true, adapter: '' }, result: null }];
     const out = students.list(rounds);
     expect(out.running).toBe(true);
     expect(out.candidates.find((c) => c.id === 'Qwen/Qwen3-0.6B').trial.agreement).toBe(null);
@@ -81,7 +96,7 @@ describe('choosing the student', () => {
   });
 
   it('a failed trial keeps its reason where it can be read', () => {
-    const rounds = [{ id: 'r-bad', status: 'failed', recipe: { base: 'Qwen/Qwen3-0.6B', trial: true }, result: null, why: 'could not load Qwen/Qwen3-0.6B' }];
+    const rounds = [{ id: 'r-bad', status: 'failed', recipe: { base: 'Qwen/Qwen3-0.6B', trial: true, adapter: '' }, result: null, why: 'could not load Qwen/Qwen3-0.6B' }];
     const t = students.list(rounds).candidates.find((c) => c.id === 'Qwen/Qwen3-0.6B').trial;
     expect(t.status).toBe('failed');
     expect(t.why).toMatch(/could not load/);

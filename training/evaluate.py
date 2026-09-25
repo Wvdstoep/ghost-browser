@@ -469,7 +469,10 @@ def main():
     ap.add_argument("--adapter", default=None, help="a LoRA adapter to apply on top")
     ap.add_argument("--data", default=r"D:\gb-train\data\eval.jsonl")
     ap.add_argument("--limit", type=int, default=300)
-    ap.add_argument("--max-new", type=int, default=48)
+    # 320 IS WHAT SERVING GIVES IT (student.js OPTIONS.num_predict). At 48 a `finish` was cut off
+    # mid-JSON and scored as garbage, which is why that tool read 0% in every round ever measured.
+    ap.add_argument("--max-new", type=int, default=320,
+                    help="the answer budget; matches what the served student is given")
     ap.add_argument("--out", default=None)
     ap.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32",
                     help="float32 is the rounds' own precision; a trial of a bigger candidate is measured in bfloat16")

@@ -29,15 +29,28 @@ const FILE = () => path.join(DIR(), 'students.json');
  * there to separate "newer" from "bigger", which is the whole reason to run four and not two.
  */
 const CANDIDATES = [
-  { id: 'Qwen/Qwen2.5-0.5B-Instruct', name: 'Qwen2.5 0.5B', params: '0.5B',
-    why: 'the incumbent, and the control: the same paper, so the other has something to beat' },
-  { id: 'Qwen/Qwen2.5-1.5B-Instruct', name: 'Qwen2.5 1.5B', params: '1.5B',
+  { id: 'ours:serving', model: 'Qwen/Qwen2.5-0.5B-Instruct', adapter: 'hub:r-mugxfwm4-y0m6',
+    name: 'Ours, serving now', params: '0.5B + adapter',
+    why: 'what answers today, re-measured under the corrected answer budget — this is the real bar' },
+  { id: 'ours:refused', model: 'Qwen/Qwen2.5-0.5B-Instruct', adapter: 'hub:r-muhbyo1p-gzi9',
+    name: 'Ours, refused tonight', params: '0.5B + adapter',
+    why: 'refused at 27.4% against 34.18%, both measured with `finish` and `note` cut off mid-answer' },
+  { id: 'Qwen/Qwen2.5-0.5B-Instruct', model: 'Qwen/Qwen2.5-0.5B-Instruct', adapter: '',
+    name: 'Qwen2.5 0.5B', params: '0.5B',
+    why: 'the incumbent with nothing learned: what every adapter is measured against' },
+  { id: 'Qwen/Qwen2.5-1.5B-Instruct', model: 'Qwen/Qwen2.5-1.5B-Instruct', adapter: '',
+    name: 'Qwen2.5 1.5B', params: '1.5B',
     why: 'three times the size, the same architecture and chat template — nothing in serving changes' },
-  { id: 'Qwen/Qwen3-0.6B', name: 'Qwen3 0.6B', params: '0.6B',
+  { id: 'Qwen/Qwen3-0.6B', model: 'Qwen/Qwen3-0.6B', adapter: '',
+    name: 'Qwen3 0.6B', params: '0.6B',
     why: 'the same size a generation on — separates what the model is worth from what the parameters are worth' },
-  { id: 'Qwen/Qwen3-1.7B', name: 'Qwen3 1.7B', params: '1.7B',
+  { id: 'Qwen/Qwen3-1.7B', model: 'Qwen/Qwen3-1.7B', adapter: '',
+    name: 'Qwen3 1.7B', params: '1.7B',
     why: 'the newer generation at three times the size; thinking is switched off so it answers with the tool call' },
 ];
+
+/** A candidate by the name the queue and the screen use, or null. */
+const candidate = (id) => CANDIDATES.find((c) => c.id === String(id)) || null;
 
 /*
  * NOT YET, AND WHY. These are not worse candidates; they are candidates that cost more than a
@@ -62,9 +75,18 @@ function write(v) {
 /** Is this round a student trial rather than a training round? */
 const isTrial = (r) => !!(r && r.recipe && r.recipe.trial);
 
-/** The newest finished trial of one model, from the rounds themselves — one store, not two. */
+/*
+ * The newest finished trial of one candidate, from the rounds themselves - one store, not two.
+ * A candidate is a model AND an adapter: three entries share Qwen2.5-0.5B and only the adapter
+ * they wear tells their rounds apart.
+ */
 function trialOf(rounds, id) {
-  const mine = (rounds || []).filter((r) => isTrial(r) && String(r.recipe.base || '') === id);
+  const c = candidate(id);
+  const model = c ? c.model : String(id);
+  const adapter = c ? String(c.adapter || '') : '';
+  const mine = (rounds || []).filter((r) => isTrial(r)
+    && String(r.recipe.base || '') === model
+    && String(r.recipe.adapter || '') === adapter);
   const done = mine.find((r) => r.status === 'done' && r.result);
   const any = mine[0] || null;
   const r = done || any;
@@ -128,4 +150,4 @@ function shift(id) {
 /** Forget everything waiting. A trial already running is a round, and is stopped like one. */
 function clear() { write({ queue: [], at: new Date().toISOString() }); return []; }
 
-module.exports = { CANDIDATES, LATER, isTrial, list, queue, next, shift, clear, trialOf };
+module.exports = { CANDIDATES, LATER, candidate, isTrial, list, queue, next, shift, clear, trialOf };
