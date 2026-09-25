@@ -937,3 +937,27 @@ describe('a batch with a dead share', () => {
     }
   });
 });
+
+describe('a round knows its hours and mode', () => {
+  it('carries them from the pending share to the state row', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-hours-'));
+    const prev = process.env.PROFILE_DIR; process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    const training = require('../src/training');
+    try {
+      training.setPending({ scope: 'base', device: 'A', batch: 'b-1', share: 2, turns: 20, hours: 1.5, mode: 'time' });
+      const a = training.startRound({ device: 'A', turns: 20 });
+      expect(a.hours).toBe(1.5);
+      expect(a.mode).toBe('time');
+      const row = training.state().rounds.find((r) => r.id === a.id);
+      expect(row.hours).toBe(1.5);
+      expect(row.mode).toBe('time');
+      const bare = training.startRound({ device: 'B', turns: 20, scope: 'base' });
+      expect(bare.hours).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env.PROFILE_DIR; else process.env.PROFILE_DIR = prev;
+      delete require.cache[require.resolve('../src/training')];
+    }
+  });
+});

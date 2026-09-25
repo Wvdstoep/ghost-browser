@@ -1767,7 +1767,7 @@ async function mergeIfReady(roundId) {
   const leftOut = training.allRounds().filter((x) => x.batch === first.batch && !x.merge && x.mergedInto === 'left out');
   if (leftOut.length) log.warn(`training: ${leftOut.map((m) => `${m.id} (${m.device})`).join(', ')} left out of the merge — collapsed on the exam`);
   const base = `merge:${members.map((m) => m.adapterHub).join(',')}`;
-  training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true, batch: first.batch || '' });
+  training.setPending({ scope: first.scope || 'base', device: dev.name, base, merge: true, batch: first.batch || '', hours: 1, mode: first.mode || '' });
   try {
     await deviceHub.runCommand(dev.deviceId, { path: '/v1/train_round', body: { base, hours: 1 } }, 30000);
     log.info(`training: merging ${members.map((m) => m.id).join(' + ')} on ${dev.name}`);
@@ -2766,7 +2766,7 @@ async function dispatchRound({ force = false } = {}) {
   const speed = sizing.secPerTurnFor(plan.device, training.allRounds());
   const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
   const batchTurns = perMachine * share;
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine });
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
   const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };

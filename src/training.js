@@ -69,8 +69,8 @@ function pendingList(now = Date.now()) {
   const list = Array.isArray(raw) ? raw : (raw && raw.at ? [raw] : []);
   return list.filter((p) => p && p.at && now - (Date.parse(p.at) || 0) <= PENDING_MS);
 }
-function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false } = {}) {
-  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, at: new Date().toISOString() };
+function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false, hours = 0, mode = '' } = {}) {
+  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, hours: Math.max(0, Number(hours) || 0), mode: mode === 'work' ? 'work' : (mode === 'time' ? 'time' : ''), at: new Date().toISOString() };
   const list = pendingList().filter((x) => !same(x.device, p.device));
   list.push(p);
   writeJson(PENDING(), list);
@@ -114,6 +114,9 @@ function startRound({ device = '', base = '', turns = 0, note = '', recipe = nul
     share: (pend && pend.share) || 1,
     /* A merge round: takes the exam on the average of two halves, trains nothing. */
     merge: !!(pend && pend.merge),
+    /* How long it was given, and the mode of its batch - so a running batch shows its own numbers. */
+    hours: (pend && Number(pend.hours)) || 0,
+    mode: (pend && pend.mode) || '',
     id: `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     startedAt: new Date().toISOString(),
     endedAt: null,
@@ -740,7 +743,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
       batch: r.batch || '', share: r.share || 1, merge: !!r.merge, mergedInto: r.mergedInto || '',
-      paper: r.paper || '', trial: r.trial || '', discarded: !!r.discarded,
+      paper: r.paper || '', trial: r.trial || '', discarded: !!r.discarded, hours: r.hours || 0, mode: r.mode || '',
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
