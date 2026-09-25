@@ -1679,6 +1679,27 @@ async function stopRound(id, why) {
   log.info(`training: round ${id} on ${r.device} stopped by the owner${told ? ' (machine told)' : ` (${error})`}`);
   return { round: r, told, error };
 }
+/* Discard: nothing chains from the round and its model leaves the serving map. The real run starts clean. */
+app.post('/v1/training/rounds/:id/discard', authed, (req, res) => {
+  const r = training.discardRound(req.params.id);
+  if (!r) return res.status(404).json({ error: 'no such round' });
+  const unmapped = [];
+  try {
+    const before = settingsStore.read();
+    const models = { ...(before.studentModels || {}) };
+    const tags = new Set([r.trial].filter(Boolean));
+    try {
+      const listed = JSON.parse(require('fs').readFileSync(require('path').join(process.env.PROFILE_DIR || '/profiles', 'training', 'models.json'), 'utf8'));
+      for (const m of listed) if (m && m.roundId === r.id) tags.add(m.tag);
+    } catch (e) { /* no list yet */ }
+    for (const [k, tag] of Object.entries(models)) if (tags.has(tag)) { delete models[k]; unmapped.push(k); }
+    const patch = { ...before, studentModels: models };
+    if (tags.has(before.studentModel)) patch.studentModel = '';
+    settingsStore.write(patch);
+  } catch (e) { /* the map is a courtesy */ }
+  log.info(`training: round ${r.id} discarded by the owner${unmapped.length ? ` — left the serving map for ${unmapped.join(', ')}` : ''}`);
+  res.json({ ok: true, round: r, unmapped });
+});
 app.post('/v1/training/rounds/:id/stop', authed, async (req, res) => {
   try {
     const out = await stopRound(req.params.id, (req.body || {}).why || 'stopped by the owner');
@@ -1843,16 +1864,14 @@ async function promoteAndExport(roundId, how = 'by hand') {
 async function trialInShadow(round, why) {
   const r = training.allRounds().find((x) => x.id === round.id) || round;
   if (!r || r.status !== 'done' || !r.result || !r.adapter) return { trial: false, why: 'nothing measured to try' };
-  /* Collapsed too: the shadow cannot act, the ledger against the teacher is the honest measure of
-     it, and the exam's collapse figure stays on the round as the warning. Every measured adapter
-     goes through the whole chain; only what DRIVES is gated. */
+  /* Collapsed: discarded, never served - not even in the shadow (the owner's rule). */
   const c = r.result.collapse;
-  const collapsed = !!(c && typeof c.ratio === 'number' && c.ratio > training.MAX_COLLAPSE);
-  if (!/did not beat|not what serves|paper held only|collapsed/.test(String(why || ''))) return { trial: false, why };
+  if (c && typeof c.ratio === 'number' && c.ratio > training.MAX_COLLAPSE) return { trial: false, why: 'collapsed — discarded, not served' };
+  if (!/did not beat|not what serves|paper held only/.test(String(why || ''))) return { trial: false, why };
   const tag = tagFor(r);
   const exportAsk = await askExport(r, tag);
   training.markTrial(r.id, tag);
-  log.info(`training: ${r.id} goes to the shadow as a trial${collapsed ? ' — COLLAPSED on the exam, shadow only' : ''} (${why}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
+  log.info(`training: ${r.id} goes to the shadow as a trial (${why}); export ${exportAsk.asked ? `asked of ${exportAsk.device} as ${tag}` : `not asked - ${exportAsk.why}`}`);
   return { trial: true, tag, export: exportAsk };
 }
 

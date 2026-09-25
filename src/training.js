@@ -324,6 +324,20 @@ function stopRound(id, why = 'stopped by the owner') {
   dropPending(r.device);
   return r;
 }
+/**
+ * DISCARDED BY THE OWNER. The round stays on the page with its numbers, but nothing chains from
+ * it and its model leaves the serving map (server.js): a chain test's adapter is not the start of
+ * the real run. The promotion map is not touched - a promoted round is replaced by promoting another.
+ */
+function discardRound(id) {
+  const rows = allRounds();
+  const r = rows.find((x) => x.id === id);
+  if (!r) return null;
+  r.discarded = true;
+  r.discardedAt = new Date().toISOString();
+  writeJson(ROUNDS(), rows);
+  return r;
+}
 /** A round tried in the shadow under this tag, without promotion. */
 function markTrial(id, tag) {
   const rows = allRounds();
@@ -432,7 +446,7 @@ function warmStartFor(scope) {
   const rows = allRounds();
   for (const r of rows) {
     if (((r.scope && r.scope.key) || 'base') !== key) continue;
-    if (r.status !== 'done' || !r.adapterHub || r.promoted) continue;
+    if (r.status !== 'done' || !r.adapterHub || r.promoted || r.discarded) continue;
     if (r.batch && !r.merge) continue;   // a share: its merge carries the batch
     if (!r.result || !r.baseline) continue;
     const c = r.result.collapse;
@@ -713,7 +727,7 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
       id: r.id, startedAt: r.startedAt, endedAt: r.endedAt, device: r.device, status: r.status,
       scope: r.scope || null,
       batch: r.batch || '', share: r.share || 1, merge: !!r.merge, mergedInto: r.mergedInto || '',
-      paper: r.paper || '', trial: r.trial || '',
+      paper: r.paper || '', trial: r.trial || '', discarded: !!r.discarded,
       turns: r.turns, promoted: r.promoted, why: r.why,
       /* What it trained, and when it last spoke — the two things the planner decides on. */
       trained: r.trained || 0,
@@ -764,4 +778,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, discardRound, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
