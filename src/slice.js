@@ -394,7 +394,7 @@ function release({ scope = null, marks = [] } = {}) {
  * Unlike the training draw there is no ledger and no gold preference: an exam is not consumed, and
  * scoring only on the tidiest turns would flatter the model.
  */
-function exam({ file, want = 150, scope = null } = {}) {
+function exam({ file, want = 150, scope = null, perRun = PER_RUN } = {}) {
   const NL = String.fromCharCode(10);
   const key = keyOf(scope);
   const lines = fs.readFileSync(file, 'utf8').split(NL).filter((l) => l.trim());
@@ -457,8 +457,25 @@ function exam({ file, want = 150, scope = null } = {}) {
     if (!moved) break;
   }
 
+    /*
+   * AND NO RUN MAY OWN THE PAPER. A job three hundred steps long would otherwise fill a tool's
+   * whole quota by itself. Each run gives at most `perRun` turns; when one is full, the quota
+   * passes to the next run's turns of that tool, so the paper stays a sample of the corpus.
+   */
   const picked = [];
-  for (const tl of tools) picked.push(...byTool.get(tl).slice(0, need.get(tl)));
+  const fromRun = new Map();
+  for (const tl of tools) {
+    let left = need.get(tl);
+    for (const i of byTool.get(tl)) {
+      if (left <= 0) break;
+      const run = jobOf(lines[i]) || `line-${i}`;
+      const used = fromRun.get(run) || 0;
+      if (perRun > 0 && used >= perRun) continue;
+      fromRun.set(run, used + 1);
+      picked.push(i);
+      left--;
+    }
+  }
   picked.sort((a, b) => a - b);
 
   const counted = {};

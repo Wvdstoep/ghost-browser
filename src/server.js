@@ -2124,6 +2124,8 @@ function trainHoursNow() {
   return Number(process.env.TRAIN_HOURS || 0) || 12;
 }
 const trainModeNow = () => (settingsStore.read().trainShare === 'work' ? 'work' : 'time');
+/* The learning rate for a round that continues from an adapter, against the trainer's 2e-4 from nothing. */
+const CONTINUE_LR = 4e-5;
 /* The batch for the owner's settings and the machines online: turns each and in all, at three epochs. */
 function sizingNow(share = 1) {
   const sizing = require('./sizing');
@@ -2931,7 +2933,17 @@ async function dispatchRound({ force = false } = {}) {
        * Still an env var, because a machine that has to close its lid at midnight needs a shorter
        * one and that is a property of the machine, not of the method.
        */
-      body: { base, hours: Math.max(0.5, Math.round(hoursEach * 4) / 4) },
+      body: {
+        base,
+        hours: Math.max(0.5, Math.round(hoursEach * 4) / 4),
+        /*
+         * A CONTINUATION TAKES A SMALLER STEP. From nothing, the full rate is right. From an
+         * adapter that already serves, the full rate overwrites it: the first platform round
+         * continued from base at 2e-4 and knocked `read` from 75% to 62%. A fifth of the rate adds
+         * without erasing. The trainer's own default stands when nothing is sent.
+         */
+        ...(base ? { lr: CONTINUE_LR } : {}),
+      },
     }, 30000);
     /* The machine answers whether it took the round; a refusal is a refusal, not a hand-over. */
     const said = reply && typeof reply === 'object' ? reply : {};
