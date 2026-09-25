@@ -148,15 +148,36 @@ function baselineFor(q) {
   const all = readJson(BASELINES(), {}) || {};
   return all[baselineKey(q)] || null;
 }
-/** Remember a measured baseline. A number measured twice is the newer one. */
+/** Remember a measured baseline. A number measured twice is the newer one. Its claim is spent. */
 function rememberBaseline(q, baseline) {
   if (!baseline || typeof baseline !== 'object' || !Number.isFinite(Number(baseline.agreement_pct))) return null;
   const all = readJson(BASELINES(), {}) || {};
-  const keys = Object.keys(all);
+  const keys = Object.keys(all).filter((k) => k !== '_claims');
   if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete all[k];
   all[baselineKey(q)] = { ...baseline, at: new Date().toISOString() };
+  if (all._claims) delete all._claims[baselineKey(q)];
   writeJson(BASELINES(), all);
   return all[baselineKey(q)];
+}
+/*
+ * ONE MEASURER PER START. Two shares of one batch used to spend the same forty minutes measuring
+ * the same start on the same paper. The first machine to ask for a number the hub does not have
+ * CLAIMS it: it measures. Every other machine is told who is measuring, trains at once, and takes
+ * the number at its end. A claim is good for three hours - a claimant that died stops blocking -
+ * and is spent the moment the number arrives.
+ */
+const CLAIM_MS = 3 * 60 * 60 * 1000;
+function claimBaseline(q, device = '', now = Date.now()) {
+  const key = baselineKey(q);
+  const all = readJson(BASELINES(), {}) || {};
+  const claims = all._claims && typeof all._claims === 'object' ? all._claims : {};
+  const c = claims[key];
+  if (c && c.device && now - (Date.parse(c.at) || 0) < CLAIM_MS) return { device: c.device, at: c.at, mine: !device || same(c.device, device) };
+  if (!device) return { device: '', at: '', mine: true };
+  claims[key] = { device: String(device), at: new Date(now).toISOString() };
+  all._claims = claims;
+  writeJson(BASELINES(), all);
+  return { device: String(device), at: claims[key].at, mine: true };
 }
 
 /** The hub's own copy of a round's adapter, by name (`hub:<round id>`), for a merge on any machine. */
@@ -635,4 +656,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { MAX_COLLAPSE, MIN_PAPER, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };

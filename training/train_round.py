@@ -348,17 +348,24 @@ class Hub:
 
     def baseline_known(self, scope, start, paper, turns):
         # GET /v1/training/baseline: the number the hub already has for this start on this paper.
-        if not paper:
-            return None
+        return self.baseline_ask(scope, start, paper, turns)[0]
+
+    def baseline_ask(self, scope, start, paper, turns):
+        """(baseline or None, measure: whether THIS machine is the one to measure it, by: who is).
+        The first machine asking for an unknown number claims it; the others train at once and take
+        the number at their end. Without a hub, or without a paper, this machine measures."""
+        if not paper or not self.base:
+            return None, True, ""
         try:
-            q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns})
+            q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns, "device": self.device})
             req = urllib.request.Request(f"{self.base}/v1/training/baseline?{q}", headers={"Authorization": f"Bearer {self.token}"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 out = json.loads(r.read().decode("utf-8"))
             b = out.get("baseline") if out.get("known") else None
-            return b if b and "agreement_pct" in b else None
+            b = b if b and "agreement_pct" in b else None
+            return b, (True if b is None and out.get("measure", True) else False), str(out.get("by") or "")
         except Exception:
-            return None
+            return None, True, ""
 
     def baseline_tell(self, scope, start, paper, turns, baseline):
         if not paper:
@@ -764,6 +771,7 @@ def main():
     # mathematically the base model (its B matrices start at zero), so measuring the base is exactly
     # measuring this round's starting point — no model needs to exist in this process yet.
     baseline = None
+    baseline_deferred = False
     if merge_names:
         # The halves measured their common start on this paper already; the merged adapter is
         # measured AGAINST that, never against itself.
@@ -772,26 +780,43 @@ def main():
             with urllib.request.urlopen(req, timeout=60) as r:
                 rows = json.loads(r.read().decode("utf-8")).get("rounds", [])
             for row in rows:
-                if row.get("id") == merge_names[0] and row.get("baseline") is not None:
-                    baseline = {"agreement_pct": float(row["baseline"]), "turns": args.eval_turns, "from": merge_names[0]}
-                    hub.note(f"merge: the halves scored their start at {baseline['agreement_pct']}% — measuring the average against that")
+                if row.get("id") in merge_names and row.get("baseline") is not None:
+                    baseline = {"agreement_pct": float(row["baseline"]), "turns": args.eval_turns, "from": row.get("id")}
+                    hub.note(f"merge: the shares scored their start at {baseline['agreement_pct']}% — measuring the average against that")
                     break
+            if baseline is None:
+                # The shares' own rows carry no number (a share ended unmeasured): the hub's cache
+                # keyed by the shares' start does - the members' start is the same for all of them.
+                start_of = ""
+                for row in rows:
+                    if row.get("id") in merge_names:
+                        start_of = str(row.get("base") or "")
+                        break
+                known = hub.baseline_known(paper_scope, start_of, paper_id, args.eval_turns)
+                if known:
+                    baseline = dict(known, **{"from": "hub"})
+                    hub.note(f"merge: the hub knows the start at {baseline['agreement_pct']}% on this paper — measuring the average against that")
         except Exception as e:
-            hub.note(f"merge: could not read the halves' baseline ({e})")
+            hub.note(f"merge: could not read the shares' baseline ({e})")
     elif not args.skip_baseline:
-        # ONCE PER START, NOT ONCE PER ROUND. The same start on the same paper scores the same;
-        # the hub keeps the number and a round asks before it spends half an hour measuring.
+        # ONCE PER START, NOT ONCE PER ROUND - AND ONCE PER BATCH, NOT ONCE PER SHARE. The same
+        # start on the same paper scores the same; the hub keeps the number and a round asks before
+        # it spends forty minutes measuring. Of the shares of one batch, the first to ask measures;
+        # the others are told who has it, train at once, and take the number at their end.
         start_name = str(args.adapter or "")
-        known = hub.baseline_known(paper_scope, start_name, paper_id, args.eval_turns) if hub.base else None
+        known, measure_me, by = hub.baseline_ask(paper_scope, start_name, paper_id, args.eval_turns)
         if known:
             baseline = known
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — known from an earlier round on this paper, not measured again")
-        else:
+        elif measure_me:
             baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
             if baseline and hub.base:
                 hub.baseline_tell(paper_scope, start_name, paper_id, args.eval_turns, baseline)
-        if baseline:
-            hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
+            if baseline:
+                hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
+        else:
+            baseline_deferred = True
+            hub.note(f"before: {by} is measuring this start on this paper — training now, the number is taken at the end")
 
     # sdpa asks for memory-efficient attention rather than the maths path that materialises the
     # whole attention matrix. On CPU it is not guaranteed, which is why checkpointing below is the
@@ -1045,6 +1070,21 @@ def main():
     # not. Same seed, same split, same count as the baseline — the comparison is the whole point.
     hub.note("measuring the trained model on the same turns")
     del model, opt, dl, ds
+    if baseline_deferred:
+        # The other share measured the start while this one trained; its number is on the hub by
+        # now. If it never arrived (that machine died), this one measures the start itself: the
+        # comparison is the whole point and it is not skipped.
+        start_name = str(args.adapter or "")
+        baseline = hub.baseline_known(paper_scope, start_name, paper_id, args.eval_turns)
+        if baseline:
+            hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — measured by the other share")
+        else:
+            hub.note("the other share's number never arrived — measuring the start now")
+            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
+            if baseline and hub.base:
+                hub.baseline_tell(paper_scope, start_name, paper_id, args.eval_turns, baseline)
+            if baseline:
+                hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
     result = measure(args.model, adapter_dir, eval_path, args.eval_turns, hub.note)
     if not result:
         hub.note("the after-measurement did not complete — the adapter is saved and unmeasured")
