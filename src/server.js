@@ -2383,6 +2383,23 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
     body: JSON.stringify({ model: tag, files: { [`${tag.replace(/:/g, '-')}.gguf`]: `sha256:${digest}` }, stream: false }) });
   const text = await made.text();
   if (!made.ok) throw new Error(`create failed: ${made.status} ${text.slice(0, 300)}`);
+  /*
+   * AND THE SERVER IS ASKED WHETHER IT HAS IT. A create that answers 200 and leaves no tag is the
+   * worst failure this path can have: the round is promoted, the map points at a model, and every
+   * request falls back to the teacher without a word. One question settles it.
+   */
+  const bare = (m) => String(m || '').replace(/:latest$/, '');
+  let served = [];
+  try {
+    const tags = await (await fetch(`${host}/api/tags`)).json();
+    served = (tags.models || []).map((m) => m.name);
+  } catch (e) { throw new Error(`the model server would not say what it has after creating ${tag}: ${e.message}`); }
+  if (!served.some((m) => bare(m) === bare(tag))) {
+    throw new Error(`the model server took ${tag} and does not have it: ${text.slice(0, 200)}`);
+  }
+  /* The file was only ever the way in. The server holds the blob now; the copy is 500 MB of a
+     twelve-gigabyte store, and twenty exports would fill it. */
+  try { fsx.unlinkSync(file); } catch (e) { /* already gone */ }
   const record = { tag, digest, base, roundId, bytes: stat.size, at: new Date().toISOString() };
   try {
     const p = pathx.join(process.env.PROFILE_DIR || '/profiles', 'training', 'models.json');
