@@ -367,3 +367,66 @@ describe('an adapter belongs to the model it was trained on', () => {
     expect(training.studentOf('')).toBe('');
   });
 });
+
+describe('a different student is measured, not promoted by itself', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  let dir, training;
+  const paper = 'p-1';
+  const write = (rows, current) => {
+    fs.mkdirSync(path.join(dir, 'training'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'training', 'rounds.json'), JSON.stringify(rows));
+    fs.writeFileSync(path.join(dir, 'training', 'current.json'), JSON.stringify(current));
+  };
+  const round = (id, model, pct, extra = {}) => ({
+    id, status: 'done', device: 'Modal L4', paper,
+    scope: { level: 'base', name: '', key: 'base' },
+    recipe: { base: model },
+    baseline: { agreement_pct: 6.2, turns: 354 },
+    result: { agreement_pct: pct, turns: 354, collapse: { ratio: 1.2, tool: 'read', distinct: 20 } },
+    adapterHub: `hub:${id}`, adapter: `hub:${id}`,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-promote-'));
+    process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    training = require('../src/training');
+  });
+  afterEach(() => {
+    delete process.env.PROFILE_DIR;
+    delete require.cache[require.resolve('../src/training')];
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses the automatic promotion of a round on another model, and says whose scope it is', () => {
+    write([
+      round('r-new', 'Qwen/Qwen3-1.7B', 44.0),
+      round('r-old', 'Qwen/Qwen2.5-0.5B-Instruct', 36.7, { promoted: true }),
+    ], { adapter: 'hub:r-old', scopes: { base: { adapter: 'hub:r-old' } } });
+    const out = training.promote('r-new', { auto: true });
+    expect(out.error).toMatch(/not the student that serves/);
+    expect(out.error).toContain('Qwen/Qwen3-1.7B');
+    expect(out.error).toContain('Qwen/Qwen2.5-0.5B-Instruct');
+  });
+
+  it('but a person may still promote it by hand', () => {
+    write([
+      round('r-new', 'Qwen/Qwen3-1.7B', 44.0),
+      round('r-old', 'Qwen/Qwen2.5-0.5B-Instruct', 36.7, { promoted: true }),
+    ], { adapter: 'hub:r-old', scopes: { base: { adapter: 'hub:r-old' } } });
+    const out = training.promote('r-new');
+    expect(String(out.error || '')).not.toMatch(/not the student that serves/);
+  });
+
+  it(`and the incumbent own rounds are untouched by the rule`, () => {
+    write([
+      round('r-next', 'Qwen/Qwen2.5-0.5B-Instruct', 40.0),
+      round('r-old', 'Qwen/Qwen2.5-0.5B-Instruct', 36.7, { promoted: true }),
+    ], { adapter: 'hub:r-old', scopes: { base: { adapter: 'hub:r-old' } } });
+    const out = training.promote('r-next', { auto: true });
+    expect(String(out.error || '')).not.toMatch(/not the student that serves/);
+  });
+});

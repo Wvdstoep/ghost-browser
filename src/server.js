@@ -1900,7 +1900,8 @@ async function askExport(round, tag) {
 const tagFor = (round) => `gb-${trainScopes.slug(round.scope || 'base')}-${String(round.id || '').replace(/^r-/, '').slice(0, 12)}`;
 
 async function promoteAndExport(roundId, how = 'by hand') {
-  const r = training.promote(roundId);
+  /* `by itself` is the automatic path, and that one refuses to change the student. See promote(). */
+  const r = training.promote(roundId, { auto: how === 'by itself' });
   if (r.error) { log.info(`training: ${roundId} not promoted ${how} — ${r.error}`); return r; }
   let exportAsk = { asked: false, why: '' };
   try {
@@ -3754,13 +3755,23 @@ async function modalStartNow(req, why = 'by hand') {
   const owner = (req && req.client && req.client.owner) || nodes.modalState().owner || '';
   if (!owner) return { ok: false, error: 'no owner to mint the node for — start it once from the Studio' };
   const deviceId = `node-modal-${require('crypto').randomBytes(6).toString('hex')}`;
-  const rec = deviceTokens.mint(keys, { owner, deviceId, name: `Modal ${cfg.modalGpu || 'T4'}` });
+  /*
+   * A NAME OF ITS OWN. Shares are handed to machines BY NAME, so a second card called the same
+   * thing as the first would take its work. The first keeps the plain name - nothing already
+   * running is renamed - and any further one is numbered after the cards already online.
+   */
+  const card = `Modal ${cfg.modalGpu || 'T4'}`;
+  const upNow = (deviceHub.deviceList() || []).filter((d) => d.online && String(d.name || '').startsWith(card)).length;
+  const name = upNow ? `${card} #${upNow + 1}` : card;
+  const rec = deviceTokens.mint(keys, { owner, deviceId, name });
   const publicUrl = req ? publicUrlOf(req) : (nodes.modalState().publicUrl || '');
   const j = nodes.mintJoin({ kind: 'modal', name: rec.name, token: rec.token, deviceId, owner, publicUrl });
   training.setTrainer(deviceId, true);
   nodes.modalPatch({ owner, publicUrl, starting: new Date().toISOString(), lastError: '', code: j.code, deviceId });
   const out = await nodes.modalStart({ tokenId: cfg.modalTokenId, tokenSecret: cfg.modalTokenSecret, joinUrl: nodes.joinUrl(j, publicUrl), gpu: cfg.modalGpu || 'T4' });
-  nodes.modalPatch(out.ok ? { app: out.app || '', lastStart: new Date().toISOString(), starting: '', lastError: '' } : { starting: '', lastError: out.error || `modal run exited ${out.code}` });
+  /* EVERY app, not the newest: stopping "the app" with two up left one running and billing. */
+  const apps = [...new Set([...(nodes.modalState().apps || []), ...(out.ok && out.app ? [out.app] : [])])];
+  nodes.modalPatch(out.ok ? { app: out.app || '', apps, lastStart: new Date().toISOString(), starting: '', lastError: '' } : { starting: '', lastError: out.error || `modal run exited ${out.code}` });
   log.info(`training: modal node ${out.ok ? 'started' : 'NOT started'} ${why}${out.app ? ` (app ${out.app})` : ''}${out.ok ? '' : ` — ${out.error || ''} ${String(out.out || '').slice(-300).replace(/\s+/g, ' ')}`}`);
   return out;
 }
@@ -3770,11 +3781,18 @@ app.post('/v1/training/nodes/modal/start', authed, async (req, res) => {
 app.post('/v1/training/nodes/modal/stop', authed, async (req, res) => {
   const cfg = settingsStore.read();
   const st = nodes.modalState();
-  try {
-    const out = await nodes.modalStop({ tokenId: cfg.modalTokenId, tokenSecret: cfg.modalTokenSecret, app: st.app });
-    if (out.ok) nodes.modalPatch({ app: '', stoppedAt: new Date().toISOString() });
-    res.json(out);
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  /* Stop the one named, or every app this hub started - a card left running bills all night. */
+  const only = String((req.body || {}).app || '');
+  const list = only ? [only] : [...new Set([...(st.apps || []), ...(st.app ? [st.app] : [])])];
+  if (!list.length) return res.json({ ok: true, out: 'nothing to stop' });
+  const results = [];
+  for (const app of list) {
+    try { results.push({ app, ...(await nodes.modalStop({ tokenId: cfg.modalTokenId, tokenSecret: cfg.modalTokenSecret, app })) }); }
+    catch (e) { results.push({ app, ok: false, error: e.message }); }
+  }
+  const left = results.filter((r) => !r.ok).map((r) => r.app);
+  nodes.modalPatch({ app: left[0] || '', apps: left, stoppedAt: new Date().toISOString() });
+  res.json({ ok: !left.length, stopped: results.filter((r) => r.ok).map((r) => r.app), failed: left, results });
 });
 
 app.get('/v1/training/script/:name', authed, (req, res) => {
