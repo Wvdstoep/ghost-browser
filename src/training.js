@@ -533,11 +533,24 @@ function slotFree(key, existingTag, models = []) {
   return !(r && r.promoted);
 }
 
-function promote(roundId) {
+function promote(roundId, { auto = false } = {}) {
   const rows = allRounds();
   const r = rows.find((x) => x.id === roundId);
   if (!r) return { error: 'no such round' };
   if (r.status !== 'done') return { error: `round ${roundId} is ${r.status}, not done` };
+  /*
+   * A CHALLENGER IS MEASURED, NOT INSTALLED. A round on a different base model can clear every
+   * gate honestly and still must not take over serving on its own: the sidecar would answer from
+   * another model at another speed, and every adapter we hold belongs to the one it replaced.
+   * By hand, yes - that is where the decision belongs.
+   */
+  if (auto) {
+    const mine = String((r.recipe && r.recipe.base) || '');
+    const serving = studentOf(adapterFor(r.scope || 'base').adapter || '');
+    if (mine && serving && mine !== serving) {
+      return { error: `${mine} is not the student that serves this scope (${serving}) — measured and kept, promote by hand to change the student` };
+    }
+  }
   if (!r.result || !r.baseline) return { error: 'that round has no measurement, so there is nothing to promote on' };
   if (Number(r.result.agreement_pct) <= Number(r.baseline.agreement_pct)) {
     return { error: `it did not beat the baseline (${r.result.agreement_pct}% against ${r.baseline.agreement_pct}%)` };
