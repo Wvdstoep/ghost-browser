@@ -54,9 +54,21 @@ function fromShadow(books, model = '') {
  * model serving it speaks; where both have something to say, the worse of the two is taken - a
  * tool that fails on either is a tool to train.
  */
-function forScope({ rounds = [], shadow = {}, model = '', key = 'base' } = {}) {
-  const mine = (rounds || []).filter((r) => ((r.scope && r.scope.key) || 'base') === key && r.promoted && r.result && !r.discarded);
-  const newest = mine[0] || null;
+function forScope({ rounds = [], shadow = {}, model = '', key = 'base', student = '' } = {}) {
+  const all = rounds || [];
+  const ofScope = (r) => ((r.scope && r.scope.key) || 'base') === key;
+  const measured = (r) => !!(r.result && typeof r.result.agreement_pct === 'number');
+  /*
+   * THIS STUDENT'S OWN EXAM FIRST. A round belongs to the model named in its recipe; drilling a
+   * challenger on the incumbent's weak tools trains it for someone else's failures. A refused
+   * round still measured something true, and a trial is a measurement, so both count. Only a
+   * student nobody has measured falls back to the scope's promoted round.
+   */
+  const ownRounds = student
+    ? all.filter((r) => ofScope(r) && measured(r) && String((r.recipe && r.recipe.base) || '') === String(student))
+    : [];
+  const promoted = all.filter((r) => ofScope(r) && r.promoted && r.result && !r.discarded);
+  const newest = ownRounds[0] || promoted[0] || null;
   const exam = fromExam(newest && newest.result);
   const live = fromShadow(shadow, model);
   const out = { ...exam };

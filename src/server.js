@@ -3986,12 +3986,6 @@ app.get('/v1/training/slice', authed, (req, res) => {
     const manifest = JSON.parse(require('fs').readFileSync(pathx.join(base, 'traceset', 'manifest.json'), 'utf8'));
     /* What this scope's model gets wrong, so the draw can train it (weakness.js). */
     const scopeKey = training.scopeOfRound(String(req.query.round || ''), String(req.query.device || ''));
-    const weights = (() => {
-      try {
-        const key = require('./trainScopes').parse(scopeKey || 'base').key;
-        return require('./weakness').forScope({ rounds: training.allRounds(), shadow: shadow.all(), model: (settingsStore.read().studentModels || {})[key] || '', key });
-      } catch (e) { return null; }
-    })();
     /*
      * WHO IS ASKING. The learned ledger is per student, so the draw must know which model this
      * round trains: the pending share says so before the round registers, the round's own recipe
@@ -4002,6 +3996,13 @@ app.get('/v1/training/slice', authed, (req, res) => {
       if (rid) { const r = training.allRounds().find((x) => x.id === rid); if (r && r.recipe && r.recipe.base) return String(r.recipe.base); }
       const p = training.peekPending(String(req.query.device || ''));
       return (p && p.student) ? String(p.student) : '';
+    })();
+    const weights = (() => {
+      try {
+        const key = require('./trainScopes').parse(scopeKey || 'base').key;
+        /* Weighted by THIS student's own exam where it has one - see weakness.forScope. */
+        return require('./weakness').forScope({ rounds: training.allRounds(), shadow: shadow.all(), model: (settingsStore.read().studentModels || {})[key] || '', key, student: studentAsking });
+      } catch (e) { return null; }
     })();
     const s = require('./slice').draw({
       file, builtAt: manifest.builtAt, student: studentAsking,
