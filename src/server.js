@@ -2662,11 +2662,32 @@ app.get('/v1/training/results', authed, (req, res) => {
     for (const r of rows) for (const p2 of r.perTool) seen.set(p2.tool, Math.max(seen.get(p2.tool) || 0, p2.seen || 0));
     const tools = [...seen.entries()].sort((a, b2) => b2[1] - a[1]).map(([tool, n]) => ({ tool, seen: n }));
     const servingRound = all.find((r) => r.promoted && (r.adapterHub || r.adapter));
+    /*
+     * THE NEWEST MEASUREMENT OF IT, not the one it was born with. The serving adapter scored
+     * 34.55% under an exam that cut every answer off at 48 tokens and 36.72% under the one that
+     * does not; quoting the first understates the bar a challenger must clear, which is the one
+     * number here that must never flatter. A trial of the same adapter counts - it is a
+     * measurement - and its own round's number is the fallback.
+     */
+    const servingBarNow = (() => {
+      if (!servingRound) return null;
+      const name = String(servingRound.adapterHub || servingRound.adapter || '');
+      const newer = all.find((r) => r.result && typeof r.result.agreement_pct === 'number'
+        && String((r.recipe && r.recipe.adapter) || '') === name
+        && (Date.parse(r.endedAt || r.startedAt || '') || 0) > (Date.parse(servingRound.endedAt || servingRound.startedAt || '') || 0));
+      return newer ? { from: newer.id, agreement: newer.result.agreement_pct } : null;
+    })();
     res.json({
       rounds: rows,
       tools,
       /* The bar every round is judged against, named so the screen can mark it. */
-      serving: servingRound ? { id: servingRound.id, model: String((servingRound.recipe && servingRound.recipe.base) || ''), agreement: (servingRound.result || {}).agreement_pct } : null,
+      serving: servingRound ? {
+        id: servingRound.id,
+        model: String((servingRound.recipe && servingRound.recipe.base) || ''),
+        agreement: servingBarNow ? servingBarNow.agreement : (servingRound.result || {}).agreement_pct,
+        measuredBy: servingBarNow ? servingBarNow.from : servingRound.id,
+        born: (servingRound.result || {}).agreement_pct,
+      } : null,
       models: [...new Set(rows.map((r) => r.model).filter(Boolean))],
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
