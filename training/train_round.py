@@ -197,6 +197,36 @@ import tempfile
 EXAM_CHILD = None
 
 
+def resolve_targets(model, wanted):
+    """The module names to adapt, found in the model instead of assumed.
+
+    LoRA replaces a linear layer. Most models expose `q_proj` as a plain Linear and the wanted name
+    is used as it stands. Gemma 4 wraps each projection in `Gemma4ClippableLinear`, which PEFT
+    refuses because it does not know how to adapt it - the Linear is one level down, so the name
+    of THAT is used instead.
+
+    The vision and audio towers of a multimodal model carry projections with the same names. They
+    are skipped: an adapter spent on the parts that never see a browser page is capacity thrown
+    away, and it would make the adapter bigger for nothing.
+    """
+    import torch.nn as nn
+    skip = ("vision", "audio", "image", "vision_tower", "audio_tower", "multi_modal")
+    names = set()
+    for name, mod in model.named_modules():
+        if any(s in name.lower() for s in skip):
+            continue
+        last = name.split(".")[-1]
+        if last not in wanted:
+            continue
+        if isinstance(mod, nn.Linear):
+            names.add(last)
+            continue
+        inner = [n for n, m in mod.named_children() if isinstance(m, nn.Linear)]
+        if len(inner) == 1:
+            names.add(last + "." + inner[0])
+    return sorted(names)
+
+
 ANSWER_TOKENS = 320   # what serving gives the student; the exam gives it the same. See evaluate.py.
 
 
@@ -1008,9 +1038,15 @@ def main():
         model = PeftModel.from_pretrained(model, args.adapter, is_trainable=True)
         print(f"continuing from {args.adapter}", flush=True)
     else:
+        # The names as this model really spells them. See resolve_targets: Gemma 4 keeps its
+        # linears one level down inside a wrapper PEFT will not adapt.
+        found = resolve_targets(model, set(targets))
+        if found and sorted(found) != sorted(targets):
+            print(f"adapting {len(found)} module name(s) as this model spells them: {', '.join(found[:8])}"
+                  + (" ..." if len(found) > 8 else ""), flush=True)
         model = get_peft_model(model, LoraConfig(
             r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05, task_type="CAUSAL_LM",
-            target_modules=targets,
+            target_modules=found or targets,
         ))
     model.print_trainable_parameters()
 
