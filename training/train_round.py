@@ -753,6 +753,9 @@ def main():
     dtype = torch.bfloat16 if (args.bf16 and use_cuda) else torch.float32
     targets = (["q_proj", "k_proj", "v_proj", "o_proj"] if args.lora_scope == "attn"
                else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
+    # THE EXAM USES THE PRECISION THE TRAINING USED. Measuring a bfloat16 round in float32 loads
+    # the model twice in two formats and reports a number about neither.
+    exam_dtype = "bfloat16" if (args.bf16 and use_cuda) else "float32"
     recipe = {
         "base": args.model, "device": "cuda" if use_cuda else "cpu", "dtype": str(dtype).replace("torch.", ""),
         "loraR": args.lora_r, "loraAlpha": args.lora_alpha, "loraScope": args.lora_scope,
@@ -967,7 +970,7 @@ def main():
             baseline = known
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — known from an earlier round on this paper, not measured again")
         elif measure_me:
-            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
+            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note, dtype=exam_dtype)
             if baseline and hub.base:
                 hub.baseline_tell(paper_scope, start_name, paper_id, args.eval_turns, baseline)
             if baseline:
@@ -1258,12 +1261,12 @@ def main():
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — measured by the other share")
         else:
             hub.note("the other share's number never arrived — measuring the start now")
-            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note)
+            baseline = measure(args.model, args.adapter, eval_path, args.eval_turns, hub.note, dtype=exam_dtype)
             if baseline and hub.base:
                 hub.baseline_tell(paper_scope, start_name, paper_id, args.eval_turns, baseline)
             if baseline:
                 hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline['turns']} turns")
-    result = measure(args.model, adapter_dir, eval_path, args.eval_turns, hub.note)
+    result = measure(args.model, adapter_dir, eval_path, args.eval_turns, hub.note, dtype=exam_dtype)
     if not result:
         hub.note("the after-measurement did not complete — the adapter is saved and unmeasured")
         hub.end("done", baseline, None, adapter_dir, "trained, but not measured", trained=seen, drawSeed=draw_seed, paper=paper_id)

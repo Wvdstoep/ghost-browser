@@ -236,6 +236,10 @@ def run_round(body):
         cmd += ["--model", model]
     if body.get("measureOnly"):
         cmd += ["--measure-only"]
+    # BIGGER STUDENTS TRAIN IN BFLOAT16. float32 is right for the half-billion incumbent and about
+    # thirty gigabytes for a Gemma; the card holds twenty-four. Off unless the hub asks.
+    if body.get("bf16"):
+        cmd += ["--bf16"]
     env = dict(os.environ, GB_HUB=HUB, GB_TOKEN=TOKEN, GB_DEVICE=NAME, GB_CKPT_HUB="1",
                PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     # The trainer's lines go to the round log AND to this process's stdout, so a session's own

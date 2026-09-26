@@ -3206,7 +3206,7 @@ setInterval(() => {
   })().catch((e) => log.warn(`[gpu] watch: ${e.message}`));
 }, 3 * 60 * 1000).unref?.();
 
-async function dispatchRound({ force = false, scope = '', student = '', device = '' } = {}) {
+async function dispatchRound({ force = false, scope = '', student = '', device = '', bf16 = false } = {}) {
   const { plan: planned, usable } = planNow();
   let plan = planned;
   /*
@@ -3340,6 +3340,8 @@ async function dispatchRound({ force = false, scope = '', student = '', device =
         base,
         /* The model to train, when a person named one. The trainer's own default stands otherwise. */
         ...(student ? { model: student } : {}),
+        /* And in half precision, which anything much larger than the incumbent needs to fit. */
+        ...(bf16 ? { bf16: true } : {}),
         hours: Math.max(0.5, Math.round(hoursEach * 4) / 4),
         /*
          * A CONTINUATION TAKES A SMALLER STEP. From nothing, the full rate is right. From an
@@ -3378,7 +3380,7 @@ async function dispatchAll() {
 
 app.post('/v1/training/dispatch', authed, async (req, res) => {
   const b = req.body || {};
-  try { res.json(await dispatchRound({ force: !!b.force, scope: String(b.scope || ''), student: String(b.student || ''), device: String(b.device || '') })); }
+  try { res.json(await dispatchRound({ force: !!b.force, scope: String(b.scope || ''), student: String(b.student || ''), device: String(b.device || ''), bf16: !!b.bf16 })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
