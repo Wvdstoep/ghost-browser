@@ -979,8 +979,24 @@ def main():
     # sdpa asks for memory-efficient attention rather than the maths path that materialises the
     # whole attention matrix. On CPU it is not guaranteed, which is why checkpointing below is the
     # load-bearing fix and this is only the cheap half.
-    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype,
-                                                 attn_implementation="sdpa").to(device)
+    # WHATEVER CLASS THE MODEL SAYS IT IS. A multimodal wrapper such as Gemma 4's
+    # Gemma4ForConditionalGeneration is not a causal LM and AutoModelForCausalLM refuses it; the
+    # class is named in the model's own config, which works for both and needs no list.
+    model = None
+    try:
+        import transformers as _tf
+        from transformers import AutoConfig as _AutoConfig
+        _arch = (getattr(_AutoConfig.from_pretrained(args.model), "architectures", None) or [None])[0]
+        if _arch and _arch != "AutoModelForCausalLM" and hasattr(_tf, _arch):
+            model = getattr(_tf, _arch).from_pretrained(args.model, dtype=dtype,
+                                                        attn_implementation="sdpa").to(device)
+            print(f"loaded as {_arch}", flush=True)
+    except Exception as e:
+        print(f"the named architecture did not load ({str(e)[:140]}) - trying the causal loader", flush=True)
+        model = None
+    if model is None:
+        model = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype,
+                                                     attn_implementation="sdpa").to(device)
     if args.adapter:
         # Carrying on from the serving adapter rather than starting over: each night is a small
         # step from where the model already is, which is what makes this a loop and not a series of
