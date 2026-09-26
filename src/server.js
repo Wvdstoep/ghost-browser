@@ -2612,6 +2612,72 @@ app.get('/v1/training/adapters/:name', authed, (req, res) => {
   fsx.createReadStream(file).pipe(res);
 });
 
+/*
+ * ── THE SCOREBOARD ──────────────────────────────────────────────────────────────────────────────
+ *
+ * Every measured round, whatever model it trained, with the numbers that let two of them be
+ * compared: where it started, where it finished, how lopsided it became, how many distinct tools
+ * it still used, and the per-tool table. The model is a COLUMN, not a filter - the whole point is
+ * to set a Qwen3 round beside a Qwen2.5 one and read the difference off one screen.
+ */
+app.get('/v1/training/results', authed, (req, res) => {
+  try {
+    const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 24));
+    const all = training.allRounds();
+    const measured = all.filter((r) => r.result && typeof r.result.agreement_pct === 'number').slice(0, limit);
+    const verdictOf = (r) => (r.promoted ? 'promoted' : (r.discarded ? 'refused' : (students.isTrial(r) ? 'measured' : r.status)));
+    const rows = measured.map((r) => {
+      const b = r.baseline || {}; const s = r.result || {};
+      const col = s.collapse || {};
+      const per = s.per_tool || {}; const was = b.per_tool || {};
+      return {
+        id: r.id,
+        at: r.endedAt || r.startedAt || '',
+        /* WHOSE ROUND THIS IS: the model, and the adapter it wore if any. */
+        model: String((r.recipe && r.recipe.base) || ''),
+        wore: String((r.recipe && r.recipe.adapter) || r.base || ''),
+        scope: (r.scope && r.scope.key) || 'base',
+        trial: students.isTrial(r),
+        device: r.device || '',
+        turns: r.trained || r.turns || 0,
+        epochs: (r.recipe && r.recipe.epochs) || null,
+        lr: (r.recipe && r.recipe.lr) || null,
+        answerTokens: (r.recipe && r.recipe.answerTokens) || null,
+        paper: r.paper || '',
+        start: typeof b.agreement_pct === 'number' ? b.agreement_pct : null,
+        after: s.agreement_pct,
+        change: typeof b.agreement_pct === 'number' ? Number((s.agreement_pct - b.agreement_pct).toFixed(2)) : null,
+        args: typeof s.args_agreement_pct === 'number' ? s.args_agreement_pct : null,
+        unusable: typeof s.unusable_pct === 'number' ? s.unusable_pct : null,
+        collapse: col.ratio != null ? Number(col.ratio) : null,
+        collapseTool: String(col.tool || ''),
+        distinct: col.distinct != null ? Number(col.distinct) : null,
+        verdict: verdictOf(r),
+        why: String(r.why || ''),
+        perTool: Object.entries(per).map(([tool, v]) => ({
+          tool,
+          seen: v.seen,
+          after: v.pct,
+          before: was[tool] ? was[tool].pct : null,
+          change: (was[tool] && typeof was[tool].pct === 'number' && typeof v.pct === 'number') ? Number((v.pct - was[tool].pct).toFixed(1)) : null,
+        })).sort((a, b2) => b2.seen - a.seen),
+      };
+    });
+    /* One ordering of the tools for every column, so the table reads down as well as across. */
+    const seen = new Map();
+    for (const r of rows) for (const p2 of r.perTool) seen.set(p2.tool, Math.max(seen.get(p2.tool) || 0, p2.seen || 0));
+    const tools = [...seen.entries()].sort((a, b2) => b2[1] - a[1]).map(([tool, n]) => ({ tool, seen: n }));
+    const servingRound = all.find((r) => r.promoted && (r.adapterHub || r.adapter));
+    res.json({
+      rounds: rows,
+      tools,
+      /* The bar every round is judged against, named so the screen can mark it. */
+      serving: servingRound ? { id: servingRound.id, model: String((servingRound.recipe && servingRound.recipe.base) || ''), agreement: (servingRound.result || {}).agreement_pct } : null,
+      models: [...new Set(rows.map((r) => r.model).filter(Boolean))],
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
   try { const now = planNow(); res.json({ scopes: now.scopes, platformMap: platformMap.state(), sliceTurns: now.sizing.batchTurns, sizing: now.sizing }); }
