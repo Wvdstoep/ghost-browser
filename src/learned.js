@@ -31,19 +31,28 @@ function idOf(line) {
   return 'h:' + crypto.createHash('sha1').update(s).digest('hex').slice(0, 24);
 }
 
+/*
+ * THE STUDENT THIS LEDGER IS ABOUT. Everything recorded before a second student existed belongs to
+ * the incumbent, so the incumbent keeps the bare scope key and nothing already written moves. Any
+ * other student gets its own shelf and therefore an empty one, which is the truth about it.
+ */
+const INCUMBENT = 'Qwen/Qwen2.5-0.5B-Instruct';
+const shelf = (key = 'base', student = '') => (!student || String(student) === INCUMBENT ? String(key) : `${key}@${student}`);
+
 function all() {
   const l = readJson(FILE(), null);
   return l && typeof l === 'object' && l.by ? l : { by: {} };
 }
-/** The learned ids of one scope, as a Set - loaded once per draw. */
-function setFor(key = 'base') { return new Set(Object.keys((all().by || {})[key] || {})); }
-function count(key = 'base') { return Object.keys((all().by || {})[key] || {}).length; }
-function has(key, line) { return setFor(key).has(idOf(line)); }
+/** The learned ids of one scope FOR ONE STUDENT, as a Set - loaded once per draw. */
+function setFor(key = 'base', student = '') { return new Set(Object.keys((all().by || {})[shelf(key, student)] || {})); }
+function count(key = 'base', student = '') { return Object.keys((all().by || {})[shelf(key, student)] || {}).length; }
+function has(key, line, student = '') { return setFor(key, student).has(idOf(line)); }
 
 /** Record lines as learned for a scope by the round that earned it. Returns how many were new. */
-function record({ key = 'base', roundId = '', lines = [] } = {}) {
+function record({ key = 'base', roundId = '', lines = [], student = '' } = {}) {
   const l = all();
-  const by = l.by[key] || (l.by[key] = {});
+  const s = shelf(key, student);
+  const by = l.by[s] || (l.by[s] = {});
   let added = 0;
   for (const line of lines) { const id = idOf(line); if (!by[id]) { by[id] = roundId || true; added++; } }
   writeJson(FILE(), l);
@@ -55,7 +64,7 @@ function record({ key = 'base', roundId = '', lines = [] } = {}) {
  * found by the marks the draw stamped - the round's id, `<batch>@<device>` for a share that
  * fetched before it registered, `single@<device>` for a lone round. Case does not matter.
  */
-function recordFromLedger({ key = 'base', roundId = '', marks = [], file = '', ledger = null } = {}) {
+function recordFromLedger({ key = 'base', roundId = '', marks = [], file = '', ledger = null, student = '' } = {}) {
   if (!ledger || !ledger.taken || !file) return { added: 0, matched: 0 };
   const want = new Set((marks || []).map((m) => String(m).toLowerCase()));
   const idx = [];
@@ -71,12 +80,12 @@ function recordFromLedger({ key = 'base', roundId = '', marks = [], file = '', l
   let lines;
   try { lines = fs.readFileSync(file, 'utf8').split('\n').filter((x) => x.trim()); } catch { return { added: 0, matched: idx.length }; }
   const picked = idx.filter((i) => i >= 0 && i < lines.length).map((i) => lines[i]);
-  return { added: record({ key, roundId, lines: picked }), matched: idx.length };
+  return { added: record({ key, roundId, lines: picked, student }), matched: idx.length };
 }
 
-function reset(key = null) {
+function reset(key = null, student = '') {
   if (!key) { writeJson(FILE(), { by: {} }); return; }
-  const l = all(); delete l.by[key]; writeJson(FILE(), l);
+  const l = all(); delete l.by[shelf(key, student)]; writeJson(FILE(), l);
 }
 
-module.exports = { idOf, all, setFor, count, has, record, recordFromLedger, reset, FILE };
+module.exports = { idOf, all, setFor, count, has, record, recordFromLedger, reset, shelf, INCUMBENT, FILE };

@@ -2857,7 +2857,7 @@ setInterval(() => {
   })().catch((e) => log.warn(`[gpu] watch: ${e.message}`));
 }, 3 * 60 * 1000).unref?.();
 
-async function dispatchRound({ force = false, scope = '', student = '' } = {}) {
+async function dispatchRound({ force = false, scope = '', student = '', device = '' } = {}) {
   const { plan: planned, usable } = planNow();
   let plan = planned;
   /*
@@ -2900,9 +2900,13 @@ async function dispatchRound({ force = false, scope = '', student = '' } = {}) {
   const speed = sizing.secPerTurnFor(plan.device, training.allRounds(), { gpu: gpuNode });
   const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
   const batchTurns = perMachine * share;
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode });
+  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode, student });
   if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
-  const dev = plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId };
+  /* A NAMED MACHINE, when two cards are up and the second round must not be offered to the first. */
+  const asked = device ? usable.find((t) => t.online && (String(t.name).toLowerCase() === device.toLowerCase() || t.deviceId === device)) : null;
+  if (device && !asked) return { run: false, why: `no machine called ${device} is online and allowed` };
+  const dev = asked ? { ...plan, device: asked.name, deviceId: asked.deviceId }
+    : (plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId });
   if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
   /*
    * A RETRY CONTINUES FROM THE CHECKPOINT, NOT FROM ZERO. A round that died or was stopped on
@@ -2911,6 +2915,18 @@ async function dispatchRound({ force = false, scope = '', student = '' } = {}) {
    * Twelve hours of a laptop are not thrown away for a crash in the eleventh.
    */
   let base = dev.base || '';
+  /*
+   * AND NOT ANOTHER MODEL'S ADAPTER. Shapes come from the network underneath, so a start that
+   * belongs to a different student does not degrade - it fails at load, in a rented hour. A new
+   * student correctly starts from nothing; it has nothing of its own yet.
+   */
+  if (student && base) {
+    const owner = training.studentOf(base);
+    if (owner && owner !== student) {
+      log.info(`training: ${String(base).slice(0, 40)} belongs to ${owner}, not ${student} — starting ${student} from the bare model`);
+      base = '';
+    }
+  }
   /*
    * A START NOBODY CAN REACH IS NOT A START. `hub:<round>` travels to any machine; a directory on
    * the laptop or the rented session that trained it does not, and a round told to continue from
@@ -2936,6 +2952,8 @@ async function dispatchRound({ force = false, scope = '', student = '' } = {}) {
     const recent = (r) => (Date.parse(r.endedAt || '') || 0) > Date.now() - 24 * 3600 * 1000;
     const prev = training.allRounds().find((r) => r.status === 'failed' && !r.discarded
       && ((r.scope && r.scope.key) || 'base') === key && recent(r)
+      /* A checkpoint is another model's too: only this student's own is worth continuing. */
+      && (!student || String((r.recipe && r.recipe.base) || '') === student)
       && ((sameDevice(r) && r.adapter && !/^hub:/.test(String(r.adapter))) || r.adapterLast || (r.adapter && /^hub:/.test(String(r.adapter)))));
     if (prev) {
       base = (sameDevice(prev) && prev.adapter && !/^hub:/.test(String(prev.adapter))) ? prev.adapter : (prev.adapterLast || prev.adapter);
@@ -3003,7 +3021,7 @@ async function dispatchAll() {
 
 app.post('/v1/training/dispatch', authed, async (req, res) => {
   const b = req.body || {};
-  try { res.json(await dispatchRound({ force: !!b.force, scope: String(b.scope || ''), student: String(b.student || '') })); }
+  try { res.json(await dispatchRound({ force: !!b.force, scope: String(b.scope || ''), student: String(b.student || ''), device: String(b.device || '') })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3594,8 +3612,19 @@ app.get('/v1/training/slice', authed, (req, res) => {
         return require('./weakness').forScope({ rounds: training.allRounds(), shadow: shadow.all(), model: (settingsStore.read().studentModels || {})[key] || '', key });
       } catch (e) { return null; }
     })();
+    /*
+     * WHO IS ASKING. The learned ledger is per student, so the draw must know which model this
+     * round trains: the pending share says so before the round registers, the round's own recipe
+     * afterwards. Silence means the incumbent, which is what every round so far has been.
+     */
+    const studentAsking = (() => {
+      const rid = String(req.query.round || '');
+      if (rid) { const r = training.allRounds().find((x) => x.id === rid); if (r && r.recipe && r.recipe.base) return String(r.recipe.base); }
+      const p = training.peekPending(String(req.query.device || ''));
+      return (p && p.student) ? String(p.student) : '';
+    })();
     const s = require('./slice').draw({
-      file, builtAt: manifest.builtAt,
+      file, builtAt: manifest.builtAt, student: studentAsking,
       want: (() => { const asked = Math.min(5000, Math.max(50, Number(req.query.turns) || 700)); const p = training.peekPending(); return p && p.turns > 0 && !p.merge ? Math.min(asked, Math.max(20, p.turns)) : asked; })(),
       /* The round's id once registered; before that, the pending share of the machine asking, so
          the ledger says which share of which batch holds each line. */

@@ -69,8 +69,10 @@ function pendingList(now = Date.now()) {
   const list = Array.isArray(raw) ? raw : (raw && raw.at ? [raw] : []);
   return list.filter((p) => p && p.at && now - (Date.parse(p.at) || 0) <= PENDING_MS);
 }
-function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false, hours = 0, mode = '' } = {}) {
-  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, hours: Math.max(0, Number(hours) || 0), mode: mode === 'work' ? 'work' : (mode === 'time' ? 'time' : ''), at: new Date().toISOString() };
+function setPending({ scope = null, device = '', base = '', batch = '', share = 1, turns = 0, merge = false, hours = 0, mode = '', student = '' } = {}) {
+  /* `student` is the model this share will train. The draw needs it: the learned ledger is kept
+     per student, so a model that has never seen this corpus must be offered all of it. */
+  const p = { scope: normScope(scope), device: String(device || ''), base: String(base || ''), batch: String(batch || ''), share: Math.max(1, Number(share) || 1), turns: Math.max(0, Number(turns) || 0), merge: !!merge, hours: Math.max(0, Number(hours) || 0), mode: mode === 'work' ? 'work' : (mode === 'time' ? 'time' : ''), student: String(student || ''), at: new Date().toISOString() };
   const list = pendingList().filter((x) => !same(x.device, p.device));
   list.push(p);
   writeJson(PENDING(), list);
@@ -386,6 +388,21 @@ function discardRound(id) {
   r.released = releaseTurns(r);
   return r;
 }
+/**
+ * WHICH MODEL AN ADAPTER BELONGS TO. The round that produced it wrote the model into its recipe,
+ * so the answer is on disk and needs no new bookkeeping. '' when nothing here knows, which the
+ * caller must read as "cannot say", not as "any model will do".
+ */
+function studentOf(name = '') {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  const id = raw.replace(/^hub:/, '').replace(/-last$/, '');
+  const r = allRounds().find((x) => x.id === id
+    || String(x.adapterHub || '') === raw || String(x.adapter || '') === raw
+    || String(x.adapterLast || '') === raw || String(x.adapterLocal || '') === raw);
+  return (r && r.recipe && r.recipe.base) ? String(r.recipe.base) : '';
+}
+
 /** A round tried in the shadow under this tag, without promotion. */
 function markTrial(id, tag) {
   const rows = allRounds();
@@ -832,4 +849,4 @@ function state({ corpus, manifest, preflight, trainers } = {}) {
   };
 }
 
-module.exports = { releaseClaims, MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, discardRound, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
+module.exports = { studentOf, releaseClaims, MAX_COLLAPSE, MIN_PAPER, CLAIM_MS, recordLearned, warmStartFor, servingBar, slotFree, markTrial, discardRound, claimBaseline, stopRound, dropPending, baselineFor, rememberBaseline, baselineKey, setAdapterHub, batchReadyToMerge, batchesAwaitingMerge, inBatch, pendingList, clearPending, startRound, noteRound, checkRound, setAdapter, endRound, promote, current, adapterFor, allRounds, state, byDevice, autoOn, setAuto, trainerOn, setTrainer, trainerList, setPending, peekPending, takePending, scopeOfRound, DIR };
