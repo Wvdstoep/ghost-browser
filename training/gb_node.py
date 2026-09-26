@@ -350,20 +350,9 @@ def export_model(body):
         setup()
     if not os.path.isfile(conv):
         return {"started": False, "error": "no gguf converter on this node"}
-    # A hub adapter is a NAME; the exporter wants a directory on this disk.
-    try:
-        adapter_dir = fetch_adapter(body.get("adapter", ""))
-    except Exception as e:
-        return {"started": False, "error": f"could not fetch the adapter: {e}"}
-    if not adapter_dir or not os.path.isdir(adapter_dir):
-        return {"started": False, "error": f"no adapter at {adapter_dir or body.get('adapter', '')}"}
-    cmd = [sys.executable, script, "--adapter", adapter_dir, "--tag", str(body.get("tag", "")),
-           "--round", str(body.get("roundId", "")), "--hub", HUB, "--token", TOKEN]
-    if body.get("base"):
-        cmd += ["--base", str(body["base"])]
-    logf = open(os.path.join(HOME, "last-export.log"), "wb")
-    p = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=dict(os.environ, PYTHONUNBUFFERED="1"))
-    EXPORT["proc"] = p
+    running = EXPORT.get("proc")
+    if running is not None and running.poll() is None:
+        return {"started": False, "error": "an export is already running on this node"}
 
     def watch_export(proc, fh):
         # An export that ran detached and said nothing left a promoted round with no model and no
@@ -386,7 +375,31 @@ def export_model(body):
         except Exception:
             pass
         say(f"export of {body.get('tag', '')} {'done' if code == 0 else f'FAILED ({code}): ' + ' | '.join(tail)[-300:]}")
-    threading.Thread(target=watch_export, args=(p, logf), daemon=True).start()
+
+    def start_export():
+        # THE SLOW PART, off the request. Fetching a sixty-five megabyte adapter takes longer than
+        # the hub is willing to wait for an answer, so the answer goes first and this runs after.
+        try:
+            adapter_dir = fetch_adapter(body.get("adapter", ""))
+        except Exception as e:
+            say(f"export of {body.get('tag', '')} FAILED: could not fetch the adapter - {e}")
+            return
+        if not adapter_dir or not os.path.isdir(adapter_dir):
+            say(f"export of {body.get('tag', '')} FAILED: no adapter at {adapter_dir or body.get('adapter', '')}")
+            return
+        cmd = [sys.executable, script, "--adapter", adapter_dir, "--tag", str(body.get("tag", "")),
+               "--round", str(body.get("roundId", "")), "--hub", HUB, "--token", TOKEN]
+        if body.get("base"):
+            cmd += ["--base", str(body["base"])]
+        say(f"exporting {body.get('tag', '')} from {os.path.basename(adapter_dir)}")
+        logf = open(os.path.join(HOME, "last-export.log"), "wb")
+        proc = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                env=dict(os.environ, PYTHONUNBUFFERED="1"))
+        EXPORT["proc"] = proc
+        LAST_WORK["at"] = time.time()
+        watch_export(proc, logf)
+
+    threading.Thread(target=start_export, daemon=True).start()
     LAST_WORK["at"] = time.time()
     return {"started": True}
 
