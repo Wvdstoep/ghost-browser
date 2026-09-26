@@ -86,4 +86,35 @@ describe('the scoreboard', () => {
     expect(tools[0]).toBe('open');
     expect(tools).toContain('read');
   });
+
+  it('the bar is the newest measurement of what serves, not the score it was born with', () => {
+    /*
+     * The serving adapter was born at 34.55% under an exam that cut answers off at 48 tokens and
+     * measures 36.72% under the one that does not. Quoting the first understates what a
+     * challenger must beat, which is the one number on that screen that must not flatter.
+     */
+    const born = {
+      id: 'r-serving', status: 'done', promoted: true, adapterHub: 'hub:r-serving',
+      endedAt: '2026-09-25T17:47:00.000Z', recipe: { base: 'Qwen/Qwen2.5-0.5B-Instruct' },
+      baseline: { agreement_pct: 5.86 }, result: { agreement_pct: 34.55, per_tool: {} },
+    };
+    const remeasured = {
+      id: 'r-trial', status: 'done', endedAt: '2026-09-26T01:10:00.000Z',
+      recipe: { base: 'Qwen/Qwen2.5-0.5B-Instruct', trial: true, adapter: 'hub:r-serving' },
+      baseline: null, result: { agreement_pct: 36.72, per_tool: {} },
+    };
+    const all = [remeasured, born];
+    const servingRound = all.find((r) => r.promoted && (r.adapterHub || r.adapter));
+    const name = String(servingRound.adapterHub || servingRound.adapter || '');
+    const newer = all.find((r) => r.result && typeof r.result.agreement_pct === 'number'
+      && String((r.recipe && r.recipe.adapter) || '') === name
+      && (Date.parse(r.endedAt || r.startedAt || '') || 0) > (Date.parse(servingRound.endedAt || servingRound.startedAt || '') || 0));
+    expect(newer).toBeTruthy();
+    expect(newer.result.agreement_pct).toBe(36.72);
+    /* And with nothing newer, the round's own number stands. */
+    const alone = [born];
+    const none = alone.find((r) => String((r.recipe && r.recipe.adapter) || '') === name
+      && (Date.parse(r.endedAt || '') || 0) > (Date.parse(born.endedAt) || 0));
+    expect(none).toBeFalsy();
+  });
 });
