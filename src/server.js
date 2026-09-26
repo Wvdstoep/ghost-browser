@@ -2725,6 +2725,241 @@ function templateFor(model = '') {
   };
 }
 
+/*
+ * ── SIDE BY SIDE: ONE RECORDED JOB, ONE MODEL, STEP BY STEP ─────────────────────────────────────
+ *
+ * The exam gives a number. This gives the answers. Every turn of a recorded job is handed to the
+ * chosen model with exactly the page the teacher saw, and the two choices are set beside each
+ * other. Teacher-forced: the model never navigates itself off the trail, so a single wrong step
+ * costs it nothing afterwards. That is deliberately the kindest reading available, and it still
+ * showed us a model that answers `read` when told to open a URL.
+ *
+ * Background, because a forty-step job on a processor-only sidecar takes minutes. `start` mints a
+ * run, the walk fills it in, and the screen polls.
+ */
+const COMPARE = new Map();   // id -> { id, model, jobId, goal, steps: [...], done, error, at }
+const COMPARE_KEEP = 8;
+
+/** The recorded turns of one job, oldest first, from the set the exams are drawn from. */
+function turnsOfJob(jobId, { file = '' } = {}) {
+  const pathx = require('path');
+  const base = process.env.PROFILE_DIR || '/profiles';
+  const out = [];
+  for (const name of file ? [file] : ['eval.jsonl', 'train.jsonl']) {
+    const p2 = pathx.isAbsolute(name) ? name : pathx.join(base, 'traceset', name);
+    let raw = '';
+    try { raw = require('fs').readFileSync(p2, 'utf8'); } catch (e) { continue; }
+    for (const line of raw.split('\n')) {
+      if (!line || (jobId && !line.includes(jobId))) continue;
+      let o; try { o = JSON.parse(line); } catch (e) { continue; }
+      if (!o.meta || o.meta.jobId !== jobId) continue;
+      out.push(o);
+    }
+    if (out.length) break;
+  }
+  return out.sort((a, b) => (a.meta.at || 0) - (b.meta.at || 0));
+}
+
+/** The jobs available to compare on, longest first — a long trail shows more than a short one. */
+function comparableJobs({ limit = 40, q = '' } = {}) {
+  const pathx = require('path');
+  const base = process.env.PROFILE_DIR || '/profiles';
+  const seen = new Map();
+  let raw = '';
+  try { raw = require('fs').readFileSync(pathx.join(base, 'traceset', 'eval.jsonl'), 'utf8'); } catch (e) { return []; }
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let o; try { o = JSON.parse(line); } catch (e) { continue; }
+    const m = o.meta || {};
+    if (!m.jobId) continue;
+    let rec = seen.get(m.jobId);
+    if (!rec) {
+      const user = (o.messages || []).find((x) => x.role === 'user');
+      const goal = String((user && user.content) || '').replace(/\s+/g, ' ').replace(/^GOAL:\s*/, '').slice(0, 160);
+      rec = { jobId: m.jobId, role: m.role || '', platform: m.platform || '', goal, turns: 0 };
+      seen.set(m.jobId, rec);
+    }
+    rec.turns++;
+  }
+  const want = String(q || '').toLowerCase();
+  return [...seen.values()]
+    .filter((r) => !want || r.goal.toLowerCase().includes(want) || r.role.toLowerCase().includes(want) || r.jobId.includes(want))
+    .sort((a, b) => b.turns - a.turns)
+    .slice(0, limit);
+}
+
+/** Walk one job against one model, filling the run in as it goes. */
+async function walkComparison(run) {
+  const host = String(settingsStore.read().studentHost || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+  const short = (v) => JSON.stringify(v || {}).replace(/\s+/g, ' ');
+  try {
+    for (let i = 0; i < run.turns.length; i++) {
+      if (run.stopped) break;
+      const turn = run.turns[i];
+      const msgs = (turn.messages || []).filter((m) => m.role !== 'assistant');
+      let gold = {}; try { gold = JSON.parse(turn.messages[turn.messages.length - 1].content || '{}'); } catch (e) { gold = {}; }
+      let said = '';
+      const t0 = Date.now();
+      try {
+        const r = await fetch(`${host}/api/chat`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: run.model, messages: msgs, stream: false,
+            options: { temperature: 0, num_predict: 400, num_ctx: 8192 } }),
+        });
+        const j = await r.json();
+        said = String((j.message && j.message.content) || j.error || '').trim();
+      } catch (e) { said = `(no answer: ${e.message})`; }
+      let mine = null; try { mine = JSON.parse(said); } catch (e) { mine = null; }
+      run.steps.push({
+        n: i + 1,
+        teacherTool: String(gold.tool || ''),
+        teacherArgs: short(gold.args).slice(0, 400),
+        modelTool: mine ? String(mine.tool || '') : '',
+        modelArgs: mine ? short(mine.args).slice(0, 400) : '',
+        raw: mine ? '' : said.replace(/\s+/g, ' ').slice(0, 400),
+        same: !!(mine && mine.tool === gold.tool),
+        seconds: Math.round((Date.now() - t0) / 100) / 10,
+      });
+      run.at = new Date().toISOString();
+    }
+  } catch (e) { run.error = e.message; }
+  run.done = true;
+  run.at = new Date().toISOString();
+}
+
+app.get('/v1/training/compare/jobs', authed, (req, res) => {
+  try { res.json({ jobs: comparableJobs({ q: String(req.query.q || ''), limit: Math.min(60, Number(req.query.limit) || 40) }) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/v1/training/compare', authed, async (req, res) => {
+  const b = req.body || {};
+  const model = String(b.model || '');
+  const jobId = String(b.jobId || '');
+  if (!model) return res.status(400).json({ error: 'which model should answer?' });
+  if (!jobId) return res.status(400).json({ error: 'which recorded job should it walk?' });
+  const turns = turnsOfJob(jobId).slice(0, Math.min(60, Math.max(1, Number(b.steps) || 40)));
+  if (!turns.length) return res.status(404).json({ error: `no recorded turns for ${jobId}` });
+  const user = (turns[0].messages || []).find((x) => x.role === 'user');
+  const run = {
+    id: `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    model, jobId, role: turns[0].meta.role || '', platform: turns[0].meta.platform || '',
+    goal: String((user && user.content) || '').replace(/\s+/g, ' ').replace(/^GOAL:\s*/, '').slice(0, 400),
+    total: turns.length, steps: [], done: false, stopped: false, error: '',
+    at: new Date().toISOString(), turns,
+  };
+  COMPARE.set(run.id, run);
+  /* Keep the last few and no more: each holds a job's worth of prompts. */
+  for (const k of [...COMPARE.keys()].slice(0, Math.max(0, COMPARE.size - COMPARE_KEEP))) COMPARE.delete(k);
+  walkComparison(run).catch((e) => { run.error = e.message; run.done = true; });
+  const { turns: _t, ...view } = run;
+  res.status(201).json(view);
+});
+
+/*
+ * ── SIDE BY SIDE ON A PROMPT YOU TYPE ───────────────────────────────────────────────────────────
+ *
+ * The teacher works the prompt for real; the chosen model is asked the same question at each step.
+ * That is the shadow, which already exists and already keeps both answers per step - so this
+ * starts an ordinary job and reads the shadow's record of it rather than asking the model a second
+ * time down a second code path.
+ *
+ * Two preconditions, both stated rather than worked around: the model must be the one the shadow
+ * asks (the serving model for its scope), and the teacher must have credit, because the teacher is
+ * what drives the job.
+ */
+app.post('/v1/training/compare/live', authed, async (req, res) => {
+  const b = req.body || {};
+  const prompt = String(b.prompt || '').trim();
+  const model = String(b.model || '');
+  if (!prompt) return res.status(400).json({ error: 'what should they both be asked to do?' });
+  if (!model) return res.status(400).json({ error: 'which model should answer beside the teacher?' });
+
+  /* THE SHADOW ASKS WHOEVER SERVES. Comparing a model the shadow will not ask would compare
+     nothing, so say which one it is instead of running a job that proves it. */
+  const bare = (m) => String(m || '').replace(/:latest$/, '');
+  const configured = Object.values(settingsStore.read().studentModels || {}).map(bare);
+  if (!configured.includes(bare(model))) {
+    return res.status(409).json({
+      error: `the shadow asks the serving model, and ${model} is not one of them (${configured.join(', ') || 'none is set'})`,
+      hint: 'set it as the served model for its scope first, then run this',
+      configured,
+    });
+  }
+
+  let jobId = '';
+  try {
+    const started = await fetch(`${publicUrlOf(req)}/v1/agent/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: req.headers.authorization || '' },
+      body: JSON.stringify({ goal: prompt, role: String(b.role || 'general'), unattended: true,
+        ...(b.maxSteps ? { maxSteps: Number(b.maxSteps) } : {}) }),
+    });
+    const j = await started.json().catch(() => ({}));
+    if (!started.ok) return res.status(started.status).json({ error: `the job would not start: ${j.error || started.status}` });
+    jobId = String(j.jobId || j.id || '');
+    if (!jobId) return res.status(502).json({ error: 'the job started but did not say which one it is' });
+  } catch (e) { return res.status(502).json({ error: `the job would not start: ${e.message}` }); }
+
+  const run = {
+    id: `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    mode: 'live', model, jobId, role: String(b.role || 'general'), platform: '',
+    goal: prompt.slice(0, 400), total: 0, steps: [], done: false, stopped: false, error: '',
+    at: new Date().toISOString(), turns: [],
+  };
+  COMPARE.set(run.id, run);
+  for (const k of [...COMPARE.keys()].slice(0, Math.max(0, COMPARE.size - COMPARE_KEEP))) COMPARE.delete(k);
+  res.status(201).json({ ...run, turns: undefined });
+});
+
+/*
+ * A live run's steps are the shadow's own record for that job: one row per step with what the
+ * teacher did and what the model said. Read at poll time rather than copied, so a job still
+ * running shows what it has so far.
+ */
+function liveSteps(run) {
+  let recent = [];
+  try { recent = (shadow.load(run.model).recent) || []; } catch (e) { recent = []; }
+  const mine = recent.filter((r) => r.jobId === run.jobId).sort((a, b) => (a.step || 0) - (b.step || 0));
+  return mine.map((r, i) => {
+    const split = (s) => {
+      const text = String(s || '');
+      const sp = text.indexOf(' ');
+      return sp < 0 ? { tool: text, args: '' } : { tool: text.slice(0, sp), args: text.slice(sp + 1) };
+    };
+    const teach = split(r.teacher);
+    const stud = String(r.student || '') === '(nothing usable)' ? { tool: '', args: '' } : split(r.student);
+    return {
+      n: r.step || i + 1,
+      teacherTool: teach.tool, teacherArgs: teach.args,
+      modelTool: stud.tool, modelArgs: stud.args,
+      raw: stud.tool ? '' : '(nothing usable)',
+      same: !!r.agree, seconds: 0,
+    };
+  });
+}
+
+app.get('/v1/training/compare/:id', authed, (req, res) => {
+  const run = COMPARE.get(String(req.params.id));
+  if (!run) return res.status(404).json({ error: 'no such comparison' });
+  const { turns: _t, ...view } = run;
+  /* A live run's steps live in the shadow's record and grow while the job runs. */
+  const steps = run.mode === 'live' ? liveSteps(run) : run.steps;
+  const same = steps.filter((s) => s.same).length;
+  let done = run.done;
+  if (run.mode === 'live') {
+    try { const job = jobs.get(run.jobId); done = !!(job && job.status && job.status !== 'running'); } catch (e) { done = run.done; }
+  }
+  res.json({ ...view, steps, total: run.mode === 'live' ? steps.length : run.total, done, same, different: steps.length - same });
+});
+
+app.post('/v1/training/compare/:id/stop', authed, (req, res) => {
+  const run = COMPARE.get(String(req.params.id));
+  if (!run) return res.status(404).json({ error: 'no such comparison' });
+  run.stopped = true;
+  res.json({ ok: true });
+});
+
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
   try { const now = planNow(); res.json({ scopes: now.scopes, platformMap: platformMap.state(), sliceTurns: now.sizing.batchTurns, sizing: now.sizing }); }
