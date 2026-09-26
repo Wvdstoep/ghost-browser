@@ -2848,9 +2848,26 @@ async function walkComparison(run) {
   run.at = new Date().toISOString();
 }
 
-app.get('/v1/training/compare/jobs', authed, (req, res) => {
-  try { res.json({ jobs: comparableJobs({ q: String(req.query.q || ''), limit: Math.min(60, Number(req.query.limit) || 40) }) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+app.get('/v1/training/compare/jobs', authed, async (req, res) => {
+  try {
+    /*
+     * WHICH MODELS CAN ANSWER: whatever the model server actually holds. A tag in the promotion
+     * map that never reached the server would offer a comparison that cannot run, and the whole
+     * point of this screen is to show what a model really says.
+     */
+    let models = [];
+    try {
+      const host = String(settingsStore.read().studentHost || 'http://127.0.0.1:11434').replace(/\/+$/, '');
+      const tags = await (await fetch(`${host}/api/tags`)).json();
+      models = (tags.models || []).map((m) => String(m.name || m.model || '')).filter(Boolean).sort();
+    } catch (e) { models = []; }
+    res.json({
+      jobs: comparableJobs({ q: String(req.query.q || ''), limit: Math.min(60, Number(req.query.limit) || 40) }),
+      models,
+      /* The model the shadow would ask, which is the only one a live comparison can use. */
+      serving: Object.values(settingsStore.read().studentModels || {}).filter(Boolean),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/v1/training/compare', authed, async (req, res) => {
