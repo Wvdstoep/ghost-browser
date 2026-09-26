@@ -140,7 +140,7 @@ const marksOf = (v) => String(v == null ? '' : v).split(',').filter(Boolean);
 const takenBy = (mark, key) => marksOf(mark).some((m) => { const bar = m.indexOf('|'); return (bar < 0 ? 'base' : m.slice(0, bar)) === key; });
 const withMark = (mark, key, roundId) => [...marksOf(mark), `${key}|${roundId || 1}`].join(',');
 
-function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null, weights = null } = {}) {
+function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null, weights = null, student = '' } = {}) {
   const key = keyOf(scope);
   const lines = [];
   const raw = fs.readFileSync(file, 'utf8');
@@ -153,7 +153,8 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
   const taken = ledger.taken || {};
   /* Learned turns - trained on by an adapter that passed the gates - are never drawn again for
      this scope, in this build or any later one. The ledger above is per build; this is not. */
-  const done = learned.setFor(key);
+  /* LEARNED BY WHOM: a student that has never trained on this corpus is owed all of it. */
+  const done = learned.setFor(key, student);
 
   /*
    * SIGHTED TURNS ONLY, once the set has any. A blind turn - a decision recorded without the page
@@ -318,14 +319,14 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
  * learned ones minus those taken in this build. One pass over the file for every scope asked, so
  * the planner's rows cost one read. The planner counts THIS as untrained, not the sighted total.
  */
-function availability({ file, builtAt, scopes = [] } = {}) {
+function availability({ file, builtAt, scopes = [], student = '' } = {}) {
   const out = {};
   let lines = [];
   try { lines = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim()); } catch { for (const s of scopes) out[keyOf(s)] = { pool: 0, learned: 0, taken: 0, free: 0 }; return out; }
   const ledger = ledgerFor(builtAt);
   const taken = ledger.taken || {};
   const sightedOnly = lines.some((l) => l.includes(SIGHTED));
-  const want = scopes.map((s) => ({ scope: s, key: keyOf(s), done: learned.setFor(keyOf(s)), pool: 0, learned: 0, taken: 0 }));
+  const want = scopes.map((s) => ({ scope: s, key: keyOf(s), done: learned.setFor(keyOf(s), student), pool: 0, learned: 0, taken: 0 }));
   for (let i = 0; i < lines.length; i++) {
     if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
     let id = null;

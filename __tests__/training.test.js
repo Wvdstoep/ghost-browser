@@ -329,3 +329,41 @@ describe('a baseline is a number under conditions', () => {
     expect(new Set([a, b, c]).size).toBe(3);
   });
 });
+
+describe('an adapter belongs to the model it was trained on', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  let dir, training;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-student-of-'));
+    process.env.PROFILE_DIR = dir;
+    delete require.cache[require.resolve('../src/training')];
+    training = require('../src/training');
+    fs.mkdirSync(path.join(dir, 'training'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'training', 'rounds.json'), JSON.stringify([
+      { id: 'r-small', status: 'done', recipe: { base: 'Qwen/Qwen2.5-0.5B-Instruct' }, adapterHub: 'hub:r-small', adapterLast: 'hub:r-small-last' },
+      { id: 'r-big', status: 'done', recipe: { base: 'Qwen/Qwen3-1.7B' }, adapterHub: 'hub:r-big' },
+    ]));
+  });
+  afterEach(() => {
+    delete process.env.PROFILE_DIR;
+    delete require.cache[require.resolve('../src/training')];
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names the model behind an adapter, by round id or by hub name', () => {
+    expect(training.studentOf('hub:r-small')).toBe('Qwen/Qwen2.5-0.5B-Instruct');
+    expect(training.studentOf('r-small')).toBe('Qwen/Qwen2.5-0.5B-Instruct');
+    expect(training.studentOf('hub:r-big')).toBe('Qwen/Qwen3-1.7B');
+  });
+
+  it('a mid-round checkpoint belongs to the same model as its round', () => {
+    expect(training.studentOf('hub:r-small-last')).toBe('Qwen/Qwen2.5-0.5B-Instruct');
+  });
+
+  it('says nothing rather than guessing when it cannot tell', () => {
+    expect(training.studentOf('hub:r-nobody')).toBe('');
+    expect(training.studentOf('')).toBe('');
+  });
+});
