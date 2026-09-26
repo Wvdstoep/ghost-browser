@@ -2857,8 +2857,21 @@ setInterval(() => {
   })().catch((e) => log.warn(`[gpu] watch: ${e.message}`));
 }, 3 * 60 * 1000).unref?.();
 
-async function dispatchRound({ force = false } = {}) {
-  const { plan, usable } = planNow();
+async function dispatchRound({ force = false, scope = '', student = '' } = {}) {
+  const { plan: planned, usable } = planNow();
+  let plan = planned;
+  /*
+   * ASKED FOR BY NAME. A named scope replaces the planner's pick and carries its own start - the
+   * adapter that scope would chain from - so the round is the ordinary round, chosen by a person.
+   * A named student is passed to the machine as the model to train; without one the trainer uses
+   * its own, which is what every round has done so far.
+   */
+  if (scope) {
+    const rows = scopesNow({ serving: null });
+    const row = (rows || []).find((s) => s.key === scope);
+    if (!row) return { run: false, why: `no scope called ${scope}` };
+    plan = { ...plan, run: true, scope: row, base: training.adapterFor(row).adapter || '', why: `asked for by hand: ${scope}${student ? ` on ${student}` : ''}` };
+  }
   if (!plan.run && !force) return plan;
   if (!plan.run && force) {
     const hard = /already running|no machine|no training set|still reading/.test(plan.why || '');
@@ -2950,6 +2963,8 @@ async function dispatchRound({ force = false } = {}) {
        */
       body: {
         base,
+        /* The model to train, when a person named one. The trainer's own default stands otherwise. */
+        ...(student ? { model: student } : {}),
         hours: Math.max(0.5, Math.round(hoursEach * 4) / 4),
         /*
          * A CONTINUATION TAKES A SMALLER STEP. From nothing, the full rate is right. From an
@@ -2987,7 +3002,8 @@ async function dispatchAll() {
 }
 
 app.post('/v1/training/dispatch', authed, async (req, res) => {
-  try { res.json(await dispatchRound({ force: !!(req.body || {}).force })); }
+  const b = req.body || {};
+  try { res.json(await dispatchRound({ force: !!b.force, scope: String(b.scope || ''), student: String(b.student || '') })); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
