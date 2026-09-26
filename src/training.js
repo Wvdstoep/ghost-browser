@@ -514,7 +514,21 @@ function servingBar(r) {
   const serving = adapterFor(key);
   const start = serving.adapter || '';
   if (String(r.base || '') === start) return null;   // it measured what serves already
-  return baselineFor({ scope: key, base: start, paper: r.paper, turns: Number(r.result.turns) || 0 });
+  /*
+   * UNDER THE KEY IT WAS WRITTEN WITH. The answer budget and the student are part of a baseline's
+   * identity - a score taken with answers cut off at 48 tokens is not the same measurement as one
+   * taken at 320, and two models on one paper must not read each other's numbers. Asking without
+   * them finds nothing and silently skips the strongest gate we have.
+   */
+  const answer = Number((r.recipe && r.recipe.answerTokens)) || 0;
+  return baselineFor({
+    scope: key,
+    base: start,
+    paper: r.paper,
+    turns: Number(r.result.turns) || 0,
+    answer,
+    student: studentOf(start),
+  });
 }
 
 /**
@@ -580,6 +594,21 @@ function promote(roundId, { auto = false } = {}) {
   const bar = servingBar(r);
   if (bar && Number(r.result.agreement_pct) <= Number(bar.agreement_pct)) {
     return { error: `it beat its start (${r.baseline.agreement_pct}%) but not what serves: ${r.result.agreement_pct}% against ${bar.agreement_pct}% on the same paper` };
+  }
+  /*
+   * AND NOT BACKWARDS ON THE WHOLE CALL. Tool agreement is what every gate has measured, and the
+   * serving model picks the right tool a third of the time while getting the tool AND its
+   * arguments right a fifth - so half the time it chooses correctly it still acts wrongly. A
+   * round that improves its choosing by getting worse at acting is not an improvement to a
+   * browser, where the right verb with the wrong URL is a different action, not a near miss.
+   *
+   * A floor, not a headline: the round has already had to beat what serves on tool agreement.
+   * Absent is not refused - rounds measured before this number existed carry none.
+   */
+  const argsNow = Number(r.result.args_agreement_pct);
+  const argsBar = Number(bar && bar.args_agreement_pct);
+  if (Number.isFinite(argsNow) && Number.isFinite(argsBar) && argsBar > 0 && argsNow < argsBar) {
+    return { error: `it chooses better but acts worse: whole calls right ${argsNow}% against ${argsBar}% on the same paper` };
   }
   /*
    * A COLLAPSED MODEL BEATS ITS BASELINE AND IS STILL WORSE THAN NOTHING.

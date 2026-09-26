@@ -994,7 +994,10 @@ def main():
         # start on the same paper scores the same; the hub keeps the number and a round asks before
         # it spends forty minutes measuring. Of the shares of one batch, the first to ask measures;
         # the others are told who has it, train at once, and take the number at their end.
-        start_name = str(args.adapter or "")
+        # THE NAME, NOT THE PATH. `hub:<round>` means the same on every machine; the directory it
+        # was unpacked into means nothing to the hub, which looks this score up by name. Writing
+        # the path is how the "beat what serves" gate came to find nothing.
+        start_name = adapter_name or str(args.adapter or "")
         known, measure_me, by = hub.baseline_ask(paper_scope, start_name, paper_id, args.eval_turns)
         if known:
             baseline = known
@@ -1291,7 +1294,8 @@ def main():
         # The other share measured the start while this one trained; its number is on the hub by
         # now. If it never arrived (that machine died), this one measures the start itself: the
         # comparison is the whole point and it is not skipped.
-        start_name = str(args.adapter or "")
+        # By name, for the same reason as above: the hub files this score under the adapter.
+        start_name = adapter_name or str(args.adapter or "")
         baseline = hub.baseline_known(paper_scope, start_name, paper_id, args.eval_turns)
         if baseline:
             hub.note(f"before: {baseline['agreement_pct']}% agreement over {baseline.get('turns', args.eval_turns)} turns — measured by the other share")
