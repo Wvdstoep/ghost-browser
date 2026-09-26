@@ -66,6 +66,8 @@ function record({ key = 'base', roundId = '', lines = [], student = '' } = {}) {
  */
 function recordFromLedger({ key = 'base', roundId = '', marks = [], file = '', ledger = null, student = '' } = {}) {
   if (!ledger || !ledger.taken || !file) return { added: 0, matched: 0 };
+  /* The marks were written against this student's shelf, so they are read back from it. */
+  const mine = shelf(key, student);
   const want = new Set((marks || []).map((m) => String(m).toLowerCase()));
   const idx = [];
   for (const [i, v] of Object.entries(ledger.taken)) {
@@ -73,7 +75,7 @@ function recordFromLedger({ key = 'base', roundId = '', marks = [], file = '', l
       const bar = m.indexOf('|');
       const k = bar < 0 ? 'base' : m.slice(0, bar);
       const who = (bar < 0 ? m : m.slice(bar + 1)).toLowerCase();
-      if (k === key && want.has(who)) { idx.push(Number(i)); break; }
+      if (k === mine && want.has(who)) { idx.push(Number(i)); break; }
     }
   }
   if (!idx.length) return { added: 0, matched: 0 };

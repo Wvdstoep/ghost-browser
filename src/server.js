@@ -2895,19 +2895,27 @@ async function dispatchRound({ force = false, scope = '', student = '', device =
    * pass 60 turns three times, and the trainer shortened its schedule to 3 of 12 steps. The
    * epochs are not what gives; the turns are.
    */
-  const sizing = require('./sizing');
-  const gpuNode = !!((deviceHub.deviceList() || []).find((d) => String(d.name || '').toLowerCase() === String(plan.device || '').toLowerCase() && d.caps && d.caps.gpu));
-  const speed = sizing.secPerTurnFor(plan.device, training.allRounds(), { gpu: gpuNode });
-  const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
-  const batchTurns = perMachine * share;
-  training.setPending({ scope: plan.scope || 'base', device: plan.device || (settingsStore.read().trainOn === 'gpu' ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode, student });
-  if (settingsStore.read().trainOn === 'gpu') return rentRound({ plan });
-  /* A NAMED MACHINE, when two cards are up and the second round must not be offered to the first. */
+  /*
+   * THE MACHINE FIRST, BECAUSE THE SIZE DEPENDS ON IT. A named one when two cards are up and the
+   * second round must not be offered to the first; otherwise the planner's, or the first free
+   * one. Choosing after the sizing is what sized a rented card as a laptop and handed it
+   * thirty-six turns for three hours.
+   */
   const asked = device ? usable.find((t) => t.online && (String(t.name).toLowerCase() === device.toLowerCase() || t.deviceId === device)) : null;
   if (device && !asked) return { run: false, why: `no machine called ${device} is online and allowed` };
+  const free = usable.find((t) => t.online) || {};
   const dev = asked ? { ...plan, device: asked.name, deviceId: asked.deviceId }
-    : (plan.device ? plan : { ...plan, device: (usable.find((t) => t.online) || {}).name, deviceId: (usable.find((t) => t.online) || {}).deviceId });
-  if (!dev.deviceId) return { run: false, why: 'no machine is connected that can train' };
+    : (plan.device ? plan : { ...plan, device: free.name, deviceId: free.deviceId });
+  const onGpu = settingsStore.read().trainOn === 'gpu';
+  if (!dev.deviceId && !onGpu) return { run: false, why: 'no machine is connected that can train' };
+
+  const sizing = require('./sizing');
+  const gpuNode = !!((deviceHub.deviceList() || []).find((d) => String(d.name || '').toLowerCase() === String(dev.device || '').toLowerCase() && d.caps && d.caps.gpu));
+  const speed = sizing.secPerTurnFor(dev.device, training.allRounds(), { gpu: gpuNode });
+  const perMachine = sizing.turnsFor({ hours: hoursEach, secPerTurn: speed });
+  const batchTurns = perMachine * share;
+  training.setPending({ scope: plan.scope || 'base', device: dev.device || (onGpu ? 'gpu-runpod' : ''), base: plan.base || '', batch, share, turns: perMachine, hours: hoursEach, mode, student });
+  if (onGpu) return rentRound({ plan });
   /*
    * A RETRY CONTINUES FROM THE CHECKPOINT, NOT FROM ZERO. A round that died or was stopped on
    * this machine, on this scope, within a day, and left its last checkpoint behind (the app

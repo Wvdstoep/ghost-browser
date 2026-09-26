@@ -370,7 +370,7 @@ function marksOf(r) {
 /** A round that ended without its turns gives them back to the build (slice.js), and its machine gives up its baseline claims. */
 function releaseTurns(r) {
   try { releaseClaims(r.device); } catch (e) { /* a claim is a courtesy */ }
-  try { return require('./slice').release({ scope: (r.scope && r.scope.key) || 'base', marks: marksOf(r) }); } catch (e) { return 0; }
+  try { return require('./slice').release({ scope: (r.scope && r.scope.key) || 'base', marks: marksOf(r), student: (r.recipe && r.recipe.base) || '' }); } catch (e) { return 0; }
 }
 
 /**
@@ -489,7 +489,7 @@ function recordLearned(r, rows = allRounds()) {
   }
   const ledger = readJson(path.join(DIR(), 'slices.json'), null);
   const file = path.join(process.env.PROFILE_DIR || '/profiles', 'traceset', 'train.jsonl');
-  return learned.recordFromLedger({ key, roundId: r.id, marks, file, ledger });
+  return learned.recordFromLedger({ key, roundId: r.id, marks, file, ledger, student: (r.recipe && r.recipe.base) || '' });
 }
 
 /** The serving model's score on the round's paper (bare when nothing serves the scope), if measured. */

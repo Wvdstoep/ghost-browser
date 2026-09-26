@@ -137,11 +137,18 @@ function ledgerFor(builtAt) {
  */
 const keyOf = (scope) => (scope ? platforms.parse(scope).key : 'base');
 const marksOf = (v) => String(v == null ? '' : v).split(',').filter(Boolean);
+/*
+ * WHOSE MARK IT IS. The shelf is the scope for the incumbent - so every mark ever written keeps
+ * meaning what it meant - and `scope@student` for any other model. Two students draw the same
+ * turns; two shares of one student still divide them.
+ */
 const takenBy = (mark, key) => marksOf(mark).some((m) => { const bar = m.indexOf('|'); return (bar < 0 ? 'base' : m.slice(0, bar)) === key; });
 const withMark = (mark, key, roundId) => [...marksOf(mark), `${key}|${roundId || 1}`].join(',');
 
 function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope = null, weights = null, student = '' } = {}) {
   const key = keyOf(scope);
+  /* The ledger shelf this student draws against. See takenBy. */
+  const mine = learned.shelf(key, student);
   const lines = [];
   const raw = fs.readFileSync(file, 'utf8');
   /* Split once; the file is large but this runs a handful of times a day, not per request. */
@@ -172,7 +179,7 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
     if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
     if (scope && !platforms.matches(scope, lines[i])) continue;
     pool++;
-    if (taken[i] && takenBy(taken[i], key)) { takenHere++; continue; }
+    if (taken[i] && takenBy(taken[i], mine)) { takenHere++; continue; }
     /*
      * LEARNED MEANS LEARNED. A turn a promoted adapter trained on is not drawn again - unless the
      * model still fails its tool (weight at or above AGAIN_AT: right less than half the time).
@@ -290,7 +297,7 @@ function draw({ file, builtAt, want = 700, roundId = '', perRun = PER_RUN, scope
     }
   }
 
-  for (const i of picked) taken[i] = withMark(taken[i], key, roundId);
+  for (const i of picked) taken[i] = withMark(taken[i], mine, roundId);
   ledger.taken = taken;
   ledger.handed = Object.keys(taken).length;
   writeJson(LEDGER(), ledger);
@@ -326,7 +333,7 @@ function availability({ file, builtAt, scopes = [], student = '' } = {}) {
   const ledger = ledgerFor(builtAt);
   const taken = ledger.taken || {};
   const sightedOnly = lines.some((l) => l.includes(SIGHTED));
-  const want = scopes.map((s) => ({ scope: s, key: keyOf(s), done: learned.setFor(keyOf(s), student), pool: 0, learned: 0, taken: 0 }));
+  const want = scopes.map((s) => ({ scope: s, key: keyOf(s), mine: learned.shelf(keyOf(s), student), done: learned.setFor(keyOf(s), student), pool: 0, learned: 0, taken: 0 }));
   for (let i = 0; i < lines.length; i++) {
     if (sightedOnly && !lines[i].includes(SIGHTED)) continue;
     let id = null;
@@ -334,7 +341,7 @@ function availability({ file, builtAt, scopes = [], student = '' } = {}) {
       if (w.scope && w.key !== 'base' && !platforms.matches(w.scope, lines[i])) continue;
       w.pool++;
       if (w.done.size) { if (id === null) id = learned.idOf(lines[i]); if (w.done.has(id)) { w.learned++; continue; } }
-      if (taken[i] && takenBy(taken[i], w.key)) w.taken++;
+      if (taken[i] && takenBy(taken[i], w.mine)) w.taken++;
     }
   }
   for (const w of want) out[w.key] = { pool: w.pool, learned: w.learned, taken: w.taken, free: Math.max(0, w.pool - w.learned - w.taken) };
@@ -359,10 +366,11 @@ function reset(builtAt) { writeJson(LEDGER(), { builtAt, taken: {}, handed: 0 })
  * share `<batch>@<device>`, or `single@<device>`) go, and only for its scope. Case does not matter.
  * Returns how many lines were released.
  */
-function release({ scope = null, marks = [] } = {}) {
+function release({ scope = null, marks = [], student = '' } = {}) {
   const l = readJson(LEDGER(), null);
   if (!l || !l.taken) return 0;
-  const key = keyOf(scope);
+  /* Give back what THIS student took, off the shelf the draw wrote to. */
+  const key = learned.shelf(keyOf(scope), student);
   const want = new Set((marks || []).map((m) => String(m).toLowerCase()));
   let n = 0;
   for (const [i, v] of Object.entries(l.taken)) {
