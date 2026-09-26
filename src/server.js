@@ -1790,7 +1790,7 @@ async function mergeIfReady(roundId) {
  */
 app.get('/v1/training/baseline', authed, (req, res) => {
   /* `answer` is the exam's answer budget - part of what the number means. See training.baselineKey. */
-  const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0, answer: req.query.answer || 0 };
+  const q = { scope: req.query.scope || 'base', base: req.query.base || '', paper: req.query.paper || '', turns: req.query.turns || 0, answer: req.query.answer || 0, student: req.query.student || '' };
   const b = training.baselineFor(q);
   if (b) return res.json({ known: true, key: training.baselineKey(q), baseline: b, measure: false, by: '' });
   /* Not known: the first machine asking claims the measurement; the others are told who has it. */
@@ -1799,7 +1799,7 @@ app.get('/v1/training/baseline', authed, (req, res) => {
 });
 app.post('/v1/training/baseline', authed, (req, res) => {
   const b = req.body || {};
-  const q = { scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0, answer: b.answer || 0 };
+  const q = { scope: b.scope || 'base', base: b.base || '', paper: b.paper || '', turns: b.turns || 0, answer: b.answer || 0, student: b.student || '' };
   const kept = training.rememberBaseline(q, b.baseline);
   res.json({ ok: !!kept, key: training.baselineKey(q) });
 });

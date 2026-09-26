@@ -269,10 +269,13 @@ class Hub:
     page being down is not a reason to waste a night. So every call here is best-effort and failure
     is printed, never raised."""
 
-    def __init__(self, base, token, device):
+    def __init__(self, base, token, device, student=""):
         self.base = (base or "").rstrip("/")
         self.token = token or ""
         self.device = device or os.environ.get("GB_DEVICE") or os.environ.get("COMPUTERNAME") or "unknown"
+        # WHICH MODEL THIS ROUND TRAINS. A baseline belongs to a model: two students on one paper
+        # would otherwise read each other's starting scores out of the hub's cache.
+        self.student = student or ""
         self.round_id = None
 
     def _post(self, path, body):
@@ -369,7 +372,7 @@ class Hub:
             # scores differently when its answer is cut off, so a baseline taken under another
             # budget is a different measurement and must not be handed back as this one.
             q = urllib.parse.urlencode({"scope": scope, "base": start, "paper": paper, "turns": turns,
-                                        "answer": ANSWER_TOKENS, "device": self.device})
+                                        "answer": ANSWER_TOKENS, "student": self.student, "device": self.device})
             req = urllib.request.Request(f"{self.base}/v1/training/baseline?{q}", headers={"Authorization": f"Bearer {self.token}"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 out = json.loads(r.read().decode("utf-8"))
@@ -384,7 +387,7 @@ class Hub:
             return
         try:
             self._post("/v1/training/baseline", {"scope": scope, "base": start, "paper": paper, "turns": turns,
-                                                 "answer": ANSWER_TOKENS, "baseline": baseline})
+                                                 "answer": ANSWER_TOKENS, "student": self.student, "baseline": baseline})
         except Exception:
             pass
 
@@ -740,7 +743,7 @@ def main():
     args = ap.parse_args()
 
     torch.set_num_threads(args.threads)
-    hub = Hub(args.hub, args.token, args.device_name)
+    hub = Hub(args.hub, args.token, args.device_name, student=args.model)
 
     # Where and in what. A GPU makes the same round a few minutes; bf16 only means anything there.
     use_cuda = torch.cuda.is_available() and not args.cpu

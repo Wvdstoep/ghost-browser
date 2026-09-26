@@ -322,6 +322,16 @@ describe('a baseline is a number under conditions', () => {
     expect(old).not.toBe(training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320 }));
   });
 
+  it('a baseline belongs to a model, and the incumbent keeps the bare key', () => {
+    const inc = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320, student: 'Qwen/Qwen2.5-0.5B-Instruct' });
+    const bare = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320 });
+    const other = training.baselineKey({ scope: 'base', base: '', paper: 'p1', turns: 354, answer: 320, student: 'Qwen/Qwen3-0.6B' });
+    /* Nothing already measured moves: the incumbent's key is the one it always had. */
+    expect(inc).toBe(bare);
+    expect(other).not.toBe(bare);
+    expect(other).toContain('Qwen/Qwen3-0.6B');
+  });
+
   it('everything else still separates two numbers', () => {
     const a = training.baselineKey({ scope: 'base', base: 'hub:r-1', paper: 'p1', turns: 354, answer: 320 });
     const b = training.baselineKey({ scope: 'platform:google', base: 'hub:r-1', paper: 'p1', turns: 354, answer: 320 });
