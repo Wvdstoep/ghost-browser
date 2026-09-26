@@ -305,6 +305,42 @@ def stop_round(body):
     return {"stopped": n > 0, "processes": n}
 
 
+def fetch_adapter(name):
+    """`hub:<round>` fetched into ./adapters/<round> and returned as a directory.
+
+    The exporter merges a directory into a base model; it has no idea what a hub name is. The
+    trainer has always known how to fetch one, and now the exporter's caller does too - which is
+    what lets a machine serve an adapter it did not train.
+    """
+    raw = str(name or "").strip()
+    if not raw.startswith("hub:"):
+        return raw
+    short = raw[4:].strip()
+    into = os.path.join(HOME, "adapters", short)
+    if os.path.isfile(os.path.join(into, "adapter_config.json")):
+        return into
+    import tarfile
+    import urllib.request
+    os.makedirs(into, exist_ok=True)
+    tgz = into + ".tgz"
+    req = urllib.request.Request(f"{HUB}/v1/training/adapters/{short}",
+                                 headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(req, timeout=600) as r, open(tgz, "wb") as fh:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            fh.write(chunk)
+    with tarfile.open(tgz, "r:gz") as tf:
+        tf.extractall(into)
+    try:
+        os.remove(tgz)
+    except OSError:
+        pass
+    print(f"fetched adapter {short} from the hub", flush=True)
+    return into
+
+
 def export_model(body):
     script = os.path.join(HOME, "export_model.py")
     if not os.path.isfile(script):
@@ -314,7 +350,14 @@ def export_model(body):
         setup()
     if not os.path.isfile(conv):
         return {"started": False, "error": "no gguf converter on this node"}
-    cmd = [sys.executable, script, "--adapter", str(body.get("adapter", "")), "--tag", str(body.get("tag", "")),
+    # A hub adapter is a NAME; the exporter wants a directory on this disk.
+    try:
+        adapter_dir = fetch_adapter(body.get("adapter", ""))
+    except Exception as e:
+        return {"started": False, "error": f"could not fetch the adapter: {e}"}
+    if not adapter_dir or not os.path.isdir(adapter_dir):
+        return {"started": False, "error": f"no adapter at {adapter_dir or body.get('adapter', '')}"}
+    cmd = [sys.executable, script, "--adapter", adapter_dir, "--tag", str(body.get("tag", "")),
            "--round", str(body.get("roundId", "")), "--hub", HUB, "--token", TOKEN]
     if body.get("base"):
         cmd += ["--base", str(body["base"])]

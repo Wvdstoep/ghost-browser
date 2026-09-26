@@ -3006,6 +3006,38 @@ app.post('/v1/training/compare/:id/stop', authed, (req, res) => {
   res.json({ ok: true });
 });
 
+/*
+ * ── SERVE AN ADAPTER WITHOUT PROMOTING IT ──────────────────────────────────────────────────────
+ *
+ * A round that did not win still produced a model, and a score is not a demonstration. This puts
+ * any round's adapter on the model server so it can be given a real job, and changes nothing
+ * else: no promotion, no serving map, no scope. Any online machine will do - the adapter travels
+ * by name from the hub - and the base it merges into is the MODEL from the round's recipe, not
+ * `round.base`, which for a continuation is the adapter it started from.
+ */
+app.post('/v1/training/rounds/:id/export', authed, async (req, res) => {
+  try {
+    const r = training.allRounds().find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: 'no such round' });
+    const adapter = String(r.adapterHub || (String(r.adapter || '').startsWith('hub:') ? r.adapter : '') || '');
+    if (!adapter) return res.status(409).json({ error: 'this round left no adapter on the hub — only the machine that trained it ever had one' });
+    const model = String((r.recipe && r.recipe.base) || '');
+    if (!model) return res.status(409).json({ error: 'this round did not record which model it trained, so there is nothing to merge into' });
+    const asked = String((req.body || {}).device || '');
+    const able = (deviceHub.deviceList() || []).filter((d) => d.online && d.caps && (d.caps.trainer || (d.caps.features || []).includes('train_export')));
+    const dev = asked ? able.find((d) => String(d.name).toLowerCase() === asked.toLowerCase() || d.deviceId === asked) : (able.find((d) => d.caps.gpu) || able[0]);
+    if (!dev) return res.status(409).json({ error: asked ? `${asked} is not online` : 'no machine is online that can export' });
+    const tag = String((req.body || {}).tag || '') || tagFor(r);
+    const out = await deviceHub.runCommand(dev.deviceId, {
+      path: '/v1/train_export',
+      body: { adapter, tag, base: model, roundId: r.id },
+    }, 30000);
+    const said = out && typeof out === 'object' ? out : {};
+    log.info(`training: export of ${r.id} (${model}) as ${tag} on ${dev.name} — ${said.started ? 'started' : `refused: ${said.error || 'no reason given'}`}`);
+    res.json({ asked: !!said.started, tag, device: dev.name, model, adapter, error: said.error || '' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
   try { const now = planNow(); res.json({ scopes: now.scopes, platformMap: platformMap.state(), sliceTurns: now.sizing.batchTurns, sizing: now.sizing }); }
