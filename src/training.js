@@ -577,7 +577,12 @@ function promote(roundId, { auto = false } = {}) {
     const mine = String((r.recipe && r.recipe.base) || '');
     const serving = studentOf(adapterFor(r.scope || 'base').adapter || '');
     if (mine && serving && mine !== serving) {
-      return { error: `${mine} is not the student that serves this scope (${serving}) — measured and kept, promote by hand to change the student` };
+      /*
+       * A HOLD, NOT A REFUSAL. `hold` tells the caller this round did not fail anything: it is
+       * waiting for a person, and discarding it would throw away the very comparison it was run
+       * to make. See the end-of-round handler in server.js.
+       */
+      return { hold: true, error: `${mine} is not the student that serves this scope (${serving}) — measured and kept, promote by hand to change the student` };
     }
   }
   if (!r.result || !r.baseline) return { error: 'that round has no measurement, so there is nothing to promote on' };

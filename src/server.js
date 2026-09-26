@@ -1742,7 +1742,15 @@ app.post('/v1/training/rounds/:id/end', authed, async (req, res) => {
      * stage for a model that passed. (A shadow trial for score-only refusals exists behind the
      * trialInShadow setting, off by default.)
      */
-    if (promotion && promotion.error) {
+    if (promotion && promotion.error && promotion.hold) {
+      /*
+       * HELD, NOT REFUSED. Promotion declined for a reason that is not a failure - a challenger on
+       * another base model, waiting for a person to decide whether to change the student. The
+       * round keeps its adapter and its numbers; discarding it would throw away the comparison it
+       * was run to make.
+       */
+      log.info(`training: ${r.id} held for a decision — ${promotion.error}`);
+    } else if (promotion && promotion.error) {
       if (settingsStore.read().trialInShadow === true) { try { trial = await trialInShadow(r, promotion.error); } catch (e) { trial = { trial: false, why: e.message }; } }
       else { training.discardRound(r.id); log.info(`training: ${r.id} discarded at the gates — ${promotion.error}`); }
     }
