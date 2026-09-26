@@ -154,7 +154,10 @@ const BASELINES = () => path.join(DIR(), 'baselines.json');
  * a different measurement and must never be handed back as this one. Old entries keep their old key
  * and are simply never asked for again.
  */
-const baselineKey = ({ scope = 'base', base = '', paper = '', turns = 0, answer = 0 } = {}) => `${normScope(scope).key}|${String(base || 'bare')}|${String(paper || '')}|${Number(turns) || 0}` + (Number(answer) ? `|a${Number(answer)}` : '');
+const baselineKey = ({ scope = 'base', base = '', paper = '', turns = 0, answer = 0, student = '' } = {}) => `${normScope(scope).key}|${String(base || 'bare')}|${String(paper || '')}|${Number(turns) || 0}`
+  + (Number(answer) ? `|a${Number(answer)}` : '')
+  /* The model itself. The incumbent keeps the bare key so nothing already measured moves. */
+  + (student && String(student) !== require('./learned').INCUMBENT ? `|s${student}` : '');
 /** The known baseline for a start on a paper, or null. */
 function baselineFor(q) {
   const all = readJson(BASELINES(), {}) || {};
