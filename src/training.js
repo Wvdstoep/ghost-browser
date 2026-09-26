@@ -233,6 +233,18 @@ function batchReadyToMerge(id) {
   if (all.some((m) => m.status === 'running')) return null;
   const dead = all.filter((m) => m.status === 'failed' || m.status === 'stopped' || m.discarded);
   const members = all.filter((m) => m.status === 'done' && !m.discarded);
+  /*
+   * ONE MODEL'S SHARES. Averaging adapters adds their matrices, which means something only when
+   * both were fitted to the same network; across two models it is a shape error at load, after
+   * the hours are spent. Shares are minted with one student per batch, so this should be
+   * impossible - and a batch that holds two is abandoned with its reason rather than merged.
+   */
+  const students = [...new Set(members.map((m) => String((m.recipe && m.recipe.base) || '')).filter(Boolean))];
+  if (students.length > 1) {
+    for (const m of all) m.mergedInto = 'abandoned';
+    writeJson(ROUNDS(), rows);
+    return { abandoned: true, why: `this batch holds ${students.length} different models (${students.join(', ')}) — their adapters cannot be averaged` };
+  }
   if (members.some((m) => owned(m.mergedInto) || !m.adapterHub)) return null;
   if (rows.filter((x) => x.merge && x.batch === r.batch && (x.status === 'failed' || x.status === 'stopped')).length >= 3) return null;
   /* A merge round already running or pending on this batch: not twice. */
