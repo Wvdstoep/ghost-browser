@@ -439,4 +439,29 @@ describe('a different student is measured, not promoted by itself', () => {
     const out = training.promote('r-next', { auto: true });
     expect(String(out.error || '')).not.toMatch(/not the student that serves/);
   });
+
+  it('says a hold is a hold, so the caller does not throw the round away', () => {
+    /*
+     * The round that found this: Qwen3 scored 35.31% against the serving 36.72% on tool choice
+     * and 20.06% against 19.21% on whole calls, and was discarded by the rule meant to protect
+     * it. Refused-is-discarded is right for a failure and wrong for a decision waiting on a person.
+     */
+    write([
+      round('r-new', 'Qwen/Qwen3-0.6B', 35.31),
+      round('r-old', 'Qwen/Qwen2.5-0.5B-Instruct', 36.72, { promoted: true }),
+    ], { adapter: 'hub:r-old', scopes: { base: { adapter: 'hub:r-old' } } });
+    const out = training.promote('r-new', { auto: true });
+    expect(out.hold).toBe(true);
+    expect(out.error).toMatch(/promote by hand/);
+  });
+
+  it('and a real failure carries no hold, so it is discarded as before', () => {
+    write([
+      round('r-worse', 'Qwen/Qwen2.5-0.5B-Instruct', 4.0),
+      round('r-old', 'Qwen/Qwen2.5-0.5B-Instruct', 36.72, { promoted: true }),
+    ], { adapter: 'hub:r-old', scopes: { base: { adapter: 'hub:r-old' } } });
+    const out = training.promote('r-worse', { auto: true });
+    expect(out.error).toBeTruthy();
+    expect(out.hold).toBeFalsy();
+  });
 });
