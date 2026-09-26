@@ -2447,17 +2447,10 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
    * is useless. This is the same template the student was trained with, and the stop tokens that
    * end its turn.
    */
-  const TEMPLATE = [
-    '{{- if .System }}<|im_start|>system',
-    '{{ .System }}<|im_end|>',
-    '{{ end }}<|im_start|>user',
-    '{{ .Prompt }}<|im_end|>',
-    '<|im_start|>assistant',
-    '{{ .Response }}',
-  ].join('\n');
+  const shape = templateFor(modelOfTag(tag));
   const made = await fetch(`${host}/api/create`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: tag, files: { [`${tag.replace(/:/g, '-')}.gguf`]: `sha256:${digest}` },
-      template: TEMPLATE, parameters: { stop: ['<|im_end|>', '<|im_start|>'], temperature: 0 }, stream: false }) });
+      template: shape.template, parameters: { stop: shape.stop, temperature: 0 }, stream: false }) });
   const text = await made.text();
   if (!made.ok) throw new Error(`create failed: ${made.status} ${text.slice(0, 300)}`);
   /*
@@ -2477,8 +2470,9 @@ async function createServedModel({ tag, digest, base = '', roundId = '' }) {
   /* And that it holds the template: a passthrough one means every answer will be prose. */
   try {
     const shown = await (await fetch(`${host}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: tag }) })).json();
-    if (!String(shown.template || '').includes('<|im_start|>')) {
-      throw new Error(`${tag} is on the model server without its chat template — it would answer prose, not tool calls`);
+    /* THAT FAMILY's marker, not ChatML's: a Gemma export carries <start_of_turn>. */
+    if (!String(shown.template || '').includes(shape.marker)) {
+      throw new Error(`${tag} is on the model server without its ${shape.family} chat template — it would answer prose, not tool calls`);
     }
   } catch (e) { if (/without its chat template/.test(e.message)) throw e; }
   /* The file was only ever the way in. The server holds the blob now; the copy is 500 MB of a
@@ -2677,6 +2671,59 @@ app.get('/v1/training/results', authed, (req, res) => {
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+/*
+ * WHICH FAMILY A SERVED TAG BELONGS TO. The tag is minted from the round, and the round wrote the
+ * model into its recipe, so the answer is on disk. Unknown means Qwen, which is what every export
+ * so far has been.
+ */
+function modelOfTag(tag = '') {
+  try {
+    const want = String(tag || '').replace(/:latest$/, '');
+    const r = training.allRounds().find((x) => {
+      try { return tagFor(x) === want; } catch (e) { return false; }
+    });
+    return String((r && r.recipe && r.recipe.base) || '');
+  } catch (e) { return ''; }
+}
+
+/*
+ * THE TURN MARKERS OF ONE FAMILY, and the tokens that end a turn. Gemma has no system turn: its
+ * system text goes at the top of the first user turn, exactly as evaluate.py folds it for the exam,
+ * so the served prompt and the measured prompt stay the same shape.
+ */
+function templateFor(model = '') {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('gemma')) {
+    return {
+      family: 'gemma',
+      marker: '<start_of_turn>',
+      template: [
+        '<start_of_turn>user',
+        '{{- if .System }}',
+        '{{ .System }}',
+        '{{ end }}',
+        '{{ .Prompt }}<end_of_turn>',
+        '<start_of_turn>model',
+        '{{ .Response }}',
+      ].join('\n'),
+      stop: ['<end_of_turn>', '<start_of_turn>'],
+    };
+  }
+  return {
+    family: 'chatml',
+    marker: '<|im_start|>',
+    template: [
+      '{{- if .System }}<|im_start|>system',
+      '{{ .System }}<|im_end|>',
+      '{{ end }}<|im_start|>user',
+      '{{ .Prompt }}<|im_end|>',
+      '<|im_start|>assistant',
+      '{{ .Response }}',
+    ].join('\n'),
+    stop: ['<|im_end|>', '<|im_start|>'],
+  };
+}
 
 /* The model map: every scope with its data, its coverage, what serves for it and what it earned. */
 app.get('/v1/training/scopes', authed, (_req, res) => {
