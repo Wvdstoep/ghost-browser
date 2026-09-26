@@ -2739,6 +2739,36 @@ function templateFor(model = '') {
       stop: ['<end_of_turn>', '<start_of_turn>'],
     };
   }
+  /*
+   * QWEN3 REASONS UNLESS THE TEMPLATE TELLS IT NOT TO, and reasoning eats the whole answer.
+   *
+   * All `enable_thinking=False` does in Qwen3's own chat template - the flag evaluate.py passes
+   * on every prompt it renders - is pre-fill an EMPTY reasoning block after the assistant marker,
+   * so the model writes its answer straight away. Plain ChatML leaves that block out. The first
+   * Qwen3 adapter exported this way answered the opening move of a real job with 1,406 characters
+   * of reasoning, ran out of the 320-token budget mid-thought and parsed to nothing, while its
+   * exam said 35.31%. With the block it answers the same question in 86 characters of correct
+   * JSON, and in a sixth of the time.
+   */
+  if (m.includes('qwen3')) {
+    return {
+      family: 'qwen3',
+      marker: '<|im_start|>',
+      template: [
+        '{{- if .System }}<|im_start|>system',
+        '{{ .System }}<|im_end|>',
+        '{{ end }}<|im_start|>user',
+        '{{ .Prompt }}<|im_end|>',
+        '<|im_start|>assistant',
+        '<think>',
+        '',
+        '</think>',
+        '',
+        '{{ .Response }}',
+      ].join('\n'),
+      stop: ['<|im_end|>', '<|im_start|>'],
+    };
+  }
   return {
     family: 'chatml',
     marker: '<|im_start|>',

@@ -256,7 +256,11 @@ def _unthink(text):
     """
     if not text or "<think>" not in text:
         return text
-    return THINK.sub("", text)
+    out = THINK.sub("", text)
+    # A block that never closed leaves the model's own reasoning behind, and the object scanner
+    # will read a brace out of it - scoring a sentence the model was arguing against as the call
+    # it chose. Nothing is the honest outcome, and it is what the serving parser does.
+    return "" if "<think>" in out else out
 
 
 def predicted_call(text):

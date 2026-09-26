@@ -28,9 +28,36 @@ describe('the model is served the way it was trained', () => {
     expect(t.marker).toBe('<|im_start|>');
   });
 
-  it('and Qwen3 is the same family, so nothing about serving changes', () => {
-    expect(templateFor('Qwen/Qwen3-0.6B').family).toBe('chatml');
-    expect(templateFor('Qwen/Qwen3-1.7B').template).toContain('<|im_start|>assistant');
+  /*
+   * THIS TEST USED TO SAY "nothing about serving changes" FOR QWEN3, AND IT WAS WRONG.
+   *
+   * Qwen3 uses ChatML markers, so the family looked settled. What it also does is reason before
+   * it answers, unless the template pre-fills an empty reasoning block - which is the only thing
+   * `enable_thinking=False` does, and the exam passes that flag on every prompt it renders. The
+   * first Qwen3 adapter exported on plain ChatML answered the opening move of a real job with
+   * 1,406 characters of reasoning, ran out of the 320-token budget mid-thought, and parsed to
+   * nothing, while its exam read 35.31%. With the block: 86 characters of correct JSON, six
+   * times faster.
+   */
+  it('Qwen3 is served with the empty reasoning block, so it answers instead of reasoning', () => {
+    const t = templateFor('Qwen/Qwen3-0.6B');
+    expect(t.family).toBe('qwen3');
+    expect(t.marker).toBe('<|im_start|>');
+    expect(t.stop).toEqual(['<|im_end|>', '<|im_start|>']);
+    const after = t.template.slice(t.template.indexOf('<|im_start|>assistant'));
+    expect(after).toContain('<think>');
+    expect(after.indexOf('</think>')).toBeGreaterThan(after.indexOf('<think>'));
+    expect(after.indexOf('{{ .Response }}')).toBeGreaterThan(after.indexOf('</think>'));
+    /* Nothing between the markers: an EMPTY block, not a prompt to reason inside. */
+    const open = t.template.indexOf('<think>');
+    const close = t.template.indexOf('</think>');
+    expect(t.template.slice(open + 7, close).trim()).toBe('');
+  });
+
+  it('every Qwen3 size gets it, and Qwen2.5 gets none of it', () => {
+    expect(templateFor('Qwen/Qwen3-1.7B').family).toBe('qwen3');
+    expect(templateFor('Qwen/Qwen2.5-0.5B-Instruct').family).toBe('chatml');
+    expect(templateFor('Qwen/Qwen2.5-0.5B-Instruct').template).not.toContain('<think>');
   });
 
   it('a Gemma model is served Gemma turns, never ChatML', () => {

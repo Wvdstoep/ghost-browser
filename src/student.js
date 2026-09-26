@@ -43,9 +43,33 @@ function promptFor(job, { role = 'general', tools = [], playbook = '', notes = '
   ];
 }
 
+/*
+ * A HYBRID STUDENT'S REASONING, DROPPED BEFORE ANYTHING IS READ OUT OF THE ANSWER.
+ *
+ * The second lock, and the exam has the same one (evaluate.py `_unthink`). The first lock is the
+ * served template, which tells Qwen3 not to reason at all; this catches the answer that reasons
+ * anyway, and it has to come before the brace scanner or a `{` inside the reasoning is read as
+ * the start of the call. An UNCLOSED block is left alone: that is an answer that ran out of
+ * budget mid-thought, there is nothing in it to read, and removing the marker would only turn
+ * no answer into a guess.
+ */
+const THINK = /<think>[\s\S]*?<\/think>\s*/g;
+function unthink(text) {
+  const s = String(text || '');
+  if (!s.includes('<think>')) return s;
+  const out = s.replace(THINK, '');
+  /*
+   * A BLOCK THAT NEVER CLOSED leaves nothing readable behind it. The answer was cut off
+   * mid-thought, and what remains is the model arguing with itself - which contains braces. The
+   * scanner would read `{"tool":"click"}` out of a sentence where the model was talking itself
+   * OUT of clicking, and the agent would go and click. No answer is the honest outcome.
+   */
+  return out.includes('<think>') ? '' : out;
+}
+
 /** The first complete JSON object in the text, or null. Tolerant of prose around it. */
 function firstObject(text) {
-  const s = String(text || '');
+  const s = unthink(text);
   const start = s.indexOf('{');
   if (start < 0) return null;
   let depth = 0, inStr = false, esc = false;
@@ -135,4 +159,4 @@ async function ask({ chat, host, model, messages, signal, timeoutMs = 45000 }) {
   return String((r && r.content) || '');
 }
 
-module.exports = { observedOf, promptFor, parseCall, firstObject, compare, argsAgree, similar, ask };
+module.exports = { observedOf, promptFor, parseCall, firstObject, unthink, compare, argsAgree, similar, ask };
