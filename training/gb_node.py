@@ -345,11 +345,6 @@ def export_model(body):
     script = os.path.join(HOME, "export_model.py")
     if not os.path.isfile(script):
         return {"started": False, "error": "the export script is not here"}
-    conv = os.path.join(HOME, "tools", "llama.cpp", "convert_hf_to_gguf.py")
-    if not os.path.isfile(conv):
-        setup()
-    if not os.path.isfile(conv):
-        return {"started": False, "error": "no gguf converter on this node"}
     running = EXPORT.get("proc")
     if running is not None and running.poll() is None:
         return {"started": False, "error": "an export is already running on this node"}
@@ -377,8 +372,20 @@ def export_model(body):
         say(f"export of {body.get('tag', '')} {'done' if code == 0 else f'FAILED ({code}): ' + ' | '.join(tail)[-300:]}")
 
     def start_export():
-        # THE SLOW PART, off the request. Fetching a sixty-five megabyte adapter takes longer than
-        # the hub is willing to wait for an answer, so the answer goes first and this runs after.
+        # THE SLOW PART, off the request. Building a GGUF converter and fetching a sixty-five
+        # megabyte adapter both take longer than the hub waits for an answer, so the answer goes
+        # first and all of this runs after it, reporting through `say`.
+        conv = os.path.join(HOME, "tools", "llama.cpp", "convert_hf_to_gguf.py")
+        if not os.path.isfile(conv):
+            say(f"export of {body.get('tag', '')}: building the gguf converter first")
+            try:
+                setup()
+            except Exception as e:
+                say(f"export of {body.get('tag', '')} FAILED: the converter would not build - {e}")
+                return
+        if not os.path.isfile(conv):
+            say(f"export of {body.get('tag', '')} FAILED: no gguf converter on this node")
+            return
         try:
             adapter_dir = fetch_adapter(body.get("adapter", ""))
         except Exception as e:
