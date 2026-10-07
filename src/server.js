@@ -109,6 +109,10 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 }));
 
 const pool = new BrowserPool({ logger: log });
+const leases = require('./lease');
+/* Leases are signed so one cannot be widened after the owner wrote it. The secret only has to outlive
+   the leases it signs (they expire in minutes), so a fresh one per process is fine; LEASE_SECRET pins it. */
+const LEASE_SECRET = process.env.LEASE_SECRET || require('crypto').randomBytes(32).toString('hex');
 const keys = parseKeys();
 
 /** Turn a thrown error into the answer it deserves, with the status it carried. */
@@ -862,6 +866,44 @@ app.get('/v1/sessions/:id/analyze', async (req, res) => {
       screenshot: withShot ? analysis.screenshot : null,
     });
   } catch (e) { fail(res, e); }
+});
+
+/*
+ * WRITE LEASES — what this session may change, enforced on the wire (see lease.js).
+ *
+ *   POST   /v1/sessions/:id/lease   { allow: [{method, path, body?, max?}], ttlMs?, note? }
+ *   GET    /v1/sessions/:id/lease   → the lease in force and every write attempted, allowed or not
+ *   DELETE /v1/sessions/:id/lease   → revoke; the session is read-only from the next request
+ *
+ * A session with no lease can read and cannot write, so installing the gate is what makes a lease
+ * mean anything: the first call here attaches it, and from then on every state-changing request the
+ * browser makes is checked, whatever made it.
+ */
+async function leaseGate(s) {
+  if (s.leaseGate) return s.leaseGate;
+  s.leaseGate = await leases.enforce(s.context, () => s.lease || null, { log });
+  return s.leaseGate;
+}
+app.post('/v1/sessions/:id/lease', async (req, res) => {
+  try {
+    const s = mine(req);
+    const allow = Array.isArray(req.body && req.body.allow) ? req.body.allow : [];
+    const token = leases.mint(LEASE_SECRET, { profile: s.profile || s.id, allow, ttlMs: Number(req.body && req.body.ttlMs) || undefined, note: req.body && req.body.note });
+    s.lease = leases.verify(LEASE_SECRET, token, { profile: s.profile || s.id });
+    await leaseGate(s);
+    res.json({ ok: true, expiresAt: s.lease.exp, rules: s.lease.allow.length, note: 'every state-changing request outside this lease is now refused; new service-worker registrations are blocked so a worker cannot be a way around it' });
+  } catch (e) { fail(res, e); }
+});
+app.get('/v1/sessions/:id/lease', (req, res) => {
+  try {
+    const s = mine(req);
+    const g = s.leaseGate;
+    res.json({ gated: !!g, lease: s.lease || null, allowed: g ? g.allowed.length : 0, blocked: g ? g.blocked.slice(-50) : [] });
+  } catch (e) { fail(res, e); }
+});
+app.delete('/v1/sessions/:id/lease', async (req, res) => {
+  try { const s = mine(req); s.lease = null; await leaseGate(s); res.json({ ok: true, revoked: true }); }
+  catch (e) { fail(res, e); }
 });
 
 app.post('/v1/sessions/:id/click', async (req, res) => {
