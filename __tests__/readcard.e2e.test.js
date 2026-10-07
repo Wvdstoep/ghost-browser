@@ -19,66 +19,15 @@
  * Skips (not fails) with no launchable Chromium. GB_CHROMIUM=/path/to/chrome points it at one.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import http from 'http';
 import { makeRecorder } from '../src/recorder.js';
 import { attachRecorder } from '../src/pool.js';
 import { attemptRead, IN_PAGE_FETCH } from '../src/replay.js';
 import { planFor } from '../src/routecards.js';
 import { due, shadowCheck } from '../src/cardshadow.js';
+import { makeBookSite } from '../testbed/booksite.js';
 
 let chromium = null;
 try { ({ chromium } = await import('playwright')); } catch { /* skip below */ }
-
-const BOOKS = [
-  ['The Ghost in the Browser', 'A. Rivera'], ['Ghost Writers of the Web', 'B. Okafor'], ['Headless Ghosts', 'C. Lindqvist'],
-  ['Browser Wars, a history', 'D. Mehta'], ['The Browser Who Knew Too Much', 'E. Tanaka'], ['A Browser of One\'s Own', 'F. Haddad'],
-  ['Cookies and Other Sessions', 'G. Novak'], ['Ghost Town', 'H. Berg'],
-];
-let field = 'title';             // the drift test flips this to 'name'
-let apiVersion = 'v1';           // the shadow test moves the page to v2 and leaves v1 answering with stale rows
-const hits = { search: 0, suggest: 0, telemetry: 0 };
-
-function fixtureServer() {
-  return http.createServer((req, res) => {
-    const u = new URL(req.url, 'http://x');
-    const json = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
-    if (u.pathname === '/') {
-      res.setHeader('content-type', 'text/html');
-      return res.end(`<!doctype html><html><body>
-        <input id="q" placeholder="search books">
-        <ul id="results"></ul>
-        <script>
-          const q = document.getElementById('q'), ul = document.getElementById('results');
-          let t;
-          q.addEventListener('input', () => {
-            clearTimeout(t);
-            t = setTimeout(async () => {
-              const v = q.value;
-              fetch('/api/suggest?q=' + encodeURIComponent(v)).catch(() => {});
-              fetch('/api/telemetry', { method: 'POST', body: JSON.stringify({ e: 'typed' }) }).catch(() => {});
-              await new Promise((r) => setTimeout(r, 350));            // a real page is never instant
-              const r = await fetch('/api/' + API + 'search?query=' + encodeURIComponent(v) + '&hitsPerPage=20&tags=book');
-              const j = await r.json();
-              ul.innerHTML = j.hits.map((h) => '<li class="hit"><a class="t">' + h[FIELD] + '</a> <span class="by">' + h.author + '</span></li>').join('');
-            }, 150);
-          });
-        </script></body></html>`.replace('FIELD', JSON.stringify(field)).replace('API', JSON.stringify(apiVersion === 'v1' ? '' : 'v2/')));
-    }
-    if (u.pathname === '/api/search' || u.pathname === '/api/v2/search') {
-      hits.search++;
-      const stale = u.pathname === '/api/search' && apiVersion === 'v2';       // v1 still answers 200, same shape, STALE data
-      const q = (u.searchParams.get('query') || '').toLowerCase();
-      return json({ nbHits: 0, hits: BOOKS.filter(([t]) => t.toLowerCase().includes(q)).map(([t, a], i) => ({ objectID: 'b' + i, [field]: t, author: stale ? 'unknown' : a })) });
-    }
-    if (u.pathname === '/api/suggest') {      // a decoy: also JSON, also contains matching titles — but only the first three
-      hits.suggest++;
-      const q = (u.searchParams.get('q') || '').toLowerCase();
-      return json({ suggestions: BOOKS.filter(([t]) => t.toLowerCase().includes(q)).slice(0, 3).map(([t]) => ({ text: t })) });
-    }
-    if (u.pathname === '/api/telemetry') { hits.telemetry++; res.statusCode = 204; return res.end(); }
-    res.statusCode = 404; res.end('no');
-  });
-}
 
 let browser = null;
 if (chromium) {
@@ -91,7 +40,7 @@ if (chromium) {
 }
 
 describe.skipIf(!browser)('a read card, replayed, against the UI walk as baseline', () => {
-  let server; let base; let context; let page; let session; const log = { info() {}, warn() {} };
+  let site; let base; let context; let page; let session; const log = { info() {}, warn() {} };
   const requestsSeen = [];
 
   /** The UI WALK, exactly what an agent does: type, wait for the page to settle, read the screen. */
@@ -108,9 +57,8 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
   }
 
   beforeAll(async () => {
-    server = fixtureServer();
-    await new Promise((r) => server.listen(0, r));
-    base = `http://127.0.0.1:${server.address().port}`;
+    site = makeBookSite();
+    base = await site.listen();
     context = await browser.newContext();
     page = await context.newPage();
     session = {};
@@ -118,7 +66,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
     context.on('request', (r) => requestsSeen.push(r.url()));
     await page.goto(base + '/');
   }, 60000);
-  afterAll(async () => { if (browser) await browser.close(); if (server) await new Promise((r) => server.close(r)); });
+  afterAll(async () => { if (browser) await browser.close(); if (site) await site.close(); });
 
   const inPage = (r) => page.evaluate(IN_PAGE_FETCH, r);
   const ensure = async (o) => { if (!page.url().startsWith(o)) await page.goto(o + '/'); };
@@ -162,7 +110,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
   }, 30000);
 
   it('5 drift: a renamed field answers 200 but is REFUSED, quarantined, re-learned by the UI, and replays again', async () => {
-    field = 'name';                                                         // the site changes shape under the card
+    site.mode.field = 'name';                                                         // the site changes shape under the card
     const bad = await attemptRead({ card, values: { query: 'ghost' }, runInPage: inPage, ensureOrigin: ensure, now: 4 });
     expect(bad.status).toBe(200);                                          // the API is up and happy…
     expect(bad.done).toBe(false);                                          // …and the card still refuses its answer
@@ -184,7 +132,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
   }, 45000);
 
   it('6 SHADOW: a card that still answers 200 with the right shape but stale data is caught by comparing with the UI, before any job trusts it', async () => {
-    apiVersion = 'v1'; field = 'title';
+    site.mode.apiVersion = 'v1'; site.mode.field = 'title';
     await page.goto(base + '/');
     session.recorder.armRead({ intent: 'books.search', origin: base });
     const ui0 = await uiWalk('ghost');
@@ -198,7 +146,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
     expect(agree.card.shadow.agree).toBe(1);
     expect(due(agree.card, 21 * 3600e3).due).toBe(false);                   // trust buys a longer gap
 
-    apiVersion = 'v2';                                                       // the site moves on; v1 goes stale but stays up
+    site.mode.apiVersion = 'v2';                                                       // the site moves on; v1 goes stale but stays up
     await page.goto(base + '/');
     // WITHOUT a shadow check the card still passes its own steady-state test: right shape, status 200
     const blind = await attemptRead({ card: agree.card, values: { query: 'ghost' }, runInPage: inPage, ensureOrigin: ensure, now: 30 * 3600e3 });
@@ -211,7 +159,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
     expect(caught.diff.missing).toBeGreaterThan(0);
     expect(planFor(caught.card).mode).toBe('ui');                            // the next job walks the UI and re-learns
     expect(due(caught.card, 41 * 3600e3).due).toBe(false);                   // quarantined cards are not shadowed, they are re-learned
-    apiVersion = 'v1';
+    site.mode.apiVersion = 'v1';
   }, 60000);
 
   it('a card never stores a value it did not need: no cookie or token text in the card', () => {
