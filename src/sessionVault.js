@@ -85,7 +85,9 @@ const fileFor = (profile) => path.join(PROFILE_DIR, String(profile || ''), FILE)
 function save(profile, cookies, opts = {}) {
   const log = opts.log || null;
   if (!profile) return { saved: false, why: 'no profile' };
-  const keep = live(cookies);
+  /* A device-bound site's cookie is dead within minutes and only its device can refresh it: saving it
+     stores material that is worth nothing and would "restore" a signed-out state. See boundSessions. */
+  const keep = live(opts.withoutBound ? opts.withoutBound(cookies) : require('./boundSessions').withoutBound(cookies));
   if (!worthSaving(keep)) {
     /* The important refusal. Overwriting here would destroy the only copy of a real login. */
     return { saved: false, why: 'the jar holds no session, so the existing snapshot is left alone' };
@@ -123,7 +125,7 @@ function planRestore(jarNow, snapshot, now = Date.now() / 1000) {
     return { restore: [], why: 'no snapshot on disk' };
   }
   const already = new Set(sessionHosts(jarNow));
-  const usable = live(snapshot.cookies, now);
+  const usable = live(require('./boundSessions').withoutBound(snapshot.cookies), now);
   const hosts = sessionHosts(usable);
   /* Only put back sessions the live jar is MISSING: never stomp a session the browser already has,
      which could be a newer login than the snapshot. */

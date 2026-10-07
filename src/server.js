@@ -6592,7 +6592,10 @@ async function ringGate({ goal, owner }) {
     const prof = sites.profileNameFor ? (f.profile || f.key) : (f.profile || f.key);
     let dev = null;
     try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
-    const why = reason === 'signed-out'
+    const why = reason === 'bound'
+      ? `${f.label} ties its session to the device that signed in, so a copied login does not work here`
+        + (dev ? `. It runs on ${dev.name}, which holds the key.` : `. Connect the device that signed in — the session cannot be moved.`)
+      : reason === 'signed-out'
       ? `${f.label} needs a signed-in session and the "${prof}" profile here is signed out`
         + (dev ? `. ${dev.name} holds that login — run it there, or sign in on this profile.`
           : `. Sign in on the "${prof}" profile in Ghost Browser, or connect the device that holds it.`)

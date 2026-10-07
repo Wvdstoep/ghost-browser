@@ -24,6 +24,7 @@ import { makeRecorder } from '../src/recorder.js';
 import { attachRecorder } from '../src/pool.js';
 import { attemptRead, IN_PAGE_FETCH } from '../src/replay.js';
 import { planFor } from '../src/routecards.js';
+import { due, shadowCheck } from '../src/cardshadow.js';
 
 let chromium = null;
 try { ({ chromium } = await import('playwright')); } catch { /* skip below */ }
@@ -34,6 +35,7 @@ const BOOKS = [
   ['Cookies and Other Sessions', 'G. Novak'], ['Ghost Town', 'H. Berg'],
 ];
 let field = 'title';             // the drift test flips this to 'name'
+let apiVersion = 'v1';           // the shadow test moves the page to v2 and leaves v1 answering with stale rows
 const hits = { search: 0, suggest: 0, telemetry: 0 };
 
 function fixtureServer() {
@@ -55,17 +57,18 @@ function fixtureServer() {
               fetch('/api/suggest?q=' + encodeURIComponent(v)).catch(() => {});
               fetch('/api/telemetry', { method: 'POST', body: JSON.stringify({ e: 'typed' }) }).catch(() => {});
               await new Promise((r) => setTimeout(r, 350));            // a real page is never instant
-              const r = await fetch('/api/search?query=' + encodeURIComponent(v) + '&hitsPerPage=20&tags=book');
+              const r = await fetch('/api/' + API + 'search?query=' + encodeURIComponent(v) + '&hitsPerPage=20&tags=book');
               const j = await r.json();
               ul.innerHTML = j.hits.map((h) => '<li class="hit"><a class="t">' + h[FIELD] + '</a> <span class="by">' + h.author + '</span></li>').join('');
             }, 150);
           });
-        </script></body></html>`.replace('FIELD', JSON.stringify(field)));
+        </script></body></html>`.replace('FIELD', JSON.stringify(field)).replace('API', JSON.stringify(apiVersion === 'v1' ? '' : 'v2/')));
     }
-    if (u.pathname === '/api/search') {
+    if (u.pathname === '/api/search' || u.pathname === '/api/v2/search') {
       hits.search++;
+      const stale = u.pathname === '/api/search' && apiVersion === 'v2';       // v1 still answers 200, same shape, STALE data
       const q = (u.searchParams.get('query') || '').toLowerCase();
-      return json({ nbHits: 0, hits: BOOKS.filter(([t]) => t.toLowerCase().includes(q)).map(([t, a], i) => ({ objectID: 'b' + i, [field]: t, author: a })) });
+      return json({ nbHits: 0, hits: BOOKS.filter(([t]) => t.toLowerCase().includes(q)).map(([t, a], i) => ({ objectID: 'b' + i, [field]: t, author: stale ? 'unknown' : a })) });
     }
     if (u.pathname === '/api/suggest') {      // a decoy: also JSON, also contains matching titles — but only the first three
       hits.suggest++;
@@ -96,7 +99,7 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
     const before = requestsSeen.length; const t0 = Date.now();
     await page.fill('#q', '');
     await page.waitForTimeout(450);                    // let the cleared box's own search finish first
-    const answered = page.waitForResponse((r) => r.url().includes('/api/search') && r.url().includes('query=' + encodeURIComponent(query)));
+    const answered = page.waitForResponse((r) => /search\?query=/.test(r.url()) && r.url().includes('query=' + encodeURIComponent(query)));
     await page.fill('#q', query);
     await answered;                                    // the walk waits for the page's OWN answer, not for rows to merely exist
     await page.waitForTimeout(200);                    // …then lets the page paint it
@@ -179,6 +182,37 @@ describe.skipIf(!browser)('a read card, replayed, against the UI walk as baselin
     expect(fresh.done).toBe(true);
     expect(fresh.rows.length).toBe(4);
   }, 45000);
+
+  it('6 SHADOW: a card that still answers 200 with the right shape but stale data is caught by comparing with the UI, before any job trusts it', async () => {
+    apiVersion = 'v1'; field = 'title';
+    await page.goto(base + '/');
+    session.recorder.armRead({ intent: 'books.search', origin: base });
+    const ui0 = await uiWalk('ghost');
+    let good = session.recorder.finishRead({ uiRows: ui0.rows, inputs: { query: 'ghost' }, now: 10 }).card;
+    good = (await attemptRead({ card: good, values: { query: 'ghost' }, runInPage: inPage, ensureOrigin: ensure, baseline: ui0.rows, now: 11 })).card;
+    expect(due(good, 12).due).toBe(true);                                   // never shadowed
+    const walk = async (v) => (await uiWalk(v.query)).rows;
+
+    const agree = await shadowCheck({ card: good, values: { query: 'browser' }, uiWalk: walk, runInPage: inPage, ensureOrigin: ensure, now: 20 * 3600e3 });
+    expect(agree.verdict).toBe('agree');
+    expect(agree.card.shadow.agree).toBe(1);
+    expect(due(agree.card, 21 * 3600e3).due).toBe(false);                   // trust buys a longer gap
+
+    apiVersion = 'v2';                                                       // the site moves on; v1 goes stale but stays up
+    await page.goto(base + '/');
+    // WITHOUT a shadow check the card still passes its own steady-state test: right shape, status 200
+    const blind = await attemptRead({ card: agree.card, values: { query: 'ghost' }, runInPage: inPage, ensureOrigin: ensure, now: 30 * 3600e3 });
+    expect(blind.done).toBe(true);                                           // …which is exactly the silent failure
+    expect(blind.rows.every((r) => r.by === 'unknown')).toBe(true);          // and the data is wrong
+
+    const caught = await shadowCheck({ card: agree.card, values: { query: 'ghost' }, uiWalk: walk, runInPage: inPage, ensureOrigin: ensure, now: 40 * 3600e3 });
+    expect(caught.verdict).toBe('drift');
+    expect(caught.card.quarantined).toBe(true);
+    expect(caught.diff.missing).toBeGreaterThan(0);
+    expect(planFor(caught.card).mode).toBe('ui');                            // the next job walks the UI and re-learns
+    expect(due(caught.card, 41 * 3600e3).due).toBe(false);                   // quarantined cards are not shadowed, they are re-learned
+    apiVersion = 'v1';
+  }, 60000);
 
   it('a card never stores a value it did not need: no cookie or token text in the card', () => {
     expect(JSON.stringify(card)).not.toMatch(/cookie|bearer|set-cookie/i);

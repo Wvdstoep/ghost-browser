@@ -655,6 +655,7 @@ class BrowserPool {
       // scoped (see diagnostics.js: the tool is QA's alone).
       diag.attach(page, session, this.log);
       attachRecorder(persistent, session, makeRecorder, this.log);
+      require('./boundSessions').watch(persistent, { log: this.log });
       this.sessions.set(id, session);
       mine.add(id);
       this.perOwner.set(owner, mine);
@@ -680,6 +681,7 @@ class BrowserPool {
     followPopups(context, session, this.log);
     diag.attach(page, session, this.log);   // the ephemeral path needs it too — QA runs here
     attachRecorder(context, session, makeRecorder, this.log);
+    require('./boundSessions').watch(context, { log: this.log });
     this.sessions.set(id, session);
     mine.add(id);
     this.perOwner.set(owner, mine);
