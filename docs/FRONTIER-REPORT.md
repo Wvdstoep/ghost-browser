@@ -2,6 +2,28 @@
 
 Date: 2026-10-07. Method: repo read (see earlier audit) + web searches. "Not found" below means *I did not find it in a handful of searches*, not that it does not exist. Treat every "open" item as a hypothesis to check before building.
 
+## Status (2026-10-07, after the build session)
+
+Built, pushed and tested end to end in a real Chromium. "Simulated" says what stood in for hardware.
+
+| Idea | Where | Tested how | Simulated / not covered |
+|---|---|---|---|
+| Read cards, verified against the UI walk | `src/readcards.js`, `readcardRoutes.js`, `/v1/sessions/:id/readcard/*` | Real Chromium: baseline UI walk vs card replay, decoy endpoint, renamed field refused, re-learn; mutation-checked | Run on a **local fixture**, not a live site (this sandbox's network blocks public hosts). **Not wired into the agent loop or workflow engine**; usable via HTTP and MCP |
+| Shadow verification | `src/cardshadow.js` | A card that answers 200 with the right shape but stale data passes its own check and is caught by the shadow check | Fixture API versioning stands in for a real site change |
+| Wire-level write gate | `src/lease.js`, `/v1/sessions/:id/lease` | Obeyed prompt injection, form/beacon/XHR against a cookie-only endpoint, scoped lease with use limits, mid-session revoke, expiry; mutation-checked | Does not see GET side effects or WebSocket frames; a service worker already controlling a page keeps doing so until reload. **Taint tracking was not built** |
+| Passkey answered by the owner's device | `src/authrelay.js`, `src/ringauth.js`, `scripts/ring-node-ref.js` | Page → relay → real device hub → node → real WebAuthn verification by the site; decline, timeout and no-device all fail safe | The "device" is a software authenticator. **No phone/laptop app implements the contract yet** (`POST /v1/webauthn`, feature `webauthn`); the mobile/desktop apps were not touched |
+| Device-bound sessions | `src/boundSessions.js`, `sessionVault.js` | Header announcement detected, host routed to the device ring, vault stops saving/restoring its cookies; a copied jar dies at its TTL while the original browser keeps its session | Binding key is WebCrypto in the page, not a TPM. Header names follow the DBSC proposal and were **not** checked against a live deployment |
+| MCP server | `src/mcp.js`, `POST /mcp` | Protocol core, stdio against a stand-in, `/mcp` on the real server (a real browser session refused an IPv6-mapped metadata address through MCP) | Not tried with a real MCP client app |
+| WebMCP | `src/webmcp.js` | Tools registered via `navigator.modelContext` and `document.modelContext` found and called; a writing tool is blocked by the lease | The spec is moving and this Chromium has no native implementation, so only the capture path was exercised |
+| Walls benchmark | `scripts/walls-bench.js`, `docs/WALLS-BENCH.md` | Runs in CI | "Naive" is a stand-in; no comparison with other products |
+| SSRF fix | `src/guard.js` | 40 tests, every IPv6 spelling that used to bypass it | none |
+
+Not done: encrypting the cookie vault and TOTP secrets at rest; removing query-string tokens; splitting
+`server.js`; the live no-login run (needs the host allowed); real-hardware tests of passkeys and DBSC.
+
+Correction: I earlier suggested `shadow.js` hinted at card shadow-verification. It is the model-training
+ledger and unrelated; `src/cardshadow.js` is new.
+
 ## 0. Correction to my first audit
 
 I called route cards (learn a site's internal API from its own traffic, replay in the logged-in session) a rare idea. It is not. It is now a crowded category:

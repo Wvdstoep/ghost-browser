@@ -953,6 +953,9 @@ app.get('/v1/sessions/:id/passkey-relay', (req, res) => {
   catch (e) { fail(res, e); }
 });
 
+/* Read cards over the session API (readcardRoutes.js): arm, learn from a UI walk, replay, shadow. */
+require('./readcardRoutes').mountReadCardRoutes(app, { mine, store: agent.cardStore, fail, log, authed });
+
 async function leaseGate(s) {
   if (s.leaseGate) return s.leaseGate;
   s.leaseGate = await leases.enforce(s.context, () => s.lease || null, { log });

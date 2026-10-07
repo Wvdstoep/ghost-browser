@@ -108,6 +108,27 @@ That's why it survives redesigns where selectors don't: a numbered screenshot is
 
 ---
 
+## Behind the login: second factors, passkeys, injected pages
+
+What it does about the walls between an agent and a logged-in page (all tested in a real browser against
+self-hosted test sites; see [docs/WALLS-BENCH.md](docs/WALLS-BENCH.md) for what is real and what is simulated):
+
+- **Second factor.** The agent can hold an authenticator secret and produce the current code.
+- **Passkeys, answered by your own device.** A passkey prompt on a page the cluster drives is relayed over the
+  device ring to a node you own; you approve there, only the signed assertion comes back, and the cluster never
+  holds a key. No device online, a timeout or a decline all fail like a dismissed prompt. Wire contract:
+  [`src/ringauth.js`](src/ringauth.js); a reference node is [`scripts/ring-node-ref.js`](scripts/ring-node-ref.js).
+  *No phone or laptop app implements it yet.*
+- **Sessions that will not travel.** A site that binds its session to the device that signed in is noticed from
+  its own announcement, routed to the device that holds the login, and its cookies are never copied by the vault.
+- **A write gate on the wire.** `POST /v1/sessions/:id/lease` says what a session may *change*; every other
+  state-changing request is refused at the network layer, whatever made it, so a page that talks the agent into
+  sending something cannot. No lease means read-only.
+- **Read cards.** The page's own data request is learned from a UI walk, proven against it, replayed in one
+  request, and periodically re-checked against the UI so a card that goes stale while still answering 200 is retired.
+- **MCP and WebMCP.** `node src/mcp.js` (stdio) or `POST /mcp` exposes it to any MCP client; pages that register
+  WebMCP tools are listed and callable, under the same lease.
+
 ## Under the hood
 
 <details>
