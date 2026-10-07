@@ -235,6 +235,12 @@ async function down() {
 
 /** Where a profile should point its proxy to use the tailnet. */
 const socksUrl = () => SOCKS_URL;
-const proxyUrl = () => PROXY_URL;
+/* The browser proxy only while the tailnet daemon is actually up. Handing out the shim's address
+   when tailscaled is not running sent every login with the default 'route through the tailnet' to a
+   proxy that does not exist: Chrome showed 'No internet' / ERR_PROXY_CONNECTION_FAILED on a fresh
+   install that never connected Tailscale (live 2026-10-07). Unset now falls back to a direct
+   connection (the header already says 'tailnet down'), and a login set to 'tailscale' gets the
+   explicit refusal in profiles.launchProxy instead of a dead browser. */
+const proxyUrl = () => (fs.existsSync(SOCK) ? PROXY_URL : null);
 
 module.exports = { installed, startDaemon, status, up, setExitNode, down, socksUrl, proxyUrl, resumeIfConfigured, STATE_DIR, SOCKS_URL };
