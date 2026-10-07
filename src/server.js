@@ -110,6 +110,10 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 
 const pool = new BrowserPool({ logger: log });
 const leases = require('./lease');
+const webmcp = require('./webmcp');
+const mcp = require('./mcp');
+const authrelay = require('./authrelay');
+const ringauth = require('./ringauth');
 /* Leases are signed so one cannot be widened after the owner wrote it. The secret only has to outlive
    the leases it signs (they expire in minutes), so a fresh one per process is fine; LEASE_SECRET pins it. */
 const LEASE_SECRET = process.env.LEASE_SECRET || require('crypto').randomBytes(32).toString('hex');
@@ -879,6 +883,76 @@ app.get('/v1/sessions/:id/analyze', async (req, res) => {
  * mean anything: the first call here attaches it, and from then on every state-changing request the
  * browser makes is checked, whatever made it.
  */
+/*
+ * WEBMCP — the tools a page registers for agents (see webmcp.js). The capture is installed on every
+ * session's context when it is first asked for, so a page that registers tools after load is still
+ * heard; a page loaded BEFORE the first ask is reloaded once so its scripts run under the capture.
+ */
+async function webmcpReady(s) {
+  if (s.webmcp) return;
+  s.webmcp = true;
+  await webmcp.attach(s.context);
+  try { await s.page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }); } catch { /* a page mid-navigation reloads itself */ }
+}
+app.get('/v1/sessions/:id/webmcp', async (req, res) => {
+  try { const s = mine(req); await webmcpReady(s); res.json({ url: s.page.url(), tools: await webmcp.list(s.page) }); }
+  catch (e) { fail(res, e); }
+});
+app.post('/v1/sessions/:id/webmcp/call', async (req, res) => {
+  try {
+    const s = mine(req); await webmcpReady(s);
+    const r = await webmcp.call(s.page, String(req.body && req.body.name || ''), (req.body && req.body.args) || {});
+    res.status(r.ok ? 200 : 422).json(r.ok ? r : { error: r.error });
+  } catch (e) { fail(res, e); }
+});
+
+/* MCP over HTTP: one JSON-RPC message (or a batch) per POST, authenticated like every /v1 call. The
+   tools call this same server's HTTP API with the caller's own key, so MCP can do nothing /v1 cannot. */
+app.post('/mcp', authed, async (req, res) => {
+  const auth = req.get('authorization') || ('Bearer ' + (req.get('x-api-key') || ''));
+  const call = async ({ method, path: p, body, query }) => {
+    const u = new URL(`http://127.0.0.1:${PORT}${p}`);
+    for (const [k, v] of Object.entries(query || {})) u.searchParams.set(k, v);
+    const r = await fetch(u, { method, headers: { authorization: auth, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    let json = null; try { json = await r.json(); } catch { /* empty */ }
+    return { status: r.status, json };
+  };
+  const msgs = Array.isArray(req.body) ? req.body : [req.body];
+  const out = (await Promise.all(msgs.map((m) => mcp.handle(m, call)))).filter(Boolean);
+  if (!out.length) return res.status(202).end();
+  res.json(Array.isArray(req.body) ? out : out[0]);
+});
+
+/*
+ * PASSKEY PROMPTS ANSWERED BY THE OWNER'S DEVICE (see authrelay.js, ringauth.js).
+ *
+ *   POST   /v1/sessions/:id/passkey-relay   { deviceId? }   route this session's WebAuthn prompts to a device
+ *   GET    /v1/sessions/:id/passkey-relay                    who answers, and every prompt asked so far
+ *
+ * The cluster never holds a key: the device approves and signs, only the assertion returns. With no
+ * device online the prompt fails like a dismissed one. Replaces the blanket refusal for this session.
+ */
+app.post('/v1/sessions/:id/passkey-relay', async (req, res) => {
+  try {
+    const s = mine(req);
+    const want = req.body && req.body.deviceId ? String(req.body.deviceId) : null;
+    if (!s.relay) {
+      const state = { deviceId: want };
+      const ask = ringauth.makeAsk(deviceHub, { owner: req.client.owner, target: () => state.deviceId, log });
+      const handle = await authrelay.installRelay(s.context, ask, { log });
+      s.relay = { state, audit: handle.audit };
+    } else s.relay.state.deviceId = want;
+    const online = ringauth.candidates(deviceHub, req.client.owner).map((d) => ({ deviceId: d.deviceId, name: d.name }));
+    res.json({ ok: true, answeredBy: want || 'the best online device at the moment of each prompt', devicesOnline: online,
+      note: online.length ? 'prompts on pages loaded from now on are answered by the device; reload a page that is already waiting on one'
+        : 'no device that can answer passkey prompts is online: a prompt will fail like a dismissed one until one connects' });
+  } catch (e) { fail(res, e); }
+});
+app.get('/v1/sessions/:id/passkey-relay', (req, res) => {
+  try { const s = mine(req); res.json({ active: !!s.relay, deviceId: s.relay ? s.relay.state.deviceId : null, prompts: s.relay ? s.relay.audit.slice(-50) : [] }); }
+  catch (e) { fail(res, e); }
+});
+
 async function leaseGate(s) {
   if (s.leaseGate) return s.leaseGate;
   s.leaseGate = await leases.enforce(s.context, () => s.lease || null, { log });
