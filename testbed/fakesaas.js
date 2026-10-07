@@ -46,7 +46,7 @@ function makeFakeSaas({ mfa = 'totp', bound = false, boundTtlMs = 2000, rpId = '
 
   const rand = () => crypto.randomBytes(18).toString('base64url');
   const cookies = (req) => Object.fromEntries(String(req.headers.cookie || '').split(/;\s*/).filter(Boolean).map((c) => { const i = c.indexOf('='); return [c.slice(0, i), decodeURIComponent(c.slice(i + 1))]; }));
-  const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } }); });
+  const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { try { r(Object.fromEntries(new URLSearchParams(b))); } catch { r({}); } } }); });
   const json = (res, code, o, headers = {}) => { res.writeHead(code, { 'content-type': 'application/json', ...headers }); res.end(JSON.stringify(o)); };
 
   function startSession(res, { boundKey = null } = {}) {
@@ -222,6 +222,14 @@ function makeFakeSaas({ mfa = 'totp', bound = false, boundTtlMs = 2000, rpId = '
         const b = await readBody(req);
         state.sent.push({ to: b.to, body: b.body });
         return json(res, 200, { ok: true, id: state.sent.length });
+      }
+      // a legacy endpoint authenticated by the cookie alone, no CSRF token: the kind real sites still have,
+      // and exactly what an injected page can hit with a beacon, an XHR or a plain form post
+      if (req.method === 'POST' && p === '/legacy/send') {
+        if (!s || s.expired) return json(res, 401, { error: 'sign in' });
+        const b = await readBody(req);
+        state.sent.push({ to: b.to, body: b.body || '', via: 'legacy' });
+        return json(res, 200, { ok: true });
       }
       res.statusCode = 404; res.end('no');
     } catch (e) { res.statusCode = 500; res.end(String(e && e.message || e)); }
