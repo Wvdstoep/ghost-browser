@@ -247,10 +247,21 @@ function attachRecorder(context, session, makeRecorder, log = console) {
     if (!session.recorder.armed) return;   // the cheap common case: nothing to do
     try {
       session.recorder.observe({
-        method: req.method(), url: req.url(),
+        method: req.method(), url: req.url(), resourceType: req.resourceType(),
         headers: req.headers(), postData: req.postData() || '',
       });
     } catch { /* a request we cannot read is not worth failing a walk over */ }
+  });
+  /* A READ walk also needs the answers, to find which request holds the rows the UI showed. Only JSON,
+     only while armed to read, and a body that cannot be read is simply not a candidate. */
+  context.on('response', async (res) => {
+    if (!session.recorder.armedRead) return;
+    try {
+      const rt = res.request().resourceType();
+      if (rt !== 'xhr' && rt !== 'fetch') return;
+      if (!/json/i.test(res.headers()['content-type'] || '')) return;
+      session.recorder.observeResponse({ method: res.request().method(), url: res.url(), status: res.status(), body: await res.text() });
+    } catch { /* a response we cannot read is not worth failing a walk over */ }
   });
 }
 
@@ -644,6 +655,7 @@ class BrowserPool {
       // scoped (see diagnostics.js: the tool is QA's alone).
       diag.attach(page, session, this.log);
       attachRecorder(persistent, session, makeRecorder, this.log);
+      require('./boundSessions').watch(persistent, { log: this.log });
       this.sessions.set(id, session);
       mine.add(id);
       this.perOwner.set(owner, mine);
@@ -669,6 +681,7 @@ class BrowserPool {
     followPopups(context, session, this.log);
     diag.attach(page, session, this.log);   // the ephemeral path needs it too — QA runs here
     attachRecorder(context, session, makeRecorder, this.log);
+    require('./boundSessions').watch(context, { log: this.log });
     this.sessions.set(id, session);
     mine.add(id);
     this.perOwner.set(owner, mine);
@@ -1016,4 +1029,4 @@ class BrowserPool {
   }
 }
 
-module.exports = { BrowserPool, refusePasskeys, followPopups, presentAs, PLATFORMS, passkeyRefusalScript, LIMITS, memoryLimitBytes, memoryUsedBytes, stealthChromium, CHROME_ARGS };
+module.exports = { BrowserPool, attachRecorder, refusePasskeys, followPopups, presentAs, PLATFORMS, passkeyRefusalScript, LIMITS, memoryLimitBytes, memoryUsedBytes, stealthChromium, CHROME_ARGS };

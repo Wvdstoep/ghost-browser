@@ -19,6 +19,7 @@
  */
 
 const { buildReplay, afterReplay } = require('./routecards');
+const readcards = require('./readcards');
 
 /**
  * Attempt one replay of `card` with `values` (the payload slots the caller supplies — e.g. the new
@@ -105,10 +106,46 @@ const IN_PAGE_FETCH = async (r) => {
   try {
     const resp = await fetch(r.url, { method: r.method, headers, body, credentials: 'include' });
     let text = ''; try { text = await resp.text(); } catch (e) { /* a body we cannot read is fine; the status is the verdict */ }
-    return { status: resp.status, ok: resp.ok, text: String(text).slice(0, 300) };
+    return { status: resp.status, ok: resp.ok, text: String(text).slice(0, r.returnBody ? 1500000 : 300) };
   } catch (e) {
     return { status: 0, ok: false, error: String((e && e.message) || e) };
   }
 };
 
-module.exports = { attemptReplay, IN_PAGE_FETCH };
+/**
+ * Replay a READ card: one in-page GET with the slots filled, judged by readcards.judgeRead.
+ *
+ * With `baseline` (the rows a UI walk just read for the same inputs) the replayed rows must equal it,
+ * which is how a freshly learned card earns trust without anything being re-fired. Without one, the
+ * answer must still have the card's shape. Either failure quarantines the card on the spot and sends
+ * the caller to the UI, same as a failed write replay.
+ *
+ *   { done, healed, card, rows, status, reason, cmp }
+ */
+async function attemptRead({ card, values = {}, runInPage, ensureOrigin = null, baseline = null, now = 0 }) {
+  const replay = readcards.buildReadReplay(card, values);
+  if (!replay) {
+    return { done: false, healed: false, card, rows: null, status: null,
+      reason: 'the read card cannot be rebuilt from the values at hand — walking the UI' };
+  }
+  if (ensureOrigin) {
+    try { await ensureOrigin(card.origin); }
+    catch (e) {
+      return { done: false, healed: false, card, rows: null, status: null,
+        reason: `could not reach ${card.origin} to replay (${e && e.message || e}) — walking the UI` };
+    }
+  }
+  let result;
+  try { result = await runInPage(replay); }
+  catch (e) { result = { status: 0, ok: false, error: String((e && e.message) || e), text: '' }; }
+  const status = result && typeof result.status === 'number' ? result.status : 0;
+  const verdict = readcards.judgeRead(card, { status, text: (result && result.text) || '' }, baseline);
+  const outcome = afterReplay(card, { ok: verdict.ok, now });
+  return verdict.ok
+    ? { done: true, healed: false, card: outcome.card, rows: verdict.rows, status, cmp: verdict.cmp || null,
+        reason: `replayed the read card — ${verdict.why}` }
+    : { done: false, healed: true, card: outcome.card, rows: verdict.rows || null, status, cmp: verdict.cmp || null,
+        reason: `read replay did not verify (${verdict.why}) — card quarantined, walking the UI to re-record` };
+}
+
+module.exports = { attemptReplay, attemptRead, IN_PAGE_FETCH };
