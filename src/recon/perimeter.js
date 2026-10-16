@@ -373,7 +373,7 @@ function correlatePerimeterCves(host, headers = {}, openPorts = []) {
       component: 'Express.js / qs Parser',
       version: '< 4.18.2',
       severity: 'HIGH',
-      cvss = 7.5,
+      cvss: 7.5,
       title: 'Express qs Query String Prototype Pollution Vulnerability',
       description: 'Unsanitized bracket parameter parsing in the qs query parser allows attackers to inject Object.prototype attributes, triggering DoS or authorization bypass.',
       source: 'NVD National Vulnerability Database',
