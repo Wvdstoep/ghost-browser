@@ -38,8 +38,8 @@ data class AssistantTask(val title: String, val done: Boolean, val note: String)
 data class AssistantLive(val jobId: String, val status: String, val iterations: Int, val tasks: List<AssistantTask>, val steps: List<AssistantStep>, val startedAt: Long,
                          val backdrop: String = "",          // a live frame of the browser the agent works in (data: url), while the turn runs
                          val backdropProfile: String = "")
-data class AssistantChatView(val id: String, val title: String, val turns: List<AssistantTurn>, val live: AssistantLive?)
-data class ChatSummary(val id: String, val title: String, val updatedAt: Long, val turns: Int, val running: Boolean)
+data class AssistantChatView(val id: String, val title: String, val turns: List<AssistantTurn>, val live: AssistantLive?, val agentType: String = "browser")
+data class ChatSummary(val id: String, val title: String, val updatedAt: Long, val turns: Int, val running: Boolean, val agentType: String = "browser")
 
 /** A person the watchers see you talk with (people memory): the leads view shows the ones worth your words. */
 data class PersonInfo(val name: String, val platform: String, val worth: Int, val lead: Boolean, val repliedBack: Int, val exchanges: Int, val posts: Int,
@@ -60,11 +60,26 @@ data class RecordingInfo(val id: String, val url: String, val title: String, val
 }
 
 /** The model the agent runs on (GB's own settings, never the key): what the AI sheet shows. */
-data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "")
+data class AiModelInfo(val model: String, val host: String, val keySet: Boolean, val keyHint: String, val keyState: String = "",
+                       val keys2Set: Boolean = false,   // whether a backup-key ring (llmKeys) is set
+                       val keys2Hint: String = "")      // the backups' last characters, to tell accounts apart
 
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
 data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
-data class HubDevice(val name: String, val owner: String, val type: String, val online: Boolean, val lastSeenMs: Long, val queued: Int)
+/**
+ * One node on the account.
+ *
+ * [training] is the line the device's own training round is reporting, or blank. A machine four
+ * hours into a round must not read "online, idle" on this screen — that is how somebody closes the
+ * lid on eight hours of work. It arrives already phrased by TrainingWatch.deviceLine rather than
+ * being derived here, so this row and the Training screen cannot come to different conclusions
+ * about the same machine.
+ */
+data class HubDevice(
+    val name: String, val owner: String, val type: String, val online: Boolean,
+    val lastSeenMs: Long, val queued: Int,
+    val training: String = "", val trainingStale: Boolean = false,
+)
 data class LearnItem(val slug: String, val title: String, val description: String)
 data class DeviceOpt(val id: String, val name: String, val sub: String, val emoji: String, val online: Boolean)
 
@@ -152,4 +167,12 @@ data class ResultItem(
     val why: String = "",          // why this is (or is not) yours: "replied to you", "mentions you", …
     val thread: String = "",       // the branch as a transcript ("YOU: …\nJoe: …"), what you'd open Facebook to read
     val lead: Boolean = false,     // this person showed buying interest somewhere (people memory) — a lead
+    /*
+     * A READING, NOT A TO-DO — set by the server on results there is nothing to do about (a Search
+     * Console pass: read-only by role, it cannot press anything in the console). The card then shows
+     * what was read and offers no controls at all, rather than a Run picker for work that does not
+     * exist. Declared by the server, never inferred from the kind here: a client that decides for
+     * itself which kinds are read-only has to be taught again for every new one.
+     */
+    val readOnly: Boolean = false,
 )

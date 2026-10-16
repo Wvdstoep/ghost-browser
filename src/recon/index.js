@@ -8,11 +8,13 @@ const perimeter = require('./perimeter');
 const sessionProbe = require('./sessionProbe');
 const domAuditor = require('./domAuditor');
 const redteam = require('./redteam');
+const auditorSuite = require('./auditorSuite');
 
 module.exports = {
   ...advisory,
   ...perimeter,
   ...sessionProbe,
   ...domAuditor,
-  ...redteam
+  ...redteam,
+  ...auditorSuite
 };

@@ -44,18 +44,19 @@ object AssistantJson {
                 for (i in 0 until tk.length()) { val x = tk.optJSONObject(i) ?: continue; tasks.add(AssistantTask(x.optString("title"), x.optBoolean("done"), x.optString("note"))) }
                 AssistantLive(l.optString("jobId"), l.optString("status"), l.optInt("iterations"), tasks, steps(l.optJSONArray("steps")), l.optLong("startedAt"), l.optString("backdrop"), l.optString("backdropProfile"))
             }
-            AssistantChatView(o.optString("id"), o.optString("title"), turns, live)
+            AssistantChatView(o.optString("id"), o.optString("title"), turns, live, o.optString("agentType", "browser"))
         }
     } catch (e: Exception) { null }
     fun chats(json: String): List<ChatSummary> = try {
         val a = JSONObject(json).optJSONArray("chats") ?: JSONArray(); val out = ArrayList<ChatSummary>()
-        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(ChatSummary(c.optString("id"), c.optString("title"), c.optLong("updatedAt"), c.optInt("turns"), c.optBoolean("running"))) }
+        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(ChatSummary(c.optString("id"), c.optString("title"), c.optLong("updatedAt"), c.optInt("turns"), c.optBoolean("running"), c.optString("agentType", "browser"))) }
         out
     } catch (e: Exception) { emptyList() }
     fun model(json: String): AiModelInfo? = try {
         val o = JSONObject(json); if (o.has("error")) null else {
             val ks = o.optJSONObject("keyState"); val state = ks?.let { k -> val u = k.optInt("usable", -1); if (u >= 0) "$u key(s) usable" else "" } ?: ""
-            AiModelInfo(o.optString("llmModel"), o.optString("llmHost"), o.optBoolean("keySet"), o.optString("keyHint"), state)
+            AiModelInfo(o.optString("llmModel"), o.optString("llmHost"), o.optBoolean("keySet"), o.optString("keyHint"), state,
+                keys2Set = o.optBoolean("keys2Set"), keys2Hint = o.optString("keys2Hint"))
         }
     } catch (e: Exception) { null }
     /** GET /v1/files → what the cluster browser captured (newest first). */
