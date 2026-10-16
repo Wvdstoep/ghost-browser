@@ -48,6 +48,8 @@ import javax.swing.SwingUtilities
 fun main() {
     // Any startup crash (esp. in a packaged app with no console) lands here so we can read the reason.
     Thread.setDefaultUncaughtExceptionHandler { _, e -> writeCrash(e) }
+    /* Orphaned browser helpers from earlier instances are ended before anything else starts. */
+    try { Housekeeping.start() } catch (e: Throwable) { writeCrash(e) }
     try { runApp() } catch (e: Throwable) { writeCrash(e); throw e }
 }
 
@@ -67,8 +69,16 @@ private fun runApp() = application {
         try {
             withContext(Dispatchers.IO) { Cef.ensureApp() }               // first run downloads Chromium
             val client = Cef.client()
-            val clusterUrl = "https://ghost-browser.mavicpro-fan.my-app.engineer"
-            val control = client.createBrowser(clusterUrl, false, false)
+            /* The instance this machine belongs to: the one it was last opened on, else the built-in
+               one. It follows the person the moment they open their Ghost Browser from the platform. */
+            val clusterUrl = Cluster.load()
+            /*
+             * A TINY PAGE, NOT THE CONSOLE. The control browser only needs to sit on the cluster's
+             * origin so its fetches carry the session cookie; it loaded the full console, a Compose
+             * canvas redrawing off-screen at full rate, and on the night of 24 Sep 2026 that and the
+             * other helpers took seven of eight cores from the trainer running beside them.
+             */
+            val control = client.createBrowser(Cluster.controlUrl(), false, false)
             // Realize the control browser off-screen so it loads the GB origin (shares the SSO cookie).
             SwingUtilities.invokeLater {
                 JFrame("gb-control").apply {
@@ -93,7 +103,7 @@ private fun runApp() = application {
              */
             DesktopNode(
                 { Tabs.activeBrowser() }, deviceId(), hostName(), gbJs,
-                { goal -> Agent.send(state, Tabs.activeBrowser(), goal) },
+                { goal, runId -> Agent.send(state, Tabs.activeBrowser(), goal, runId) },
             ) { line -> println(line); state.log(line) }.start()
         } catch (e: Throwable) { error = e.message ?: "failed to start" }
     }
@@ -133,11 +143,54 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             while (true) { loadApprovals(state); kotlinx.coroutines.delay(6000) }
         }
     }
+    /*
+     * THE PAGE'S SCROLL SLIDES THE NAV BAR OFF while a page is being read, and brings it back the
+     * moment you go up. Reported by the injected listener through the console channel (Cef.onScroll)
+     * because JCEF gives no other way for a page to push an event to us.
+     *
+     * Only the browser: sliding the nav off Profiles or the chat would leave no way out.
+     */
+    LaunchedEffect(Unit) {
+        Cef.onScroll = { dy, atTop -> if (state.chrome.plausible(dy)) state.chrome.onScroll(dy, atTop) }
+    }
+
+    /*
+     * ONE UI, TWO DEVICES, ONE ENGINE.
+     *
+     * Ask here and the job may run on the phone; ask on the phone and it may run here. So what is
+     * happening is read from the cluster, which is the one place both devices meet — a strip that
+     * only knew about local work would show nothing on the surface the question was asked from.
+     */
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (Cluster.connected) {
+                try {
+                    val body = withContext(Dispatchers.IO) { Cluster.authed("GET", "/v1/ring/work", null) }
+                    engineer.myapp.gb.shared.RingWatch.apply(body, hostName())
+                } catch (e: Throwable) { /* a status line is never worth an error on screen */ }
+            }
+            /* Three seconds while something is running, a slow idle beat otherwise: this is a status
+               strip, not a heartbeat, and the cluster answers it for every open app. */
+            kotlinx.coroutines.delay(if (engineer.myapp.gb.shared.RingWork.busy.value) 3000 else 10000)
+        }
+    }
+    /*
+     * NEVER ON THE DESKTOP. The bars sliding away resize the browser area on every frame of a 180 ms
+     * animation, and the windowed Chromium inside Compose does not survive it: its native window is
+     * torn out of the canvas and never rebuilt, so the page goes grey and every site after it stays
+     * grey until the app restarts. LinkedIn's Sign in (a scroll report on submit) did it every time.
+     * A desktop window has the room; the phone keeps the behaviour.
+     */
+    val collapsible = false
+    if (!collapsible) state.chrome.reset()
+    val chromeF = engineer.myapp.gb.shared.rememberChromeFraction(collapsible && state.chrome.hidden.value)
+
     GbScaffold(
-        host = "", tabCount = Tabs.list.size, selected = if (screen == "devices" || screen == "downloads") "settings" else screen,
+        host = "", tabCount = Tabs.list.size, selected = if (screen == "devices" || screen == "downloads" || screen == "training") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
         showTopBar = false,     // desktop uses its own BrowserBar + tab strip
         approvalsBadge = state.jobs.value.sumOf { it.proposals.size },
+        chromeFraction = chromeF,
     ) {
         when (screen) {
             "browser" -> Column(Modifier.fillMaxSize()) {
@@ -155,7 +208,20 @@ private fun DesktopShell(error: String?, state: DesktopState) {
                 onRefresh = { loadApprovals(state) }, leads = state.leads.value,
             )
             "devices" -> DeviceHubScreenD(state)
-            "settings" -> SettingsScreenD(state, openUrl, onOpenDevices = { screen = "devices" }, onOpenDownloads = { screen = "downloads" })
+            "training" -> TrainingScreenD(state)
+            /*
+             * PROFILES — its own destination, and opening one still opens it in a NEW TAB. That
+             * gesture is the part of the old UI that was right; everything the surface adds is in
+             * addition to it.
+             */
+            "profiles" -> {
+                LaunchedEffect(Unit) { if (state.profiles.cards.value.isEmpty()) loadProfilesD(state) }
+                ProfilesScreenD(state, openInNewTab = { p ->
+                    Tabs.open(if (p.site.isNotBlank()) "https://${p.site}" else null)
+                    screen = "browser"
+                })
+            }
+            "settings" -> SettingsScreenD(state, openUrl, onOpenDevices = { screen = "devices" }, onOpenDownloads = { screen = "downloads" }, onOpenTraining = { screen = "training" })
             "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(state.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = { loadFilesD(state) }, onDelete = { id -> deleteFileD(state, id) }, onClose = { screen = "settings" }, onDeleteRecording = { id -> deleteRecordingD(state, id) }))
             "agent" -> {
                 LaunchedEffect(Unit) { AssistantD.open(state) }
@@ -194,6 +260,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
 @Composable
 private fun TabStrip() {
     val cs = MaterialTheme.colorScheme
+    @Suppress("UNUSED_VARIABLE") val tick = Cef.addressTick.value   // labels follow navigation
     Surface(color = cs.surface, contentColor = cs.onSurface) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f)) {
@@ -221,9 +288,10 @@ private fun hostOf(url: String): String = try { java.net.URI(url).host?.removePr
 
 /** Desktop browser navigation: home / back / forward / reload + an editable address bar (Enter to go). */
 @Composable
-private fun BrowserBar(browser: CefBrowser?, onHome: () -> Unit, onNavigated: () -> Unit) {
+private fun BrowserBar(state: DesktopState, browser: CefBrowser?, onHome: () -> Unit, onNavigated: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    var text by remember(browser?.url) { mutableStateOf(browser?.url ?: "") }
+    val tick = Cef.addressTick.value                  // a navigation re-keys the bar to the real address
+    var text by remember(browser, tick) { mutableStateOf(browser?.url ?: "") }
     fun go() {
         var u = text.trim(); if (u.isEmpty()) return
         if (!u.startsWith("http") && !u.startsWith("file:")) u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + java.net.URLEncoder.encode(u, "UTF-8")
@@ -245,6 +313,15 @@ private fun BrowserBar(browser: CefBrowser?, onHome: () -> Unit, onNavigated: ()
                         keyboardActions = KeyboardActions(onGo = { go() }, onDone = { go() }),
                         decorationBox = { inner -> if (text.isEmpty()) Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 14.sp); inner() },
                     )
+                    Spacer(Modifier.width(6.dp))
+                    engineer.myapp.gb.shared.ReconAddressBarIcon(ui = state.reconUi, currentUrl = text, onClick = {
+                        val host = hostOf(text)
+                        state.reconUi.currentTarget.value = if (host.isNotBlank()) host else text
+                        state.reconUi.isOpen.value = true
+                        if (host.isNotBlank()) {
+                            runDesktopRecon(state, host, true)
+                        }
+                    })
                 }
             }
         }
@@ -267,4 +344,30 @@ private fun newId(f: File): String {
     val id = UUID.randomUUID().toString().replace("-", "").take(24)
     try { f.parentFile?.mkdirs(); f.writeText(id) } catch (e: Exception) {}
     return id
+}
+
+
+private fun runDesktopRecon(state: DesktopState, target: String, comprehensive: Boolean) {
+    state.reconUi.isScanning.value = true
+    state.reconUi.error.value = null
+    Thread {
+        try {
+            val payload = "{\"target\":\"$target\",\"mode\":\"comprehensive\"}"
+            val res = Cluster.authed("POST", "/v1/recon/scan", payload)
+            val report = ReconJson.parseReport(res)
+            javax.swing.SwingUtilities.invokeLater {
+                state.reconUi.isScanning.value = false
+                if (report != null) {
+                    state.reconUi.report.value = report
+                } else {
+                    state.reconUi.error.value = "Failed to parse recon report: " + res
+                }
+            }
+        } catch (e: Exception) {
+            javax.swing.SwingUtilities.invokeLater {
+                state.reconUi.isScanning.value = false
+                state.reconUi.error.value = e.message ?: "Recon scan failed"
+            }
+        }
+    }.start()
 }

@@ -38,11 +38,21 @@ fun GbScaffold(
     onNav: (String) -> Unit,
     showTopBar: Boolean = true,     // desktop supplies its own address bar, so it hides this one
     approvalsBadge: Int = 0,        // pending approvals — shown as a badge on the Approvals nav item
+    /*
+     * 0 = the chrome is slid off the screen, 1 = fully shown. Driven by the page's own scroll so the
+     * content gets the space while it is being read. Only a page may collapse it: sliding the nav
+     * off Profiles or the chat would leave no way out of the screen, so every other surface passes
+     * 1 and the bars stay put.
+     */
+    chromeFraction: Float = 1f,
+    reconUi: ReconUi? = null,
+    onOpenRecon: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().background(cs.background)) {
         if (showTopBar && (selected == "browser" || selected == "flows")) {
+          CollapsingSlot(if (selected == "browser") chromeFraction else 1f, fromTop = true) {
             Surface(color = cs.surface, contentColor = cs.onSurface) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                     Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp),
@@ -53,6 +63,9 @@ fun GbScaffold(
                             Text(host.ifBlank { "Search or type a URL" },
                                 color = if (host.isBlank()) cs.onSurfaceVariant else cs.onSurface,
                                 fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if (reconUi != null && onOpenRecon != null) {
+                                ReconAddressBarIcon(ui = reconUi, currentUrl = host, onClick = onOpenRecon)
+                            }
                         }
                     }
                     Spacer(Modifier.width(6.dp))
@@ -61,14 +74,34 @@ fun GbScaffold(
                     IconButton(onClick = onOpenMenu) { Icon(Icons.Default.MoreVert, "Menu", tint = cs.onSurface) }
                 }
             }
+          }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) { content() }
+        /*
+         * WHAT THE RING IS DOING, ON EVERY SURFACE.
+         *
+         * Above the nav rather than over the page: it is a status line about the whole app, not
+         * about the page being looked at, and it must not cover the thing being read. It takes no
+         * space at all when nothing is or was running.
+         */
+        RingWorkStrip()
+        CollapsingSlot(chromeFraction, fromTop = false) {
         NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
             navItem(GbIcons.browser, "Browser", selected == "browser") { onNav("browser") }
             navItem(GbIcons.agent, "Agent", selected == "agent") { onNav("agent") }
             navItem(GbIcons.flows, "Flows", selected == "flows") { onNav("flows") }
+            /*
+             * PROFILES IS A DESTINATION, NOT A PREFERENCE.
+             *
+             * It sat three taps inside Settings as a row of chips plus one read-only line naming a
+             * role — and that role was kept in the phone's own preferences, so the cluster and the
+             * desktop never knew about it. A logged-in identity that automations act through belongs
+             * beside the browser, not inside a settings list.
+             */
+            navItem(GbIcons.profiles, "Profiles", selected == "profiles") { onNav("profiles") }
             navItem(Icons.Default.Verified, "Approvals", selected == "approvals", badge = approvalsBadge) { onNav("approvals") }
             navItem(Icons.Default.Settings, "Settings", selected == "settings") { onNav("settings") }
+        }
         }
     }
 }
