@@ -129,11 +129,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
             Column(Modifier.fillMaxSize().then(topInset)) {
                 Header(chat, live, ui, onHistory = { act.onRefreshChats(); history = true }, onNew = { act.onNewWithAgent?.invoke(ui.selectedAgent.value) ?: act.onNew() }, onSettings = act.onSettings, onClose = act.onClose)
                 AgentToggleBar(ui = ui, act = act)
-                LaunchedEffect(chat?.id) {
-                    if (chat != null && chat.agentType.isNotBlank()) {
-                        ui.selectedAgent.value = chat.agentType
-                    }
-                }
+                // selectedAgent is user-controlled via AgentToggleBar and HistorySheet
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value) ConnectCard(act.onConnect)
@@ -149,7 +145,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 Composer(live != null, ui.connected.value, act.onSend)
             }
         }
-        if (history) HistorySheet(ui.chats.value, chat?.id, onOpen = { act.onOpen(it); history = false }, onDelete = act.onDelete, onNew = { act.onNew(); history = false }, onClose = { history = false })
+        if (history) HistorySheet(ui.chats.value, chat?.id, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNew = { act.onNew(); history = false }, onClose = { history = false })
     }
 }
 

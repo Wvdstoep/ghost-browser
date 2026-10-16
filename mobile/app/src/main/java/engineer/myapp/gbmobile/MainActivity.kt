@@ -1885,25 +1885,44 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
     private fun assistantNew(agentType: String = shellUi.assistant.selectedAgent.value) {
         val payload = org.json.JSONObject().put("title", if (agentType == "recon") "Security Recon Audit" else "New chat").put("agentType", agentType).toString()
-        val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", payload))
+        val raw = apiAwait("POST", "/v1/assistant/chats", payload)
+        val v = AssistantJson.chat(raw)
         runOnUiThread {
+            ASSIST.selectedAgent.value = agentType
             if (v != null) {
                 assistantChatId = v.id
-                ASSIST.chat.value = v
-                ASSIST.selectedAgent.value = v.agentType
+                val adjusted = if (v.agentType.isBlank() || (v.agentType == "browser" && agentType == "recon")) v.copy(agentType = agentType) else v
+                ASSIST.chat.value = adjusted
                 ASSIST.error.value = ""
                 shellUi.agentBusy.value = false
-            } else ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"
+            } else {
+                assistantChatId = ""
+                ASSIST.chat.value = null
+                shellUi.agentBusy.value = false
+            }
         }
         assistantRefreshChats()
     }
     private fun assistantSend(text: String) {
         if (text.isBlank()) return
+        val currentAgent = shellUi.assistant.selectedAgent.value
         // the owner's words appear at once; the cluster's copy replaces it on the next load
         ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
         shellUi.agentBusy.value = true
         agentExec.execute {
-            if (assistantChatId.isBlank()) { val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", org.json.JSONObject().put("agentType", shellUi.assistant.selectedAgent.value).toString())); if (v == null) { runOnUiThread { ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"; shellUi.agentBusy.value = false }; return@execute }; assistantChatId = v.id }
+            if (assistantChatId.isBlank()) {
+                val payload = org.json.JSONObject().put("agentType", currentAgent).put("title", if (currentAgent == "recon") "Security Recon Audit" else "New chat").toString()
+                val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", payload))
+                if (v == null) {
+                    runOnUiThread { ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"; shellUi.agentBusy.value = false }
+                    return@execute
+                }
+                assistantChatId = v.id
+                runOnUiThread {
+                    ASSIST.chat.value = if (v.agentType.isBlank() || (v.agentType == "browser" && currentAgent == "recon")) v.copy(agentType = currentAgent) else v
+                    ASSIST.selectedAgent.value = currentAgent
+                }
+            }
             val id = assistantChatId
             val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster") }
             if (r.has("error")) runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
@@ -1963,13 +1982,91 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     /** Build the shell (browser/flows/agent) actions. */
     
-        private fun runReconScan(target: String, comprehensive: Boolean) {
+    private fun runReconScan(target: String, comprehensive: Boolean) {
         val t = target.trim()
         if (t.isBlank()) return
         shellUi.reconUi.isScanning.value = true
         shellUi.reconUi.error.value = null
+
+        // Live page DOM & Burp Suite extractor from active WebView
+        var liveDomJson: String? = null
+        val activeWeb = if (::web.isInitialized) web else null
+        if (activeWeb != null) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            runOnUiThread {
+                val extractorJs = """
+                    (function() {
+                      try {
+                        var endpoints = [];
+                        var seen = {};
+                        function add(u, method, auth, ct) {
+                          if (!u || u.startsWith('javascript:') || u.startsWith('mailto:') || u.startsWith('#')) return;
+                          var key = (method || 'GET') + ':' + u;
+                          if (seen[key]) return;
+                          seen[key] = true;
+                          endpoints.push({ url: u, method: method || 'GET', isAuthRequired: !!auth, contentType: ct || 'text/html' });
+                        }
+                        add(location.pathname + location.search, 'GET', false, 'text/html');
+                        document.querySelectorAll('a[href]').forEach(function(a) {
+                          var p = a.pathname + a.search;
+                          add(p, 'GET', p.includes('admin') || p.includes('dashboard') || p.includes('account'), 'text/html');
+                        });
+                        document.querySelectorAll('form').forEach(function(f) {
+                          var action = f.getAttribute('action') || location.pathname;
+                          var method = (f.getAttribute('method') || 'POST').toUpperCase();
+                          add(action, method, true, 'application/x-www-form-urlencoded');
+                        });
+                        if (window.performance && window.performance.getEntriesByType) {
+                          window.performance.getEntriesByType('resource').forEach(function(r) {
+                            try {
+                              var u = new URL(r.name);
+                              if (u.hostname === location.hostname) {
+                                var p = u.pathname + u.search;
+                                var isApi = p.includes('/api/') || p.includes('/v1/') || p.includes('/v2/') || p.includes('/graphql') || r.initiatorType === 'fetch' || r.initiatorType === 'xmlhttprequest';
+                                var ct = isApi ? 'application/json' : (r.initiatorType === 'script' ? 'application/javascript' : 'text/html');
+                                add(p, 'GET', isApi, ct);
+                              }
+                            } catch(e) {}
+                          });
+                        }
+                        var scriptText = Array.from(document.scripts).map(function(s) { return s.textContent; }).join(' ');
+                        var apiRegex = /(?:['"]|\x60)(\/(?:api|v[0-9]|graphql|auth|user|admin|checkout|login|signup|upload|file|dashboard|feed|query|status|settings|items|orders|data)\/[a-zA-Z0-9_\-/.]+)(?:['"]|\x60)/gi;
+                        var m;
+                        while ((m = apiRegex.exec(scriptText)) !== null) {
+                          add(m[1], 'GET', m[1].includes('auth') || m[1].includes('admin'), 'application/json');
+                        }
+                        var tech = [];
+                        if (window.React || document.querySelector('[data-reactroot], [data-reactid]')) tech.push('React');
+                        if (window.Vue || document.querySelector('[data-v-]')) tech.push('Vue.js');
+                        if (window.jQuery) tech.push('jQuery ' + (window.jQuery.fn ? window.jQuery.fn.jquery : ''));
+                        if (window.angular || document.querySelector('[ng-app], [ng-version]')) tech.push('Angular');
+                        if (document.querySelector('meta[name="generator"][content*="WordPress"]')) tech.push('WordPress');
+
+                        var storageTokens = [];
+                        for (var i = 0; i < localStorage.length; i++) {
+                          var k = localStorage.key(i);
+                          if (/auth|token|jwt|session|key|secret/i.test(k)) {
+                            storageTokens.push({ key: k, val: (localStorage.getItem(k) || '').slice(0, 40) + '...' });
+                          }
+                        }
+                        return JSON.stringify({ endpoints: endpoints.slice(0, 60), tech: tech, storageTokens: storageTokens });
+                      } catch(err) {
+                        return JSON.stringify({ error: err.message });
+                      }
+                    })()
+                """.trimIndent()
+                activeWeb.evaluateJavascript(extractorJs) { res ->
+                    liveDomJson = res
+                    latch.countDown()
+                }
+            }
+            try { latch.await(600, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (e: Exception) {}
+        }
+
         agentExec.execute {
             try {
+                // Perform real on-device audit with parallel port scan, CVE correlation & DOM extraction
+                val localReport = OnDeviceAuditor.audit(t, liveDomJson)
                 var report: engineer.myapp.gb.shared.ReconReport? = null
 
                 if (vm.clusterUrl.isNotBlank()) {
@@ -1979,14 +2076,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                             put("mode", if (comprehensive) "comprehensive" else "perimeter")
                         }.toString()
                         val res = apiAwait("POST", "/v1/recon/scan", payload)
-                        if (!res.startsWith("<") && (res.contains("\"findings\"") || res.contains("\"score\""))) {
-                            report = ReconJson.parseReport(res)
+                        if (!res.startsWith("<") && (res.contains("findings") || res.contains("score"))) {
+                            val clusterReport = ReconJson.parseReport(res)
+                            if (clusterReport != null) {
+                                // Merge rich local telemetry (openPorts, cves, crawlEndpoints) if cluster had empty arrays
+                                report = clusterReport.copy(
+                                    openPorts = if (clusterReport.openPorts.isNotEmpty()) clusterReport.openPorts else localReport.openPorts,
+                                    cves = if (clusterReport.cves.isNotEmpty()) clusterReport.cves else localReport.cves,
+                                    crawlEndpoints = if (clusterReport.crawlEndpoints.isNotEmpty()) clusterReport.crawlEndpoints else localReport.crawlEndpoints,
+                                    dnsRecords = if (clusterReport.dnsRecords.isNotEmpty()) clusterReport.dnsRecords else localReport.dnsRecords,
+                                    jsLeaks = if (clusterReport.jsLeaks.isNotEmpty()) clusterReport.jsLeaks else localReport.jsLeaks
+                                )
+                            }
                         }
                     } catch (e: Exception) {}
                 }
 
                 if (report == null) {
-                    report = OnDeviceAuditor.audit(t)
+                    report = localReport
                 }
 
                 runOnUiThread {
