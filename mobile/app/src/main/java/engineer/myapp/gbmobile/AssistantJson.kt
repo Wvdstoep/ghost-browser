@@ -44,12 +44,22 @@ object AssistantJson {
                 for (i in 0 until tk.length()) { val x = tk.optJSONObject(i) ?: continue; tasks.add(AssistantTask(x.optString("title"), x.optBoolean("done"), x.optString("note"))) }
                 AssistantLive(l.optString("jobId"), l.optString("status"), l.optInt("iterations"), tasks, steps(l.optJSONArray("steps")), l.optLong("startedAt"), l.optString("backdrop"), l.optString("backdropProfile"))
             }
-            AssistantChatView(o.optString("id"), o.optString("title"), turns, live, o.optString("agentType", "browser"))
+            var agent = o.optString("agentType", "")
+            if (agent.isBlank()) {
+                val title = o.optString("title", "")
+                agent = if (title.contains("recon", ignoreCase = true) || title.contains("security", ignoreCase = true)) "recon" else "browser"
+            }
+            AssistantChatView(o.optString("id"), o.optString("title"), turns, live, agent)
         }
     } catch (e: Exception) { null }
     fun chats(json: String): List<ChatSummary> = try {
         val a = JSONObject(json).optJSONArray("chats") ?: JSONArray(); val out = ArrayList<ChatSummary>()
-        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(ChatSummary(c.optString("id"), c.optString("title"), c.optLong("updatedAt"), c.optInt("turns"), c.optBoolean("running"), c.optString("agentType", "browser"))) }
+        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; var agent = c.optString("agentType", "")
+            if (agent.isBlank()) {
+                val title = c.optString("title", "")
+                agent = if (title.contains("recon", ignoreCase = true) || title.contains("security", ignoreCase = true)) "recon" else "browser"
+            }
+            out.add(ChatSummary(c.optString("id"), c.optString("title"), c.optLong("updatedAt"), c.optInt("turns"), c.optBoolean("running"), agent)) }
         out
     } catch (e: Exception) { emptyList() }
     fun model(json: String): AiModelInfo? = try {

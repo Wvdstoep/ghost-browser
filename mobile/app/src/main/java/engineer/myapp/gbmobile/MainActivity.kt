@@ -1926,7 +1926,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val id = assistantChatId
             val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster") }
             if (r.has("error")) runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
-            assistantLoad(id)
+            assistantLoad(id); assistantRefreshChats() // post-send
         }
     }
     /** A card the assistant handed the owner: a door into results, approvals or a page. */
