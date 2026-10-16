@@ -37,7 +37,10 @@ const V4_BLOCKED = [
   ['172.16.0.0', 12],      // private
   ['192.0.0.0', 24],       // IETF protocol assignments
   ['192.168.0.0', 16],     // private
+  ['192.0.2.0', 24],       // TEST-NET-1 (documentation)
   ['198.18.0.0', 15],      // benchmarking
+  ['198.51.100.0', 24],    // TEST-NET-2 (documentation)
+  ['203.0.113.0', 24],     // TEST-NET-3 (documentation)
   ['224.0.0.0', 4],        // multicast
   ['240.0.0.0', 4],        // reserved
 ];
@@ -52,14 +55,53 @@ function isBlockedV4(ip) {
   });
 }
 
+/*
+ * PARSE AN IPv6 ADDRESS INTO ITS 16 BYTES, whatever spelling it arrives in.
+ *
+ * The check used to be string matching, and string matching only sees the spellings somebody thought
+ * of. "::ffff:169.254.169.254" was caught; the SAME address written "::ffff:a9fe:a9fe" (which is what
+ * WHATWG URL hands back for it) was not, nor "::127.0.0.1", nor "0:0:0:0:0:0:0:1", nor the NAT64 and
+ * 6to4 forms that carry an IPv4 address inside an IPv6 one. Every one reached the cloud metadata
+ * endpoint or loopback. Bytes have exactly one spelling, so the rules below are written against
+ * bytes and cannot be dodged by re-writing the text.
+ */
+function v6Bytes(ip) {
+  let a = String(ip).toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');   // drop brackets and a zone id
+  if (!net.isIPv6(a)) return null;
+  // an embedded dotted quad ("::ffff:1.2.3.4") becomes two hex groups first
+  const q = a.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (q) {
+    const o = q[2].split('.').map(Number);
+    a = q[1] + ((o[0] << 8) | o[1]).toString(16) + ':' + ((o[2] << 8) | o[3]).toString(16);
+  }
+  const [head, tail] = a.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail === undefined ? [] : (tail ? tail.split(':') : []);
+  const fill = tail === undefined ? 0 : 8 - h.length - t.length;
+  const groups = [...h, ...Array(fill).fill('0'), ...t].map((x) => parseInt(x || '0', 16));
+  if (groups.length !== 8 || groups.some((x) => !(x >= 0 && x <= 0xffff))) return null;
+  return groups.flatMap((x) => [x >> 8, x & 255]);
+}
+
+const v4Of = (b, i) => b.slice(i, i + 4).join('.');
+const allZero = (b, from, to) => b.slice(from, to).every((x) => x === 0);
+
 function isBlockedV6(ip) {
-  const a = ip.toLowerCase().replace(/^\[|\]$/g, '');
-  if (a === '::' || a === '::1') return true;                 // unspecified, loopback
-  if (a.startsWith('fe80') || a.startsWith('fec0')) return true; // link-local, site-local
-  if (/^f[cd][0-9a-f]{2}:/.test(a)) return true;              // unique local (fc00::/7)
-  // IPv4-mapped (::ffff:169.254.169.254) is the same attack wearing a different hat.
-  const mapped = a.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return isBlockedV4(mapped[1]);
+  const b = v6Bytes(ip);
+  if (!b) return true;                                             // unparseable is not a reason to allow it
+  if (allZero(b, 0, 15) && (b[15] === 0 || b[15] === 1)) return true;           // :: and ::1
+  if (allZero(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) return isBlockedV4(v4Of(b, 12));   // ::ffff:a.b.c.d (mapped)
+  if (allZero(b, 0, 12)) return isBlockedV4(v4Of(b, 12));                       // ::a.b.c.d (deprecated "compatible")
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(b, 4, 12)) {
+    return isBlockedV4(v4Of(b, 12));                               // 64:ff9b::/96 NAT64 — the v4 address it will reach
+  }
+  if (b[0] === 0x20 && b[1] === 0x02) return isBlockedV4(v4Of(b, 2));           // 2002::/16 6to4 — the v4 it tunnels to
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return true;   // 2001::/32 Teredo
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) return true;   // 2001:db8::/32 documentation
+  if ((b[0] & 0xfe) === 0xfc) return true;                         // fc00::/7 unique local
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;        // fe80::/10 link-local
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;        // fec0::/10 site-local
+  if (b[0] === 0xff) return true;                                  // ff00::/8 multicast
   return false;
 }
 

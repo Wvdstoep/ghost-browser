@@ -47,6 +47,41 @@ describe('addresses that must never be reachable', () => {
   });
 });
 
+describe('IPv6 spellings of the addresses above are the same addresses', () => {
+  // Every row reached 169.254.169.254 or loopback before the check was done on bytes instead of text.
+  it.each([
+    ['::ffff:a9fe:a9fe', 'v4-mapped metadata, hex spelling'],
+    ['::ffff:169.254.169.254', 'v4-mapped metadata, dotted spelling'],
+    ['::ffff:7f00:1', 'v4-mapped loopback, hex'],
+    ['::127.0.0.1', 'v4-compatible loopback'],
+    ['0:0:0:0:0:0:0:1', 'loopback, written out'],
+    ['0000:0000:0000:0000:0000:0000:0000:0001', 'loopback, fully padded'],
+    ['64:ff9b::a9fe:a9fe', 'NAT64 to the metadata address'],
+    ['2002:a9fe:a9fe::', '6to4 to the metadata address'],
+    ['2002:7f00:1::', '6to4 to loopback'],
+    ['2001:0:4136:e378:8000:63bf:3fff:fdd2', 'Teredo'],
+    ['2001:db8::1', 'documentation range'],
+    ['ff02::1', 'multicast'],
+    ['[::ffff:a9fe:a9fe]', 'bracketed, as in a URL'],
+    ['fe80::1%eth0', 'link-local with a zone id'],
+  ])('blocks %s (%s)', (ip) => { expect(isBlockedAddress(ip)).toBe(true); });
+
+  it('still allows a real public IPv6 address and the v4 it maps to', () => {
+    expect(isBlockedAddress('2606:4700:4700::1111')).toBe(false);   // Cloudflare DNS
+    expect(isBlockedAddress('::ffff:8.8.8.8')).toBe(false);
+    expect(isBlockedAddress('64:ff9b::808:808')).toBe(false);       // NAT64 to 8.8.8.8
+    expect(isBlockedAddress('2002:808:808::')).toBe(false);         // 6to4 to 8.8.8.8
+  });
+
+  it('blocks the documentation IPv4 ranges', () => {
+    for (const ip of ['192.0.2.1', '198.51.100.7', '203.0.113.9']) expect(isBlockedAddress(ip)).toBe(true);
+  });
+
+  it('a URL written with an IPv6 mapped host is refused end to end', async () => {
+    await expect(assertPublicUrl('http://[::ffff:169.254.169.254]/latest/meta-data/')).rejects.toMatchObject({ status: 403 });
+  });
+});
+
 describe('assertPublicUrl', () => {
   const dns = resolverFor({
     'example.com': ['93.184.216.34'],
