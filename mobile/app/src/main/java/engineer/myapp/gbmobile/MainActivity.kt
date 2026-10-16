@@ -1869,7 +1869,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         runOnUiThread {
             if (v == null) { ASSIST.error.value = "Could not reach your Ghost Browser (${raw.take(80)})"; shellUi.agentBusy.value = false; return@runOnUiThread }
             if (frame != null) { ASSIST.backdrop.value = frame; ASSIST.backdropProfile.value = v.live?.backdropProfile ?: "" }
-            assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.error.value = ""
+            assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.selectedAgent.value = v.agentType; ASSIST.error.value = ""
             shellUi.agentBusy.value = v.live != null
             assistantPollH.removeCallbacksAndMessages(null)
             if (v.live != null) assistantPollH.postDelayed({ if (shellUi.screen.value == "agent" || true) agentExec.execute { assistantLoad(v.id) } }, 2500)
@@ -1883,9 +1883,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
         }
     }
-    private fun assistantNew() {
-        val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", "{}"))
-        runOnUiThread { if (v != null) { assistantChatId = v.id; ASSIST.chat.value = v; ASSIST.error.value = ""; shellUi.agentBusy.value = false } else ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?" }
+    private fun assistantNew(agentType: String = shellUi.assistant.selectedAgent.value) {
+        val payload = org.json.JSONObject().put("title", if (agentType == "recon") "Security Recon Audit" else "New chat").put("agentType", agentType).toString()
+        val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", payload))
+        runOnUiThread {
+            if (v != null) {
+                assistantChatId = v.id
+                ASSIST.chat.value = v
+                ASSIST.selectedAgent.value = v.agentType
+                ASSIST.error.value = ""
+                shellUi.agentBusy.value = false
+            } else ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"
+        }
         assistantRefreshChats()
     }
     private fun assistantSend(text: String) {
@@ -1894,7 +1903,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
         shellUi.agentBusy.value = true
         agentExec.execute {
-            if (assistantChatId.isBlank()) { val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", "{}")); if (v == null) { runOnUiThread { ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"; shellUi.agentBusy.value = false }; return@execute }; assistantChatId = v.id }
+            if (assistantChatId.isBlank()) { val v = AssistantJson.chat(apiAwait("POST", "/v1/assistant/chats", org.json.JSONObject().put("agentType", shellUi.assistant.selectedAgent.value).toString())); if (v == null) { runOnUiThread { ASSIST.error.value = "Could not start a chat — is your Ghost Browser connected?"; shellUi.agentBusy.value = false }; return@execute }; assistantChatId = v.id }
             val id = assistantChatId
             val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster") }
             if (r.has("error")) runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
@@ -2017,7 +2026,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onCloseAgent = { shellUi.screen.value = "browser" },
         assistant = engineer.myapp.gb.shared.AssistantActions(
             onSend = { t -> assistantSend(t) },
-            onNew = { agentExec.execute { assistantNew() } },
+            onNew = { agentExec.execute { assistantNew(shellUi.assistant.selectedAgent.value) } },
+            onNewWithAgent = { type -> agentExec.execute { assistantNew(type) } },
             onOpen = { id -> agentExec.execute { assistantLoad(id) } },
             onDelete = { id -> agentExec.execute { apiAwait("DELETE", "/v1/assistant/chats/$id", null); assistantRefreshChats(); if (id == assistantChatId) { assistantChatId = ""; runOnUiThread { shellUi.assistant.chat.value = null } } } },
             onStop = { agentExec.execute { val id = assistantChatId; if (id.isNotBlank()) { apiAwait("POST", "/v1/assistant/chats/$id/stop", "{}"); assistantLoad(id) } } },

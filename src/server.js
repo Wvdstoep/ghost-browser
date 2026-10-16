@@ -360,20 +360,7 @@ app.get('/v1/admin/tenants-overview', superadminGate, async (req, res) => {
   const tenants = await Promise.all(targets.map(async (base) => {
     try {
       const r = await fetch(base + '/v1/admin/overview', { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return {
-    recon: {
-      auditTarget: (target) => recon.auditTarget(target),
-      auditActivePage: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
-        return recon.auditActivePage(s.page);
-      },
-      runRedteamAudit: (target) => recon.runRedteamAudit(target),
-      testHttpSessionInvalidation: (opts) => recon.testHttpSessionInvalidation(opts),
-      executeSecurityScript: async (profile, script) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
-        return recon.executeSecurityScript(s.page, script);
-      }
-    }, base, error: `HTTP ${r.status}` };
+      if (!r.ok) return { base, error: `HTTP ${r.status}` };
       return { base, ...(await r.json()) };
     } catch (e) { return { base, error: String(e.message).slice(0, 140) }; }
   }));
@@ -6121,6 +6108,41 @@ ${g}` : g;
       log.info(`[assistant] walk ${job.id} in ${s.profile || 'default'}: ${g.slice(0, 100)}`);
       return { jobId: job.id, profile: s.profile || null, status: 'running' };
     },
+    recon: {
+      auditTarget: (target) => recon.auditTarget(target),
+      auditActivePage: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditActivePage(s.page);
+      },
+      runRedteamAudit: (target) => recon.runRedteamAudit(target),
+      testHttpSessionInvalidation: (opts) => recon.testHttpSessionInvalidation(opts),
+      executeSecurityScript: async (profile, script) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.executeSecurityScript(s.page, script);
+      },
+      auditBola: (opts) => recon.auditBola(opts),
+      auditDomSinks: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditDomSinks(s.page);
+      },
+      auditPostMessages: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditPostMessages(s.page);
+      },
+      auditApiAndGraphql: async (targetUrl, profile) => {
+        let page = null;
+        try { const s = await sessionFor(profiles.safeName(profile || 'facebook')); page = s.page; } catch {}
+        return recon.auditApiAndGraphql(page, targetUrl);
+      },
+      auditWebSockets: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditWebSockets(s.page);
+      },
+      auditStorageHygiene: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditStorageHygiene(s.page);
+      }
+    },
   };
 }
 /** One job: fresh from a goal, or resumed from the journal a restart left behind (restore = the record). */
@@ -6148,7 +6170,10 @@ const assistant = require('./operator/assistant').makeAssistant({
   startTurn: ({ goal, orientation, finishSpec, meta, maxMs }) => {
     const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
     const { assistantPrompt } = require('./operator/assistantPrompt');
-    return startOperatorJob(goal, cfg, null, { systemPrompt: assistantPrompt(), orientation, finishSpec, meta, maxMs, startIterations: 60, maxIterations: 200 });
+    const { reconPrompt } = require('./operator/reconPrompt');
+    const isRecon = (meta && meta.agentType === 'recon');
+    const systemPrompt = isRecon ? reconPrompt() : assistantPrompt();
+    return startOperatorJob(goal, cfg, null, { systemPrompt, orientation, finishSpec, meta, maxMs, startIterations: 60, maxIterations: 200 });
   },
 });
 /** Jobs the last process died on come back by themselves — the journal carries the task list and the
@@ -6215,7 +6240,7 @@ app.post('/v1/profiles/:name/cookies', authed, async (req, res) => {
   res.json({ ok: true, profile: name, stored: byKey.size, applied });
 });
 app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
-app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title)));
+app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title, (req.body || {}).agentType)));
 /* THE BACKDROP: while a turn runs, the chat view carries a small frame of the browser the agent works
    in (the profile its last walk/look named, else the login browser), so the app can show the live
    browser behind the chat. Cached per profile for 2.5 s; jpeg, ~40–80 KB. Never fails the view. */

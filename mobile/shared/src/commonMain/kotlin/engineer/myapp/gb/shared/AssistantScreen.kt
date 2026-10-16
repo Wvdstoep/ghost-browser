@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
  * sees what it is doing right now, can add a word, or stop it.
  */
 class AssistantUi {
+    val selectedAgent = mutableStateOf("browser") // "browser" | "recon"
     val chat = mutableStateOf<AssistantChatView?>(null)
     val chats = mutableStateOf<List<ChatSummary>>(emptyList())
     val error = mutableStateOf("")            // last transport error, shown once under the timeline
@@ -83,6 +84,17 @@ class AssistantActions(
     val onClose: () -> Unit,
     val onOpenUrl: (String) -> Unit,
     val onConnect: () -> Unit,
+    val onNewWithAgent: ((String) -> Unit)? = null,
+)
+
+val RECON_SUGGESTIONS = listOf(
+    "🛡️ Full security recon & attack surface audit",
+    "🔍 Instrument DOM sinks for XSS taint flows",
+    "⚡ Inspect PostMessage handlers & origin validation",
+    "📡 Harvest API routes & probe GraphQL schema",
+    "🔒 Audit WebSocket protocols & query token leakage",
+    "🔑 Audit client storage & token exposure (JWTs/Cookies)",
+    "🧪 Test multi-session credential invalidation (CWE-613)",
 )
 
 val ASSISTANT_SUGGESTIONS = listOf(
@@ -115,11 +127,17 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
         }
         Surface(color = if (backdrop != null) Color.Transparent else cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().then(topInset)) {
-                Header(chat, live, ui, onHistory = { act.onRefreshChats(); history = true }, onNew = act.onNew, onSettings = act.onSettings, onClose = act.onClose)
+                Header(chat, live, ui, onHistory = { act.onRefreshChats(); history = true }, onNew = { act.onNewWithAgent?.invoke(ui.selectedAgent.value) ?: act.onNew() }, onSettings = act.onSettings, onClose = act.onClose)
+                AgentToggleBar(ui = ui, act = act)
+                LaunchedEffect(chat?.id) {
+                    if (chat != null && chat.agentType.isNotBlank()) {
+                        ui.selectedAgent.value = chat.agentType
+                    }
+                }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value) ConnectCard(act.onConnect)
-                        else if (chat == null || chat.turns.isEmpty()) EmptyState(act.onSend)
+                        else if (chat == null || chat.turns.isEmpty()) EmptyState(ui.selectedAgent.value, act.onSend)
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
                         if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
@@ -383,23 +401,31 @@ expect fun currentTimeMillisCompat(): Long
 
 /* ── empty, connect, error ─────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun EmptyState(onSend: (String) -> Unit) {
+private fun EmptyState(agentType: String, onSend: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 8.dp)) {
-        Box(Modifier.size(44.dp).clip(CircleShape).background(Brand.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) { Icon(Icons.Default.AutoAwesome, null, tint = Brand, modifier = Modifier.size(22.dp)) }
+    val isRecon = agentType == "recon"
+    val accentColor = if (isRecon) Color(0xFFE5484D) else Brand
+    val suggestions = if (isRecon) RECON_SUGGESTIONS else ASSISTANT_SUGGESTIONS
+    Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp)) {
+        Box(Modifier.size(44.dp).clip(CircleShape).background(accentColor.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+            Icon(if (isRecon) Icons.Default.Security else Icons.Default.AutoAwesome, null, tint = accentColor, modifier = Modifier.size(22.dp))
+        }
         Spacer(Modifier.height(14.dp))
-        Text("What can I do for you?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text(if (isRecon) "Security Recon & Red Team" else "What can I do for you?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
-        Text("I run inside your Ghost Browser with your logins. Ask a question, hand me a task, or tell me what to keep an eye on — I'll read what your watchers already gathered, run them, browse, or build what's missing.",
-            color = cs.onSurfaceVariant, fontSize = 14.sp, lineHeight = 20.sp)
+        Text(
+            if (isRecon) "I am your dedicated AppSec & Red-Team auditing agent. I inspect perimeter security, instrument DOM sinks, test postMessage boundaries, audit client storage hygiene, introspect GraphQL schemas, and verify BOLA tenant isolation."
+            else "I run inside your Ghost Browser with your logins. Ask a question, hand me a task, or tell me what to keep an eye on — I'll read what your watchers already gathered, run them, browse, or build what's missing.",
+            color = cs.onSurfaceVariant, fontSize = 14.sp, lineHeight = 20.sp
+        )
         Spacer(Modifier.height(18.dp))
-        Text("TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (isRecon) "SUGGESTED RECON SCANS" else "TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        ASSISTANT_SUGGESTIONS.forEach { s ->
+        suggestions.forEach { s ->
             Surface(color = cs.surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.6f)), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSend(s) }) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(s, Modifier.weight(1f), fontSize = 14.sp)
-                    Icon(Icons.Default.ArrowForward, null, tint = Brand, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.ArrowForward, null, tint = accentColor, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -468,6 +494,14 @@ private fun HistorySheet(chats: List<ChatSummary>, currentId: String?, onOpen: (
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (c.running) { PulseDot(Brand, 7); Spacer(Modifier.width(6.dp)) }
+                                    val isReconChat = c.agentType == "recon"
+                                    Surface(
+                                        color = if (isReconChat) Color(0xFFE5484D).copy(alpha = 0.18f) else Brand.copy(alpha = 0.18f),
+                                        shape = RoundedCornerShape(4.dp),
+                                        modifier = Modifier.padding(end = 6.dp)
+                                    ) {
+                                        Text(if (isReconChat) "RECON" else "BROWSER", color = if (isReconChat) Color(0xFFE5484D) else Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                    }
                                     Text(c.title.ifBlank { "New chat" }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 Text("${c.turns} message${if (c.turns == 1) "" else "s"} · ${ago(c.updatedAt)}", color = cs.onSurfaceVariant, fontSize = 11.sp)
@@ -485,4 +519,59 @@ private fun ago(t: Long): String {
     if (t <= 0) return ""
     val d = (currentTimeMillisCompat() - t) / 1000
     return when { d < 60 -> "just now"; d < 3600 -> "${d / 60} min ago"; d < 86400 -> "${d / 3600} h ago"; else -> "${d / 86400} d ago" }
+}
+
+@Composable
+fun AgentToggleBar(ui: AssistantUi, act: AssistantActions) {
+    val cs = MaterialTheme.colorScheme
+    val isBrowser = ui.selectedAgent.value != "recon"
+    val isRecon = ui.selectedAgent.value == "recon"
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cs.surface.copy(alpha = 0.95f))
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            modifier = Modifier.weight(1f).height(38.dp).clickable {
+                ui.selectedAgent.value = "browser"
+                val curr = ui.chat.value
+                if (curr != null && curr.agentType == "recon") {
+                    val browserChat = ui.chats.value.firstOrNull { it.agentType != "recon" }
+                    if (browserChat != null) act.onOpen(browserChat.id) else (act.onNewWithAgent?.invoke("browser") ?: act.onNew())
+                }
+            },
+            shape = RoundedCornerShape(10.dp),
+            color = if (isBrowser) Brand else cs.surfaceVariant.copy(alpha = 0.6f),
+            contentColor = if (isBrowser) BrandOn else cs.onSurfaceVariant
+        ) {
+            Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                Icon(Icons.Default.Public, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Browser Agent", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        Surface(
+            modifier = Modifier.weight(1f).height(38.dp).clickable {
+                ui.selectedAgent.value = "recon"
+                val curr = ui.chat.value
+                if (curr != null && curr.agentType != "recon") {
+                    val reconChat = ui.chats.value.firstOrNull { it.agentType == "recon" }
+                    if (reconChat != null) act.onOpen(reconChat.id) else (act.onNewWithAgent?.invoke("recon") ?: act.onNew())
+                }
+            },
+            shape = RoundedCornerShape(10.dp),
+            color = if (isRecon) Color(0xFFE5484D) else cs.surfaceVariant.copy(alpha = 0.6f),
+            contentColor = if (isRecon) Color.White else cs.onSurfaceVariant
+        ) {
+            Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                Icon(Icons.Default.Security, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Security Recon", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
 }

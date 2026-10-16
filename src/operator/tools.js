@@ -196,6 +196,50 @@ function registerOperatorTools(reg, ctx) {
       return ctx.recon.executeSecurityScript(profile || 'default', script);
     });
 
+  
+  // ── 6 advanced security auditor tools ──
+  R('gb_audit_bola', 'MULTI-SESSION AUTHORIZATION & BOLA / IDOR AUDIT (CWE-639 / OWASP API1:2023): tests cross-profile or dual-token access against sensitive resource endpoints to verify tenant boundary isolation.',
+    obj({ targetUrl: { type: 'string', description: 'target resource URL' }, tokenA: { type: 'string', description: 'session/bearer token for Tenant A' }, tokenB: { type: 'string', description: 'session/bearer token for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }, ['targetUrl']),
+    async ({ targetUrl, tokenA, tokenB, objectIds }) => {
+      if (!ctx.recon || !ctx.recon.auditBola) return { error: 'BOLA auditor engine not wired in context' };
+      return ctx.recon.auditBola({ targetUrl, tokenA, tokenB, objectIds });
+    }, { repeatable: true });
+
+  R('gb_audit_dom_sinks', 'DYNAMIC DOM SINK & TAINT AUDIT: instruments and inspects browser DOM sinks (innerHTML, outerHTML, eval, Function, document.write, navigation sinks, and reflected query parameters) in the active page.',
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.auditDomSinks) return { error: 'DOM sink auditor not wired in context' };
+      return ctx.recon.auditDomSinks(profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_audit_postmessage', 'POSTMESSAGE & CROSS-WINDOW BOUNDARY AUDIT: inspects window message event listeners in the active page, checks for missing event.origin validation, and flags wildcard targetOrigin "*".',
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.auditPostMessages) return { error: 'postMessage auditor not wired in context' };
+      return ctx.recon.auditPostMessages(profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_audit_api_graphql', 'DYNAMIC API ROUTE HARVESTING & GRAPHQL INTROSPECTION AUDIT: harvests discovered REST endpoints and probes GraphQL endpoints for exposed __schema introspection, discovering queries, mutations, and sensitive fields.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or URL' }, profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ targetUrl, profile }) => {
+      if (!ctx.recon || !ctx.recon.auditApiAndGraphql) return { error: 'API/GraphQL auditor not wired in context' };
+      return ctx.recon.auditApiAndGraphql(targetUrl, profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_audit_websockets', 'WEBSOCKET & STREAMING PROTOCOL AUDIT: verifies whether active WebSockets use secure wss:// encryption and audits URLs for sensitive tokens exposed in query parameters.',
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.auditWebSockets) return { error: 'WebSocket auditor not wired in context' };
+      return ctx.recon.auditWebSockets(profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_audit_storage', 'CLIENT STORAGE HYGIENE & TOKEN EXPOSURE AUDIT: deep inspection of localStorage, sessionStorage, and cookies for exposed JWTs, API tokens, passwords, and missing HttpOnly / Secure flags.',
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.auditStorageHygiene) return { error: 'Storage hygiene auditor not wired in context' };
+      return ctx.recon.auditStorageHygiene(profile || 'default');
+    }, { repeatable: true });
+
   return reg.names().length;
 }
 

@@ -40,7 +40,7 @@ const STEP_LABELS = {
   gb_watchers: 'Checking watchers', gb_watcher_health: 'Checking watcher health', gb_watcher_feed: 'Reading watcher results', gb_watcher_config: 'Updating watcher settings', gb_watcher_posts: 'Updating watched posts', gb_watcher_run: 'Running the watcher', gb_watcher_wait: 'Waiting for the pass', gb_watcher_toggle: 'Switching the watcher', gb_watcher_probe: 'Reading the thread',
   gb_tools: 'Checking the tool palette', gb_roles: 'Checking roles', gb_role_get: 'Reading a role', gb_role_save: 'Creating a role', gb_role_update: 'Updating a role',
   gb_flows: 'Checking automations', gb_flow_get: 'Reading an automation', gb_flow_save: 'Saving an automation', gb_flow_run: 'Running an automation', gb_flow_wait: 'Waiting for the run', gb_flow_runs: 'Checking runs', gb_flow_run_status: 'Checking the run', gb_platforms: 'Checking platforms',
-  gb_recon: 'Auditing security & perimeter', gb_security_eval: 'Auditing in-browser DOM & storage', gb_redteam_probe: 'Probing endpoints & CORS', gb_recon_probe: 'Testing multi-session invalidation (CWE-613)', gb_page_script: 'Running in-browser recon script',
+  gb_recon: 'Auditing security & perimeter', gb_audit_bola: 'Auditing BOLA / tenant authorization', gb_audit_dom_sinks: 'Instrumenting DOM sinks & taints', gb_audit_postmessage: 'Auditing PostMessage security', gb_audit_api_graphql: 'Harvesting APIs & GraphQL introspection', gb_audit_websockets: 'Auditing WebSocket protocols & tokens', gb_audit_storage: 'Auditing client storage & tokens', gb_security_eval: 'Auditing in-browser DOM & storage', gb_redteam_probe: 'Probing endpoints & CORS', gb_recon_probe: 'Testing multi-session invalidation (CWE-613)', gb_page_script: 'Running in-browser recon script',
   gb_walk: 'Browsing for you', record_start: 'Starting a recording', record_status: 'Checking the recording', record_stop: 'Stopping the recording', record_list: 'Listing recordings', gb_walk_wait: 'Browsing…', gb_walk_stop: 'Stopping the walk', gb_files_recent: 'Checking captured files', gb_file_show: 'Showing the file', gb_people: 'Checking people', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
 };
 const labelOf = (name) => STEP_LABELS[name] || String(name || '').replace(/^gb_/, '').replace(/_/g, ' ');
@@ -73,6 +73,12 @@ function briefOf(name, text) {
       case 'gb_roles': return Array.isArray(v) ? `${v.length} roles` : '';
       case 'gb_platforms': return Array.isArray(v) ? `${v.length} platforms` : '';
       case 'gb_runs_recent': return Array.isArray(v) ? `${v.length} recent runs` : '';
+      case 'gb_audit_bola': return v && v.vulnerable !== undefined ? (v.vulnerable ? 'VULNERABLE (CWE-639 BOLA): cross-tenant access permitted' : 'SECURE: tenant boundaries strictly enforced') : '';
+      case 'gb_audit_dom_sinks': return v ? `${v.sinksFound || 0} DOM sinks · ${v.reflectedParams ? v.reflectedParams.length : 0} reflected params` : '';
+      case 'gb_audit_postmessage': return v ? `${v.messageListenerCount || 0} listener(s) · ${v.vulnerable ? 'UNVERIFIED ORIGIN' : 'VERIFIED'}` : '';
+      case 'gb_audit_api_graphql': return v ? `${v.harvestedRoutesCount || 0} routes · GraphQL Introspection: ${v.graphqlAudit && v.graphqlAudit.introspectionEnabled ? 'OPEN' : 'SECURE'}` : '';
+      case 'gb_audit_websockets': return v ? `${v.socketsCount || 0} WebSockets · ${(v.findings || []).length} issue(s)` : '';
+      case 'gb_audit_storage': return v ? `${v.sensitiveTokensFound || 0} sensitive token(s) · ${(v.findings || []).length} issue(s)` : '';
       case 'gb_recon': return v && v.grade ? `Grade ${v.grade} (${v.score}/100) · ${v.findingsCount || 0} findings · WAF: ${(v.waf && v.waf.name) || 'None'}` : '';
       case 'gb_security_eval': return v && v.advisories ? `${v.advisories.length} DOM/storage advisories · ${v.sensitiveStorageFound || 0} sensitive tokens` : '';
       case 'gb_redteam_probe': return v && v.endpoints ? `${(v.endpoints.findings || []).length} exposed files · CORS: ${v.cors?.vulnerableToCredentialTheft ? 'VULNERABLE' : 'SECURE'}` : '';
@@ -136,13 +142,13 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
   function list() {
     try {
       return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => load(f.slice(0, -5))).filter(Boolean)
-        .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, turns: c.turns.length, running: live.has(c.id) }))
+        .map((c) => ({ id: c.id, title: c.title, agentType: c.agentType || 'browser', updatedAt: c.updatedAt, turns: c.turns.length, running: live.has(c.id) }))
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     } catch { return []; }
   }
-  function create(title) {
+  function create(title, agentType = 'browser') {
     const id = `chat-${now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    return save({ id, title: String(title || 'New chat').slice(0, 80), createdAt: now(), updatedAt: now(), turns: [] });
+    return save({ id, title: String(title || 'New chat').slice(0, 80), agentType: String(agentType || 'browser'), createdAt: now(), updatedAt: now(), turns: [] });
   }
   function remove(id) { if (live.has(id)) return false; try { fs.unlinkSync(file(id)); } catch { /* gone */ } return true; }
 
@@ -185,7 +191,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     const liveView = run ? { jobId: run.id, status: run.stopped && run.stopped() && run.status === 'running' ? 'stopping' : run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
     const turns = c.turns.map((t) => ({ ...t, steps: (t.steps || []).map((s) => ({ ...s })) }));
     inlineImages(turns, liveView);
-    return { id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
+    return { id: c.id, title: c.title, agentType: c.agentType || 'browser', createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
   }
 
   /** The turn's end: the answer becomes the assistant's turn in the chat. */
@@ -209,7 +215,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     c.turns.push({ role: 'user', text: t, t: now() });
     if (c.title === 'New chat' || !c.title) c.title = t.slice(0, 60);
     c.updatedAt = now(); save(c);
-    const run = startTurn({ goal: t, orientation: () => historyDigest(c), finishSpec: REPLY_SPEC, meta: { chatId: c.id }, maxMs: TURN_MAX_MS });
+    const run = startTurn({ goal: t, orientation: () => historyDigest(c), finishSpec: REPLY_SPEC, meta: { chatId: c.id, agentType: c.agentType || 'browser' }, maxMs: TURN_MAX_MS });
     hook(c, run);
     return { ok: true, jobId: run.id };
   }
