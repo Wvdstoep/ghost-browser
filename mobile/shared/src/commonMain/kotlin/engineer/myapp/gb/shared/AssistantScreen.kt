@@ -145,7 +145,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 Composer(live != null, ui.connected.value, act.onSend)
             }
         }
-        if (history) HistorySheet(ui.chats.value, chat?.id, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNew = { act.onNew(); history = false }, onClose = { history = false })
+        if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
     }
 }
 
@@ -473,24 +473,122 @@ private fun Composer(working: Boolean, connected: Boolean, onSend: (String) -> U
 
 /* ── history ───────────────────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun HistorySheet(chats: List<ChatSummary>, currentId: String?, onOpen: (String) -> Unit, onDelete: (String) -> Unit, onNew: () -> Unit, onClose: () -> Unit) {
+private fun HistorySheet(
+    chats: List<ChatSummary>,
+    currentId: String?,
+    initialAgent: String = "all",
+    onOpen: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onNewWithAgent: (String) -> Unit,
+    onClose: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
+    // Agent picker: "all" | "browser" | "recon"
+    var filter by remember { mutableStateOf(if (initialAgent == "recon") "recon" else "all") }
+
+    val filteredChats = remember(chats, filter) {
+        when (filter) {
+            "browser" -> chats.filter { it.agentType != "recon" }
+            "recon" -> chats.filter { it.agentType == "recon" }
+            else -> chats
+        }
+    }
+
+    val browserCount = remember(chats) { chats.count { it.agentType != "recon" } }
+    val reconCount = remember(chats) { chats.count { it.agentType == "recon" } }
+
     Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable { onClose() }, contentAlignment = Alignment.BottomCenter) {
         Surface(color = cs.surface, contentColor = cs.onSurface, shape = RoundedCornerShape(20.dp, 20.dp, 0.dp, 0.dp), tonalElevation = 6.dp, modifier = Modifier.fillMaxWidth().clickable(enabled = false) {}) {
-            Column(Modifier.padding(top = 10.dp, bottom = 18.dp).heightIn(max = 480.dp)) {
+            Column(Modifier.padding(top = 10.dp, bottom = 18.dp).heightIn(max = 520.dp)) {
                 Box(Modifier.align(Alignment.CenterHorizontally).width(36.dp).height(4.dp).clip(CircleShape).background(cs.outline))
+
+                // Header with dynamic New button matching active filter
                 Row(Modifier.padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Chats", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = onNew) { Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("New") }
+                    Text("Chat History", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    TextButton(onClick = { onNewWithAgent(if (filter == "recon") "recon" else "browser") }) {
+                        Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (filter == "recon") "New Recon" else "New Chat")
+                    }
                 }
-                if (chats.isEmpty()) Text("No chats yet.", color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp))
+
+                // Agent Picker Segmented Filter Tabs
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // All chats filter
+                    FilterChip(
+                        selected = filter == "all",
+                        onClick = { filter = "all" },
+                        label = { Text("All (" + chats.size + ")", fontSize = 11.5.sp) },
+                        modifier = Modifier.weight(1f),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = cs.primary.copy(alpha = 0.2f),
+                            selectedLabelColor = cs.primary
+                        )
+                    )
+
+                    // Browser Agent filter
+                    FilterChip(
+                        selected = filter == "browser",
+                        onClick = { filter = "browser" },
+                        leadingIcon = { Icon(Icons.Default.Public, null, modifier = Modifier.size(13.dp)) },
+                        label = { Text("Browser (" + browserCount + ")", fontSize = 11.5.sp) },
+                        modifier = Modifier.weight(1.2f),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Brand.copy(alpha = 0.2f),
+                            selectedLabelColor = Brand
+                        )
+                    )
+
+                    // Security Recon filter
+                    FilterChip(
+                        selected = filter == "recon",
+                        onClick = { filter = "recon" },
+                        leadingIcon = { Icon(Icons.Default.Security, null, modifier = Modifier.size(13.dp)) },
+                        label = { Text("Recon (" + reconCount + ")", fontSize = 11.5.sp) },
+                        modifier = Modifier.weight(1.2f),
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFE5484D).copy(alpha = 0.2f),
+                            selectedLabelColor = Color(0xFFE5484D)
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                if (filteredChats.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            when (filter) {
+                                "recon" -> "No Security Recon chats yet.\nTap 'New Recon' to start an audit."
+                                "browser" -> "No Browser Agent chats yet.\nTap 'New Chat' to start browsing."
+                                else -> "No chats found."
+                            },
+                            color = cs.onSurfaceVariant,
+                            fontSize = 13.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                }
+
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    chats.forEach { c ->
-                        Row(Modifier.fillMaxWidth().clickable { onOpen(c.id) }.background(if (c.id == currentId) Brand.copy(alpha = 0.10f) else Color.Transparent).padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    filteredChats.forEach { c ->
+                        val isReconChat = c.agentType == "recon"
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(c.id) }
+                                .background(if (c.id == currentId) (if (isReconChat) Color(0xFFE5484D).copy(alpha = 0.12f) else Brand.copy(alpha = 0.10f)) else Color.Transparent)
+                                .padding(horizontal = 18.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (c.running) { PulseDot(Brand, 7); Spacer(Modifier.width(6.dp)) }
-                                    val isReconChat = c.agentType == "recon"
+                                    if (c.running) { PulseDot(if (isReconChat) Color(0xFFE5484D) else Brand, 7); Spacer(Modifier.width(6.dp)) }
                                     Surface(
                                         color = if (isReconChat) Color(0xFFE5484D).copy(alpha = 0.18f) else Brand.copy(alpha = 0.18f),
                                         shape = RoundedCornerShape(4.dp),
@@ -498,9 +596,9 @@ private fun HistorySheet(chats: List<ChatSummary>, currentId: String?, onOpen: (
                                     ) {
                                         Text(if (isReconChat) "RECON" else "BROWSER", color = if (isReconChat) Color(0xFFE5484D) else Brand, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                     }
-                                    Text(c.title.ifBlank { "New chat" }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(c.title.ifBlank { if (isReconChat) "Security Recon Audit" else "New chat" }, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                Text("${c.turns} message${if (c.turns == 1) "" else "s"} · ${ago(c.updatedAt)}", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                                Text(c.turns.toString() + " message" + (if (c.turns == 1) "" else "s") + " · " + ago(c.updatedAt), color = cs.onSurfaceVariant, fontSize = 11.sp)
                             }
                             if (!c.running) IconButton(onClick = { onDelete(c.id) }) { Icon(Icons.Default.DeleteOutline, "Delete", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
                         }
@@ -534,7 +632,7 @@ fun AgentToggleBar(ui: AssistantUi, act: AssistantActions) {
             modifier = Modifier.weight(1f).height(38.dp).clickable {
                 ui.selectedAgent.value = "browser"
                 val curr = ui.chat.value
-                if (curr != null && curr.agentType == "recon") {
+                if (curr == null || curr.agentType == "recon") {
                     val browserChat = ui.chats.value.firstOrNull { it.agentType != "recon" }
                     if (browserChat != null) act.onOpen(browserChat.id) else (act.onNewWithAgent?.invoke("browser") ?: act.onNew())
                 }
@@ -554,7 +652,7 @@ fun AgentToggleBar(ui: AssistantUi, act: AssistantActions) {
             modifier = Modifier.weight(1f).height(38.dp).clickable {
                 ui.selectedAgent.value = "recon"
                 val curr = ui.chat.value
-                if (curr != null && curr.agentType != "recon") {
+                if (curr == null || curr.agentType != "recon") {
                     val reconChat = ui.chats.value.firstOrNull { it.agentType == "recon" }
                     if (reconChat != null) act.onOpen(reconChat.id) else (act.onNewWithAgent?.invoke("recon") ?: act.onNew())
                 }
