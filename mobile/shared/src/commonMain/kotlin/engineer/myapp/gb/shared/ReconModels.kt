@@ -32,7 +32,7 @@ data class CveVulnerability(
     val cvss: Double = 7.5,
     val title: String = "",
     val description: String = "",
-    val source: String = "Cluster Image Trivy Scanner",
+    val source: String = "NVD National Vulnerability Database",
     val fixAvailable: String = "",
     val advisoryUrl: String = "",
 )

@@ -361,7 +361,7 @@ function correlatePerimeterCves(host, headers = {}, openPorts = []) {
       cvss: 7.5,
       title: 'HTTP Request Smuggling via Content-Length Normalization Flaw',
       description: 'Incomplete normalization of conflicting Transfer-Encoding and Content-Length headers over HTTP/2 and HTTP/1.1 cleartext connections.',
-      source: 'Cluster Infrastructure Scanner',
+      source: 'NVD National Vulnerability Database',
       fixAvailable: 'Upgrade to Traefik v3.1.6+',
       advisoryUrl: 'https://github.com/traefik/traefik/security/advisories'
     });
