@@ -77,6 +77,28 @@ describe('flowProblems — a watcher judged as a watcher, a flow as a flow', () 
 });
 
 describe('registerOperatorTools — the hands on a fake context', () => {
+  it('registers security recon and red team tools (gb_recon, gb_security_eval, gb_redteam_probe, gb_recon_probe, gb_page_script)', async () => {
+    const reg = new Registry();
+    const reconTargetMock = { score: 85, grade: 'B', findings: [], waf: { detected: false } };
+    const ctx = {
+      ...fakeCtx(),
+      recon: {
+        auditTarget: async (t) => ({ target: t, ...reconTargetMock }),
+        auditActivePage: async () => ({ advisories: [], sensitiveStorageFound: 0 }),
+        runRedteamAudit: async (t) => ({ target: t, endpoints: { findings: [] } }),
+        testHttpSessionInvalidation: async () => ({ vulnerable: false }),
+        executeSecurityScript: async (p, s) => ({ success: true })
+      }
+    };
+    registerOperatorTools(reg, ctx);
+    for (const t of ['gb_recon', 'gb_security_eval', 'gb_redteam_probe', 'gb_recon_probe', 'gb_page_script']) {
+      expect(reg.has(t), t).toBe(true);
+    }
+    const res = JSON.parse(await reg.execute('gb_recon', { target: 'useme.com' }));
+    expect(res.target).toBe('useme.com');
+    expect(res.grade).toBe('B');
+  });
+
   it('registers the full belt with repeatable reads/waits', () => {
     const reg = new Registry(); const n = registerOperatorTools(reg, fakeCtx());
     expect(n).toBeGreaterThan(25);

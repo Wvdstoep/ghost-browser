@@ -40,6 +40,7 @@ const STEP_LABELS = {
   gb_watchers: 'Checking watchers', gb_watcher_health: 'Checking watcher health', gb_watcher_feed: 'Reading watcher results', gb_watcher_config: 'Updating watcher settings', gb_watcher_posts: 'Updating watched posts', gb_watcher_run: 'Running the watcher', gb_watcher_wait: 'Waiting for the pass', gb_watcher_toggle: 'Switching the watcher', gb_watcher_probe: 'Reading the thread',
   gb_tools: 'Checking the tool palette', gb_roles: 'Checking roles', gb_role_get: 'Reading a role', gb_role_save: 'Creating a role', gb_role_update: 'Updating a role',
   gb_flows: 'Checking automations', gb_flow_get: 'Reading an automation', gb_flow_save: 'Saving an automation', gb_flow_run: 'Running an automation', gb_flow_wait: 'Waiting for the run', gb_flow_runs: 'Checking runs', gb_flow_run_status: 'Checking the run', gb_platforms: 'Checking platforms',
+  gb_recon: 'Auditing security & perimeter', gb_security_eval: 'Auditing in-browser DOM & storage', gb_redteam_probe: 'Probing endpoints & CORS', gb_recon_probe: 'Testing multi-session invalidation (CWE-613)', gb_page_script: 'Running in-browser recon script',
   gb_walk: 'Browsing for you', record_start: 'Starting a recording', record_status: 'Checking the recording', record_stop: 'Stopping the recording', record_list: 'Listing recordings', gb_walk_wait: 'Browsing…', gb_walk_stop: 'Stopping the walk', gb_files_recent: 'Checking captured files', gb_file_show: 'Showing the file', gb_people: 'Checking people', save_task_list: 'Planning', update_task: 'Progress', reply: 'Answering',
 };
 const labelOf = (name) => STEP_LABELS[name] || String(name || '').replace(/^gb_/, '').replace(/_/g, ' ');
@@ -72,6 +73,12 @@ function briefOf(name, text) {
       case 'gb_roles': return Array.isArray(v) ? `${v.length} roles` : '';
       case 'gb_platforms': return Array.isArray(v) ? `${v.length} platforms` : '';
       case 'gb_runs_recent': return Array.isArray(v) ? `${v.length} recent runs` : '';
+      case 'gb_recon': return v && v.grade ? `Grade ${v.grade} (${v.score}/100) · ${v.findingsCount || 0} findings · WAF: ${(v.waf && v.waf.name) || 'None'}` : '';
+      case 'gb_security_eval': return v && v.advisories ? `${v.advisories.length} DOM/storage advisories · ${v.sensitiveStorageFound || 0} sensitive tokens` : '';
+      case 'gb_redteam_probe': return v && v.endpoints ? `${(v.endpoints.findings || []).length} exposed files · CORS: ${v.cors?.vulnerableToCredentialTheft ? 'VULNERABLE' : 'SECURE'}` : '';
+      case 'gb_recon_probe': return v && v.vulnerable !== undefined ? (v.vulnerable ? 'VULNERABLE (CWE-613): session active after password change' : 'SECURE: session revoked on password change') : '';
+      case 'gb_page_script': return v && v.success ? 'script executed in page context' : (v && v.error ? 'script error: ' + v.error : '');
+
       /*
        * WHAT THE DEVICE IS DOING, IN THE CHAT WHERE THE QUESTION WAS ASKED.
        *

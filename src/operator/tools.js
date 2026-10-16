@@ -159,6 +159,43 @@ function registerOperatorTools(reg, ctx) {
   R('gb_people', 'The PEOPLE the owner talks with on a platform — memory across posts: exchanges, what the owner promised them, what they asked, COMMERCIAL SIGNALS (leads). One name for the full record + the drafter\'s profile; leadsOnly for the leads. Also the draft OUTCOMES (posted as-is / edited / rewritten).', obj({ platform: { type: 'string', description: 'default facebook' }, name: { type: 'string' }, leadsOnly: { type: 'boolean' } }), async ({ platform, name, leadsOnly }) => ctx.people ? ctx.people(platform, name, leadsOnly) : { error: 'not wired' }, { repeatable: true });
   R('gb_platforms', 'The platform registry: where a login exists (signedIn), which profile holds it, what may be done there.', obj({}), async () => ctx.platforms(), { repeatable: true });
 
+  
+  // ── security recon & red-team intelligence ──
+  R('gb_recon', 'FULL SECURITY RECON & ATTACK SURFACE AUDIT of any website, domain, or URL: evaluates HTTP security headers (CSP, HSTS, XFO, XCTO, Referrer-Policy, Cookies), DNS posture (SPF, DMARC, DKIM, CAA, MX, CNAME takeover risk), perimeter port exposure (80, 443, 22, 25, 3306, 5432, 6379), WAF fingerprinting, overall security score & grade (A-F), and actionable 4-pillar remediations (Traefik, Nginx, Express, DNS). Always call this when asked for "recon", "audit", "security scan", "vulnerabilities", or "check attack surface".',
+    obj({ target: { type: 'string', description: 'domain or URL to audit, e.g. "useme.com" or "https://my-app.engineer"' } }, ['target']),
+    async ({ target }) => {
+      if (!ctx.recon || !ctx.recon.auditTarget) return { error: 'recon engine not wired in context' };
+      return ctx.recon.auditTarget(target);
+    }, { repeatable: true });
+
+  R('gb_security_eval', 'CLIENT-SIDE DOM & STORAGE SECURITY AUDIT of the active browser tab: scans localStorage and sessionStorage for leaked auth tokens / JWTs / API keys, audits HTML forms for CSRF tokens and HTTP submissions, checks inline scripts and DOM XSS sinks.',
+    obj({ profile: { type: 'string', description: 'browser profile to audit, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.auditActivePage) return { error: 'DOM security auditor not wired in context' };
+      return ctx.recon.auditActivePage(profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_redteam_probe', 'ACTIVE RED TEAM ATTACK SURFACE PROBE: tests target for exposed sensitive files (/.git, /.env, /metrics, /health, /actuator, /swagger.json, /api-docs), tests CORS misconfigurations with rogue origin reflection and credential theft, and tests iframe clickjacking frameability.',
+    obj({ target: { type: 'string', description: 'target domain or URL' } }, ['target']),
+    async ({ target }) => {
+      if (!ctx.recon || !ctx.recon.runRedteamAudit) return { error: 'red team probe engine not wired in context' };
+      return ctx.recon.runRedteamAudit(target);
+    }, { repeatable: true });
+
+  R('gb_recon_probe', 'BROKEN MULTI-SESSION INVALIDATION AUDIT (CWE-613): verifies whether user password change / credential rotation terminates active concurrent sessions across secondary browsers and mobile devices.',
+    obj({ loginUrl: { type: 'string' }, passwordChangeUrl: { type: 'string' }, protectedUrl: { type: 'string' } }, ['loginUrl', 'passwordChangeUrl', 'protectedUrl']),
+    async ({ loginUrl, passwordChangeUrl, protectedUrl }) => {
+      if (!ctx.recon || !ctx.recon.testHttpSessionInvalidation) return { error: 'session probe engine not wired in context' };
+      return ctx.recon.testHttpSessionInvalidation({ loginUrl, passwordChangeUrl, protectedUrl });
+    }, { repeatable: true });
+
+  R('gb_page_script', 'EXECUTE CUSTOM IN-BROWSER RECON / SECURITY SCRIPT in the target browser page context: inspects live DOM, extracts endpoints from loaded bundles, reads window globals, or evaluates custom client-side red-team tests.',
+    obj({ script: { type: 'string', description: 'JavaScript code to execute in the page' }, profile: { type: 'string', description: 'browser profile, default "default"' } }, ['script']),
+    async ({ script, profile }) => {
+      if (!ctx.recon || !ctx.recon.executeSecurityScript) return { error: 'browser script evaluator not wired in context' };
+      return ctx.recon.executeSecurityScript(profile || 'default', script);
+    });
+
   return reg.names().length;
 }
 
