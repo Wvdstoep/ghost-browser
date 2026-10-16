@@ -1948,25 +1948,38 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     /** Build the shell (browser/flows/agent) actions. */
     
-    private fun runReconScan(target: String, comprehensive: Boolean) {
+        private fun runReconScan(target: String, comprehensive: Boolean) {
         val t = target.trim()
         if (t.isBlank()) return
         shellUi.reconUi.isScanning.value = true
         shellUi.reconUi.error.value = null
         agentExec.execute {
             try {
-                val payload = org.json.JSONObject().apply {
-                    put("target", t)
-                    put("mode", if (comprehensive) "comprehensive" else "perimeter")
-                }.toString()
-                val res = apiAwait("POST", "/v1/recon/scan", payload)
-                val report = ReconJson.parseReport(res)
+                var report: engineer.myapp.gb.shared.ReconReport? = null
+
+                if (vm.clusterUrl.isNotBlank()) {
+                    try {
+                        val payload = org.json.JSONObject().apply {
+                            put("target", t)
+                            put("mode", if (comprehensive) "comprehensive" else "perimeter")
+                        }.toString()
+                        val res = apiAwait("POST", "/v1/recon/scan", payload)
+                        if (!res.startsWith("<") && (res.contains("\"findings\"") || res.contains("\"score\""))) {
+                            report = ReconJson.parseReport(res)
+                        }
+                    } catch (e: Exception) {}
+                }
+
+                if (report == null) {
+                    report = OnDeviceAuditor.audit(t)
+                }
+
                 runOnUiThread {
                     shellUi.reconUi.isScanning.value = false
                     if (report != null) {
                         shellUi.reconUi.report.value = report
                     } else {
-                        shellUi.reconUi.error.value = "Failed to parse recon report: " + res
+                        shellUi.reconUi.error.value = "Failed to audit target: " + t
                     }
                 }
             } catch (e: Exception) {
