@@ -63,6 +63,7 @@ class ShellUi {
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
+    val reconUi = engineer.myapp.gb.shared.ReconUi()
     // the assistant — one chat, one agent on the cluster (state shapes live in :shared)
     val assistant = engineer.myapp.gb.shared.AssistantUi()
     val aiModel = engineer.myapp.gb.shared.AiModelUi()
@@ -74,6 +75,17 @@ class ShellUi {
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
+    /* The nightly training loop. One object feeds both the Training screen and each device's row in
+       the hub, so the phone cannot say "idle" about a machine the desktop shows mid-round. */
+    val training = mutableStateOf(engineer.myapp.gb.shared.TrainingWatch.View())
+    /* The runs browser: the rows, and the one run open over the page. */
+    val trainingRuns = mutableStateOf<List<engineer.myapp.gb.shared.TrainingWatch.RunRow>>(emptyList())
+    /* The scoreboard: every measured round, whatever model trained it. Null until the tab asks. */
+    val trainingResults = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.Results?>(null)
+    /* Side by side: what may be compared, and the run being watched. */
+    val compareOffer = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.CompareOffer?>(null)
+    val compareRun = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.CompareRun?>(null)
+    val trainingRun = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.RunDetail?>(null)
     // new-tab home feed (my-app.engineer /learn pages)
     val homeFeed = mutableStateOf<List<LearnItem>>(emptyList())
     val homeFeedLoading = mutableStateOf(false)
@@ -87,6 +99,20 @@ class ShellUi {
     val watchersLoading = mutableStateOf(false)
     val watcherRoles = mutableStateOf<List<String>>(emptyList())
     val watcherProfiles = mutableStateOf<List<String>>(listOf("facebook"))
+    /*
+     * PROFILES — its own destination now, not a chip row inside Settings.
+     *
+     * The role a profile uses lived in this phone's own preferences (`profileRolesJson`), so the
+     * cluster never knew about it, the desktop never knew about it, and reinstalling the app lost
+     * it. It is a field on the profile on the server now; this is only what the screen renders.
+     */
+    val profileCards = mutableStateOf<List<engineer.myapp.gb.shared.ProfileCard>>(emptyList())
+    val profileRoleNames = mutableStateOf<List<String>>(emptyList())
+    val profileRoleDetail = mutableStateOf<engineer.myapp.gb.shared.RoleChoice?>(null)
+    val profileStatus = mutableStateOf("")
+    /* The address bar and nav bar slide away while a page is scrolled down. Fed by the WebView's
+       own scroll reports; see ChromeScroll for why it is direction-with-a-threshold and not position. */
+    val chrome = engineer.myapp.gb.shared.ChromeScroll()
 }
 
 class ShellActions(
@@ -113,6 +139,9 @@ class ShellActions(
     val onOpenLearn: (String) -> Unit,
     val onRefreshHome: () -> Unit,
     // overflow menu / browser actions
+    val onOpenRecon: () -> Unit = {},
+    val onRunReconScan: (String, Boolean) -> Unit = { _, _ -> },
+    val onCopyReconSnippet: (String) -> Unit = {},
     val onOpenMenu: () -> Unit,
     val onCloseMenu: () -> Unit,
     val onBack: () -> Unit,
@@ -123,6 +152,37 @@ class ShellActions(
     val onFindInPage: () -> Unit,
     val onOpenHub: () -> Unit,
     val onRefreshHub: () -> Unit,
+    /* Defaulted, so adding the pipeline page did not force every construction site to be touched. */
+    val onRefreshTraining: () -> Unit = {},
+    val onPromoteRound: (String) -> Unit = {},
+    val onSetTrainingAuto: (Boolean) -> Unit = {},
+    val onSetHarvest: (Boolean) -> Unit = {},
+    val onSetResight: (Boolean) -> Unit = {},
+    val onSetServing: (String?, String?) -> Unit = { _, _ -> },
+    val onSetGpu: (Map<String, String>) -> Unit = {},
+    val onDestroyGpu: () -> Unit = {},
+    val onSetJudge: (Boolean) -> Unit = {},
+    /* The practice collector and autopilot serving - the two switches phase 5 added. */
+    val onSetPractice: (Boolean) -> Unit = {},
+    val onSetAutopilot: (Boolean) -> Unit = {},
+    val onStopRound: (String) -> Unit = {},
+    val onNodeJoin: (String) -> Unit = {},
+    val onNodeRevoke: (String) -> Unit = {},
+    val onSetModal: (Map<String, String>) -> Unit = {},
+    val onModalStart: () -> Unit = {},
+    val onTrialStudents: (List<String>) -> Unit = {},
+    val onLoadResults: () -> Unit = {},
+    val onLoadCompare: () -> Unit = {},
+    val onCompareRecorded: (String, String) -> Unit = { _, _ -> },
+    val onCompareLive: (String, String) -> Unit = { _, _ -> },
+    val onCompareStop: () -> Unit = {},
+    val onModalStop: () -> Unit = {},
+    val onLoadRuns: () -> Unit = {},
+    val onOpenRun: (String) -> Unit = {},
+    val onLabelStep: (String, Int, String) -> Unit = { _, _, _ -> },
+    val onRunRoundNow: () -> Unit = {},
+    val onAllowTrainer: (String, Boolean) -> Unit = { _, _ -> },
+    val onSetUpTrainer: (String) -> Unit = {},
     val onOpenAiSettings: () -> Unit,
     val onCloseAiSettings: () -> Unit,
     // approvals gate
@@ -142,6 +202,16 @@ class ShellActions(
     val onLoadFiles: () -> Unit = {},
     val onDeleteFile: (id: String) -> Unit = {},
     val onDeleteRecording: (id: String) -> Unit = {},
+    // profiles — the logged-in identities and the role each one uses
+    val onLoadProfiles: () -> Unit = {},
+    val onOpenProfile: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
+    val onReadRole: (String) -> Unit = {},
+    val onSetProfileRole: (profile: String, role: String) -> Unit = { _, _ -> },
+    val onCreateProfile: (name: String, site: String) -> Unit = { _, _ -> },
+    val onRenameProfile: (profile: String, to: String) -> Unit = { _, _ -> },
+    val onDuplicateProfile: (profile: String, to: String) -> Unit = { _, _ -> },
+    val onClearProfileLogin: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
+    val onDeleteProfile: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
 )
 
 private fun hostOf(url: String): String {
@@ -156,9 +226,23 @@ private fun hostOf(url: String): String {
 fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
     val cs = MaterialTheme.colorScheme
     val screen = shell.screen.value
+    /*
+     * CHROME THAT GETS OUT OF THE WAY WHILE YOU READ.
+     *
+     * The omnibox and the nav bar take about a fifth of a phone screen, permanently, on every page.
+     * Scrolling down the page slides both off and gives the space to the content; scrolling up
+     * brings them straight back. Only on the BROWSER: sliding the nav off Profiles or the chat
+     * would leave no way out of the screen, so leaving the browser shows the chrome again.
+     */
+    val collapsible = screen == "browser"
+    if (!collapsible) shell.chrome.reset()
+    val chromeF = engineer.myapp.gb.shared.rememberChromeFraction(collapsible && shell.chrome.hidden.value)
+
     Box(Modifier.fillMaxSize().background(cs.background)) {
         Column(Modifier.fillMaxSize()) {
-            if (screen == "browser" || screen == "flows") TopBar(shell, act)
+            if (screen == "browser") {
+                engineer.myapp.gb.shared.CollapsingSlot(chromeF, fromTop = true) { TopBar(shell, act) }
+            } else if (screen == "flows") TopBar(shell, act)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // The real browser is always mounted so tab state/JS is never torn down; other screens
                 // draw over it (opaque) rather than unmounting it.
@@ -201,10 +285,70 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         onOpenUrl = { act.onUrlGo(it) }, onRefresh = act.onRefreshApprovals,
                         topInset = Modifier.statusBarsPaddingSafe(), leads = shell.leads.value,
                     )
-                    "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
+                    /*
+                     * PROFILES. Pressing one still opens it in a NEW TAB in that profile's own
+                     * cookie jar — the part of the old UI that was right, kept exactly.
+                     */
+                    "profiles" -> engineer.myapp.gb.shared.ProfilesScreen(
+                        profiles = shell.profileCards.value,
+                        onOpen = { p -> act.onOpenProfile(p) },
+                        onRefresh = act.onLoadProfiles,
+                        roleNames = shell.profileRoleNames.value,
+                        roleDetail = shell.profileRoleDetail.value,
+                        onReadRole = { r -> act.onReadRole(r) },
+                        onSetRole = { p, r -> act.onSetProfileRole(p, r) },
+                        onCreate = { n, s -> act.onCreateProfile(n, s) },
+                        onRename = { p, to -> act.onRenameProfile(p, to) },
+                        onDuplicate = { p, to -> act.onDuplicateProfile(p, to) },
+                        onClearLogin = { p -> act.onClearProfileLogin(p) },
+                        onDelete = { p -> act.onDeleteProfile(p) },
+                        status = shell.profileStatus.value,
+                        topInset = Modifier.statusBarsPaddingSafe(),
+                    )
+                    "settings" -> PhoneSettings(settingsUi, settingsAct, shell, act) { act.onNav("browser") }
                     "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }, onDeleteRecording = act.onDeleteRecording), topInset = Modifier.statusBarsPaddingSafe())
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
                         shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
+                        topInset = Modifier.statusBarsPaddingSafe(),
+                    )
+                    /* The same pipeline page the desktop shows. Ask anywhere, see it everywhere. */
+                    "training" -> engineer.myapp.gb.shared.TrainingScreen(
+                        shell.training.value,
+                        onRefresh = act.onRefreshTraining,
+                        onPromote = act.onPromoteRound,
+                        onSetAuto = act.onSetTrainingAuto,
+                        onRunNow = act.onRunRoundNow,
+                        onAllowTrainer = act.onAllowTrainer,
+                        onSetUpTrainer = act.onSetUpTrainer,
+                        onSetHarvest = act.onSetHarvest,
+                        onSetResight = act.onSetResight,
+                        onSetServing = act.onSetServing,
+                        onSetGpu = act.onSetGpu,
+                        onDestroyGpu = act.onDestroyGpu,
+                        onSetJudge = act.onSetJudge,
+                        onSetPractice = act.onSetPractice,
+                        onSetAutopilot = act.onSetAutopilot,
+                        onStopRound = act.onStopRound,
+                        onNodeJoin = act.onNodeJoin,
+                        onNodeRevoke = act.onNodeRevoke,
+                        onSetModal = act.onSetModal,
+                        onModalStart = act.onModalStart,
+                        onTrialStudents = act.onTrialStudents,
+                        results = shell.trainingResults.value,
+                        onLoadResults = act.onLoadResults,
+                        compareOffer = shell.compareOffer.value,
+                        compareRun = shell.compareRun.value,
+                        onLoadCompare = act.onLoadCompare,
+                        onCompareRecorded = act.onCompareRecorded,
+                        onCompareLive = act.onCompareLive,
+                        onCompareStop = act.onCompareStop,
+                        onModalStop = act.onModalStop,
+                        runs = shell.trainingRuns.value,
+                        runDetail = shell.trainingRun.value,
+                        onLoadRuns = act.onLoadRuns,
+                        onOpenRun = act.onOpenRun,
+                        onCloseRun = { shell.trainingRun.value = null },
+                        onLabelStep = act.onLabelStep,
                         topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     else -> if (shell.url.value.isBlank()) engineer.myapp.gb.shared.HomeScreen(   // new/blank tab → shared home
@@ -214,13 +358,24 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                     )
                 }
             }
-            BottomBar(shell, act)
+            /*
+             * WHAT THE RING IS DOING, WHEREVER IT IS DOING IT.
+             *
+             * The owner asks here and the job may run on the desktop, so this is read from the
+             * cluster, not from this phone. One UI across two devices means the surface the question
+             * was asked on is the surface that has to answer it.
+             */
+            engineer.myapp.gb.shared.RingWorkStrip()
+            if (collapsible) {
+                engineer.myapp.gb.shared.CollapsingSlot(chromeF, fromTop = false) { BottomBar(shell, act) }
+            } else BottomBar(shell, act)
         }
 
         if (shell.switcherOpen.value) TabGrid(shell, act)
         if (shell.menuOpen.value) OverflowMenu(shell, act)
         if (shell.urlFocused.value) Omnibox(shell, act)
         if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
+        if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
     }
 }
 
@@ -252,6 +407,7 @@ private fun TopBar(shell: ShellUi, act: ShellActions) {
                         color = if (host.isBlank()) cs.onSurfaceVariant else cs.onSurface,
                         fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                     )
+                    engineer.myapp.gb.shared.ReconAddressBarIcon(ui = shell.reconUi, currentUrl = shell.url.value, onClick = act.onOpenRecon)
                 }
             }
             Spacer(Modifier.width(6.dp))
@@ -279,6 +435,9 @@ private fun BottomBar(shell: ShellUi, act: ShellActions) {
         NavItem(Icons.Default.Public, "Browser", shell.screen.value == "browser") { act.onNav("browser") }
         NavItem(Icons.Default.Bolt, "Agent", shell.screen.value == "agent") { act.onOpenAgent() }
         NavItem(Icons.Default.AccountTree, "Flows", shell.screen.value == "flows") { act.onNav("flows") }
+        /* A logged-in identity that automations act through belongs beside the browser, not three
+           taps inside a settings list. */
+        NavItem(Icons.Default.SwitchAccount, "Profiles", shell.screen.value == "profiles") { act.onNav("profiles") }
         NavItem(Icons.Default.Verified, "Approvals", shell.screen.value == "approvals", badge = pending) { act.onOpenApprovals() }
         NavItem(Icons.Default.Settings, "Settings", shell.screen.value == "settings") { act.onOpenSettings() }
     }
@@ -607,3 +766,52 @@ private fun AiDropdown(options: List<String>, selectedIndex: Int, onSelect: (Int
 /* ── insets helpers (safe if window insets APIs vary) ─────────────────────────────────────────── */
 @Composable private fun Modifier.statusBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.statusBars))
 @Composable private fun Modifier.navigationBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.ime))
+
+/**
+ * THE ONE SETTINGS PAGE, fed from the phone's own state. The phone keeps its SettingsUi (the
+ * activity, the on-device model, the connection) and the shared page reads it through a
+ * SettingsState it fills on every pass; the handlers are the phone's own actions, and the model
+ * section is the same AiModelUi/AiModelActions the model sheet uses - one key ring everywhere.
+ */
+@androidx.compose.runtime.Composable
+private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, act: ShellActions, onClose: () -> Unit) {
+    val st = androidx.compose.runtime.remember { engineer.myapp.gb.shared.SettingsState() }
+    val local = androidx.compose.runtime.remember { engineer.myapp.gb.shared.LocalModelUi() }
+    st.clusterUrl.value = ui.clusterUrl
+    st.clusterStatus.value = ui.clusterStatus.value
+    st.connected.value = ui.connected.value
+    st.deviceKind.value = "phone"
+    st.deviceLine.value = ui.phoneCaps.value.ifBlank { "android · native touch · real IP" }
+    st.platforms.value = ui.platforms.value
+    st.profiles.value = ui.profiles.value
+    st.currentProfile.value = ui.currentProfile.value
+    st.roleNames.value = ui.roleNames.value
+    st.roleForCurrent.value = ui.roleForCurrent.value
+    st.devices.value = ui.devices.value
+    st.hubSummary.value = shell.hubSummary.value
+    st.trainingLine.value = sa.trainingLine()
+    st.networkLine.value = "This phone operates on its own real mobile IP — the strongest fingerprint for Cloudflare-gated sites. The cluster's Ghost Browser keeps its own in-image exit node."
+    st.themeDark.value = ui.themeMode.value != 1
+    st.activity.value = ui.log.value
+    st.appLabel.value = "Ghost Browser Mobile"
+    local.useLocal.value = ui.useLocal.value
+    local.labels.value = ui.modelLabels.value
+    local.index.value = ui.modelIndex.value
+    local.status.value = ui.modelStatus.value
+    local.progress.value = ui.modelProgress.value
+    st.local.value = local
+    val handlers = androidx.compose.runtime.remember(sa, act) {
+        engineer.myapp.gb.shared.SettingsHandlers(
+            onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onConnectToggle = sa.onConnectToggle,
+            onSetPassword = sa.onSetPassword,
+            onResync = sa.onResync, onOpenHub = sa.onOpenHub, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
+            onLoadPlatforms = sa.onLoadPlatforms, onOpenPlatform = sa.onOpenPlatform,
+            onSwitchProfile = sa.onSwitchProfile, onAddProfile = sa.onAddProfile, onSetRole = sa.onSetRole, onLoadRoles = sa.onLoadRoles,
+            onRefreshDevices = sa.onRefreshDevices, onOpenTailscale = sa.onOpenTailscale,
+            onSetTheme = { dark -> sa.onSetTheme(if (dark) 0 else 1) }, onClearLog = sa.onClearLog,
+            aiModel = act.aiModel,
+            onSetUseLocal = sa.onSetUseLocal, onSelectLocalModel = sa.onSelectModelIndex, onDownloadLocalModel = sa.onDownloadModel,
+        )
+    }
+    engineer.myapp.gb.shared.SettingsScreenShared(st, shell.aiModel, handlers, onClose = onClose, topInset = Modifier.statusBarsPaddingSafe())
+}

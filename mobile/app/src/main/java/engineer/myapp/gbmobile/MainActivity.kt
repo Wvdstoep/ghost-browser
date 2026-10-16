@@ -108,6 +108,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private var ctrlProfile: String = "default"          // the WebView profile the control channel (and its cluster session cookie) lives in
     @Volatile private var recordingsPolledAt = 0L        // last time the recordings list was refreshed for the chat's cards
     @Volatile private var ctrlApiReady = false           // control channel's __gbApi is live (registered)
+    @Volatile private var ringWatching = false           // one ring-work poller, not one per registration
     private var apiWeb: WebView? = null                  // hidden WebView on the GB origin = same-origin authed API channel
     @Volatile private var apiReady = false
     private val apiQueue = mutableListOf<() -> Unit>()
@@ -259,6 +260,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun activateTab(i: Int) {
         if (i < 0 || i >= tabs.size) return
+        /* Switching tabs shows the chrome: the new tab's scroll position has nothing to do with the
+           direction the last one was being read in. */
+        shellUi.chrome.reset()
         val h = tabs[i]
         val w = ensureWeb(h)
         (w.parent as? ViewGroup)?.removeView(w)
@@ -364,6 +368,25 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (h.desktop) s.userAgentString = DESKTOP_UA                 // "Request desktop site" for portals that refuse mobile
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
+        /*
+         * THE PAGE'S OWN SCROLL DRIVES THE CHROME.
+         *
+         * Read off the WebView rather than from a Compose gesture: the page is a native view, so a
+         * Compose scroll modifier over it would either steal the gesture or never see it. The
+         * WebView reports its real scroll position, which is also the only thing that knows about a
+         * page's inner scrollers and its momentum.
+         *
+         * Only the visible tab may move the chrome. Background tabs report scroll while they load
+         * and settle, and those reports would slide the bar away under a page nobody is looking at.
+         */
+        w.setOnScrollChangeListener { v, _, y, _, oldY ->
+            /* `web` is always the active tab's WebView (see activateTab); `::web.isInitialized`
+               guards the very first tab, whose listener is set before the field is assigned. */
+            if (::web.isInitialized && v === web) {
+                val dy = y - oldY
+                if (shellUi.chrome.plausible(dy)) shellUi.chrome.onScroll(dy, y <= 2)
+            }
+        }
         w.webViewClient = object : WebViewClient() {
             // Non-http(s) links (app deep links) crash a WebView with ERR_UNKNOWN_URL_SCHEME. Keep the
             // user inside GB (real logged-in session): rewrite Messenger/app deep links to their web
@@ -411,6 +434,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun load(raw: String) {
         var u = raw.trim(); if (u.isEmpty()) return
+        /* A new page starts at the top, so the address bar is there to be seen — and the accumulated
+           scroll direction from the last page means nothing on this one. */
+        shellUi.chrome.reset()
         if (!u.startsWith("http") && !u.startsWith("file:")) {
             u = if (u.contains(".") && !u.contains(" ")) "https://$u" else "https://www.google.com/search?q=" + Uri.encode(u)
         }
@@ -598,6 +624,181 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun renderRoleSpinner() {
         settingsUi.roleNames.value = roleNames()
         settingsUi.roleForCurrent.value = roleForProfile(vm.currentProfile.value ?: "default").ifBlank { "(none)" }
+    }
+
+    /**
+     * WHAT THE RING IS DOING, READ FROM THE CLUSTER.
+     *
+     * The owner asks here and the job may run on the desktop. A strip that only knew about work on
+     * THIS phone would show nothing on the very surface the question was asked from — which is the
+     * state that had the assistant hand the same CapCut goal over twice while the desktop was
+     * already working on it. One UI, two devices, one engine: the cluster is where they meet.
+     */
+    private fun startRingWatch() {
+        if (ringWatching) return
+        ringWatching = true
+        Thread({
+            while (true) {
+                try {
+                    if (vm.clusterUrl.trim().isNotEmpty() && ctrlApiReady) {
+                        val body = apiAwait("GET", "/v1/ring/work", null)
+                        runOnUiThread { engineer.myapp.gb.shared.RingWatch.apply(body, android.os.Build.MODEL ?: "this phone") }
+                    }
+                } catch (e: Exception) { /* a status line is never worth an error on screen */ }
+                /* Three seconds while something runs, a slow beat otherwise. */
+                try { Thread.sleep(if (engineer.myapp.gb.shared.RingWork.busy.value) 3000L else 12000L) } catch (e: InterruptedException) { return@Thread }
+            }
+        }, "gb-ring-watch").apply { isDaemon = true }.start()
+    }
+
+    // ---- PROFILES: its own surface, and the role kept where everything can see it ---------------
+
+    /**
+     * Every profile and the role it uses, in ONE call.
+     *
+     * The alternative is N+1 — the list, then each profile's settings, then the roles, then the
+     * flows to count what runs where — which is how this screen never got built and the role ended
+     * up in `vm.profileRolesJson`, a map in THIS PHONE's preferences that the cluster and the
+     * desktop could not see and a reinstall threw away.
+     */
+    private fun profilesLoad() {
+        runOnUiThread { shellUi.profileStatus.value = "loading your profiles…" }
+        agentExec.execute {
+            val raw = apiAwait("GET", "/v1/profiles/overview", null)
+            val o = try { JSONObject(raw) } catch (e: Exception) { JSONObject().put("error", raw.take(120)) }
+            if (o.has("error")) { runOnUiThread { shellUi.profileStatus.value = o.optString("error") }; return@execute }
+            val arr = o.optJSONArray("profiles") ?: JSONArray()
+            val cards = ArrayList<engineer.myapp.gb.shared.ProfileCard>()
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONObject(i) ?: continue
+                cards.add(engineer.myapp.gb.shared.ProfileCard(
+                    name = p.optString("name"), site = p.optString("site"), note = p.optString("note"),
+                    hasLogin = p.optBoolean("hasLogin"), role = p.optString("role"),
+                    roleSource = p.optString("roleSource"), missingRole = p.optString("missingRole"),
+                    device = p.optString("device"), automations = p.optInt("automations"),
+                    live = p.optBoolean("live"), exit = p.optString("exit"),
+                ))
+            }
+            val names = ArrayList<String>()
+            val rs = o.optJSONArray("roles") ?: JSONArray()
+            for (i in 0 until rs.length()) rs.optString(i).takeIf { it.isNotBlank() }?.let { names.add(it) }
+            runOnUiThread {
+                shellUi.profileCards.value = cards
+                shellUi.profileRoleNames.value = names
+                shellUi.profileStatus.value = ""
+            }
+            migrateLocalProfileRoles(cards)
+        }
+    }
+
+    /**
+     * CARRY THE OLD LOCAL CHOICES UP TO THE SERVER, ONCE.
+     *
+     * Roles picked before today live in `vm.profileRolesJson` on this phone and nowhere else. Now
+     * that the profile itself carries the choice, those would simply be lost — a silent downgrade
+     * of settings someone deliberately made, which is worse than never having had the feature.
+     *
+     * So each local entry is pushed for a profile the server does not already have a CHOSEN role
+     * for (never overwriting a newer decision), and only what actually lands is dropped from the
+     * local map. An entry naming a role that no longer exists is left alone rather than deleted:
+     * the server refuses it, and keeping it means the evidence is still there to look at.
+     */
+    private fun migrateLocalProfileRoles(cards: List<engineer.myapp.gb.shared.ProfileCard>) {
+        val local = try { JSONObject(vm.profileRolesJson) } catch (e: Exception) { return }
+        if (local.length() == 0) return
+        val chosen = cards.filter { it.roleSource == "chosen" }.map { it.name }.toSet()
+        var moved = 0
+        val keys = local.keys().asSequence().toList()
+        for (k in keys) {
+            val role = local.optString(k).trim()
+            if (role.isBlank() || role == "(none)" || k in chosen) { local.remove(k); continue }
+            val r = try { JSONObject(apiAwait("PUT", "/v1/profiles/$k/settings", JSONObject().put("defaultRole", role).toString())) }
+                    catch (e: Exception) { JSONObject().put("error", "no answer") }
+            if (r.has("error")) { vm.log("! could not move \"$k\" → $role to the cluster: ${r.optString("error").take(90)}") }
+            else { local.remove(k); moved++ }
+        }
+        vm.profileRolesJson = local.toString()
+        if (moved > 0) {
+            vm.log("↑ moved $moved profile role${if (moved == 1) "" else "s"} to your Ghost Browser — the desktop and the cluster can see them now")
+            profilesLoad()
+        }
+    }
+
+    /**
+     * One role in full, for reading BEFORE choosing.
+     *
+     * `requireWords` and `runsOn` are sentences the server writes (src/requireWords.js). Translating
+     * capability flags here too would be a second copy of one rule, and the copy in the client is
+     * always the one that goes stale — the same way this endpoint's own projection dropped `require`
+     * while the router went on matching against it.
+     */
+    private fun profileRoleRead(name: String) {
+        runOnUiThread { shellUi.profileRoleDetail.value = null }
+        agentExec.execute {
+            val r = try { JSONObject(apiAwait("GET", "/v1/agent/roles/$name", null)) } catch (e: Exception) { JSONObject().put("error", "no answer") }
+            if (r.has("error")) { runOnUiThread { shellUi.profileStatus.value = r.optString("error") }; return@execute }
+            val tools = ArrayList<String>()
+            val ta = r.optJSONArray("tools") ?: JSONArray()
+            for (i in 0 until ta.length()) ta.optString(i).takeIf { it.isNotBlank() }?.let { tools.add(it) }
+            val d = engineer.myapp.gb.shared.RoleChoice(
+                name = r.optString("name", name), label = r.optString("label"), site = r.optString("site"),
+                group = r.optString("group"), description = r.optString("description"),
+                playbook = r.optString("prompt"), requireWords = r.optString("requireWords"),
+                runsOn = r.optJSONObject("runsOn")?.optString("summary") ?: "",
+                tools = tools, builtin = r.optBoolean("builtin"),
+                /* Every way this role can run, as the SERVER listed them. Working out which device
+                   can do what here would be a second copy of the router's rule, and the copy in
+                   the client is always the one that goes stale. */
+                variants = run {
+                    val out = ArrayList<engineer.myapp.gb.shared.RoleVariant>()
+                    val va = r.optJSONArray("variants") ?: JSONArray()
+                    for (i in 0 until va.length()) {
+                        val v = va.optJSONObject(i) ?: continue
+                        out.add(engineer.myapp.gb.shared.RoleVariant(
+                            kind = v.optString("kind"), where = v.optString("where"),
+                            requireWords = v.optString("requireWords"), method = v.optString("method"),
+                            note = v.optString("note"), ready = v.optBoolean("ready"), runsOn = v.optString("runsOn"),
+                        ))
+                    }
+                    out
+                },
+            )
+            runOnUiThread { shellUi.profileRoleDetail.value = d }
+        }
+    }
+
+    /**
+     * One management call, and its answer shown as it came back.
+     *
+     * Every one of these refuses on the server while a session holds the profile: pulling a profile
+     * directory out from under a running Chromium leaves the browser writing into a folder that no
+     * longer exists, and that surfaces minutes later somewhere unrelated. The refusal names the way
+     * out ("close that session first"), so it is shown verbatim rather than swallowed.
+     */
+    private fun profileManage(method: String, path: String, body: String?, ok: String) {
+        runOnUiThread { shellUi.profileStatus.value = "…" }
+        agentExec.execute {
+            val raw = apiAwait(method, path, body)
+            val r = try { JSONObject(raw) } catch (e: Exception) { JSONObject().put("error", raw.take(140)) }
+            runOnUiThread { shellUi.profileStatus.value = if (r.has("error")) r.optString("error") else ok }
+            profilesLoad()
+        }
+    }
+
+    /** Make a role this profile's default, or clear it back to the site match with "". */
+    private fun profileRoleSet(profile: String, role: String) {
+        agentExec.execute {
+            val r = try { JSONObject(apiAwait("PUT", "/v1/profiles/$profile/settings", JSONObject().put("defaultRole", role).toString())) }
+                    catch (e: Exception) { JSONObject().put("error", "no answer") }
+            runOnUiThread {
+                /* The server refuses a role that does not exist and names the valid ones: a typo
+                   would otherwise leave the profile looking configured and acting as a generalist. */
+                shellUi.profileStatus.value = if (r.has("error")) r.optString("error")
+                    else if (role.isBlank()) "$profile works it out from the site again"
+                    else "$profile uses $role"
+            }
+            profilesLoad()
+        }
     }
 
     /** Automations whose steps run on [profile] — read off the flow definitions (nodes[].profile), so the
@@ -1284,8 +1485,45 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
              * the desktop's tool list never offered the drag and upload its own machine could do.
              * What is left here is what is really this phone's: its tools, its tab, its profile role.
              */
+            /*
+             * WHAT THIS PHONE DID, KEPT SO IT CAN BE LEARNED FROM.
+             *
+             * This is the data the ring exists for. The phone holds the real logins at a real
+             * address, so it reaches the pages nothing else can — and until now every one of those
+             * runs taught the model nothing, because on-device work was journalled as prose into a
+             * store the training set never reads.
+             */
+            agentTrace = engineer.myapp.gb.shared.DeviceTrace.Run(text.trim(), role = roleName, profile = vm.currentProfile.value ?: "")
+            agentSaid = ""
+            var how = "idle"
             try { AgentCore.run(phoneHost(brain, roleName)) }
-            finally { runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false } }
+            catch (e: Throwable) { how = "failed"; if (agentSaid.isBlank()) agentSaid = e.message ?: "failed"; throw e }
+            finally {
+                runOnUiThread { agentBusy = false; shellUi.agentBusy.value = false }
+                fileAgentTrace(how)
+            }
+        }
+    }
+
+    /* The run being recorded, and the agent's own last word — which becomes the report the
+       verifiers read. One at a time, which agentBusy already guarantees on a phone. */
+    @Volatile private var agentTrace: engineer.myapp.gb.shared.DeviceTrace.Run? = null
+    @Volatile private var agentSaid: String = ""
+
+    /**
+     * File the run with the cluster as an ordinary job.
+     *
+     * Best-effort: a run that worked must never be reported as failed because its history could not
+     * be filed. Off the agent thread, because the loop has already finished.
+     */
+    private fun fileAgentTrace(status: String) {
+        val r = agentTrace ?: return
+        agentTrace = null
+        if (vm.clusterUrl.trim().isEmpty()) return
+        val body = r.body(status, agentSaid, android.os.Build.MODEL ?: "phone")
+        agentExec.execute {
+            try { apiAwait("POST", "/v1/device-runs/trace", body) }
+            catch (e: Exception) { vm.log("! run not filed: ${e.message}") }
         }
     }
 
@@ -1303,12 +1541,23 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             return runAgentTool(name, a)
         }
         override fun chat(system: String, user: String) = brain.chat(system, user)
-        override fun push(role: String, text: String) = agentPushMsg(role, text, null)
+        override fun push(role: String, text: String) {
+            if (role == "assistant" && text.isNotBlank()) agentSaid = text
+            agentPushMsg(role, text, null)
+        }
         /* This app shows the CALL as the assistant's own line and the RESULT as a tool chip, which is
            why AgentCore has two hooks instead of one. */
-        override fun pushToolCall(name: String, argsJson: String) =
+        override fun pushToolCall(name: String, argsJson: String) {
+            /* The decision half of a turn — what the agent chose, with the arguments it chose. */
+            agentTrace?.tool(name, argsJson)
             agentPushMsg("assistant", "{\"tool\":\"$name\",\"args\":$argsJson}", null)
-        override fun pushToolResult(name: String, result: String) = agentPushMsg("tool", result, name)
+        }
+        override fun pushToolResult(name: String, result: String) {
+            /* The observation half of a turn. A look's result is the numbered list, and DeviceTrace
+               keeps it as marks — the only thing that makes a later click learnable. */
+            agentTrace?.observed(name, result)
+            agentPushMsg("tool", result, name)
+        }
         override fun transcript() = buildAgentTranscript()
     }
 
@@ -1663,6 +1912,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     // ---- The AI model: Ghost Browser's own setting, edited from here ----------------------------
+    /* The run open in the browser, so a label can re-read it. */
+    private var lastOpenRun = ""
     private val AIM = shellUi.aiModel
     private fun aiModelLoad() {
         runOnUiThread { AIM.loading.value = true }
@@ -1687,10 +1938,46 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         runOnUiThread { AIM.note.value = if (r.has("error")) "✗ ${r.optString("error").take(120)}" else "✓ saved — the agent now runs on ${r.optString("llmModel", model)}" }
         aiModelLoad()
     }
+    /* The backup ring — a key from a different account, tried only after the first hits its limit. */
+    private fun aiModelSaveBackups(backups: String) {
+        try { apiAwait("PUT", "/v1/agent/settings", JSONObject().put("llmKeys", backups.trim()).toString()) } catch (e: Exception) { runOnUiThread { AIM.note.value = "✗ could not save the backup key" } }
+        aiModelLoad()
+    }
 
     // ---- Cluster panel --------------------------------------------------------------------------
 
     /** Build the shell (browser/flows/agent) actions. */
+    
+    private fun runReconScan(target: String, comprehensive: Boolean) {
+        val t = target.trim()
+        if (t.isBlank()) return
+        shellUi.reconUi.isScanning.value = true
+        shellUi.reconUi.error.value = null
+        agentExec.execute {
+            try {
+                val payload = org.json.JSONObject().apply {
+                    put("target", t)
+                    put("mode", if (comprehensive) "comprehensive" else "perimeter")
+                }.toString()
+                val res = apiAwait("POST", "/v1/recon/scan", payload)
+                val report = ReconJson.parseReport(res)
+                runOnUiThread {
+                    shellUi.reconUi.isScanning.value = false
+                    if (report != null) {
+                        shellUi.reconUi.report.value = report
+                    } else {
+                        shellUi.reconUi.error.value = "Failed to parse recon report: " + res
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    shellUi.reconUi.isScanning.value = false
+                    shellUi.reconUi.error.value = e.message ?: "Recon request failed"
+                }
+            }
+        }
+    }
+
     private fun buildShellActions() = engineer.myapp.gbmobile.ui.ShellActions(
         onUrlGo = { shellUi.urlFocused.value = false; load(it) },
         onFocusUrl = { shellUi.urlFocused.value = true },
@@ -1701,7 +1988,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onCloseSwitcher = { shellUi.switcherOpen.value = false },
         onSelectTab = { i -> activateTab(i); shellUi.switcherOpen.value = false; shellUi.urlFocused.value = false },
         onCloseTab = { i -> closeTab(i) },
-        onNav = { s -> shellUi.screen.value = s; if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows") },
+        onNav = { s ->
+            shellUi.screen.value = s
+            if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows")
+            if (s == "profiles" && shellUi.profileCards.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) profilesLoad()
+        },
         onOpenSettings = { openSettings() },
         onOpenAgent = { assistantOpen() },
         onCloseAgent = { shellUi.screen.value = "browser" },
@@ -1723,6 +2014,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             onList = { host, key -> agentExec.execute { aiModelList(host, key) } },
             onTest = { host, key, model -> agentExec.execute { aiModelTest(host, key, model) } },
             onSave = { host, key, model -> agentExec.execute { aiModelSave(host, key, model) } },
+            onSaveBackups = { backups -> agentExec.execute { aiModelSaveBackups(backups) } },
         ),
         onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
         onRunFlow = { id, name -> runFlow(id, name) },
@@ -1731,6 +2023,23 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
         onRefreshHome = { fetchLearnFeed() },
+        onOpenRecon = {
+            val u = shellUi.url.value
+            val host = try { android.net.Uri.parse(u).host ?: u } catch (e: Exception) { u }
+            shellUi.reconUi.currentTarget.value = if (host.isNotBlank()) host else u
+            shellUi.reconUi.isOpen.value = true
+            if (host.isNotBlank() && shellUi.reconUi.report.value?.target != host) {
+                runReconScan(host, true)
+            }
+        },
+        onRunReconScan = { target, comp -> runReconScan(target, comp) },
+        onCopyReconSnippet = { text ->
+            try {
+                val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Recon Remediation", text))
+                runOnUiThread { android.widget.Toast.makeText(this@MainActivity, "Remediation copied to clipboard", android.widget.Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {}
+        },
         onOpenMenu = { shellUi.desktopMode.value = tabs.getOrNull(activeTab)?.desktop == true; shellUi.menuOpen.value = true },
         onCloseMenu = { shellUi.menuOpen.value = false },
         onBack = { if (this::web.isInitialized && web.canGoBack()) web.goBack() },
@@ -1741,6 +2050,61 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onFindInPage = { try { if (this::web.isInitialized) web.showFindDialog(null, true) } catch (e: Exception) { vm.log("! find in page unavailable") } },
         onOpenHub = { openDeviceHub() },
         onRefreshHub = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
+        onRefreshTraining = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/state", null, "run_training") },
+        /* Promotion is the one act on that page with a consequence. The cluster refuses any round
+           that did not beat its own baseline, so this cannot be the way a worse model reaches
+           service — it is a request, not a decision. */
+        onPromoteRound = { id -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/rounds/$id/promote", "{}", "run_promote") },
+        /* The same three controls the desktop has: the loop is one loop, seen from either surface. */
+        onSetTrainingAuto = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/auto", JSONObject().put("on", on).toString(), "run_promote") },
+        /* Letting the browser collect its own training data. Routed through run_promote so the
+           page reloads after it, the same way the other three controls do. */
+        onSetHarvest = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/harvest/on", JSONObject().put("on", on).toString(), "run_promote") },
+        onSetResight = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/resight", JSONObject().put("on", on).toString(), "run_promote") },
+        onSetServing = { mode, model -> if (vm.clusterUrl.trim().isNotEmpty()) { val b = JSONObject(); if (mode != null) b.put("mode", mode); if (model != null) b.put("model", model); apiCall("POST", "/v1/training/serving", b.toString(), "run_promote") } },
+        onSetGpu = { fields -> if (vm.clusterUrl.trim().isNotEmpty()) { val b = JSONObject(); fields.forEach { (k, v) -> b.put(k, v) }; apiCall("POST", "/v1/training/gpu", b.toString(), "run_promote") } },
+        onDestroyGpu = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/gpu/destroy", "{}", "run_promote") },
+        onSetJudge = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/judge", JSONObject().put("on", on).toString(), "run_promote") },
+        onSetPractice = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/practice", JSONObject().put("on", on).toString(), "run_promote") },
+        onSetAutopilot = { on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/serving", JSONObject().put("autopilot", on).toString(), "run_promote") },
+        onStopRound = { id -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/rounds/$id/stop", "{}", "run_promote") },
+        onNodeJoin = { kind -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/nodes/join", JSONObject().put("kind", kind).toString(), "run_promote") },
+        onNodeRevoke = { code -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("DELETE", "/v1/training/nodes/" + java.net.URLEncoder.encode(code, "UTF-8"), null, "run_promote") },
+        onSetModal = { fields -> if (vm.clusterUrl.trim().isNotEmpty()) { val b = JSONObject(); fields.forEach { (k, v) -> if (k == "auto") b.put(k, v == "true") else b.put(k, v) }; apiCall("POST", "/v1/training/nodes/modal", b.toString(), "run_promote") } },
+        onModalStart = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/nodes/modal/start", "{}", "run_promote") },
+        onTrialStudents = { models ->
+            if (vm.clusterUrl.trim().isNotEmpty()) {
+                val body = if (models.isEmpty()) "{}" else "{\"models\":[" + models.joinToString(",") { "\"" + it + "\"" } + "]}"
+                apiCall("POST", "/v1/training/students/trial", body, "run_promote")
+            }
+        },
+        onModalStop = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/nodes/modal/stop", "{}", "run_promote") },
+        onLoadRuns = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/runs?limit=60", null, "run_runs") },
+        /* The scoreboard: every measured round, whatever model trained it. */
+        onLoadResults = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/results?limit=24", null, "run_results") },
+        /* Side by side: what may be compared, and the two ways to start one. */
+        onLoadCompare = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/compare/jobs", null, "run_cmp_jobs") },
+        onCompareRecorded = { jobId, model ->
+            if (vm.clusterUrl.trim().isNotEmpty()) {
+                val body = JSONObject().put("jobId", jobId).put("model", model).toString()
+                apiCall("POST", "/v1/training/compare", body, "run_cmp_run")
+            }
+        },
+        onCompareLive = { prompt, model ->
+            if (vm.clusterUrl.trim().isNotEmpty()) {
+                val body = JSONObject().put("prompt", prompt).put("model", model).toString()
+                apiCall("POST", "/v1/training/compare/live", body, "run_cmp_run")
+            }
+        },
+        onCompareStop = {
+            val id = shellUi.compareRun.value?.id ?: ""
+            if (id.isNotBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/compare/$id/stop", "{}", "run_cmp_stop")
+        },
+        onOpenRun = { id -> if (vm.clusterUrl.trim().isNotEmpty()) { lastOpenRun = id; apiCall("GET", "/v1/training/runs/$id", null, "run_run") } },
+        onLabelStep = { id, n, verdict -> if (vm.clusterUrl.trim().isNotEmpty()) { lastOpenRun = id; apiCall("POST", "/v1/training/runs/$id/steps/$n/label", JSONObject().put("verdict", verdict).toString(), "run_run_label") } },
+        onRunRoundNow = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/dispatch", JSONObject().put("force", true).toString(), "run_promote") },
+        onAllowTrainer = { id, on -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/trainers/$id", JSONObject().put("on", on).toString(), "run_promote") },
+        onSetUpTrainer = { id -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/v1/training/trainers/$id/setup", "{}", "run_promote") },
         onOpenAiSettings = { syncSettingsUi(); shellUi.aiSettingsOpen.value = true },
         onCloseAiSettings = { shellUi.aiSettingsOpen.value = false },
         onOpenApprovals = { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() },
@@ -1765,6 +2129,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onLoadFiles = { loadFiles() },
         onDeleteFile = { id -> deleteCapturedFile(id) },
         onDeleteRecording = { id -> deleteRecording(id) },
+        // profiles — the surface; opening one still opens it in a NEW TAB in its own cookie jar
+        onLoadProfiles = { profilesLoad() },
+        onOpenProfile = { p -> openPlatform(p.name, if (p.site.isNotBlank()) "https://${p.site}" else HOME) },
+        onReadRole = { r -> profileRoleRead(r) },
+        onSetProfileRole = { p, r -> profileRoleSet(p, r) },
+        onCreateProfile = { n, s -> profileManage("POST", "/v1/profiles", JSONObject().put("name", n).put("site", s).toString(), "created \"$n\" — sign into it once by hand") },
+        onRenameProfile = { p, to -> profileManage("POST", "/v1/profiles/$p/rename", JSONObject().put("to", to).toString(), "renamed to \"$to\"") },
+        onDuplicateProfile = { p, to -> profileManage("POST", "/v1/profiles/$p/duplicate", JSONObject().put("to", to).toString(), "copied to \"$to\" — settings only, so sign into it once") },
+        onClearProfileLogin = { p -> profileManage("POST", "/v1/profiles/${p.name}/clear-login", "{}", "signed \"${p.name}\" out; its settings are untouched") },
+        onDeleteProfile = { p -> profileManage("DELETE", "/v1/profiles/${p.name}", null, "deleted \"${p.name}\"") },
     )
 
     /* ── Downloads: the files the cluster browser captured (GET /v1/files), like any browser's list ── */
@@ -2199,13 +2573,26 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun openSettings() {
         syncSettingsUi()
         shellUi.screen.value = "settings"
-        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+        if (vm.clusterUrl.trim().isNotEmpty()) {
+            apiCall("GET", "/v1/device/list", null, "run_devices")
+            apiCall("GET", "/v1/training/state", null, "run_training")
+        }
     }
 
     /** Native, local Device Hub screen — no cluster web page. Renders /v1/device/list as cards. */
     private fun openDeviceHub() {
         shellUi.screen.value = "devices"
-        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+        if (vm.clusterUrl.trim().isNotEmpty()) {
+            apiCall("GET", "/v1/device/list", null, "run_devices")
+            /* And what each of them is training, so a machine mid-round never reads as idle here. */
+            apiCall("GET", "/v1/training/state", null, "run_training")
+        } else vm.log("! sign in first (Settings → Account & sync)")
+    }
+
+    /** The nightly training pipeline — the same page the desktop shows, read from the cluster. */
+    private fun openTraining() {
+        shellUi.screen.value = "training"
+        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/state", null, "run_training")
         else vm.log("! sign in first (Settings → Account & sync)")
     }
 
@@ -2287,8 +2674,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onSaveClusterUrl = { vm.clusterUrl = it.trim(); settingsUi.clusterUrl = vm.clusterUrl },
         onSignIn = { doSignIn() },
         onConnectToggle = { doConnectToggle() },
+        onSetPassword = { pw -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/api/auth/password", JSONObject().put("password", pw).toString(), "set_password") },
         onResync = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↻ re-syncing shared data…"); autoSyncSharedData() } },
         onOpenHub = { openDeviceHub() },
+        onOpenTraining = { openTraining() },
+        trainingLine = {
+            val v = shellUi.training.value
+            v.active?.let { r -> "training now on ${r.device}" + (r.lines.lastOrNull()?.let { " — $it" } ?: "") }
+                ?: engineer.myapp.gb.shared.TrainingWatch.readiness(v.corpus)
+        },
         onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(); syncSettingsUi() },
         onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(); syncSettingsUi() },
         onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
@@ -2457,6 +2851,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"
                     vm.log("● registered with the cluster — waiting for commands")
                     ctrlApiReady = true                 // the control session can now serve cluster reads
+                    startRingWatch()                    // and from here we can see what the ring is doing
                     autoSyncSharedData()                // pull flows/platforms/roles over the connected session
                     apiCall("GET", "/v1/device/list", null, "run_devices")
                 }
@@ -2582,10 +2977,62 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         d.optString("name").ifBlank { d.optString("deviceId") }, d.optString("owner"),
                         type, on, d.optLong("lastSeen", 0), d.optInt("queued", 0)))
                 }
-                shellUi.hubDevices.value = hub
+                /* Each row carries what that machine's training round is doing, phrased by the
+                   shared code rather than here — a laptop four hours into a round must never read
+                   as idle, and two surfaces deriving it separately is how that comes back. */
+                shellUi.hubDevices.value = hub.map { d ->
+                    val tr = shellUi.training.value.byDevice[d.name]
+                    d.copy(training = engineer.myapp.gb.shared.TrainingWatch.deviceLine(tr), trainingStale = tr?.stale == true)
+                }
                 shellUi.hubSummary.value = "$online online · ${arr.length()} registered"
             } catch (e: Exception) { /* keep base list */ }
             "run_devices_err" -> { /* keep base list */ }
+            "run_training" -> {
+                val v = engineer.myapp.gb.shared.TrainingWatch.parse(data)
+                shellUi.training.value = v
+                /* Re-phrase the hub rows off the same answer, so the two screens cannot drift. */
+                shellUi.hubDevices.value = shellUi.hubDevices.value.map { d ->
+                    val tr = v.byDevice[d.name]
+                    d.copy(training = engineer.myapp.gb.shared.TrainingWatch.deviceLine(tr), trainingStale = tr?.stale == true)
+                }
+                /*
+                 * The collection loop keeps its own state at its own endpoint, read straight after.
+                 * Separate on purpose: an older cluster answers 404 for it and the training page must
+                 * still draw. Folding it into one reply would make a missing block read as "off",
+                 * which is a confident wrong answer about something that spends money.
+                 */
+                if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/harvest/state", null, "run_harvest")
+            }
+            "run_harvest" -> {
+                val h = try { engineer.myapp.gb.shared.TrainingWatch.parseHarvest(data) } catch (e: Exception) { null }
+                if (h != null) shellUi.training.value = shellUi.training.value.copy(harvest = h)
+            }
+            "run_runs" -> shellUi.trainingRuns.value = engineer.myapp.gb.shared.TrainingWatch.parseRuns(data)
+            "run_results" -> shellUi.trainingResults.value = engineer.myapp.gb.shared.TrainingWatch.parseResults(data)
+            "run_results_err" -> shellUi.trainingResults.value = engineer.myapp.gb.shared.TrainingWatch.Results(error = data.ifBlank { "the cluster did not answer" })
+            "run_cmp_jobs" -> shellUi.compareOffer.value = engineer.myapp.gb.shared.TrainingWatch.parseCompareOffer(data)
+            "run_cmp_jobs_err" -> shellUi.compareOffer.value = engineer.myapp.gb.shared.TrainingWatch.CompareOffer(error = data.ifBlank { "the cluster did not answer" })
+            /*
+             * A comparison fills in over minutes - a forty-step job on a processor-only sidecar is
+             * not quick - so the answer to starting one is also the answer to polling it, and it
+             * asks again until it says it is done.
+             */
+            "run_cmp_run" -> {
+                val run = engineer.myapp.gb.shared.TrainingWatch.parseCompareRun(data)
+                shellUi.compareRun.value = run
+                if (run.id.isNotBlank() && !run.done && run.error.isBlank()) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        if (shellUi.compareRun.value?.id == run.id && shellUi.compareRun.value?.done == false) {
+                            apiCall("GET", "/v1/training/compare/" + run.id, null, "run_cmp_run")
+                        }
+                    }, 3000)
+                }
+            }
+            "run_cmp_run_err" -> shellUi.compareRun.value = engineer.myapp.gb.shared.TrainingWatch.CompareRun(error = data.ifBlank { "the cluster did not answer" })
+            "run_run" -> shellUi.trainingRun.value = engineer.myapp.gb.shared.TrainingWatch.parseRun(data)
+            /* A label landed: read the run again so the chip shows what the server now holds. */
+            "run_run_label" -> if (lastOpenRun.isNotBlank()) apiCall("GET", "/v1/training/runs/$lastOpenRun", null, "run_run")
+            "run_promote" -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/training/state", null, "run_training")
             "route" -> try {
                 // S4: the capability router answered. deviceId==this phone → run locally; a sibling device
                 // → cluster for now (remote drive is next); null → cluster.
