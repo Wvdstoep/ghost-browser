@@ -844,7 +844,7 @@ private fun CveVulnerabilitiesTab(report: ReconReport?) {
             .heightIn(max = 480.dp)
             .verticalScroll(scroll),
     ) {
-        // Connected to Cluster Trivy Engine indicator
+        // Active NVD Correlation Indicator
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -858,7 +858,7 @@ private fun CveVulnerabilitiesTab(report: ReconReport?) {
                     color = Color.White,
                 )
                 Text(
-                    "Correlated from NVD National Vulnerability Database & Cluster Workload Trivy Scans",
+                    "Correlated from National Vulnerability Database (NVD) & Perimeter Fingerprint",
                     fontSize = 10.5.sp,
                     color = Color(0xFF94A3B8),
                 )
@@ -873,171 +873,227 @@ private fun CveVulnerabilitiesTab(report: ReconReport?) {
                 ) {
                     Box(Modifier.size(6.dp).clip(CircleShape).background(ReconCyan))
                     Spacer(Modifier.width(6.dp))
-                    Text("Cluster Trivy Engine", color = ReconCyan, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                    Text("NVD Feed Active", color = ReconCyan, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
         Spacer(Modifier.height(10.dp))
 
-        // Banner Card matching Screenshot
-        Surface(
-            color = ReconDarkCard,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(12.dp)) {
-                Surface(
-                    color = ReconRed.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(4.dp),
-                ) {
-                    Text(
-                        "WORKLOAD CVE VULNERABILITIES DETECTED",
-                        color = ReconRed,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "Live Container & Infrastructure Vulnerabilities",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = Color.White,
-                        )
-                        Text(
-                            "Matched running workload components and base images against Trivy Security Database.",
-                            fontSize = 10.5.sp,
-                            color = Color(0xFF94A3B8),
-                        )
-                    }
-
-                    Spacer(Modifier.width(10.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val critCount = cves.count { it.severity.equals("CRITICAL", true) }.coerceAtLeast(3)
-                        val highCount = cves.count { it.severity.equals("HIGH", true) }.coerceAtLeast(50)
-
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(ReconDarkCardInner)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(critCount.toString(), fontWeight = FontWeight.Black, fontSize = 14.sp, color = ReconRed)
-                                Text("CRITICAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
-                            }
-                        }
-
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(ReconDarkCardInner)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(highCount.toString(), fontWeight = FontWeight.Black, fontSize = 14.sp, color = ReconOrange)
-                                Text("HIGH", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        // CVE list cards
-        cves.forEach { cve ->
+        if (cves.isEmpty()) {
             Surface(
                 color = ReconDarkCard,
                 shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Surface(
+                        color = ReconEmerald.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(4.dp),
+                    ) {
+                        Text(
+                            "NO TARGET CVES IDENTIFIED",
+                            color = ReconEmerald,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Target Perimeter Stack Clean",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "No unpatched high-severity CVEs identified for the detected software stack, HTTP headers, or TLS ciphers.",
+                        fontSize = 10.5.sp,
+                        color = Color(0xFF94A3B8),
+                    )
+                }
+            }
+        } else {
+            val critCount = cves.count { it.severity.equals("CRITICAL", true) }
+            val highCount = cves.count { it.severity.equals("HIGH", true) }
+            val medCount = cves.count { it.severity.equals("MEDIUM", true) }
+
+            // Summary Card
+            Surface(
+                color = ReconDarkCard,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            color = severityColor(cve.severity),
-                            shape = RoundedCornerShape(4.dp),
-                        ) {
-                            Text(
-                                cve.severity,
-                                color = Color.Black,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
+                    Surface(
+                        color = if (critCount > 0) ReconRed.copy(alpha = 0.15f) else ReconOrange.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(4.dp),
+                    ) {
                         Text(
-                            cve.cveId,
-                            color = ReconCyan,
+                            "TARGET CVE VULNERABILITIES IDENTIFIED",
+                            color = if (critCount > 0) ReconRed else ReconOrange,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.5.sp,
-                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            cve.component,
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Surface(
-                            color = ReconDarkCardInner,
-                            shape = RoundedCornerShape(4.dp),
-                        ) {
-                            Text(
-                                "CVSS: ${cve.cvss}",
-                                color = Color(0xFFF1F5F9),
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
                     }
-
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        cve.description.ifBlank { cve.title },
-                        fontSize = 11.sp,
-                        color = Color(0xFFE2E8F0),
-                    )
-
                     Spacer(Modifier.height(6.dp))
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            cve.source,
-                            fontSize = 10.sp,
-                            color = Color(0xFF64748B),
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (cve.fixAvailable.isNotBlank()) {
+                        Column(Modifier.weight(1f)) {
                             Text(
-                                "Fix available: ${cve.fixAvailable}  •  Advisory →",
-                                fontSize = 10.sp,
-                                color = ReconEmerald,
+                                "Correlated Software Vulnerabilities",
                                 fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color.White,
                             )
+                            Text(
+                                "Correlated from active server technologies, web frameworks, and perimeter headers.",
+                                fontSize = 10.5.sp,
+                                color = Color(0xFF94A3B8),
+                            )
+                        }
+
+                        Spacer(Modifier.width(10.dp))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (critCount > 0) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(ReconDarkCardInner)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(critCount.toString(), fontWeight = FontWeight.Black, fontSize = 14.sp, color = ReconRed)
+                                        Text("CRITICAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
+                                    }
+                                }
+                            }
+
+                            if (highCount > 0) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(ReconDarkCardInner)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(highCount.toString(), fontWeight = FontWeight.Black, fontSize = 14.sp, color = ReconOrange)
+                                        Text("HIGH", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
+                                    }
+                                }
+                            }
+
+                            if (critCount == 0 && highCount == 0 && medCount > 0) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(ReconDarkCardInner)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(medCount.toString(), fontWeight = FontWeight.Black, fontSize = 14.sp, color = ReconAmber)
+                                        Text("MEDIUM", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // CVE list cards
+            cves.forEach { cve ->
+                Surface(
+                    color = ReconDarkCard,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = severityColor(cve.severity),
+                                shape = RoundedCornerShape(4.dp),
+                            ) {
+                                Text(
+                                    cve.severity,
+                                    color = Color.Black,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                cve.cveId,
+                                color = ReconCyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                cve.component,
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Surface(
+                                color = ReconDarkCardInner,
+                                shape = RoundedCornerShape(4.dp),
+                            ) {
+                                Text(
+                                    "CVSS: " + cve.cvss,
+                                    color = Color(0xFFF1F5F9),
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            cve.description.ifBlank { cve.title },
+                            fontSize = 11.sp,
+                            color = Color(0xFFE2E8F0),
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                cve.source,
+                                fontSize = 10.sp,
+                                color = Color(0xFF64748B),
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (cve.fixAvailable.isNotBlank()) {
+                                Text(
+                                    "Fix available: " + cve.fixAvailable + "  •  Advisory →",
+                                    fontSize = 10.sp,
+                                    color = ReconEmerald,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                     }
                 }

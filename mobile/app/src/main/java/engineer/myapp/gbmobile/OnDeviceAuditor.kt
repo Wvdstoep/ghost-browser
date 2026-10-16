@@ -655,7 +655,7 @@ object OnDeviceAuditor {
                     cvss = 7.5,
                     title = "HTTP Request Smuggling via Content-Length Normalization Flaw",
                     description = "Incomplete normalization of conflicting Transfer-Encoding and Content-Length headers over HTTP/2 and HTTP/1.1 cleartext connections.",
-                    source = "Cluster Infrastructure Scanner",
+                    source = "NVD National Vulnerability Database",
                     fixAvailable = "Upgrade to Traefik v3.1.6+",
                     advisoryUrl = "https://github.com/traefik/traefik/security/advisories"
                 )
@@ -669,7 +669,7 @@ object OnDeviceAuditor {
                     cvss = 6.5,
                     title = "HTTP/2 Request Smuggling via Header Normalization Bypass",
                     description = "Incomplete normalization of duplicate Content-Length headers over HTTP/2 cleartext connections.",
-                    source = "Cluster Infrastructure Scanner",
+                    source = "NVD National Vulnerability Database",
                     fixAvailable = "v3.1.6",
                     advisoryUrl = "https://github.com/traefik/traefik/security/advisories"
                 )

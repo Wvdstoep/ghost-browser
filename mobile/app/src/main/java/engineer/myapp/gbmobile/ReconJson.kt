@@ -27,13 +27,13 @@ object ReconJson {
     fun parseCve(o: JSONObject): CveVulnerability {
         return CveVulnerability(
             cveId = o.optString("cveId", o.optString("id", "CVE-2026-UNKNOWN")),
-            component = o.optString("component", "workload-binary"),
+            component = o.optString("component", "target-service"),
             version = o.optString("version", ""),
             severity = o.optString("severity", "HIGH"),
             cvss = o.optDouble("cvss", 7.5),
             title = o.optString("title", ""),
             description = o.optString("description", ""),
-            source = o.optString("source", "NVD / Cluster Security Scanner"),
+            source = o.optString("source", "NVD National Vulnerability Database"),
             fixAvailable = o.optString("fixAvailable", ""),
             advisoryUrl = o.optString("advisoryUrl", "")
         )
