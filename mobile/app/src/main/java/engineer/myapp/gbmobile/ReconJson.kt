@@ -33,7 +33,7 @@ object ReconJson {
             cvss = o.optDouble("cvss", 7.5),
             title = o.optString("title", ""),
             description = o.optString("description", ""),
-            source = o.optString("source", "Cluster Image Trivy Scanner"),
+            source = o.optString("source", "NVD / Cluster Security Scanner"),
             fixAvailable = o.optString("fixAvailable", ""),
             advisoryUrl = o.optString("advisoryUrl", "")
         )
@@ -60,10 +60,11 @@ object ReconJson {
     }
 
     fun parsePort(o: JSONObject): PortProbeResult {
+        val st = o.optString("state", o.optString("status", "OPEN")).uppercase()
         return PortProbeResult(
             port = o.optInt("port", 80),
             service = o.optString("service", "HTTP"),
-            state = o.optString("state", "OPEN"),
+            state = if (st == "OPEN") "OPEN" else st,
             sensitive = o.optBoolean("sensitive", false)
         )
     }
@@ -93,6 +94,8 @@ object ReconJson {
         return try {
             val o = JSONObject(json)
             if (o.has("error") && !o.has("findings") && !o.has("score")) return null
+
+            val targetHost = o.optString("target", "")
 
             val findings = ArrayList<ReconFinding>()
             val findingsArr = o.optJSONArray("findings")
@@ -128,10 +131,33 @@ object ReconJson {
                     val dObj = dnsArr.optJSONObject(i) ?: continue
                     dnsRecords.add(parseDns(dObj))
                 }
+            } else {
+                val dObj = o.optJSONObject("dns")
+                if (dObj != null) {
+                    val aArr = dObj.optJSONArray("a")
+                    if (aArr != null && aArr.length() > 0) {
+                        val ipList = (0 until aArr.length()).map { aArr.optString(it) }.joinToString(", ")
+                        dnsRecords.add(DnsRecordItem("A", targetHost, ipList, "OK", "IPv4 address routing configured."))
+                    }
+                    val aaaaArr = dObj.optJSONArray("aaaa")
+                    if (aaaaArr != null && aaaaArr.length() > 0) {
+                        val ipv6List = (0 until aaaaArr.length()).map { aaaaArr.optString(it) }.joinToString(", ")
+                        dnsRecords.add(DnsRecordItem("AAAA", targetHost, ipv6List, "OK", "IPv6 routing active."))
+                    }
+                    val mxArr = dObj.optJSONArray("mx")
+                    if (mxArr != null && mxArr.length() > 0) {
+                        val mxList = (0 until mxArr.length()).map { mxArr.optJSONObject(it)?.optString("exchange") ?: mxArr.optString(it) }.joinToString(", ")
+                        dnsRecords.add(DnsRecordItem("MX", targetHost, mxList, "OK", "Mail exchanger records published."))
+                    }
+                    val dmarc = dObj.optString("dmarc")
+                    if (dmarc.isNotBlank()) {
+                        dnsRecords.add(DnsRecordItem("DMARC", "_dmarc." + targetHost, dmarc, "OK", "Email origin authentication policy configured."))
+                    }
+                }
             }
 
             val openPorts = ArrayList<PortProbeResult>()
-            val portsArr = o.optJSONArray("openPorts")
+            val portsArr = o.optJSONArray("openPorts") ?: o.optJSONObject("network")?.optJSONArray("openPorts")
             if (portsArr != null) {
                 for (i in 0 until portsArr.length()) {
                     val pObj = portsArr.optJSONObject(i) ?: continue
@@ -162,7 +188,7 @@ object ReconJson {
             val sessionProbe = parseSessionProbe(sessionProbeObj)
 
             ReconReport(
-                target = o.optString("target", ""),
+                target = targetHost,
                 url = o.optString("url", ""),
                 timestamp = o.optString("timestamp", ""),
                 score = o.optInt("score", 85),
