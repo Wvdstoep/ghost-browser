@@ -375,7 +375,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
         if (shell.menuOpen.value) OverflowMenu(shell, act)
         if (shell.urlFocused.value) Omnibox(shell, act)
         if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
-        if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
+        if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onRunSessionProbe = { target -> act.onRunReconScan(target, true) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
     }
 }
 
