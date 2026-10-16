@@ -244,11 +244,11 @@ private fun Label(text: String, color: Color) {
 @Composable
 private fun CardChip(c: AssistantCard, onClick: () -> Unit) {
     // a "choice" card is the agent asking you something: tapping it sends that option as your answer
-    val icon = when (c.kind) { "results" -> Icons.Default.Inbox; "approvals" -> Icons.Default.Verified; "choice" -> Icons.Default.TouchApp; else -> Icons.Default.OpenInNew }
+    val icon = when (c.kind) { "results" -> Icons.Default.Inbox; "approvals" -> Icons.Default.Verified; "choice" -> Icons.Default.TouchApp; "recon" -> Icons.Default.Shield; else -> Icons.Default.OpenInNew }
     if (c.kind == "choice") Button(onClick = onClick, shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Brand.copy(alpha = 0.14f), contentColor = MaterialTheme.colorScheme.onSurface), border = BorderStroke(1.dp, Brand.copy(alpha = 0.55f))) {
         Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp)); Text(c.title.ifBlank { "Yes" }, fontSize = 13.sp)
-    } else AssistChip(onClick = onClick, label = { Text(c.title.ifBlank { when (c.kind) { "results" -> "Open results"; "approvals" -> "Open approvals"; else -> "Open" } }, fontSize = 12.sp) },
+    } else AssistChip(onClick = onClick, label = { Text(c.title.ifBlank { when (c.kind) { "results" -> "Open results"; "approvals" -> "Open approvals"; "recon" -> "Open ReconForge"; else -> "Open" } }, fontSize = 12.sp) },
         leadingIcon = { Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)) }, border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Brand.copy(alpha = 0.5f)))
 }
 

@@ -1907,7 +1907,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "results" -> if (c.watcherId.isNotBlank()) openWatcherResults(c.watcherId)
             "approvals" -> { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() }
             "url" -> if (c.url.isNotBlank()) { shellUi.screen.value = "browser"; load(c.url) }
-            "choice" -> assistantSend(c.title)   // the agent asked; the tapped option is the answer
+            "choice" -> assistantSend(c.title)
+            "recon" -> {
+                val t = if (c.url.isNotBlank()) c.url else c.title
+                shellUi.reconUi.currentTarget.value = t
+                shellUi.reconUi.isOpen.value = true
+                runReconScan(t, true)
+            }   // the agent asked; the tapped option is the answer
         }
     }
 

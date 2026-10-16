@@ -80,6 +80,7 @@ const crypto = require('crypto');
 const tailscale = require('./tailscale');
 const diagnostics = require('./diagnostics');
 const fileAssets = require('./fileAssets');
+const recon = require('./recon');
 
 const PORT = process.env.PORT || 3000;
 const NAV_TIMEOUT = parseInt(process.env.NAV_TIMEOUT_MS, 10) || 30000;
@@ -359,7 +360,20 @@ app.get('/v1/admin/tenants-overview', superadminGate, async (req, res) => {
   const tenants = await Promise.all(targets.map(async (base) => {
     try {
       const r = await fetch(base + '/v1/admin/overview', { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(8000) });
-      if (!r.ok) return { base, error: `HTTP ${r.status}` };
+      if (!r.ok) return {
+    recon: {
+      auditTarget: (target) => recon.auditTarget(target),
+      auditActivePage: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.auditActivePage(s.page);
+      },
+      runRedteamAudit: (target) => recon.runRedteamAudit(target),
+      testHttpSessionInvalidation: (opts) => recon.testHttpSessionInvalidation(opts),
+      executeSecurityScript: async (profile, script) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        return recon.executeSecurityScript(s.page, script);
+      }
+    }, base, error: `HTTP ${r.status}` };
       return { base, ...(await r.json()) };
     } catch (e) { return { base, error: String(e.message).slice(0, 140) }; }
   }));
@@ -1437,6 +1451,38 @@ app.post('/v1/platforms/:key/note', authed, (req, res) => {
  * knowledge base) needs no per-customer tool code. A generic tool (knowledge_query/store) resolves a
  * named connector at call time. list() never returns the key; the in-process tool reads it via get().
  */
+
+// ── Red Team Reconnaissance & Security Audit Surface ─────────────────────────────────
+app.post('/v1/recon/scan', authed, async (req, res) => {
+  try {
+    const target = req.body?.target || req.query?.target;
+    if (!target) return res.status(400).json({ error: 'Target domain or URL is required.' });
+    const result = await recon.auditTarget(target);
+    res.json(result);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.post('/v1/recon/session-probe', authed, async (req, res) => {
+  try {
+    const { loginUrl, loginPayload, passwordChangeUrl, passwordChangePayload, protectedUrl } = req.body || {};
+    if (!loginUrl || !passwordChangeUrl || !protectedUrl) {
+      return res.status(400).json({ error: 'loginUrl, passwordChangeUrl, and protectedUrl are required.' });
+    }
+    const result = await recon.testHttpSessionInvalidation({
+      loginUrl,
+      loginPayload,
+      passwordChangeUrl,
+      passwordChangePayload,
+      protectedUrl
+    });
+    res.json(result);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
 app.get('/v1/connectors', authed, (_req, res) => res.json({ connectors: connectors.list() }));
 app.post('/v1/connectors', authed, (req, res) => {
   try { res.json(connectors.create(req.body || {})); }
@@ -5788,6 +5834,7 @@ function watcherProfileOf(id) {
 function profileBusy(profile) { const want = profiles.safeName(profile || ''); for (const k of runningWatchers) if (watcherProfileOf(k) === want) return k; return null; }
 const assistantWalks = new Set();   // every walk any assistant turn started (ids), so a stale one is ours to stop
 function operatorContext() {
+  // Context for operator tools
   const owner = consoleOwner(); const feed = require('./watcherFeed'); const pw = require('./postWatch');
   const myWalks = new Set();          // this turn's walks
   const c = { owner, maxConcurrent: 2 };
