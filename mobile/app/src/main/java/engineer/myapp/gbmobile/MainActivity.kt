@@ -1909,6 +1909,23 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // the owner's words appear at once; the cluster's copy replaces it on the next load
         ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
         shellUi.agentBusy.value = true
+
+        val isReconRequest = currentAgent == "recon" ||
+            text.contains("beveilig", ignoreCase = true) ||
+            text.contains("security", ignoreCase = true) ||
+            text.contains("recon", ignoreCase = true) ||
+            text.contains("scan", ignoreCase = true) ||
+            text.contains("audit", ignoreCase = true) ||
+            text.contains("vulnerabilit", ignoreCase = true) ||
+            text.contains("kwetsbaar", ignoreCase = true)
+
+        if (isReconRequest) {
+            agentExec.execute {
+                runOnDeviceReconTurn(text)
+            }
+            return
+        }
+
         agentExec.execute {
             if (assistantChatId.isBlank()) {
                 val payload = org.json.JSONObject().put("agentType", currentAgent).put("title", if (currentAgent == "recon") "Security Recon Audit" else "New chat").toString()
@@ -1929,6 +1946,158 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             assistantLoad(id); assistantRefreshChats() // post-send
         }
     }
+
+    private fun runOnDeviceReconTurn(prompt: String) {
+        val targetMatch = Regex("""(?:https?://)?([a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)+(?::\d+)?)""").find(prompt)
+        val extractedTarget = targetMatch?.groupValues?.get(1)?.trim() ?: ""
+        val target = if (extractedTarget.isNotBlank()) extractedTarget else {
+            shellUi.reconUi.currentTarget.value.trim().ifBlank {
+                currentUrl().takeIf { it != HOME && it.startsWith("http") }?.let { try { java.net.URI(it).host } catch (e: Exception) { null } } ?: "my-app.engineer"
+            }
+        }
+
+        val startTime = System.currentTimeMillis()
+        val live = engineer.myapp.gb.shared.AssistantLive(
+            jobId = "recon-${System.currentTimeMillis()}",
+            status = "running",
+            iterations = 1,
+            tasks = listOf(
+                engineer.myapp.gb.shared.AssistantTask(title = "Perimeter & Port Reconnaissance", done = false, note = ""),
+                engineer.myapp.gb.shared.AssistantTask(title = "HTTP Security Headers & SSL Audit", done = false, note = ""),
+                engineer.myapp.gb.shared.AssistantTask(title = "Attack Surface & 4-Pillar Remediation", done = false, note = "")
+            ),
+            steps = listOf(
+                engineer.myapp.gb.shared.AssistantStep(name = "recon", label = "Targeting $target", args = "", text = "Starting security assessment"),
+                engineer.myapp.gb.shared.AssistantStep(name = "read", label = "Evaluating perimeter & headers", args = "", text = "Probing $target")
+            ),
+            startedAt = startTime
+        )
+        runOnUiThread {
+            shellUi.reconUi.currentTarget.value = target
+            val c = ASSIST.chat.value
+            if (c != null) {
+                ASSIST.chat.value = c.copy(live = live)
+            } else {
+                ASSIST.chat.value = engineer.myapp.gb.shared.AssistantChatView(
+                    id = "chat-${System.currentTimeMillis()}",
+                    title = "Security Recon Audit",
+                    turns = listOf(engineer.myapp.gb.shared.AssistantTurn("user", prompt, System.currentTimeMillis())),
+                    live = live,
+                    agentType = "recon"
+                )
+            }
+        }
+
+        val report = OnDeviceAuditor.audit(target)
+
+        val sb = StringBuilder()
+        sb.append("### Security Recon Audit\n")
+        sb.append("**Security Posture: Grade ${report.grade} · ${report.score}/100 · WAF: ${report.waf.name}**\n\n")
+
+        if (report.findings.isNotEmpty()) {
+            sb.append("#### Key Security Findings (${report.findingsCount})\n")
+            report.findings.forEach { f ->
+                val timeEst = when (f.severity.uppercase()) {
+                    "CRITICAL" -> "5 min"
+                    "HIGH" -> if (f.title.contains("SRI", ignoreCase = true)) "30 min" else "5 min"
+                    "MEDIUM" -> "5 min"
+                    else -> "2 min"
+                }
+                sb.append("- **[${f.severity}]** ${f.title}  *(${timeEst})*\n")
+                if (f.impact.isNotBlank()) sb.append("  - *Risk*: ${f.impact}\n")
+                val fix = if (f.traefik.isNotBlank()) f.traefik else if (f.nginx.isNotBlank()) f.nginx else f.rootCause
+                if (fix.isNotBlank()) sb.append("  - *Fix*: ${fix}\n")
+            }
+            sb.append("\n")
+        }
+
+        sb.append("#### 4-Pillar Remediation Summary\n\n")
+        sb.append("| Component | Action Required | Effort |\n")
+        sb.append("|---|---|---|\n")
+        if (report.findings.any { it.severity.equals("CRITICAL", ignoreCase = true) || it.severity.equals("HIGH", ignoreCase = true) }) {
+            sb.append("| **Traefik** | Enforce HSTS, X-Frame-Options & strict CORS middleware | 10 min |\n")
+            sb.append("| **Nginx** | Hide server tokens, configure SSL ciphers & block xmlrpc.php | 5 min |\n")
+            sb.append("| **Express** | Mount helmet() and sanitize cookie flags (HttpOnly, Secure) | 15 min |\n")
+            sb.append("| **DNS** | Configure SPF, DMARC, and CAA records | 5 min |\n")
+        } else {
+            sb.append("| **Perimeter** | Maintain current security headers & monitor ports | Ongoing |\n")
+        }
+
+        val detailSb = StringBuilder()
+        detailSb.append("Target: $target\n")
+        detailSb.append("Timestamp: ${report.timestamp}\n")
+        detailSb.append("Score: ${report.score}/100 (Grade ${report.grade})\n")
+        detailSb.append("WAF: ${report.waf.name}\n\n")
+        if (report.openPorts.isNotEmpty()) {
+            detailSb.append("Open Ports:\n")
+            report.openPorts.forEach { p ->
+                detailSb.append("  - Port ${p.port}/${p.service}: ${p.state}\n")
+            }
+            detailSb.append("\n")
+        }
+        if (report.cves.isNotEmpty()) {
+            detailSb.append("Discovered CVEs:\n")
+            report.cves.forEach { cv ->
+                detailSb.append("  - ${cv.cveId}: ${cv.title} (CVSS ${cv.cvss})\n")
+            }
+        }
+
+        val cleanUrl = if (target.startsWith("http://") || target.startsWith("https://")) target else "https://$target"
+        val cards = ArrayList<engineer.myapp.gb.shared.AssistantCard>()
+        cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "url", url = cleanUrl, title = "Open Site"))
+        if (report.findings.any { it.title.contains("readme.html", ignoreCase = true) }) {
+            cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "url", url = "$cleanUrl/readme.html", title = "View Exposed readme.html"))
+        }
+        if (report.findings.any { it.title.contains("REST API", ignoreCase = true) }) {
+            cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "url", url = "$cleanUrl/wp-json/wp/v2/users", title = "View Exposed REST API"))
+        }
+        if (report.findings.any { it.title.contains("author", ignoreCase = true) }) {
+            cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "url", url = "$cleanUrl/?author=1", title = "View Exposed Author Page"))
+        }
+        cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "recon", url = cleanUrl, title = "Open ReconForge Report"))
+        cards.add(engineer.myapp.gb.shared.AssistantCard(kind = "pdf", url = sb.toString(), id = detailSb.toString(), title = "Save Report as PDF"))
+
+        val finalTurn = engineer.myapp.gb.shared.AssistantTurn(
+            role = "assistant",
+            text = sb.toString(),
+            t = System.currentTimeMillis(),
+            status = "done",
+            details = detailSb.toString(),
+            cards = cards,
+            steps = listOf(
+                engineer.myapp.gb.shared.AssistantStep(name = "recon", label = "Perimeter port & DNS scan", args = "", text = "Probed $target"),
+                engineer.myapp.gb.shared.AssistantStep(name = "read", label = "HTTP security headers & cookies", args = "", text = "Posture: Grade ${report.grade}"),
+                engineer.myapp.gb.shared.AssistantStep(name = "results", label = "Calculated 4-pillar remediations", args = "", text = "${report.findingsCount} findings")
+            )
+        )
+
+        runOnUiThread {
+            shellUi.reconUi.report.value = report
+            shellUi.reconUi.currentTarget.value = target
+            val currentChat = ASSIST.chat.value
+            if (currentChat != null) {
+                ASSIST.chat.value = currentChat.copy(
+                    live = null,
+                    turns = currentChat.turns + finalTurn
+                )
+            } else {
+                val newChat = engineer.myapp.gb.shared.AssistantChatView(
+                    id = "chat-${System.currentTimeMillis()}",
+                    title = "Security Recon Audit",
+                    turns = listOf(
+                        engineer.myapp.gb.shared.AssistantTurn("user", prompt, System.currentTimeMillis()),
+                        finalTurn
+                    ),
+                    live = null,
+                    agentType = "recon"
+                )
+                ASSIST.chat.value = newChat
+                assistantChatId = newChat.id
+            }
+            shellUi.agentBusy.value = false
+        }
+    }
+
         private fun resolveCardUrl(c: engineer.myapp.gb.shared.AssistantCard): String {
         var raw = c.url.trim()
         val base = shellUi.reconUi.currentTarget.value.trim().ifBlank {
