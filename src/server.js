@@ -6110,6 +6110,7 @@ ${g}` : g;
     },
     recon: {
       auditTarget: (target) => recon.auditTarget(target),
+      auditHttpHeaders: (target, opts) => recon.auditHttpHeaders(target, opts),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
@@ -6160,9 +6161,31 @@ ${g}` : g;
       browserType: async (profile, selector, text) => {
         const s = await sessionFor(profiles.safeName(profile || 'default'));
         try {
-          await s.page.fill(selector, text, { timeout: 8000 });
+          await s.page.fill(selector, text, { timeout: 4000 });
           return { typed: true, selector, length: text.length, currentUrl: s.page.url() };
         } catch (e) {
+          // If hidden inside a tabbed modal or form, attempt to reveal the tab or force value via DOM
+          try {
+            const revealed = await s.page.evaluate(({ sel, val }) => {
+              const el = document.querySelector(sel);
+              if (!el) return { found: false };
+              // Try clicking parent tab buttons (e.g. Sign up, Create account, Register)
+              const modal = el.closest('.modal, [role="dialog"], form, body');
+              if (modal) {
+                const tabs = Array.from(modal.querySelectorAll('button, a, [role="tab"], .tab, span'));
+                const trigger = tabs.find(t => /(?:sign\s*up|create\s*account|register)/i.test(t.innerText || ''));
+                if (trigger && typeof trigger.click === 'function') trigger.click();
+              }
+              el.focus();
+              el.value = val;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              return { found: true, forced: true };
+            }, { sel: selector, val: text });
+            if (revealed && revealed.found) {
+              return { typed: true, selector, length: text.length, forced: true, currentUrl: s.page.url() };
+            }
+          } catch (_) {}
           return { typed: false, selector, error: e.message };
         }
       },
