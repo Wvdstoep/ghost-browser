@@ -91,6 +91,39 @@ class AssistantActions(
 data class StarterPrompt(val title: String, val subtitle: String, val prompt: String)
 
 val RECON_PROMPT_CHIPS = listOf(
+    // ── MASTER ORCHESTRATOR SUITES ──
+    StarterPrompt(
+        title = "🏆 8 Frontier Vectors Abyss Audit",
+        subtitle = "Smuggling, SSTI, Prototype RCE, GraphQL batch, CSWSH, Dependency Confusion, Cache & PKCE",
+        prompt = "Execute a non-destructive 8 Frontier Vectors Abyss Audit on https://target-domain.com. Systematically invoke all 8 frontier engines: 1. HTTP Request Smuggling (gb_audit_http_smuggling), 2. Polyglot SSTI Engine Fingerprinting (gb_audit_polyglot_ssti), 3. Prototype Pollution RCE Gadget Chains (gb_audit_prototype_gadgets), 4. GraphQL Batching & Alias Amplification (gb_audit_graphql_batch), 5. Cross-Site WebSocket Hijacking (gb_audit_cswsh), 6. Dependency Confusion & Namespace Squatting (gb_audit_dependency_confusion), 7. Web Cache Deception & Poisoning (gb_audit_web_cache), 8. OAuth2 PKCE & State Entropy (gb_audit_oauth_pkce). Map all findings to SOC 2 and ISO 27001 (gb_audit_compliance) and generate PR-ready code remediations."
+    ),
+    StarterPrompt(
+        title = "🛡️ Full Enterprise Red-Team Audit",
+        subtitle = "Perimeter, Headers, Canaries, Auth Matrix, OAST, AST, SQLi & Cloud SSRF",
+        prompt = "Perform a full-spectrum comprehensive red-team and AppSec audit on https://target-domain.com. Execute all validation engines systematically: 1. Perimeter mapping (gb_recon) and HTTP headers/verbs (gb_audit_http_headers). 2. Semantic SPA route discovery (gb_audit_semantic_surface) and unauthenticated API auth matrix (gb_audit_auth_matrix). 3. Zero-false-positive canary reflection & DOM sinks (gb_audit_canary_reflection). 4. Token cryptographic hygiene (gb_audit_token_hygiene) and rate-limiting (gb_audit_throttling). 5. Out-of-band canary blind callback testing (gb_audit_oast_callbacks). 6. 3-Pillar deterministic CVE verification (gb_audit_cve_verification). 7. Deep inter-file AST reachability analysis (gb_audit_ast_reachability). 8. Statistical timing differential for blind SQLi (gb_audit_sqli_timing). 9. Cloud metadata SSRF boundary probing (gb_audit_cloud_metadata). 10. Mass assignment schema pollution (gb_audit_mass_assignment). 11. Multi-phase second-order stored injection (gb_audit_second_order). 12. OpenAPI contract fuzzing (gb_audit_openapi_fuzz). 13. Subdomain takeover analyzer (gb_audit_subdomain_takeover). 14. JWT key confusion verification (gb_audit_jwt_key_confusion). Map all findings to SOC 2 / ISO 27001 (gb_audit_compliance) and generate verified PR-ready code remediations."
+    ),
+    StarterPrompt(
+        title = "🌐 Gateway, Cache & Pipeline Desync Suite",
+        subtitle = "Probe HTTP request smuggling, Web Cache Deception & WebSocket origin validation",
+        prompt = "Audit the reverse proxy, CDN, and gateway tiers on https://target-domain.com. Run gb_audit_http_smuggling for RFC 7230 Content-Length and Transfer-Encoding desyncs, gb_audit_web_cache for static extension path confusion and unkeyed cache poisoning, and gb_audit_cswsh for WebSocket origin handshake validation."
+    ),
+    StarterPrompt(
+        title = "🧬 Backend RCE & Template Engine Suite",
+        subtitle = "AST prototype pollution gadget chains, Next.js Server Actions & polyglot SSTI",
+        prompt = "Audit backend execution sinks on https://target-domain.com. Scan project files with gb_audit_prototype_gadgets to identify reachable child_process (shell, env, NODE_OPTIONS) and template compiler gadgets, probe candidate endpoints with gb_audit_polyglot_ssti for mathematical template evaluation (${31*37} -> 1147), and trace Server Actions using gb_audit_ast_reachability."
+    ),
+    StarterPrompt(
+        title = "🔐 Auth, OAuth2 & API Surface Matrix",
+        subtitle = "OAuth PKCE enforcement, GraphQL batching amplification & BOLA access control",
+        prompt = "Audit authentication, API gateways, and authorization boundaries on https://target-domain.com. Run gb_audit_oauth_pkce to verify high-entropy state parameters and SHA-256 PKCE code_challenge enforcement, gb_audit_graphql_batch to test aliased multi-call mutations, and gb_audit_auth_matrix to verify server-side authorization enforcement."
+    ),
+    StarterPrompt(
+        title = "📦 Supply Chain & Cloud Infrastructure Audit",
+        subtitle = "Dependency confusion public registry checks, Cloud Metadata SSRF & dangling DNS",
+        prompt = "Audit supply chain and infrastructure boundaries on https://target-domain.com. Run gb_audit_dependency_confusion to verify that private packages in package.json are claimed on npmjs.org or mapped in .npmrc, gb_audit_cloud_metadata to test IMDSv1/v2 isolation, and gb_audit_subdomain_takeover for unclaimed CNAME pointers."
+    ),
+
+    // ── DEDICATED FRONTIER VECTORS ──
     StarterPrompt(
         title = "💥 HTTP Request Smuggling & Desync (CWE-444)",
         subtitle = "RFC 7230 dual Content-Length & obfuscated TE probes without socket desync",
@@ -132,11 +165,7 @@ val RECON_PROMPT_CHIPS = listOf(
         prompt = "Audit OAuth2 login flows on https://target-domain.com using gb_audit_oauth_pkce. Verifies state parameter cryptographic entropy (>3.0 bits/char CSRF protection) and SHA-256 PKCE (code_challenge_method=S256) enforcement."
     ),
 
-    StarterPrompt(
-        title = "🛡️ Full Comprehensive Red-Team Audit",
-        subtitle = "Perimeter, Headers, Canaries, Auth Matrix, OAST, AST, SQLi & Cloud SSRF",
-        prompt = "Perform a full-spectrum comprehensive red-team and AppSec audit on https://target-domain.com. Execute all validation engines systematically: 1. Perimeter mapping (gb_recon) and HTTP headers/verbs (gb_audit_http_headers). 2. Semantic SPA route discovery (gb_audit_semantic_surface) and unauthenticated API auth matrix (gb_audit_auth_matrix). 3. Zero-false-positive canary reflection & DOM sinks (gb_audit_canary_reflection). 4. Token cryptographic hygiene (gb_audit_token_hygiene) and rate-limiting (gb_audit_throttling). 5. Out-of-band canary blind callback testing (gb_audit_oast_callbacks). 6. 3-Pillar deterministic CVE verification (gb_audit_cve_verification). 7. Deep inter-file AST reachability analysis (gb_audit_ast_reachability). 8. Statistical timing differential for blind SQLi (gb_audit_sqli_timing). 9. Cloud metadata SSRF boundary probing (gb_audit_cloud_metadata). 10. Mass assignment schema pollution (gb_audit_mass_assignment). 11. Multi-phase second-order stored injection (gb_audit_second_order). 12. OpenAPI contract fuzzing (gb_audit_openapi_fuzz). 13. Subdomain takeover analyzer (gb_audit_subdomain_takeover). 14. JWT key confusion verification (gb_audit_jwt_key_confusion). Map all findings to SOC 2 / ISO 27001 (gb_audit_compliance) and generate verified PR-ready code remediations."
-    ),
+    // ── ADVANCED APPSEC SPECIALTIES ──
     StarterPrompt(
         title = "⏱️ Blind SQLi Timing Canary (CWE-89)",
         subtitle = "Statistical standard deviation over 3 requests (50ms vs 2000ms delay)",
