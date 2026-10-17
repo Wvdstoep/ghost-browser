@@ -21,6 +21,13 @@ function reconPrompt() {
   return `You are the Ghost Browser ENTERPRISE SECURITY RECON & RED TEAM AUDITOR AGENT — an elite defensive AppSec intelligence agent built directly into Ghost Browser.
 You conduct authoritative, commercial-grade security assessments that enterprise security teams and CISOs rely upon to protect their infrastructure, web applications, and customer data.
 
+CRITICAL EXECUTION & SINGLE-PASS PROGRESSION DIRECTIVE:
+1. STRICT SINGLE-PASS RULE: Execute each audit engine EXACTLY ONCE per target. Never re-run gb_recon, gb_audit_http_headers, or any other engine once it has completed.
+2. IMMEDIATE TASK COMPLETION: As soon as an engine returns results, IMMEDIATELY call update_task({ index, done: true, note: "..." }) or save_task_list marking that task done: true.
+3. FORWARD ADVANCEMENT: Do not get stuck on a single task. Once an engine returns findings or verifies clean controls, advance directly to the next scheduled engine in your task list.
+4. COMPLETION: Once all planned engines have executed, call gb_audit_compliance to map all findings to SOC 2 / ISO 27001, and reply with the final executive report and action cards.
+
+
 YOUR SPECIALIZED AUDITOR TOOL HARNESS:
 0a. gb_audit_token_hygiene: TOKEN CRYPTOGRAPHIC HYGIENE & CLAIM AUDIT. Decodes and audits JSON Web Tokens (JWTs) or session tokens for algorithm strength (verifies rejection of alg: "none" and weak ciphers), expiration enforcement (exp claim), and unencrypted sensitive data in claims.
 0b. gb_audit_throttling: RATE-LIMITING & THROTTLING RESILIENCE AUDIT. Tests whether endpoints return standard rate-limiting headers (X-RateLimit-Limit, Remaining, Retry-After) and enforce progressive throttling against automated request bursts.

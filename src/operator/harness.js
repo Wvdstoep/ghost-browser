@@ -75,13 +75,27 @@ class OperatorRun {
   /* built-ins: the plan as state, and the only way out */
   _registerBuiltins() {
     const reg = this.registry;
-    if (!reg.has('save_task_list')) reg.register('save_task_list', 'Write your plan as a task list (do this FIRST). Replaces the list.', { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' } }, required: ['title'] } } }, required: ['tasks'] }, async ({ tasks }) => {
-      this.tasks = (Array.isArray(tasks) ? tasks : []).slice(0, 30).map((t, i) => ({ i, title: String(t.title || '').slice(0, 200), note: String(t.note || '').slice(0, 500), done: false }));
-      return { ok: true, tasks: this.tasks };
+    if (!reg.has('save_task_list')) reg.register('save_task_list', 'Write your plan as a task list (do this FIRST). Replaces or updates the list, preserving and recognizing done status.', { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' } }, required: ['title'] } } }, required: ['tasks'] }, async ({ tasks }) => {
+      const prevDoneCount = this.tasks.filter(t => t.done).length;
+      this.tasks = (Array.isArray(tasks) ? tasks : []).slice(0, 30).map((t, i) => {
+        const isDone = typeof t.done === 'boolean'
+          ? t.done
+          : (typeof t.note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(t.note) && !t.note.toLowerCase().includes('pending'));
+        return { i, title: String(t.title || '').slice(0, 200), note: String(t.note || '').slice(0, 500), done: isDone };
+      });
+      const newDoneCount = this.tasks.filter(t => t.done).length;
+      if (newDoneCount > prevDoneCount) {
+        this.budget = Math.min(this.maxIterations, this.budget + (newDoneCount - prevDoneCount) * 40);
+      }
+      return { ok: true, tasks: this.tasks, budgetLeft: this.budget - this.iterations };
     });
     if (!reg.has('update_task')) reg.register('update_task', 'Mark a task done (and say what you learned in its note) or update its note. Done tasks earn more iterations.', { type: 'object', properties: { index: { type: 'number' }, done: { type: 'boolean' }, note: { type: 'string' } }, required: ['index'] }, async ({ index, done, note }) => {
       const t = this.tasks[Number(index)]; if (!t) return { error: `no task ${index}` };
-      if (typeof done === 'boolean' && done && !t.done) { t.done = true; this.budget = Math.min(this.maxIterations, this.budget + 40); }
+      const isDone = typeof done === 'boolean'
+        ? done
+        : (typeof note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(note) && !note.toLowerCase().includes('pending'));
+      if (isDone && !t.done) { t.done = true; this.budget = Math.min(this.maxIterations, this.budget + 40); }
+      else if (done === false) { t.done = false; }
       if (note) t.note = String(note).slice(0, 500);
       return { ok: true, task: t, budgetLeft: this.budget - this.iterations };
     });
@@ -233,17 +247,32 @@ class OperatorRun {
           const name = String(call.name || ''); const args = call.args && typeof call.args === 'object' ? call.args : {};
           const tool = this.registry.get(name);
           const sig = name + ':' + JSON.stringify(args);
-          const repeat = tool && !tool.repeatable && this._recentCalls.includes(sig);
-          this._recentCalls.push(sig); if (this._recentCalls.length > 6) this._recentCalls.shift();
+          if (!this._completedAudits) this._completedAudits = new Map();
+          
+          // Domain-level deduplication for security audit tools
+          const isAuditTool = name.startsWith('gb_recon') || name.startsWith('gb_audit_') || name.startsWith('gb_pipeline_');
+          let auditTargetKey = null;
+          if (isAuditTool) {
+            const rawTarget = (args.target || args.targetUrl || args.url || '').toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+            auditTargetKey = `${name}:${rawTarget}`;
+          }
+
+          const auditRepeated = auditTargetKey && this._completedAudits.has(auditTargetKey);
+          const repeat = (tool && !tool.repeatable && this._recentCalls.includes(sig)) || auditRepeated;
+          this._recentCalls.push(sig); if (this._recentCalls.length > 20) this._recentCalls.shift();
           let out;
           if (repeat) {
             this._repeatStreak++;
-            out = { error: `you already called ${name} with exactly these arguments and have its result above — do something different (a different argument, another tool, or finish)` };
+            out = { error: auditRepeated
+              ? `You ALREADY executed ${name} on target '${args.target || args.targetUrl || args.url}' and its results are in your transcript above. Do NOT repeat this tool. Immediately mark task done (done: true) and advance to the next pending audit engine.`
+              : `you already called ${name} with exactly these arguments and have its result above — do something different (a different argument, another tool, or finish)` };
+            if (!auditRepeated) this._completedAudits.set(auditTargetKey, true);
             if (this._repeatStreak >= 4) { this._finishAs('blocked', `stuck repeating ${name} — no progress`); this._pushTool(call, out); break; }
           } else {
             this._repeatStreak = 0;
             this._event('tool', { name, args: clip(args, 400) });
             out = await this.registry.execute(name, args);
+            if (auditTargetKey && !looksFailed(out)) this._completedAudits.set(auditTargetKey, true);
             if (looksFailed(out)) this._failStreak++; else this._failStreak = 0;
             // a picture the tool took rides on the event so a chat can show it (the text is clipped)
             // a picture or a file the tool produced rides on the event — the tools hand back JSON text
