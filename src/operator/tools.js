@@ -161,6 +161,27 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_cloud_metadata', 'CLOUD METADATA & INTERNAL SSRF TRAVERSAL AUDIT (CWE-918): tests whether URL fetchers, webhook endpoints, and proxy APIs enforce strict isolation against AWS IMDSv1/v2 (169.254.169.254), GCP internal metadata, Azure instance metadata, Kubernetes internal API, and loopback decimal/hex bypass encodings.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditCloudMetadataBoundaries) return { error: 'auditCloudMetadataBoundaries not wired in context' };
+      return ctx.recon.auditCloudMetadataBoundaries(targetUrl || url, { endpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_sqli_timing', 'STATISTICAL TIMING DIFFERENTIAL & NON-DESTRUCTIVE SQLI AUDIT (CWE-89): mathematically proves SQL Injection vulnerabilities without destructive queries or data dumping using calibrated time-delay differentials (2000ms delay) across multiple trials.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate search/query endpoints' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditSqliTimingDifferential) return { error: 'auditSqliTimingDifferential not wired in context' };
+      return ctx.recon.auditSqliTimingDifferential(targetUrl || url, { endpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_mass_assignment', 'MASS ASSIGNMENT & PRIVILEGED ATTRIBUTE ESCALATION AUDIT (CWE-915): evaluates whether state-changing mutation endpoints (POST/PUT/PATCH) accept unauthorized privileged attributes (role: "admin", isAdmin: true, permissions: ["*"], credits: 99999).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate mutation endpoints' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditMassAssignment) return { error: 'auditMassAssignment not wired in context' };
+      return ctx.recon.auditMassAssignment(targetUrl || url, { endpoints });
+    }, { repeatable: true });
+
   R('gb_audit_oast_callbacks', 'OUT-OF-BAND CANARY (OAST) BLIND CALLBACK AUDIT (CWE-918 / CWE-644): generates ephemeral cryptographic canary tokens (UUID + HMAC) to safely verify blind SSRF and out-of-band host header callbacks without destructive payloads. Polls for DNS/HTTP pingback interactions.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, candidateParams: { type: 'array', items: { type: 'string' }, description: 'candidate parameters (url, webhook, redirect, callback)' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' }, oastDomain: { type: 'string', description: 'optional custom OAST domain' } }),
     async ({ targetUrl, url, candidateParams, endpoints, oastDomain }) => {
