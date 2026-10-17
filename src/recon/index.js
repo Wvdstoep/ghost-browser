@@ -11,6 +11,10 @@ const redteam = require('./redteam');
 const auditorSuite = require('./auditorSuite');
 const accountAutomation = require('./accountAutomation');
 const headersAuditor = require('./headersAuditor');
+const canaryAuditor = require('./canaryAuditor');
+const semanticRouter = require('./semanticRouter');
+const authMatrixAuditor = require('./authMatrixAuditor');
+const patchGenerator = require('./patchGenerator');
 
 module.exports = {
   ...advisory,
@@ -20,5 +24,9 @@ module.exports = {
   ...redteam,
   ...auditorSuite,
   ...accountAutomation,
-  ...headersAuditor
+  ...headersAuditor,
+  ...canaryAuditor,
+  ...semanticRouter,
+  ...authMatrixAuditor,
+  ...patchGenerator
 };

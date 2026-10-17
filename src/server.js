@@ -6111,6 +6111,29 @@ ${g}` : g;
     recon: {
       auditTarget: (target) => recon.auditTarget(target),
       auditHttpHeaders: (target, opts) => recon.auditHttpHeaders(target, opts),
+      auditCanaryReflections: async (profile, targetUrl) => {
+        let page = null;
+        try {
+          const s = await sessionFor(profiles.safeName(profile || 'default'));
+          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+          }
+          page = s.page;
+        } catch (_) {}
+        return recon.auditCanaryReflections(page, targetUrl);
+      },
+      auditSemanticSurface: async (profile, targetUrl) => {
+        let page = null;
+        try {
+          const s = await sessionFor(profiles.safeName(profile || 'default'));
+          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+          }
+          page = s.page;
+        } catch (_) {}
+        return recon.auditSemanticSurface(page, targetUrl);
+      },
+      auditAuthMatrix: (targetUrl, opts) => recon.auditAuthMatrix(targetUrl, opts),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
@@ -6124,6 +6147,37 @@ ${g}` : g;
       },
       browserNavigate: async (profile, url) => {
         const s = await sessionFor(profiles.safeName(profile || 'default'));
+        try {
+          await s.page.addInitScript(() => {
+            window.__gbSinkAlerts = window.__gbSinkAlerts || [];
+            const sinks = [
+              { obj: Element.prototype, prop: 'innerHTML' },
+              { obj: Element.prototype, prop: 'outerHTML' },
+              { obj: Document.prototype, prop: 'write' }
+            ];
+            sinks.forEach(({ obj, prop }) => {
+              try {
+                const desc = Object.getOwnPropertyDescriptor(obj, prop);
+                if (desc && desc.set && !desc.set.__gbInstrumented) {
+                  const orig = desc.set;
+                  const hook = function(val) {
+                    if (typeof val === 'string' && val.includes('gbc_')) {
+                      window.__gbSinkAlerts.push({
+                        sink: prop,
+                        tagName: this.tagName || 'DOCUMENT',
+                        value: val.substring(0, 300),
+                        stack: new Error().stack
+                      });
+                    }
+                    return orig.call(this, val);
+                  };
+                  hook.__gbInstrumented = true;
+                  Object.defineProperty(obj, prop, { set: hook, get: desc.get });
+                }
+              } catch (_) {}
+            });
+          });
+        } catch (_) {}
         let res = null;
         try {
           res = await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });

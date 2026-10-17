@@ -161,6 +161,27 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_canary_reflection', 'ENTERPRISE ZERO-FALSE-POSITIVE BENIGN CANARY REFLECTION & DOM TAINT AUDIT: probes target URL query parameters and discovered DOM forms with harmless boundary delimiter tokens (__gbcanary_xxxx\'"><gbtest>) to mathematically prove whether input is reflected unencoded (CWE-79) or safely entity-escaped. Also checks Playwright DOM sink traces (innerHTML, outerHTML, document.write) for active taint. Returns reproducible curl PoC, exact response snippet, and ready-to-merge remediation patch.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
+    async ({ targetUrl, url, profile }) => {
+      if (!ctx.recon || !ctx.recon.auditCanaryReflections) return { error: 'auditCanaryReflections not wired in context' };
+      return ctx.recon.auditCanaryReflections(profile || 'default', targetUrl || url);
+    }, { repeatable: true });
+
+  R('gb_audit_semantic_surface', 'IN-BROWSER SEMANTIC ROUTE & ROLE SURFACE AUDIT: inspects client-side SPA runtime (Next.js, Remix, Vue Router, Nuxt) and DOM elements to extract application routes, privileged role-gated buttons/forms (Admin, Billing, Delete, Team, API Keys), and internal API endpoints that traditional crawlers miss.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
+    async ({ targetUrl, url, profile }) => {
+      if (!ctx.recon || !ctx.recon.auditSemanticSurface) return { error: 'auditSemanticSurface not wired in context' };
+      return ctx.recon.auditSemanticSurface(profile || 'default', targetUrl || url);
+    }, { repeatable: true });
+
+  R('gb_audit_auth_matrix', 'BUSINESS LOGIC & BROKEN ACCESS CONTROL (BOLA/IDOR) AUDIT (OWASP A01:2021 / CWE-285): tests whether backend API and administrative endpoints enforce server-side authorization or merely rely on UI button hiding. Strips session cookies and tokens to test unauthenticated access to privileged routes. Generates reproducible curl PoC and pull-request ready authorization middleware patches.',
+    obj({ targetUrl: { type: 'string', description: 'base target URL' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'list of candidate endpoints or routes to test' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditAuthMatrix) return { error: 'auditAuthMatrix not wired in context' };
+      return ctx.recon.auditAuthMatrix(targetUrl || url, { endpoints });
+    }, { repeatable: true });
+
   R('gb_audit_http_headers', 'ENTERPRISE BURP SUITE-STYLE DIFFERENTIAL HTTP HEADER & VERB AUDIT: probes target endpoints with verb tampering (OPTIONS, HEAD, TRACE, PUT, DELETE, PATCH), Host Header injection / reverse proxy cache poisoning (X-Forwarded-Host), internal IP trust spoofing (X-Forwarded-For: 127.0.0.1), CORS differential origin matrix (null, arbitrary attacker, subdomain reflection with credentials), Cache-Control PII leakage, and modern enterprise defense header compliance (HSTS, CSP, XFO, XCTO, Permissions-Policy, COOP). Returns structured CWE vulnerabilities, proof-of-concept curl commands, and 4-pillar hardening directives.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url }) => {
