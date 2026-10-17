@@ -161,6 +161,34 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_second_order', 'MULTI-PHASE SECOND-ORDER STORED INJECTION AUDIT (CWE-79 / CWE-116): injects benign canary tokens into mutation endpoints (Step 1) and crawls downstream profile, export, or administrative views (Step 2) to detect unescaped reflection in secondary sinks.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, mutationEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 1 injection endpoints' }, downstreamEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 2 downstream sink endpoints' } }),
+    async ({ targetUrl, url, mutationEndpoints, downstreamEndpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditSecondOrderInjection) return { error: 'auditSecondOrderInjection not wired in context' };
+      return ctx.recon.auditSecondOrderInjection(targetUrl || url, { mutationEndpoints, downstreamEndpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_openapi_fuzz', 'AUTONOMOUS OPENAPI / SWAGGER SCHEMA CONTRACT FUZZER (CWE-20 / CWE-754): discovers exposed /api-docs or /swagger.json specifications and fires deterministic edge-case type mutations (integer overflow, negative amounts, null bytes) to catch unhandled 500 server crashes.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.auditOpenApiContractFuzzing) return { error: 'auditOpenApiContractFuzzing not wired in context' };
+      return ctx.recon.auditOpenApiContractFuzzing(targetUrl || url);
+    }, { repeatable: true });
+
+  R('gb_audit_subdomain_takeover', 'SUBDOMAIN TAKEOVER & DANGLING DNS CLOUD ANALYZER (CWE-284 / CWE-650): resolves DNS CNAME records for apex domains and subdomains, inspecting for dangling cloud pointers (AWS S3, GitHub Pages, Heroku, Vercel) that return unclaimed signature errors.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, subdomains: { type: 'array', items: { type: 'string' }, description: 'optional list of candidate subdomains to probe' } }),
+    async ({ targetUrl, url, subdomains }) => {
+      if (!ctx.recon || !ctx.recon.auditSubdomainTakeover) return { error: 'auditSubdomainTakeover not wired in context' };
+      return ctx.recon.auditSubdomainTakeover(targetUrl || url, { subdomains });
+    }, { repeatable: true });
+
+  R('gb_audit_jwt_key_confusion', 'JWT KEY CONFUSION & ALGORITHM DOWNGRADE AUDIT (CVE-2015-9235 / CWE-347): tests whether JWT authentication endpoints accept HMAC-SHA256 (HS256) tokens signed with the server public RSA key (asymmetric-to-symmetric key confusion).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate authenticated endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditJwtKeyConfusion) return { error: 'auditJwtKeyConfusion not wired in context' };
+      return ctx.recon.auditJwtKeyConfusion(targetUrl || url, { endpoints });
+    }, { repeatable: true });
+
   R('gb_audit_cloud_metadata', 'CLOUD METADATA & INTERNAL SSRF TRAVERSAL AUDIT (CWE-918): tests whether URL fetchers, webhook endpoints, and proxy APIs enforce strict isolation against AWS IMDSv1/v2 (169.254.169.254), GCP internal metadata, Azure instance metadata, Kubernetes internal API, and loopback decimal/hex bypass encodings.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' } }),
     async ({ targetUrl, url, endpoints }) => {

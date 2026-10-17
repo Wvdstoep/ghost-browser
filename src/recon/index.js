@@ -28,6 +28,10 @@ const astReachability = require('./astReachability');
 const cloudMetadataAuditor = require('./cloudMetadataAuditor');
 const sqliTimingAuditor = require('./sqliTimingAuditor');
 const massAssignmentAuditor = require('./massAssignmentAuditor');
+const secondOrderAuditor = require('./secondOrderAuditor');
+const openapiFuzzer = require('./openapiFuzzer');
+const subdomainTakeoverAuditor = require('./subdomainTakeoverAuditor');
+const jwtKeyConfusionAuditor = require('./jwtKeyConfusionAuditor');
 
 module.exports = {
   ...advisory,
@@ -54,5 +58,9 @@ module.exports = {
   ...astReachability,
   ...cloudMetadataAuditor,
   ...sqliTimingAuditor,
-  ...massAssignmentAuditor
+  ...massAssignmentAuditor,
+  ...secondOrderAuditor,
+  ...openapiFuzzer,
+  ...subdomainTakeoverAuditor,
+  ...jwtKeyConfusionAuditor
 };
