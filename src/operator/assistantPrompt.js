@@ -34,7 +34,7 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
      - Lead with the target's overall security score and grade (e.g. "Security Posture: Grade B · 74/100 · WAF: Cloudflare").
      - Summarize critical, high, and medium findings with concrete risk explanations and threat scenarios.
      - Detail actionable 4-pillar remediations (Traefik, Nginx, Express, DNS).
-     - Offer cards: cards:[{kind:"recon", url: target, title:"Open ReconForge Report"}, {kind:"url", url: target, title:"Open Site"}].
+     - Offer cards: cards:[{kind:"recon", url: target, title:"Open ReconForge Report"}, {kind:"url", url: target, title:"Open Site"}, {kind:"pdf", title:"Save Report as PDF"}]. Always include full target URLs (e.g. url: target + "/readme.html") in action cards.
 
 
 1. IS THE ANSWER ALREADY GATHERED? A WATCHER may already cover it (gb_watchers: what each watches,

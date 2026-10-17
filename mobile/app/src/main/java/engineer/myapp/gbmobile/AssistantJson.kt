@@ -13,7 +13,12 @@ object AssistantJson {
     }
     private fun cards(a: JSONArray?): List<AssistantCard> {
         val out = ArrayList<AssistantCard>(); if (a == null) return out
-        for (i in 0 until a.length()) { val c = a.optJSONObject(i) ?: continue; out.add(AssistantCard(c.optString("kind"), c.optString("title"), c.optString("watcherId"), c.optString("url"), c.optString("id"))) }
+        for (i in 0 until a.length()) {
+            val c = a.optJSONObject(i) ?: continue
+            val u = c.optString("url", c.optString("href", c.optString("link", c.optString("target", ""))))
+            val k = c.optString("kind", if (u.isNotBlank()) "url" else "")
+            out.add(AssistantCard(k, c.optString("title"), c.optString("watcherId"), u, c.optString("id")))
+        }
         return out
     }
     /** One recording (GET /v1/recordings/:id, or an item of the list). */

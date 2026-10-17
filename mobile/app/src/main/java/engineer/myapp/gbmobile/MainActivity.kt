@@ -1929,19 +1929,90 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             assistantLoad(id); assistantRefreshChats() // post-send
         }
     }
-    /** A card the assistant handed the owner: a door into results, approvals or a page. */
+        private fun resolveCardUrl(c: engineer.myapp.gb.shared.AssistantCard): String {
+        var raw = c.url.trim()
+        val base = shellUi.reconUi.currentTarget.value.trim().ifBlank {
+            currentUrl().takeIf { it != HOME && it.startsWith("http") } ?: shellUi.url.value.trim()
+        }.trimEnd('/')
+
+        val cleanBase = if (base.isNotBlank() && !base.startsWith("http://") && !base.startsWith("https://")) {
+            "https://$base"
+        } else {
+            base
+        }
+
+        if (raw.isNotBlank()) {
+            if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("file://")) {
+                return raw
+            }
+            if (cleanBase.isNotBlank()) {
+                val path = if (raw.startsWith("/")) raw else "/$raw"
+                return cleanBase + path
+            }
+            return "https://$raw"
+        }
+
+        val title = c.title.trim()
+        if (title.equals("Open Site", ignoreCase = true) || title.equals("Open Target", ignoreCase = true)) {
+            return cleanBase
+        }
+        if (title.contains("readme.html", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/readme.html" else "https://readme.html"
+        }
+        if (title.contains("REST API", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/wp-json/wp/v2/users" else "https://wp-json"
+        }
+        if (title.contains("Author Page", ignoreCase = true) || title.contains("Author", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/?author=1" else cleanBase
+        }
+        if (title.contains("xmlrpc.php", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/xmlrpc.php" else cleanBase
+        }
+        if (title.contains("wp-config", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/wp-config.php" else cleanBase
+        }
+        if (title.contains("security.txt", ignoreCase = true)) {
+            return if (cleanBase.isNotBlank()) "$cleanBase/.well-known/security.txt" else cleanBase
+        }
+        if (title.startsWith("http://") || title.startsWith("https://")) {
+            return title
+        }
+        if (title.startsWith("/")) {
+            return if (cleanBase.isNotBlank()) cleanBase + title else "https://$title"
+        }
+        return ""
+    }
+
+    /** A card the assistant handed the owner: a door into results, approvals, a page, or PDF export. */
     private fun assistantCard(c: engineer.myapp.gb.shared.AssistantCard) {
-        when (c.kind) {
-            "results" -> if (c.watcherId.isNotBlank()) openWatcherResults(c.watcherId)
-            "approvals" -> { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() }
-            "url" -> if (c.url.isNotBlank()) { shellUi.screen.value = "browser"; load(c.url) }
-            "choice" -> assistantSend(c.title)
-            "recon" -> {
+        when {
+            c.kind == "pdf" || c.title.contains("pdf", ignoreCase = true) -> {
+                val target = shellUi.reconUi.currentTarget.value.ifBlank { shellUi.url.value }
+                val model = ASSIST.model.value.ifBlank { "glm-5.2" }
+                val reportText = c.url.ifBlank { ASSIST.chat.value?.turns?.lastOrNull { it.role == "assistant" }?.text ?: "" }
+                val details = c.id.ifBlank { ASSIST.chat.value?.turns?.lastOrNull { it.role == "assistant" }?.details ?: "" }
+                ReconReportPdf.exportAndOpen(this, target, model, reportText, details)
+            }
+            c.kind == "results" -> if (c.watcherId.isNotBlank()) openWatcherResults(c.watcherId)
+            c.kind == "approvals" -> { shellUi.screen.value = "approvals"; pollApprovals(); startApprovalsPolling() }
+            c.kind == "recon" -> {
                 val t = if (c.url.isNotBlank()) c.url else c.title
                 shellUi.reconUi.currentTarget.value = t
                 shellUi.reconUi.isOpen.value = true
                 runReconScan(t, true)
-            }   // the agent asked; the tapped option is the answer
+            }
+            else -> {
+                val targetUrl = resolveCardUrl(c)
+                if (targetUrl.isNotBlank()) {
+                    runOnUiThread {
+                        newTab(targetUrl, activate = true)
+                        shellUi.screen.value = "browser"
+                        shellUi.switcherOpen.value = false
+                    }
+                } else if (c.kind == "choice") {
+                    assistantSend(c.title)
+                }
+            }
         }
     }
 
