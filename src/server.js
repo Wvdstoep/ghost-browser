@@ -6331,6 +6331,7 @@ ${g}` : g;
 }
 /** One job: fresh from a goal, or resumed from the journal a restart left behind (restore = the record). */
 function startOperatorJob(goal, cfg, restore = null, opts = {}) {
+  try { for (const k of Object.keys(require.cache)) { if (k.includes('/operator/') || k.includes('/recon/')) delete require.cache[k]; } } catch (_) {}
   const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
   const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
   const reg = new Registry(); const ctx = operatorContext(); registerOperatorTools(reg, ctx);
