@@ -161,6 +161,13 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_http_headers', 'ENTERPRISE BURP SUITE-STYLE DIFFERENTIAL HTTP HEADER & VERB AUDIT: probes target endpoints with verb tampering (OPTIONS, HEAD, TRACE, PUT, DELETE, PATCH), Host Header injection / reverse proxy cache poisoning (X-Forwarded-Host), internal IP trust spoofing (X-Forwarded-For: 127.0.0.1), CORS differential origin matrix (null, arbitrary attacker, subdomain reflection with credentials), Cache-Control PII leakage, and modern enterprise defense header compliance (HSTS, CSP, XFO, XCTO, Permissions-Policy, COOP). Returns structured CWE vulnerabilities, proof-of-concept curl commands, and 4-pillar hardening directives.',
+    obj({ targetUrl: { type: 'string', description: 'target endpoint or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.auditHttpHeaders) return { error: 'auditHttpHeaders not wired in context' };
+      return ctx.recon.auditHttpHeaders(targetUrl || url);
+    }, { repeatable: true });
+
   R('gb_recon', 'FULL SECURITY RECON & ATTACK SURFACE AUDIT of any website, domain, or URL: evaluates HTTP security headers (CSP, HSTS, XFO, XCTO, Referrer-Policy, Cookies), DNS posture (SPF, DMARC, DKIM, CAA, MX, CNAME takeover risk), perimeter port exposure (80, 443, 22, 25, 3306, 5432, 6379), WAF fingerprinting, overall security score & grade (A-F), and actionable 4-pillar remediations (Traefik, Nginx, Express, DNS). Always call this when asked for "recon", "audit", "security scan", "vulnerabilities", or "check attack surface".',
     obj({ target: { type: 'string', description: 'domain or URL to audit, e.g. "useme.com" or "https://my-app.engineer"' } }, ['target']),
     async ({ target }) => {

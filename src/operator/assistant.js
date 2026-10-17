@@ -78,6 +78,7 @@ function briefOf(name, text) {
       case 'gb_audit_postmessage': return v ? `${v.messageListenerCount || 0} listener(s) · ${v.vulnerable ? 'UNVERIFIED ORIGIN' : 'VERIFIED'}` : '';
       case 'gb_audit_api_graphql': return v ? `${v.harvestedRoutesCount || 0} routes · GraphQL Introspection: ${v.graphqlAudit && v.graphqlAudit.introspectionEnabled ? 'OPEN' : 'SECURE'}` : '';
       case 'gb_audit_websockets': return v ? `${v.socketsCount || 0} WebSockets · ${(v.findings || []).length} issue(s)` : '';
+      case 'gb_audit_http_headers': return v && v.grade ? `Grade ${v.grade} (${v.score}/100) · ${v.findingsCount || 0} findings · Verbs: ${Object.keys(v.verbResults || {}).length} tested` : '';
       case 'gb_audit_storage': return v ? `${v.sensitiveTokensFound || 0} sensitive token(s) · ${(v.findings || []).length} issue(s)` : '';
       case 'gb_recon': return v && v.grade ? `Grade ${v.grade} (${v.score}/100) · ${v.findingsCount || 0} findings · WAF: ${(v.waf && v.waf.name) || 'None'}` : '';
       case 'gb_security_eval': return v && v.advisories ? `${v.advisories.length} DOM/storage advisories · ${v.sensitiveStorageFound || 0} sensitive tokens` : '';

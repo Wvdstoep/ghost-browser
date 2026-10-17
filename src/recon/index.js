@@ -10,6 +10,7 @@ const domAuditor = require('./domAuditor');
 const redteam = require('./redteam');
 const auditorSuite = require('./auditorSuite');
 const accountAutomation = require('./accountAutomation');
+const headersAuditor = require('./headersAuditor');
 
 module.exports = {
   ...advisory,
@@ -18,5 +19,6 @@ module.exports = {
   ...domAuditor,
   ...redteam,
   ...auditorSuite,
-  ...accountAutomation
+  ...accountAutomation,
+  ...headersAuditor
 };
