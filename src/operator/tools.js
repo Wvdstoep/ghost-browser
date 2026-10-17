@@ -161,6 +161,20 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_token_hygiene', 'TOKEN CRYPTOGRAPHIC HYGIENE & CLAIM AUDIT: parses and cryptographically audits JSON Web Tokens (JWTs) or session bearer tokens for algorithm security (detects alg: "none", weak ciphers), expiration (exp claim enforcement), and sensitive PII or secrets leaked in unencrypted claims.',
+    obj({ token: { type: 'string', description: 'raw JWT or bearer token string to audit' } }, ['token']),
+    async ({ token }) => {
+      if (!ctx.recon || !ctx.recon.auditToken) return { error: 'auditToken not wired in context' };
+      return ctx.recon.auditToken(token);
+    }, { repeatable: true });
+
+  R('gb_audit_throttling', 'RATE-LIMITING & THROTTLING RESILIENCE AUDIT: checks whether target endpoints return RFC 6585 rate-limiting headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After) and enforce progressive request throttling against automated abuse.',
+    obj({ targetUrl: { type: 'string', description: 'endpoint URL to test' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.auditThrottling) return { error: 'auditThrottling not wired in context' };
+      return ctx.recon.auditThrottling(targetUrl || url);
+    }, { repeatable: true });
+
   R('gb_audit_canary_reflection', 'ENTERPRISE ZERO-FALSE-POSITIVE BENIGN CANARY REFLECTION & DOM TAINT AUDIT: probes target URL query parameters and discovered DOM forms with harmless boundary delimiter tokens (__gbcanary_xxxx\'"><gbtest>) to mathematically prove whether input is reflected unencoded (CWE-79) or safely entity-escaped. Also checks Playwright DOM sink traces (innerHTML, outerHTML, document.write) for active taint. Returns reproducible curl PoC, exact response snippet, and ready-to-merge remediation patch.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
     async ({ targetUrl, url, profile }) => {

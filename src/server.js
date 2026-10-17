@@ -6134,6 +6134,8 @@ ${g}` : g;
         return recon.auditSemanticSurface(page, targetUrl);
       },
       auditAuthMatrix: (targetUrl, opts) => recon.auditAuthMatrix(targetUrl, opts),
+      auditToken: (token) => recon.auditToken(token),
+      auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
