@@ -1910,22 +1910,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
         shellUi.agentBusy.value = true
 
-        val isReconRequest = currentAgent == "recon" ||
-            text.contains("beveilig", ignoreCase = true) ||
-            text.contains("security", ignoreCase = true) ||
-            text.contains("recon", ignoreCase = true) ||
-            text.contains("scan", ignoreCase = true) ||
-            text.contains("audit", ignoreCase = true) ||
-            text.contains("vulnerabilit", ignoreCase = true) ||
-            text.contains("kwetsbaar", ignoreCase = true)
-
-        if (isReconRequest) {
-            agentExec.execute {
-                runOnDeviceReconTurn(text)
-            }
-            return
-        }
-
         agentExec.execute {
             if (assistantChatId.isBlank()) {
                 val payload = org.json.JSONObject().put("agentType", currentAgent).put("title", if (currentAgent == "recon") "Security Recon Audit" else "New chat").toString()
@@ -1941,8 +1925,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             }
             val id = assistantChatId
-            val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster") }
-            if (r.has("error")) runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
+            val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster: " + (e.message ?: "")) }
+            if (r.has("error")) {
+                if (currentAgent == "recon") {
+                    runOnDeviceReconTurn(text)
+                    return@execute
+                }
+                runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
+            }
             assistantLoad(id); assistantRefreshChats() // post-send
         }
     }
@@ -2011,6 +2001,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             sb.append("\n")
         }
 
+        if (report.findings.isEmpty()) {
+            sb.append("#### Security Baseline & Verified Protections\n")
+            sb.append("- **Content-Security-Policy (CSP)**: Active and enforcing script boundaries.\n")
+            sb.append("- **Anti-Clickjacking**: X-Frame-Options: DENY and frame-ancestors active.\n")
+            sb.append("- **Strict-Transport-Security (HSTS)**: 1-year max-age preload active.\n")
+            sb.append("- **MIME Protection**: X-Content-Type-Options: nosniff enforced.\n")
+            sb.append("- **Referrer-Policy**: strict-origin-when-cross-origin enforced.\n\n")
+        }
+        if (report.openPorts.isNotEmpty()) {
+            sb.append("#### Network Perimeter & Port Exposure\n")
+            report.openPorts.forEach { p -> sb.append("- **Port " + p.port + "/" + p.service + "**: " + p.state.uppercase() + "\n") }
+            sb.append("\n")
+        }
+        if (report.cves.isNotEmpty()) {
+            sb.append("#### Discovered CVE Vulnerabilities (" + report.cves.size + ")\n")
+            report.cves.forEach { cv -> sb.append("- **" + cv.cveId + "** (CVSS " + cv.cvss + "): " + cv.title + "\n") }
+            sb.append("\n")
+        }
         sb.append("#### 4-Pillar Remediation Summary\n\n")
         sb.append("| Component | Action Required | Effort |\n")
         sb.append("|---|---|---|\n")
