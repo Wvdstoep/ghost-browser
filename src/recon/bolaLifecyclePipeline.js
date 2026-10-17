@@ -94,7 +94,7 @@ function computeEntropy(str) {
  * @param {object} options - Optional credentials, tokens, or custom endpoint overrides
  */
 async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
-  let origin = targetUrl;
+  let origin = targetUrl || options.target || options.url || options.targetUrl || '';
   try {
     const u = new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl);
     origin = u.origin;
@@ -107,12 +107,13 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
   // LAYER 1: PUBLIC SURFACE & ROUTE EXTRACTION
   // ═════════════════════════════════════════════════════════════════════
   const harvested = (options.endpoints && options.endpoints.length > 0)
-    ? { all: options.endpoints, mutationEndpoints: [], authEndpoints: [], adminEndpoints: [] }
+    ? { allEndpoints: options.endpoints, mutationEndpoints: [], authEndpoints: [] }
     : await harvestTargetEndpoints(origin);
 
-  const publicRoutes = harvested.all.slice(0, 8);
-  const adminCandidates = harvested.adminEndpoints.length > 0
-    ? harvested.adminEndpoints
+  const allEndpoints = (harvested && (harvested.allEndpoints || harvested.all)) || [];
+  const publicRoutes = allEndpoints.slice(0, 8);
+  const adminCandidates = (harvested && harvested.authEndpoints && harvested.authEndpoints.filter(e => e.includes('admin')).length > 0)
+    ? harvested.authEndpoints.filter(e => e.includes('admin'))
     : ['/admin', '/api/admin', '/api/users', '/admin/dashboard'];
 
   // 1A. CORS & Origin Boundary Check on Root & Discovered APIs
@@ -125,8 +126,9 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
     }
   });
 
-  const acao = corsTest.headers['access-control-allow-origin'];
-  const acac = corsTest.headers['access-control-allow-credentials'];
+  const corsHdrs = (corsTest && corsTest.headers) || {};
+  const acao = corsHdrs['access-control-allow-origin'];
+  const acac = corsHdrs['access-control-allow-credentials'];
 
   let corsPermissive = false;
   if (acao === '*' && acac === 'true') {
@@ -167,7 +169,8 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
     const epUrl = origin + (ep.startsWith('/') ? ep : '/' + ep);
     const res = await httpRequest(epUrl, { method: 'GET' });
     if (res.status === 200 && res.body) {
-      const isJson = res.headers['content-type'] && res.headers['content-type'].includes('json');
+      const resHdrs = (res && res.headers) || {};
+      const isJson = resHdrs['content-type'] && resHdrs['content-type'].includes('json');
       if (isJson && (res.body.includes('"users"') || res.body.includes('"email"') || res.body.includes('"roles"'))) {
         unauthLeaks.push({ endpoint: ep, status: res.status });
       }
@@ -267,7 +270,8 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
   } else {
     // Probing cookie security hygiene on base responses
     const baseRes = await httpRequest(origin);
-    const setCookie = baseRes.headers['set-cookie'] || [];
+    const baseHdrs = (baseRes && baseRes.headers) || {};
+    const setCookie = baseHdrs['set-cookie'] || [];
     const cookieHeaders = Array.isArray(setCookie) ? setCookie : [setCookie];
     for (const cookie of cookieHeaders) {
       if (cookie && !cookie.toLowerCase().includes('httponly')) {
@@ -295,7 +299,7 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
   // LAYER 3: CROSS-TENANT INVALIDATION & REPLAY
   // ═════════════════════════════════════════════════════════════════════
   // 3A. BOLA / IDOR Parameter Substitution Probe
-  const candidateObjectEndpoints = harvested.all.filter(ep =>
+  const candidateObjectEndpoints = allEndpoints.filter(ep =>
     ep.includes('/user') || ep.includes('/account') || ep.includes('/order') || ep.includes('/profile') || ep.includes('/settings')
   );
 
@@ -320,7 +324,8 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
 
       // If server returns 200 with sensitive private data for another tenant ID without ownership check
       if (replayRes.status === 200 && replayRes.body) {
-        const isJson = replayRes.headers['content-type'] && replayRes.headers['content-type'].includes('json');
+        const repHdrs = (replayRes && replayRes.headers) || {};
+        const isJson = repHdrs['content-type'] && repHdrs['content-type'].includes('json');
         if (isJson && (replayRes.body.includes('"email"') || replayRes.body.includes('"password"') || replayRes.body.includes('"secret"'))) {
           bolaVulnerabilities.push({ endpoint: testUrl, status: replayRes.status });
           break;
@@ -381,7 +386,7 @@ async function auditBolaLifecyclePipeline(targetUrl, options = {}) {
     grade,
     layers: {
       layer1_publicSurface: {
-        totalEndpointsDiscovered: harvested.all.length,
+        totalEndpointsDiscovered: allEndpoints.length,
         adminEndpointsProbed: adminCandidates.length,
         corsPermissive
       },

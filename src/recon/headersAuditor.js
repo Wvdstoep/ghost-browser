@@ -67,11 +67,11 @@ function makeRequest(targetUrl, { method = 'GET', headers = {}, body = null, tim
 
       req.on('timeout', () => {
         req.destroy();
-        done({ status: 0, error: 'TIMEOUT', method, targetUrl });
+        done({ status: 0, headers: {}, body: '', error: 'TIMEOUT', method, targetUrl });
       });
 
       req.on('error', (err) => {
-        done({ status: 0, error: err.message, method, targetUrl });
+        done({ status: 0, headers: {}, body: '', error: err.message, method, targetUrl });
       });
 
       if (body) {
@@ -79,7 +79,7 @@ function makeRequest(targetUrl, { method = 'GET', headers = {}, body = null, tim
       }
       req.end();
     } catch (err) {
-      done({ status: 0, error: err.message, method, targetUrl });
+      done({ status: 0, headers: {}, body: '', error: err.message, method, targetUrl });
     }
   });
 }
@@ -123,7 +123,7 @@ async function auditHttpHeaders(targetUrl, opts = {}) {
     }
 
     if (verb === 'OPTIONS') {
-      const allowHeader = res.headers['allow'] || res.headers['access-control-allow-methods'] || '';
+      const allowHeader = (res && res.headers ? (res.headers['allow'] || res.headers['access-control-allow-methods']) : '') || '';
       verbResults.allowed = allowHeader;
       if (/DELETE|PUT|TRACE/i.test(allowHeader)) {
         findings.push({
@@ -194,8 +194,8 @@ async function auditHttpHeaders(targetUrl, opts = {}) {
       method: 'GET',
       headers: { 'Origin': ot.origin }
     });
-    const acao = res.headers['access-control-allow-origin'];
-    const acac = res.headers['access-control-allow-credentials'];
+    const acao = res && res.headers ? res.headers['access-control-allow-origin'] : '';
+    const acac = res && res.headers ? res.headers['access-control-allow-credentials'] : '';
 
     corsMatrix.push({ origin: ot.origin, acao: acao || '(none)', acac: acac || '(none)' });
 

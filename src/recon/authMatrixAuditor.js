@@ -88,7 +88,7 @@ function containsSensitiveData(body, contentType) {
  * @param {object} [options.headers] - Authenticated headers to compare against
  */
 async function auditAuthMatrix(targetUrl, options = {}) {
-  let base = (targetUrl || '').trim();
+  let base = (targetUrl || options.target || options.url || options.targetUrl || '').trim();
   if (!base.startsWith('http://') && !base.startsWith('https://')) base = 'https://' + base;
 
   let u = null;
@@ -125,9 +125,10 @@ async function auditAuthMatrix(targetUrl, options = {}) {
 
     if (res.status === 0) continue;
 
-    const contentType = res.headers['content-type'] || '';
+    const hdrs = (res && res.headers) || {};
+    const contentType = hdrs['content-type'] || '';
     const isRedirect = res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308;
-    const location = res.headers['location'] || '';
+    const location = hdrs['location'] || '';
 
     // Evaluate authorization enforcement
     if (res.status === 401 || res.status === 403) {

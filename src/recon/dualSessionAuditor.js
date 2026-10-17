@@ -91,13 +91,15 @@ function buildAuthHeaders(tokenOrHeaders) {
  */
 async function auditDualTenantIsolation({
   targetUrl,
+  url,
+  target,
   tokenA,
   tokenB,
   objectIds = [],
   pageA,
   pageB
 } = {}) {
-  let base = (targetUrl || '').trim();
+  let base = (targetUrl || url || target || '').trim();
   if (!base.startsWith('http://') && !base.startsWith('https://')) base = 'https://' + base;
 
   const findings = [];
