@@ -76,6 +76,16 @@ class OperatorRun {
   _registerBuiltins() {
     const reg = this.registry;
     if (!reg.has('save_task_list')) reg.register('save_task_list', 'Write your initial plan as a task list (CALL THIS ONLY ONCE AT THE START). Subsequent calls merge progress without unchecking completed tasks.', { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' } }, required: ['title'] } } }, required: ['tasks'] }, async ({ tasks }) => {
+      // If plan is already initialized and active past the first turn, lock it from churning
+      if (this.tasks && this.tasks.length > 0 && this.iterations > 2) {
+        return {
+          ok: true,
+          tasks: this.tasks,
+          budgetLeft: this.budget - this.iterations,
+          locked: true,
+          notice: 'Task list is already active and locked against rewriting. Call update_task({ index, done: true, note }) to advance.'
+        };
+      }
       if (!this._doneTasks) this._doneTasks = new Set();
       // Record any tasks previously marked done so they NEVER get reset
       this.tasks.forEach((existing, idx) => {
@@ -108,8 +118,18 @@ class OperatorRun {
         advice: 'Do NOT call save_task_list repeatedly. Use update_task({ index, done: true, note }) and immediately execute the next pending audit engine.'
       };
     });
-    if (!reg.has('update_task')) reg.register('update_task', 'Mark a task done (and say what you learned in its note) or update its note. Done tasks earn more iterations.', { type: 'object', properties: { index: { type: 'number' }, done: { type: 'boolean' }, note: { type: 'string' } }, required: ['index'] }, async ({ index, done, note }) => {
-      const t = this.tasks[Number(index)]; if (!t) return { error: `no task ${index}` };
+    if (!reg.has('update_task')) reg.register('update_task', 'Mark a task done (and say what you learned in its note) or update its note. Done tasks earn more iterations.', { type: 'object', properties: { index: { type: 'number' }, title: { type: 'string' }, done: { type: 'boolean' }, note: { type: 'string' } }, required: [] }, async ({ index, title, done, note }) => {
+      let idx = typeof index === 'number' ? index : (index !== undefined ? Number(index) : -1);
+      let t = this.tasks[idx];
+      if (!t && title) {
+        const norm = String(title).toLowerCase().trim();
+        t = this.tasks.find(x => x.title.toLowerCase().trim() === norm || x.title.toLowerCase().includes(norm));
+      }
+      if (!t && idx >= 1 && this.tasks[idx - 1]) {
+        // Handle 1-based human indexing fallback
+        t = this.tasks[idx - 1];
+      }
+      if (!t) return { error: `no task matching index ${index}` };
       if (!this._doneTasks) this._doneTasks = new Set();
       const normTitle = String(t.title || '').toLowerCase().trim();
       const previouslyDone = this._doneTasks.has(Number(index)) || this._doneTasks.has(normTitle);
@@ -289,11 +309,17 @@ class OperatorRun {
           let out;
           if (repeat) {
             this._repeatStreak++;
-            out = { error: auditRepeated
-              ? `You ALREADY executed ${name} on target '${args.target || args.targetUrl || args.url}' and its results are in your transcript above. Do NOT repeat this tool. Immediately mark task done (done: true) and advance to the next pending audit engine.`
-              : `you already called ${name} with exactly these arguments and have its result above — do something different (a different argument, another tool, or finish)` };
-            if (!auditRepeated) this._completedAudits.set(auditTargetKey, true);
-            if (this._repeatStreak >= 4) { this._finishAs('blocked', `stuck repeating ${name} — no progress`); this._pushTool(call, out); break; }
+            if (auditRepeated) {
+              out = {
+                ok: true,
+                status: "already_completed",
+                cached: true,
+                notice: `${name} has already executed on target '${args.target || args.targetUrl || args.url}' in this run. Telemetry is preserved in transcript above. Mark task done (done: true) and advance to the next audit engine.`
+              };
+            } else {
+              out = { error: `you already called ${name} with exactly these arguments and have its result above — do something different (a different argument, another tool, or finish)` };
+            }
+            if (this._repeatStreak >= 4 && !auditRepeated) { this._finishAs("blocked", `stuck repeating ${name} — no progress`); this._pushTool(call, out); break; }
           } else {
             this._repeatStreak = 0;
             this._event('tool', { name, args: clip(args, 400) });
