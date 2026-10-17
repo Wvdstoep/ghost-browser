@@ -29,7 +29,27 @@ const REPLY_SPEC = {
   name: 'reply',
   description: 'ANSWER the owner and end this turn. text = the answer in the owner\'s language, plain and complete (markdown is fine: short headings, bullets, bold). details = optional evidence/what you did for a "details" fold. cards = optional actions for the app: {kind:"results", watcherId, title} opens a watcher\'s results; {kind:"approvals", title} opens the approvals; {kind:"url", url, title} opens a page; {kind:"recording", id, title} shows a recording (added by itself for every recording you start); {kind:"choice", title} is an ANSWER OPTION when you ask the owner something — tapping it sends the title back as their next message. status "blocked" only when you could not do what was asked.',
   schema: { type: 'object', properties: { text: { type: 'string' }, details: { type: 'string' }, cards: { type: 'array', items: { type: 'object' } }, status: { type: 'string', enum: ['done', 'blocked'] } }, required: ['text'] },
-  map: ({ text, details, cards, status }) => ({ status: status === 'blocked' ? 'blocked' : 'done', summary: String(text || '').slice(0, 600), report: { answer: String(text || ''), details: details ? String(details) : '', cards: Array.isArray(cards) ? cards.slice(0, 8) : [] } }),
+  map: ({ text, details, cards, status }) => {
+    let outCards = Array.isArray(cards) ? cards.slice(0, 8) : [];
+    const ans = String(text || '');
+    if (outCards.length === 0 && (/Security\s*Audit\s*Report|Executive\s*Scorecard|Hardening\s*Directives/i.test(ans))) {
+      const urlMatch = ans.match(/https?:\/\/[a-zA-Z0-9.\-_]+/i);
+      const targetUrl = urlMatch ? urlMatch[0] : '';
+      outCards = [
+        { kind: 'pdf', title: 'Save Report as PDF' },
+        ...(targetUrl ? [{ kind: 'recon', title: 'ReconForge Report', url: targetUrl }] : [])
+      ];
+    }
+    return {
+      status: status === 'blocked' ? 'blocked' : 'done',
+      summary: ans.slice(0, 600),
+      report: {
+        answer: ans,
+        details: details ? String(details) : '',
+        cards: outCards
+      }
+    };
+  },
   proseIsReply: true,
 };
 
