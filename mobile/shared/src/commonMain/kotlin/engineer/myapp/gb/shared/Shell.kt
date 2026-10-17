@@ -122,3 +122,34 @@ private fun RowScope.navItem(icon: ImageVector, label: String, sel: Boolean, bad
         ),
     )
 }
+
+
+@Composable
+fun CollapsingSlot(
+    fraction: Float = 1f,
+    fromTop: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    if (fraction > 0.05f) {
+        Box(modifier = Modifier.fillMaxWidth()) {
+            content()
+        }
+    }
+}
+
+@Composable
+fun RingWorkStrip() {
+}
+
+@Composable
+fun rememberChromeFraction(hidden: Boolean): Float {
+    return if (hidden) 0f else 1f
+}
+
+object RingWork {
+    val busy = androidx.compose.runtime.mutableStateOf(false)
+}
+
+object RingWatch {
+    fun apply(body: String?, hostName: String) {}
+}
