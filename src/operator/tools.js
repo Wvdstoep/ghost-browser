@@ -178,58 +178,58 @@ function registerOperatorTools(reg, ctx) {
   };
   R('gb_audit_second_order', 'MULTI-PHASE SECOND-ORDER STORED INJECTION AUDIT (CWE-79 / CWE-116): injects benign canary tokens into mutation endpoints (Step 1) and crawls downstream profile, export, or administrative views (Step 2) to detect unescaped reflection in secondary sinks.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, mutationEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 1 injection endpoints' }, downstreamEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 2 downstream sink endpoints' } }),
-    async ({ targetUrl, url, mutationEndpoints, downstreamEndpoints }) => {
+    async ({ targetUrl, url, target, mutationEndpoints, downstreamEndpoints }) => {
       if (!ctx.recon || !ctx.recon.auditSecondOrderInjection) return { error: 'auditSecondOrderInjection not wired in context' };
-      return ctx.recon.auditSecondOrderInjection(targetUrl || url, { mutationEndpoints, downstreamEndpoints });
+      return ctx.recon.auditSecondOrderInjection(targetUrl || url || target, { mutationEndpoints, downstreamEndpoints });
     }, { repeatable: true });
 
   R('gb_audit_openapi_fuzz', 'AUTONOMOUS OPENAPI / SWAGGER SCHEMA CONTRACT FUZZER (CWE-20 / CWE-754): discovers exposed /api-docs or /swagger.json specifications and fires deterministic edge-case type mutations (integer overflow, negative amounts, null bytes) to catch unhandled 500 server crashes.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
-    async ({ targetUrl, url }) => {
+    async ({ targetUrl, url, target }) => {
       if (!ctx.recon || !ctx.recon.auditOpenApiContractFuzzing) return { error: 'auditOpenApiContractFuzzing not wired in context' };
-      return ctx.recon.auditOpenApiContractFuzzing(targetUrl || url);
+      return ctx.recon.auditOpenApiContractFuzzing(targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_subdomain_takeover', 'SUBDOMAIN TAKEOVER & DANGLING DNS CLOUD ANALYZER (CWE-284 / CWE-650): resolves DNS CNAME records for apex domains and subdomains, inspecting for dangling cloud pointers (AWS S3, GitHub Pages, Heroku, Vercel) that return unclaimed signature errors.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, subdomains: { type: 'array', items: { type: 'string' }, description: 'optional list of candidate subdomains to probe' } }),
-    async ({ targetUrl, url, subdomains }) => {
+    async ({ targetUrl, url, target, subdomains }) => {
       if (!ctx.recon || !ctx.recon.auditSubdomainTakeover) return { error: 'auditSubdomainTakeover not wired in context' };
-      return ctx.recon.auditSubdomainTakeover(targetUrl || url, { subdomains });
+      return ctx.recon.auditSubdomainTakeover(targetUrl || url || target, { subdomains });
     }, { repeatable: true });
 
   R('gb_audit_jwt_key_confusion', 'JWT KEY CONFUSION & ALGORITHM DOWNGRADE AUDIT (CVE-2015-9235 / CWE-347): tests whether JWT authentication endpoints accept HMAC-SHA256 (HS256) tokens signed with the server public RSA key (asymmetric-to-symmetric key confusion).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate authenticated endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditJwtKeyConfusion) return { error: 'auditJwtKeyConfusion not wired in context' };
-      return ctx.recon.auditJwtKeyConfusion(targetUrl || url, { endpoints });
+      return ctx.recon.auditJwtKeyConfusion(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_cloud_metadata', 'CLOUD METADATA & INTERNAL SSRF TRAVERSAL AUDIT (CWE-918): tests whether URL fetchers, webhook endpoints, and proxy APIs enforce strict isolation against AWS IMDSv1/v2 (169.254.169.254), GCP internal metadata, Azure instance metadata, Kubernetes internal API, and loopback decimal/hex bypass encodings.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditCloudMetadataBoundaries) return { error: 'auditCloudMetadataBoundaries not wired in context' };
-      return ctx.recon.auditCloudMetadataBoundaries(targetUrl || url, { endpoints });
+      return ctx.recon.auditCloudMetadataBoundaries(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_sqli_timing', 'STATISTICAL TIMING DIFFERENTIAL & NON-DESTRUCTIVE SQLI AUDIT (CWE-89): mathematically proves SQL Injection vulnerabilities without destructive queries or data dumping using calibrated time-delay differentials (2000ms delay) across multiple trials.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate search/query endpoints' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditSqliTimingDifferential) return { error: 'auditSqliTimingDifferential not wired in context' };
-      return ctx.recon.auditSqliTimingDifferential(targetUrl || url, { endpoints });
+      return ctx.recon.auditSqliTimingDifferential(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_mass_assignment', 'MASS ASSIGNMENT & PRIVILEGED ATTRIBUTE ESCALATION AUDIT (CWE-915): evaluates whether state-changing mutation endpoints (POST/PUT/PATCH) accept unauthorized privileged attributes (role: "admin", isAdmin: true, permissions: ["*"], credits: 99999).',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate mutation endpoints' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditMassAssignment) return { error: 'auditMassAssignment not wired in context' };
-      return ctx.recon.auditMassAssignment(targetUrl || url, { endpoints });
+      return ctx.recon.auditMassAssignment(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_oast_callbacks', 'OUT-OF-BAND CANARY (OAST) BLIND CALLBACK AUDIT (CWE-918 / CWE-644): generates ephemeral cryptographic canary tokens (UUID + HMAC) to safely verify blind SSRF and out-of-band host header callbacks without destructive payloads. Polls for DNS/HTTP pingback interactions.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, candidateParams: { type: 'array', items: { type: 'string' }, description: 'candidate parameters (url, webhook, redirect, callback)' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' }, oastDomain: { type: 'string', description: 'optional custom OAST domain' } }),
-    async ({ targetUrl, url, candidateParams, endpoints, oastDomain }) => {
+    async ({ targetUrl, url, target, candidateParams, endpoints, oastDomain }) => {
       if (!ctx.recon || !ctx.recon.auditOastCanaryProtocol) return { error: 'auditOastCanaryProtocol not wired in context' };
-      return ctx.recon.auditOastCanaryProtocol(targetUrl || url, { candidateParams, endpoints, oastDomain });
+      return ctx.recon.auditOastCanaryProtocol(targetUrl || url || target, { candidateParams, endpoints, oastDomain });
     }, { repeatable: true });
 
   R('gb_audit_ast_reachability', 'DEEP INTER-FILE AST SYMBOL RESOLUTION & SERVER ACTION AUDIT: indexes JavaScript/TypeScript project files, identifies Next.js Server Actions (use server) and App Router routes, and traces cross-file import/export symbol call graphs down to dangerous sinks (CWE-1321, CWE-78, CWE-94, CWE-918). Separates PROVEN_LIVE_REACHABLE risks from DORMANT_DEAD_CODE.',
@@ -241,25 +241,25 @@ function registerOperatorTools(reg, ctx) {
 
   R('gb_audit_cve_verification', 'NON-DESTRUCTIVE DETERMINISTIC CVE & REACHABILITY AUDIT: executes the 3-pillar validation protocol for site owners without destructive exploits: (1) Behavioral Differential Probing (header normalization, duplicate Content-Length, HTTP desync patch checks), (2) Static Call-Graph & Dependency Reachability Analysis (distinguishes live reachable sinks from dormant dead-code CVEs in Node.js packages), (3) Harmless Canary Protocol (safe mathematical evaluation ${9413*7} -> 65891 proving SSTI/RCE and isolated prototype pollution CWE-1321). Eliminates false positives and outputs PR-ready remediations.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints to probe' }, projectDir: { type: 'string', description: 'optional local directory path for AST reachability analysis' } }),
-    async ({ targetUrl, url, endpoints, projectDir }) => {
+    async ({ targetUrl, url, target, endpoints, projectDir }) => {
       if (!ctx.recon || !ctx.recon.auditNonDestructiveVerification) return { error: 'auditNonDestructiveVerification not wired in context' };
-      return ctx.recon.auditNonDestructiveVerification(targetUrl || url, { endpoints, projectDir });
+      return ctx.recon.auditNonDestructiveVerification(targetUrl || url || target, { endpoints, projectDir });
     }, { repeatable: true });
 
   R('gb_audit_http_smuggling', 'HTTP REQUEST SMUGGLING & PARSER DESYNC AUDIT (CWE-444): non-destructively probes front-end reverse proxies (Cloudflare, Nginx, Traefik) and back-end application servers for HTTP request framing desyncs (CL.TE, TE.CL, TE.TE, RFC 7230 Dual Content-Length) without corrupting shared socket pipelines.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
-    async ({ targetUrl, url }) => {
+    async ({ targetUrl, url, target }) => {
       if (!ctx.recon || !ctx.recon.auditHttpRequestSmuggling) return { error: 'auditHttpRequestSmuggling not wired in context' };
-      return ctx.recon.auditHttpRequestSmuggling(targetUrl || url);
+      return ctx.recon.auditHttpRequestSmuggling(targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_polyglot_ssti', 'MATHEMATICAL POLYGLOT SSTI ENGINE FINGERPRINTING (CWE-1336): injects non-destructive mathematical polyglots (${31*37}, {{31*37}}, <%= 31*37 %>, #{31*37}) across discovered input fields to detect whether template engines (Jinja2, Twig, EJS, Pug, Freemarker) evaluate math to 1147.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate mutation or query endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditPolyglotSsti) return { error: 'auditPolyglotSsti not wired in context' };
-      const target = targetUrl || url;
-      const discovered = await getDiscovered(target);
-      return ctx.recon.auditPolyglotSsti(target, { endpoints: endpoints || (discovered ? [...(discovered.mutationEndpoints || []), ...(discovered.queryEndpoints || [])] : null) });
+      const resolvedTarget = targetUrl || url || target;
+      const discovered = await getDiscovered(resolvedTarget);
+      return ctx.recon.auditPolyglotSsti(resolvedTarget, { endpoints: endpoints || (discovered ? [...(discovered.mutationEndpoints || []), ...(discovered.queryEndpoints || [])] : null) });
     }, { repeatable: true });
 
   R('gb_audit_prototype_gadgets', 'PROTOTYPE POLLUTION RCE GADGET CHAIN AUDIT (CWE-1321 / CWE-78): scans backend AST dependencies and recursive merges to prove whether an active prototype pollution vulnerability can reach child_process (shell, env, NODE_OPTIONS) or template compiler execution gadgets.',
@@ -271,20 +271,20 @@ function registerOperatorTools(reg, ctx) {
 
   R('gb_audit_graphql_batch', 'GRAPHQL BATCHING & ALIAS AMPLIFICATION AUDIT (CWE-400): sends non-destructive safe aliased multi-call queries (a: __typename, b: __typename) and array batches to test whether GraphQL gateways enforce query complexity and batch limits.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate GraphQL endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditGraphQLBatchAmplification) return { error: 'auditGraphQLBatchAmplification not wired in context' };
-      const target = targetUrl || url;
-      const discovered = await getDiscovered(target);
-      return ctx.recon.auditGraphQLBatchAmplification(target, { endpoints: endpoints || discovered?.graphqlEndpoints });
+      const resolvedTarget = targetUrl || url || target;
+      const discovered = await getDiscovered(resolvedTarget);
+      return ctx.recon.auditGraphQLBatchAmplification(resolvedTarget, { endpoints: endpoints || discovered?.graphqlEndpoints });
     }, { repeatable: true });
 
   R('gb_audit_cswsh', 'CROSS-SITE WEBSOCKET HIJACKING (CSWSH) AUDIT (CWE-1385): probes WebSocket upgrade endpoints with untrusted Origin headers (https://evil-attacker.com) to verify whether the server enforces Origin validation during the 101 Switching Protocols handshake.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate WebSocket endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditCrossSiteWebSocketHijacking) return { error: 'auditCrossSiteWebSocketHijacking not wired in context' };
-      const target = targetUrl || url;
-      const discovered = await getDiscovered(target);
-      return ctx.recon.auditCrossSiteWebSocketHijacking(target, { endpoints: endpoints || discovered?.websocketEndpoints });
+      const resolvedTarget = targetUrl || url || target;
+      const discovered = await getDiscovered(resolvedTarget);
+      return ctx.recon.auditCrossSiteWebSocketHijacking(resolvedTarget, { endpoints: endpoints || discovered?.websocketEndpoints });
     }, { repeatable: true });
 
   R('gb_audit_dependency_confusion', 'DEPENDENCY CONFUSION & INTERNAL NAMESPACE SQUATTING AUDIT (CWE-427): scans package.json and .npmrc for internal dependencies and resolves against public registry.npmjs.org to ensure no private packages are unclaimed publicly.',
@@ -296,67 +296,67 @@ function registerOperatorTools(reg, ctx) {
 
   R('gb_audit_web_cache', 'WEB CACHE DECEPTION & CACHE POISONING AUDIT (CWE-524 / CWE-444): probes authenticated endpoints with static pseudo-extensions (.css, .js, .png, ;.css) and unkeyed headers to verify whether CDN caches store private account JSON.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate authenticated endpoints to probe' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditWebCacheDeception) return { error: 'auditWebCacheDeception not wired in context' };
-      const target = targetUrl || url;
-      const discovered = await getDiscovered(target);
-      return ctx.recon.auditWebCacheDeception(target, { endpoints: endpoints || discovered?.authEndpoints });
+      const resolvedTarget = targetUrl || url || target;
+      const discovered = await getDiscovered(resolvedTarget);
+      return ctx.recon.auditWebCacheDeception(resolvedTarget, { endpoints: endpoints || discovered?.authEndpoints });
     }, { repeatable: true });
 
   R('gb_audit_oauth_pkce', 'OAUTH2 PKCE & PRE-ACCOUNT TAKEOVER AUDIT (CWE-287 / RFC 7636): analyzes OAuth redirect flows (Google, GitHub, SSO) for high-entropy state parameters and SHA-256 PKCE (code_challenge_method=S256) enforcement.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate OAuth initiate endpoints' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditOAuthPkceAndState) return { error: 'auditOAuthPkceAndState not wired in context' };
-      const target = targetUrl || url;
-      const discovered = await getDiscovered(target);
-      return ctx.recon.auditOAuthPkceAndState(target, { endpoints });
+      const resolvedTarget = targetUrl || url || target;
+      const discovered = await getDiscovered(resolvedTarget);
+      return ctx.recon.auditOAuthPkceAndState(resolvedTarget, { endpoints });
     }, { repeatable: true });
 
   // ── 4 MULTI-LAYER APPSEC PIPELINES ──
   R('gb_pipeline_bola_lifecycle', '3-LAYER AUTHORIZATION & BOLA/IDOR LIFECYCLE PIPELINE (CWE-639 / OWASP API1:2023): executes Layer 1 (Public surface & route extraction, CORS credentials), Layer 2 (Single-tenant session baseline, token entropy & object ID mapping), and Layer 3 (Cross-tenant replay, parameter substitution & WebSocket invalidation check).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, sessionToken: { type: 'string', description: 'optional session JWT or bearer token' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints' } }),
-    async ({ targetUrl, url, sessionToken, endpoints }) => {
+    async ({ targetUrl, url, target, sessionToken, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditBolaLifecyclePipeline) return { error: 'auditBolaLifecyclePipeline not wired in context' };
-      const target = targetUrl || url;
-      return ctx.recon.auditBolaLifecyclePipeline(target, { sessionToken, endpoints });
+      const resolvedTarget = targetUrl || url || target;
+      return ctx.recon.auditBolaLifecyclePipeline(resolvedTarget, { sessionToken, endpoints });
     }, { repeatable: true });
 
   R('gb_pipeline_reachability_proof', '3-PILLAR DETERMINISTIC VULNERABILITY PROOF & REACHABILITY PIPELINE (CWE-1336 / CWE-1321 / CWE-444): executes Pillar 1 (Manifest & dependency declaration audit for declared CVEs), Pillar 2 (Inter-file AST call-graph reachability from HTTP route handlers to vulnerable sinks), and Pillar 3 (In-vivo non-destructive behavioral differential via mathematical polyglots and framing desyncs).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, projectDir: { type: 'string', description: 'optional local directory path for AST reachability analysis' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional candidate endpoints' } }),
-    async ({ targetUrl, url, projectDir, endpoints }) => {
+    async ({ targetUrl, url, target, projectDir, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditReachabilityProofPipeline) return { error: 'auditReachabilityProofPipeline not wired in context' };
-      const target = targetUrl || url;
-      return ctx.recon.auditReachabilityProofPipeline(target, { projectDir, endpoints });
+      const resolvedTarget = targetUrl || url || target;
+      return ctx.recon.auditReachabilityProofPipeline(resolvedTarget, { projectDir, endpoints });
     }, { repeatable: true });
 
   R('gb_pipeline_blind_detection', '3-LAYER BLIND VULNERABILITY DETECTION PIPELINE (CWE-89 / CWE-918): executes Layer 1 (In-band boundary reflections & database syntax error disclosures), Layer 2 (3-pass statistical timing differentials with standard deviation analysis for blind SQLi), and Layer 3 (Out-of-band OAST ephemeral cryptographic canary callbacks for asynchronous workers).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional candidate query endpoints' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditBlindDetectionPipeline) return { error: 'auditBlindDetectionPipeline not wired in context' };
-      const target = targetUrl || url;
-      return ctx.recon.auditBlindDetectionPipeline(target, { endpoints });
+      const resolvedTarget = targetUrl || url || target;
+      return ctx.recon.auditBlindDetectionPipeline(resolvedTarget, { endpoints });
     }, { repeatable: true });
 
   R('gb_pipeline_second_order', '3-LAYER SECOND-ORDER STORED INJECTION PIPELINE (CWE-79 / CWE-116): executes Layer 1 (Schema mutation injection with tracked boundary canaries into state-altering inputs), Layer 2 (Multi-step downstream route traversal across admin views, exports, and profiles), and Layer 3 (Headless DOM sink taint instrumentation checking innerHTML, eval, and unsafe DOM assignments).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific mutation endpoints' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditSecondOrderPipeline) return { error: 'auditSecondOrderPipeline not wired in context' };
-      const target = targetUrl || url;
-      return ctx.recon.auditSecondOrderPipeline(target, { endpoints });
+      const resolvedTarget = targetUrl || url || target;
+      return ctx.recon.auditSecondOrderPipeline(resolvedTarget, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_vibe_security', 'AI-GENERATED APP & VIBE-CODER ARCHITECTURE AUDIT: evaluates client-side secrets & API key exposure (Stripe, Supabase service roles, AWS), unauthenticated API mutations (POST/PUT/DELETE on /api/user, /api/checkout), and prototype pollution integrity.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, apiRoutes: { type: 'array', items: { type: 'string' }, description: 'candidate API routes to test for unauthenticated mutations' } }),
-    async ({ targetUrl, url, apiRoutes }) => {
+    async ({ targetUrl, url, target, apiRoutes }) => {
       if (!ctx.recon || !ctx.recon.auditVibeSecurity) return { error: 'auditVibeSecurity not wired in context' };
-      return ctx.recon.auditVibeSecurity(targetUrl || url, { apiRoutes });
+      return ctx.recon.auditVibeSecurity(targetUrl || url || target, { apiRoutes });
     }, { repeatable: true });
 
   R('gb_audit_concurrency', 'CONCURRENCY, TOCTOU & IDEMPOTENCY AUDIT (CWE-362): fires synchronized parallel requests with idempotency keys to verify state synchronization and prevent duplicate processing in state-changing operations.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' }, concurrency: { type: 'number', description: 'burst count (default 6, max 10)' } }),
-    async ({ targetUrl, url, concurrency }) => {
+    async ({ targetUrl, url, target, concurrency }) => {
       if (!ctx.recon || !ctx.recon.auditConcurrency) return { error: 'auditConcurrency not wired in context' };
-      return ctx.recon.auditConcurrency(targetUrl || url, { concurrency });
+      return ctx.recon.auditConcurrency(targetUrl || url || target, { concurrency });
     }, { repeatable: true });
 
   R('gb_audit_compliance', 'ENTERPRISE COMPLIANCE FRAMEWORK MAPPING: maps security findings directly to SOC 2 Type II (Trust Services Criteria), ISO 27001:2022 (Annex A Controls), and PCI-DSS v4.0 (Requirement 6).',
@@ -368,16 +368,16 @@ function registerOperatorTools(reg, ctx) {
 
   R('gb_audit_graphql_resilience', 'GRAPHQL QUERY COMPLEXITY, DEPTH & CONTRACT RESILIENCE AUDIT: discovers GraphQL endpoints, checks production introspection exposure, tests recursive query depth limits, and verifies query batching resilience against request flooding.',
     obj({ targetUrl: { type: 'string', description: 'target domain or GraphQL endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' } }),
-    async ({ targetUrl, url }) => {
+    async ({ targetUrl, url, target }) => {
       if (!ctx.recon || !ctx.recon.auditGraphqlResilience) return { error: 'auditGraphqlResilience not wired in context' };
-      return ctx.recon.auditGraphqlResilience(targetUrl || url);
+      return ctx.recon.auditGraphqlResilience(targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_dual_tenant', 'MULTI-TENANT CROSS-SESSION ISOLATION & BOLA AUDIT (OWASP API1:2023 / CWE-639): evaluates resource isolation by testing cross-session object substitution between Tenant A and Tenant B. Detects whether Tenant B can read, mutate, or access private assets belonging to Tenant A.',
     obj({ targetUrl: { type: 'string', description: 'resource endpoint URL (e.g. https://api.site.com/projects/{id})' }, url: { type: 'string', description: 'alias for targetUrl' }, tokenA: { type: 'string', description: 'valid bearer token or session credentials for Tenant A' }, tokenB: { type: 'string', description: 'valid bearer token or session credentials for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
-    async ({ targetUrl, url, tokenA, tokenB, objectIds }) => {
+    async ({ targetUrl, url, target, tokenA, tokenB, objectIds }) => {
       if (!ctx.recon || !ctx.recon.auditDualTenantIsolation) return { error: 'auditDualTenantIsolation not wired in context' };
-      return ctx.recon.auditDualTenantIsolation({ targetUrl: targetUrl || url, tokenA, tokenB, objectIds });
+      return ctx.recon.auditDualTenantIsolation({ targetUrl: targetUrl || url || target, tokenA, tokenB, objectIds });
     }, { repeatable: true });
 
   R('gb_audit_token_hygiene', 'TOKEN CRYPTOGRAPHIC HYGIENE & CLAIM AUDIT: parses and cryptographically audits JSON Web Tokens (JWTs) or session bearer tokens for algorithm security (detects alg: "none", weak ciphers), expiration (exp claim enforcement), and sensitive PII or secrets leaked in unencrypted claims.',
@@ -389,37 +389,37 @@ function registerOperatorTools(reg, ctx) {
 
   R('gb_audit_throttling', 'RATE-LIMITING & THROTTLING RESILIENCE AUDIT: checks whether target endpoints return RFC 6585 rate-limiting headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After) and enforce progressive request throttling against automated abuse.',
     obj({ targetUrl: { type: 'string', description: 'endpoint URL to test' }, url: { type: 'string', description: 'alias for targetUrl' } }),
-    async ({ targetUrl, url }) => {
+    async ({ targetUrl, url, target }) => {
       if (!ctx.recon || !ctx.recon.auditThrottling) return { error: 'auditThrottling not wired in context' };
-      return ctx.recon.auditThrottling(targetUrl || url);
+      return ctx.recon.auditThrottling(targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_canary_reflection', 'ENTERPRISE ZERO-FALSE-POSITIVE BENIGN CANARY REFLECTION & DOM TAINT AUDIT: probes target URL query parameters and discovered DOM forms with harmless boundary delimiter tokens (__gbcanary_xxxx\'"><gbtest>) to mathematically prove whether input is reflected unencoded (CWE-79) or safely entity-escaped. Also checks Playwright DOM sink traces (innerHTML, outerHTML, document.write) for active taint. Returns reproducible curl PoC, exact response snippet, and ready-to-merge remediation patch.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
-    async ({ targetUrl, url, profile }) => {
+    async ({ targetUrl, url, target, profile }) => {
       if (!ctx.recon || !ctx.recon.auditCanaryReflections) return { error: 'auditCanaryReflections not wired in context' };
-      return ctx.recon.auditCanaryReflections(profile || 'default', targetUrl || url);
+      return ctx.recon.auditCanaryReflections(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_semantic_surface', 'IN-BROWSER SEMANTIC ROUTE & ROLE SURFACE AUDIT: inspects client-side SPA runtime (Next.js, Remix, Vue Router, Nuxt) and DOM elements to extract application routes, privileged role-gated buttons/forms (Admin, Billing, Delete, Team, API Keys), and internal API endpoints that traditional crawlers miss.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
-    async ({ targetUrl, url, profile }) => {
+    async ({ targetUrl, url, target, profile }) => {
       if (!ctx.recon || !ctx.recon.auditSemanticSurface) return { error: 'auditSemanticSurface not wired in context' };
-      return ctx.recon.auditSemanticSurface(profile || 'default', targetUrl || url);
+      return ctx.recon.auditSemanticSurface(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_auth_matrix', 'BUSINESS LOGIC & BROKEN ACCESS CONTROL (BOLA/IDOR) AUDIT (OWASP A01:2021 / CWE-285): tests whether backend API and administrative endpoints enforce server-side authorization or merely rely on UI button hiding. Strips session cookies and tokens to test unauthenticated access to privileged routes. Generates reproducible curl PoC and pull-request ready authorization middleware patches.',
     obj({ targetUrl: { type: 'string', description: 'base target URL' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'list of candidate endpoints or routes to test' } }),
-    async ({ targetUrl, url, endpoints }) => {
+    async ({ targetUrl, url, target, endpoints }) => {
       if (!ctx.recon || !ctx.recon.auditAuthMatrix) return { error: 'auditAuthMatrix not wired in context' };
-      return ctx.recon.auditAuthMatrix(targetUrl || url, { endpoints });
+      return ctx.recon.auditAuthMatrix(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_http_headers', 'ENTERPRISE BURP SUITE-STYLE DIFFERENTIAL HTTP HEADER & VERB AUDIT: probes target endpoints with verb tampering (OPTIONS, HEAD, TRACE, PUT, DELETE, PATCH), Host Header injection / reverse proxy cache poisoning (X-Forwarded-Host), internal IP trust spoofing (X-Forwarded-For: 127.0.0.1), CORS differential origin matrix (null, arbitrary attacker, subdomain reflection with credentials), Cache-Control PII leakage, and modern enterprise defense header compliance (HSTS, CSP, XFO, XCTO, Permissions-Policy, COOP). Returns structured CWE vulnerabilities, proof-of-concept curl commands, and 4-pillar hardening directives.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
-    async ({ targetUrl, url }) => {
+    async ({ targetUrl, url, target }) => {
       if (!ctx.recon || !ctx.recon.auditHttpHeaders) return { error: 'auditHttpHeaders not wired in context' };
-      return ctx.recon.auditHttpHeaders(targetUrl || url);
+      return ctx.recon.auditHttpHeaders(targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_recon', 'FULL SECURITY RECON & ATTACK SURFACE AUDIT of any website, domain, or URL: evaluates HTTP security headers (CSP, HSTS, XFO, XCTO, Referrer-Policy, Cookies), DNS posture (SPF, DMARC, DKIM, CAA, MX, CNAME takeover risk), perimeter port exposure (80, 443, 22, 25, 3306, 5432, 6379), WAF fingerprinting, overall security score & grade (A-F), and actionable 4-pillar remediations (Traefik, Nginx, Express, DNS). Always call this when asked for "recon", "audit", "security scan", "vulnerabilities", or "check attack surface".',
@@ -535,65 +535,65 @@ function registerOperatorTools(reg, ctx) {
   // ── 6 advanced security auditor tools ──
   R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials with Gmail alias (e.g. wesley.biab+audit123@gmail.com), fills form, submits, checks the logged-in Gmail inbox for verification links or OTP codes, and establishes an authenticated session in the chosen profile.',
     obj({ targetUrl: { type: 'string', description: 'target website or base URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile to store the session into (e.g. "audit_tenant_a", "audit_tenant_b", "default")' }, username: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' }, useGmail: { type: 'boolean', description: 'whether to use logged-in Gmail alias (default true)' } }),
-    async ({ targetUrl, url, profile, username, email, password, useGmail }) => {
+    async ({ targetUrl, url, target, profile, username, email, password, useGmail }) => {
       if (!ctx.recon || !ctx.recon.authRegister) return { error: 'Account automation not wired in context' };
-      return ctx.recon.authRegister(profile || 'default', { targetUrl: targetUrl || url, username, email, password, useGmail: useGmail !== false });
+      return ctx.recon.authRegister(profile || 'default', { targetUrl: targetUrl || url || target, username, email, password, useGmail: useGmail !== false });
     }, { repeatable: true });
 
   R('gb_auth_verify_email', 'AUTONOMOUS EMAIL VERIFICATION VIA LOGGED-IN GMAIL: checks the owner\'s logged-in Gmail account in the "google" profile for recent verification emails from the target site, extracts the verification link or OTP code, and automatically verifies the target account.',
     obj({ profile: { type: 'string', description: 'target browser profile holding the registration session (default "default")' }, targetUrl: { type: 'string', description: 'target website URL' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.authVerifyEmail) return { error: 'Email verification automation not wired in context' };
-      return ctx.recon.authVerifyEmail(profile || 'default', { targetUrl: targetUrl || url });
+      return ctx.recon.authVerifyEmail(profile || 'default', { targetUrl: targetUrl || url || target });
     }, { repeatable: true });
 
   R('gb_auth_login', 'AUTONOMOUS LOGIN FOR AUDITING: automatically finds login on the target website, fills credentials, and establishes an authenticated session in the chosen profile.',
     obj({ targetUrl: { type: 'string', description: 'target website URL' }, url: { type: 'string', description: 'alias for targetUrl' }, username: { type: 'string', description: 'username or email' }, password: { type: 'string', description: 'password' }, profile: { type: 'string', description: 'browser profile (default "default")' } }, ['password']),
-    async ({ targetUrl, url, username, password, profile }) => {
+    async ({ targetUrl, url, target, username, password, profile }) => {
       if (!ctx.recon || !ctx.recon.authLogin) return { error: 'Account automation not wired in context' };
-      return ctx.recon.authLogin(profile || 'default', { targetUrl: targetUrl || url, username, password });
+      return ctx.recon.authLogin(profile || 'default', { targetUrl: targetUrl || url || target, username, password });
     }, { repeatable: true });
 
   R('gb_audit_bola', 'MULTI-SESSION AUTHORIZATION & BOLA / IDOR AUDIT (CWE-639 / OWASP API1:2023): tests cross-profile or dual-token access against sensitive resource endpoints to verify tenant boundary isolation.',
     obj({ targetUrl: { type: 'string', description: 'target resource URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profileA: { type: 'string', description: 'primary tenant browser profile (e.g. audit_tenant_a)' }, profileB: { type: 'string', description: 'secondary tenant browser profile (e.g. audit_tenant_b)' }, tokenA: { type: 'string', description: 'session/bearer token for Tenant A' }, tokenB: { type: 'string', description: 'session/bearer token for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
-    async ({ targetUrl, url, profileA, profileB, tokenA, tokenB, objectIds }) => {
+    async ({ targetUrl, url, target, profileA, profileB, tokenA, tokenB, objectIds }) => {
       if (!ctx.recon || !ctx.recon.auditBola) return { error: 'BOLA auditor engine not wired in context' };
-      return ctx.recon.auditBola({ targetUrl: targetUrl || url, profileA, profileB, tokenA, tokenB, objectIds });
+      return ctx.recon.auditBola({ targetUrl: targetUrl || url || target, profileA, profileB, tokenA, tokenB, objectIds });
     }, { repeatable: true });
 
   R('gb_audit_dom_sinks', 'DYNAMIC DOM SINK & TAINT AUDIT: instruments and inspects browser DOM sinks (innerHTML, outerHTML, eval, Function, document.write, navigation sinks, and reflected query parameters) in the active page.',
     obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditDomSinks) return { error: 'DOM sink auditor not wired in context' };
-      return ctx.recon.auditDomSinks(profile || 'default', targetUrl || url);
+      return ctx.recon.auditDomSinks(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_postmessage', 'POSTMESSAGE & CROSS-WINDOW BOUNDARY AUDIT: inspects window message event listeners in the active page, checks for missing event.origin validation, and flags wildcard targetOrigin "*".',
     obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditPostMessages) return { error: 'postMessage auditor not wired in context' };
-      return ctx.recon.auditPostMessages(profile || 'default', targetUrl || url);
+      return ctx.recon.auditPostMessages(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_api_graphql', 'DYNAMIC API ROUTE HARVESTING & GRAPHQL INTROSPECTION AUDIT: harvests discovered REST endpoints and probes GraphQL endpoints for exposed __schema introspection, discovering queries, mutations, and sensitive fields.',
     obj({ targetUrl: { type: 'string', description: 'target domain or URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ targetUrl, url, profile }) => {
+    async ({ targetUrl, url, target, profile }) => {
       if (!ctx.recon || !ctx.recon.auditApiAndGraphql) return { error: 'API/GraphQL auditor not wired in context' };
-      return ctx.recon.auditApiAndGraphql(targetUrl || url, profile || 'default');
+      return ctx.recon.auditApiAndGraphql(targetUrl || url || target, profile || 'default');
     }, { repeatable: true });
 
   R('gb_audit_websockets', 'WEBSOCKET & STREAMING PROTOCOL AUDIT: verifies whether active WebSockets use secure wss:// encryption and audits URLs for sensitive tokens exposed in query parameters.',
     obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditWebSockets) return { error: 'WebSocket auditor not wired in context' };
-      return ctx.recon.auditWebSockets(profile || 'default', targetUrl || url);
+      return ctx.recon.auditWebSockets(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   R('gb_audit_storage', 'CLIENT STORAGE HYGIENE & TOKEN EXPOSURE AUDIT: deep inspection of localStorage, sessionStorage, and cookies for exposed JWTs, API tokens, passwords, and missing HttpOnly / Secure flags.',
     obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditStorageHygiene) return { error: 'Storage hygiene auditor not wired in context' };
-      return ctx.recon.auditStorageHygiene(profile || 'default', targetUrl || url);
+      return ctx.recon.auditStorageHygiene(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
 
   return reg.names().length;
