@@ -161,6 +161,13 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_graphql_resilience', 'GRAPHQL QUERY COMPLEXITY, DEPTH & CONTRACT RESILIENCE AUDIT: discovers GraphQL endpoints, checks production introspection exposure, tests recursive query depth limits, and verifies query batching resilience against request flooding.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or GraphQL endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.auditGraphqlResilience) return { error: 'auditGraphqlResilience not wired in context' };
+      return ctx.recon.auditGraphqlResilience(targetUrl || url);
+    }, { repeatable: true });
+
   R('gb_audit_dual_tenant', 'MULTI-TENANT CROSS-SESSION ISOLATION & BOLA AUDIT (OWASP API1:2023 / CWE-639): evaluates resource isolation by testing cross-session object substitution between Tenant A and Tenant B. Detects whether Tenant B can read, mutate, or access private assets belonging to Tenant A.',
     obj({ targetUrl: { type: 'string', description: 'resource endpoint URL (e.g. https://api.site.com/projects/{id})' }, url: { type: 'string', description: 'alias for targetUrl' }, tokenA: { type: 'string', description: 'valid bearer token or session credentials for Tenant A' }, tokenB: { type: 'string', description: 'valid bearer token or session credentials for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
     async ({ targetUrl, url, tokenA, tokenB, objectIds }) => {
