@@ -123,6 +123,28 @@ val RECON_PROMPT_CHIPS = listOf(
         prompt = "Audit supply chain and infrastructure boundaries on https://target-domain.com. Run gb_audit_dependency_confusion to verify that private packages in package.json are claimed on npmjs.org or mapped in .npmrc, gb_audit_cloud_metadata to test IMDSv1/v2 isolation, and gb_audit_subdomain_takeover for unclaimed CNAME pointers."
     ),
 
+    // ── 4 MULTI-LAYER APPSEC PIPELINES ──
+    StarterPrompt(
+        title = "🔐 3-Layer Auth & BOLA Lifecycle Pipeline",
+        subtitle = "Layer 1: Public Surface & CORS -> Layer 2: Session Baseline -> Layer 3: Cross-Tenant Replay & CSWSH",
+        prompt = "Execute the 3-Layer Authorization & BOLA/IDOR Lifecycle Pipeline on https://target-domain.com using gb_pipeline_bola_lifecycle. Evaluates Layer 1 (Public surface & unauth admin leaks, CORS origin credentials), Layer 2 (Session token entropy, JWT claims, cookie hygiene), and Layer 3 (Cross-tenant object ID parameter replay and WebSocket session invalidation drop checks)."
+    ),
+    StarterPrompt(
+        title = "🔬 3-Pillar Deterministic Reachability Pipeline",
+        subtitle = "Pillar 1: Declared CVEs -> Pillar 2: AST Call-Graph Sinks -> Pillar 3: In-Vivo Behavioral Canaries",
+        prompt = "Execute the 3-Pillar Deterministic Vulnerability Proof & Reachability Pipeline on https://target-domain.com using gb_pipeline_reachability_proof. Evaluates Pillar 1 (Scans package.json for declared CVE versions), Pillar 2 (Static AST call-graph reachability from HTTP route handlers to vulnerable sinks), and Pillar 3 (Non-destructive in-vivo behavioral canary differential via mathematical polyglots and HTTP framing desyncs)."
+    ),
+    StarterPrompt(
+        title = "⏱️ 3-Layer Blind Vulnerability Pipeline",
+        subtitle = "Layer 1: Syntax Leaks -> Layer 2: Statistical Timing Differentials -> Layer 3: OAST Ephemeral Pingbacks",
+        prompt = "Execute the 3-Layer Blind Vulnerability Detection Pipeline on https://target-domain.com using gb_pipeline_blind_detection. Evaluates Layer 1 (In-band delimiter reflections and database syntax error leaks), Layer 2 (3-pass statistical timing differentials with standard deviation analysis for blind SQLi), and Layer 3 (Out-of-band OAST ephemeral cryptographic canary callbacks for asynchronous background workers)."
+    ),
+    StarterPrompt(
+        title = "🔄 3-Layer Second-Order Stored Pipeline",
+        subtitle = "Layer 1: Mutation Injection -> Layer 2: Downstream Route Traversal -> Layer 3: Headless DOM Taint",
+        prompt = "Execute the 3-Layer Second-Order Stored Injection Pipeline on https://target-domain.com using gb_pipeline_second_order. Evaluates Layer 1 (Planting harmless boundary canaries in mutation endpoints), Layer 2 (Crawling downstream profile, export, and admin views for unencoded reflection), and Layer 3 (Headless DOM taint instrumentation checking innerHTML, eval, and unsafe DOM assignments)."
+    ),
+
     // ── DEDICATED FRONTIER VECTORS ──
     StarterPrompt(
         title = "💥 HTTP Request Smuggling & Desync (CWE-444)",
