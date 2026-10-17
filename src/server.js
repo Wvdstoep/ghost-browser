@@ -6137,6 +6137,8 @@ ${g}` : g;
       auditToken: (token) => recon.auditToken(token),
       auditDualTenantIsolation: (opts) => recon.auditDualTenantIsolation(opts),
       auditGraphqlResilience: (targetUrl) => recon.auditGraphqlResilience(targetUrl),
+      auditConcurrency: (targetUrl, opts) => recon.auditConcurrency(targetUrl, opts),
+      generateComplianceScorecard: (findings) => recon.generateComplianceScorecard(findings),
       auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
