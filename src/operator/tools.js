@@ -161,6 +161,20 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_oast_callbacks', 'OUT-OF-BAND CANARY (OAST) BLIND CALLBACK AUDIT (CWE-918 / CWE-644): generates ephemeral cryptographic canary tokens (UUID + HMAC) to safely verify blind SSRF and out-of-band host header callbacks without destructive payloads. Polls for DNS/HTTP pingback interactions.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, candidateParams: { type: 'array', items: { type: 'string' }, description: 'candidate parameters (url, webhook, redirect, callback)' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate endpoints to probe' }, oastDomain: { type: 'string', description: 'optional custom OAST domain' } }),
+    async ({ targetUrl, url, candidateParams, endpoints, oastDomain }) => {
+      if (!ctx.recon || !ctx.recon.auditOastCanaryProtocol) return { error: 'auditOastCanaryProtocol not wired in context' };
+      return ctx.recon.auditOastCanaryProtocol(targetUrl || url, { candidateParams, endpoints, oastDomain });
+    }, { repeatable: true });
+
+  R('gb_audit_ast_reachability', 'DEEP INTER-FILE AST SYMBOL RESOLUTION & SERVER ACTION AUDIT: indexes JavaScript/TypeScript project files, identifies Next.js Server Actions (use server) and App Router routes, and traces cross-file import/export symbol call graphs down to dangerous sinks (CWE-1321, CWE-78, CWE-94, CWE-918). Separates PROVEN_LIVE_REACHABLE risks from DORMANT_DEAD_CODE.',
+    obj({ projectDir: { type: 'string', description: 'directory path of the project to analyze (defaults to workspace)' } }),
+    async ({ projectDir }) => {
+      if (!ctx.recon || !ctx.recon.auditAstReachability) return { error: 'auditAstReachability not wired in context' };
+      return ctx.recon.auditAstReachability(projectDir || process.cwd());
+    }, { repeatable: true });
+
   R('gb_audit_cve_verification', 'NON-DESTRUCTIVE DETERMINISTIC CVE & REACHABILITY AUDIT: executes the 3-pillar validation protocol for site owners without destructive exploits: (1) Behavioral Differential Probing (header normalization, duplicate Content-Length, HTTP desync patch checks), (2) Static Call-Graph & Dependency Reachability Analysis (distinguishes live reachable sinks from dormant dead-code CVEs in Node.js packages), (3) Harmless Canary Protocol (safe mathematical evaluation ${9413*7} -> 65891 proving SSTI/RCE and isolated prototype pollution CWE-1321). Eliminates false positives and outputs PR-ready remediations.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints to probe' }, projectDir: { type: 'string', description: 'optional local directory path for AST reachability analysis' } }),
     async ({ targetUrl, url, endpoints, projectDir }) => {

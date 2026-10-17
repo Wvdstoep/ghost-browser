@@ -23,6 +23,8 @@ const concurrencyAuditor = require('./concurrencyAuditor');
 const complianceMapper = require('./complianceMapper');
 const vibeSecurityAuditor = require('./vibeSecurityAuditor');
 const cveVerifier = require('./cveVerifier');
+const oastAuditor = require('./oastAuditor');
+const astReachability = require('./astReachability');
 
 module.exports = {
   ...advisory,
@@ -44,5 +46,7 @@ module.exports = {
   ...concurrencyAuditor,
   ...complianceMapper,
   ...vibeSecurityAuditor,
-  ...cveVerifier
+  ...cveVerifier,
+  ...oastAuditor,
+  ...astReachability
 };
