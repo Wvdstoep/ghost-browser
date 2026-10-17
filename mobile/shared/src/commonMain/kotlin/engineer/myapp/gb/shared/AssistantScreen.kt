@@ -148,8 +148,8 @@ val RECON_PROMPT_CHIPS = listOf(
     ),
     StarterPrompt(
         title = "⚡ Canary Reflection & Dynamic DOM Sink Taint",
-        subtitle = "Harmless boundary probes ('"><gbtest>) & innerHTML sinks",
-        prompt = "Audit input validation on https://my-app.engineer using gb_audit_canary_reflection and gb_audit_dom_sinks. Probe URL parameters and forms with harmless boundary delimiters (__gbcanary_xxxx'"><gbtest>) to mathematically prove whether inputs are reflected unencoded, and trace DOM sink taint."
+        subtitle = "Harmless boundary probes ('><gbtest>) & innerHTML sinks",
+        prompt = "Audit input validation on https://my-app.engineer using gb_audit_canary_reflection and gb_audit_dom_sinks. Probe URL parameters and forms with harmless boundary delimiters (__gbcanary_xxxx'><gbtest>) to mathematically prove whether inputs are reflected unencoded, and trace DOM sink taint."
     ),
     StarterPrompt(
         title = "📊 Enterprise Compliance & Hardening Directives",
