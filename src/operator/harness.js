@@ -26,8 +26,8 @@ const fs = require('fs');
 const path = require('path');
 
 const JOB_DIR = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'jobs');
-const MAX_RESULT_CHARS = 12000;
-const MAX_CONTEXT_CHARS = 140000;
+const MAX_RESULT_CHARS = 8000;
+const MAX_CONTEXT_CHARS = 24000;
 const RE_ANCHOR_EVERY = 20;
 
 const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars trimmed — ask for less, or a narrower filter)` : (s || ''); };
@@ -131,15 +131,31 @@ class OperatorRun {
 
   _prune() {
     const size = () => this.messages.reduce((n, m) => n + String(m.content || '').length, 0);
-    if (size() <= MAX_CONTEXT_CHARS) return;
-    // keep the system prompt + the first user turn; trim old tool results to one line, oldest first
-    for (let i = 2; i < this.messages.length - 24 && size() > MAX_CONTEXT_CHARS * 0.8; i++) {
-      const m = this.messages[i];
-      if (m.role === 'tool' && String(m.content || '').length > 200) m.content = String(m.content).slice(0, 160) + ' … [trimmed earlier result]';
+    // Keep head (0,1) and the most recent 2 turns intact. Condense earlier tool results to prevent payload blowup
+    if (size() > MAX_CONTEXT_CHARS * 0.5) {
+      for (let i = 2; i < this.messages.length - 2 && size() > MAX_CONTEXT_CHARS * 0.5; i++) {
+        const m = this.messages[i];
+        if (m.role === 'tool' && String(m.content || '').length > 400) {
+          try {
+            const parsed = JSON.parse(m.content);
+            const concise = {
+              target: parsed.target || parsed.url || parsed.targetUrl,
+              score: parsed.score,
+              grade: parsed.grade,
+              findingsCount: parsed.findingsCount || (Array.isArray(parsed.findings) ? parsed.findings.length : undefined),
+              findings: Array.isArray(parsed.findings) ? parsed.findings.slice(0, 5).map(f => typeof f === 'object' ? (f.title || f.key || f.id) : f) : undefined,
+              status: parsed.status || parsed.remediation || (parsed.advisories ? `${parsed.advisories.length} advisories` : undefined)
+            };
+            m.content = JSON.stringify(concise);
+          } catch (_) {
+            m.content = String(m.content).slice(0, 300) + ' … [trimmed earlier result]';
+          }
+        }
+      }
     }
     if (size() > MAX_CONTEXT_CHARS) {
-      // still too big: drop the oldest middle turns entirely, keeping the head and the recent tail
-      const head = this.messages.slice(0, 2), tail = this.messages.slice(-24);
+      // still too big: drop oldest middle turns, keeping head and recent 4 turns
+      const head = this.messages.slice(0, 2), tail = this.messages.slice(-4);
       this.messages = [...head, { role: 'user', content: '[Earlier turns were trimmed to fit the context. Your task list and notes carry what was learned.]' }, ...tail];
     }
   }
@@ -173,7 +189,18 @@ class OperatorRun {
         this._prune();
         let reply;
         try { reply = await this.chat({ host: this.llm.host, model: this.llm.model, key: this.llm.key, messages: this.messages, tools: this.registry.definitions() }); }
-        catch (e) { this._event('llm-error', { message: e.message }); if (++this._failStreak >= 4) { this._finishAs('error', `the model stopped answering: ${e.message}`); break; } await new Promise((r) => setTimeout(r, 4000)); continue; }
+        catch (e) {
+          this._event('llm-error', { message: e.message });
+          // If the model hits a limit or 500 error, aggressively condense historical messages before retry
+          for (let i = 2; i < this.messages.length - 1; i++) {
+            if (this.messages[i].role === 'tool' && String(this.messages[i].content || '').length > 250) {
+              this.messages[i].content = String(this.messages[i].content).slice(0, 200) + ' … [trimmed on error]';
+            }
+          }
+          if (++this._failStreak >= 4) { this._finishAs('error', `the model stopped answering: ${e.message}`); break; }
+          await new Promise((r) => setTimeout(r, 4000));
+          continue;
+        }
         const calls = Array.isArray(reply.toolCalls) ? reply.toolCalls : [];
         const content = String(reply.content || '');
         if (content) this._event('thought', { text: content.slice(0, 1200) });
