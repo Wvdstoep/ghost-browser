@@ -18,6 +18,7 @@ const patchGenerator = require('./patchGenerator');
 const jwtAuditor = require('./jwtAuditor');
 const throttlingAuditor = require('./throttlingAuditor');
 const dualSessionAuditor = require('./dualSessionAuditor');
+const graphqlAuditor = require('./graphqlAuditor');
 
 module.exports = {
   ...advisory,
@@ -34,5 +35,6 @@ module.exports = {
   ...patchGenerator,
   ...jwtAuditor,
   ...throttlingAuditor,
-  ...dualSessionAuditor
+  ...dualSessionAuditor,
+  ...graphqlAuditor
 };
