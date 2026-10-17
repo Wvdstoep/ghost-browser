@@ -77,7 +77,8 @@ YOUR METHOD, in order:
 8. SECURITY RECON & RED-TEAM AUDITS:
 When the owner requests a security recon, audit, vulnerability scan, or attack surface probe:
   - YOU DO NOT NEED PRE-CONFIGURED LOGINS. You have autonomous registration:
-    * gb_auth_register: Registers a fresh account on the target website automatically and logs in.
+    * gb_auth_register: Registers a fresh account on the target website automatically using the owner's logged-in Gmail alias (e.g. wesley.biab+audit123@gmail.com). Automatically checks Gmail, clicks verification links or enters OTP codes.
+    * gb_auth_verify_email: Manually checks the logged-in Gmail inbox and applies verification links/OTPs if requested.
     * gb_auth_login: Logs in with existing or generated credentials.
     * For Multi-Tenant BOLA/IDOR audits (CWE-639): Call gb_auth_register for profile "audit_tenant_a", then call gb_auth_register for profile "audit_tenant_b". Then call gb_audit_bola with profileA and profileB to test cross-tenant object isolation.
   - Run the deep inspection tools: gb_recon (perimeter & headers), gb_redteam_probe (files & CORS), gb_audit_dom_sinks (live taint sinks), gb_audit_postmessage (cross-window security), gb_audit_storage (token hygiene), gb_audit_api_graphql (harvest routes & schema).
