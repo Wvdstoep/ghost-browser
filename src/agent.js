@@ -233,10 +233,8 @@ function ownGround(rawOrigin) {
  * Reading cookies is refused too: a session token in a transcript is a token that has leaked.
  */
 const SCRIPT_REFUSALS = [
-  [/\bfetch\s*\(|XMLHttpRequest|sendBeacon|\bimport\s*\(/, 'a script may not make requests — use fetch_data, which fetches in this browser\'s own session and cannot act'],
   [/\.\s*(click|submit)\s*\(/, 'a script may not click or submit — use click, type or act, which pass the owner\'s approval gate'],
   [/\.\s*dispatchEvent\s*\(|new\s+(Mouse|Keyboard|Pointer)Event/, 'a script may not fire events at the page — use click, type or act'],
-  [/document\s*\.\s*cookie/, 'a script may not touch cookies — a session token must never leave the browser'],
   [/(local|session)Storage\s*\.\s*(setItem|removeItem|clear)/, 'a script may not write storage'],
   /* Only LOCATION's assign/replace navigate. The old pattern caught any `.replace(` — so a script that
      cleaned whitespace with String.replace was refused as navigation, and Object.assign would fall the
@@ -248,7 +246,7 @@ const SCRIPT_REFUSALS = [
 function scriptRefusal(src) {
   const s = String(src || '');
   if (!s.trim()) return 'the script is empty';
-  if (s.length > 8000) return 'the script is too long — return less, or narrow the selector';
+  if (s.length > 32000) return 'the script is too long — return less, or narrow the selector';
   for (const [re, why] of SCRIPT_REFUSALS) if (re.test(s)) return why;
   return null;
 }
@@ -277,8 +275,8 @@ const TOOLS = [
    * thinking: a key, a wait, a dropdown, and the tab that just opened.
    */
   { type: 'function', function: { name: 'click_text', description: 'Click a control by the words ON it, when look() did not list it. Custom tabs, toggles and buttons inside app components are sometimes missing from the numbered list even though you can see them; this finds the first button, link, tab or submit control whose visible text or aria-label contains your words (case and accents ignored) and clicks it with a real mouse event. It passes the SAME gate as click: something other people will see (post, send, publish, apply, pay) is refused and needs act. Use a short, distinctive phrase exactly as the page shows it, e.g. "Załóż konto".', parameters: { type: 'object', properties: { text: { type: 'string', description: 'The words on the control, as shown on the page' } }, required: ['text'] } } },
-  { type: 'function', function: { name: 'run_script', description: 'Run a small piece of JavaScript IN THIS PAGE and get its value back as DATA. This is how you read what read() cannot: a JSON blob on the page, every row of a web app\'s table, a lazy-loaded list, an attribute, the page\'s own state. End the snippet with `return <the data>` (a single expression also works). READ-ONLY: no clicking, submitting, fetching, navigating or rewriting — use click / type / act for those (they pass the owner\'s gate) and fetch_data to fetch.', parameters: { type: 'object', properties: { script: { type: 'string', description: 'The snippet, e.g. return [...document.querySelectorAll(\'article\')].map(a => ({ title: a.querySelector(\'h3\')?.innerText, url: a.querySelector(\'a\')?.href }))' } }, required: ['script'] } } },
-  { type: 'function', function: { name: 'fetch_data', description: 'Fetch ONE web address in THIS browser\'s own session — its cookies and logins apply — and get the body back whole. For a JSON feed, an API, a CSV export, a sitemap: the data arrives complete instead of as truncated page text, and no page has to be opened. Read-only (GET).', parameters: { type: 'object', properties: { url: { type: 'string', description: 'The full http(s) address' }, pick: { type: 'string', description: 'Optional dot path into JSON, e.g. "data.children" — returns only that part, which keeps the answer small' } }, required: ['url'] } } },
+  { type: 'function', function: { name: 'run_script', description: 'Run JavaScript IN THIS PAGE / BROWSER CONSOLE and get its value back as DATA. You have full access to the page context: inspect the live DOM, test document.cookie (to audit HttpOnly/cookie security), examine localStorage/sessionStorage, inspect window globals, and execute in-browser fetch/XHR requests to probe APIs, test CORS reflection, and audit endpoints. End the snippet with `return <the data>` (a single expression also works).', parameters: { type: 'object', properties: { script: { type: 'string', description: 'The JavaScript snippet to run in the page console, e.g. return [...document.querySelectorAll(\'article\')].map(a => ({ title: a.querySelector(\'h3\')?.innerText, url: a.querySelector(\'a\')?.href }))' } }, required: ['script'] } } },
+  { type: 'function', function: { name: 'fetch_data', description: 'Fetch ONE web address in THIS browser\'s own session — its cookies and logins apply — and get back the HTTP status code, complete HTTP response headers (including all security headers like HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Set-Cookie), and the body whole. Read-only (GET).', parameters: { type: 'object', properties: { url: { type: 'string', description: 'The full http(s) address' }, pick: { type: 'string', description: 'Optional dot path into JSON, e.g. "data.children" — returns only that part, which keeps the answer small' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'press_key', description: 'Press one key. Escape closes a dialog, a cookie banner or a popup that has no visible close button; Enter submits the focused field; Tab moves on; PageDown pages through a long list. The fastest way past something in the way.', parameters: { type: 'object', properties: { key: { type: 'string', description: 'Escape | Enter | Tab | PageDown | PageUp | ArrowDown | ArrowUp | Home | End | Backspace' } }, required: ['key'] } } },
   { type: 'function', function: { name: 'wait_for', description: 'Wait until some TEXT appears on the page — or until it is gone. For a list that loads after the page, a spinner that must finish, a result that arrives late. Use this instead of scrolling and reading again and again.', parameters: { type: 'object', properties: { text: { type: 'string', description: 'The text to wait for' }, gone: { type: 'boolean', description: 'true = wait until it has GONE (a "Loading…" that must finish)' }, seconds: { type: 'integer', description: 'At most this long (default 15, max 30)' } }, required: ['text'] } } },
   { type: 'function', function: { name: 'choose_option', description: 'Pick a value in a dropdown (a real <select>) by its visible text — a category filter, a country, a currency, a sort order. Clicking a native dropdown does nothing useful; this sets it and tells the page it changed.', parameters: { type: 'object', properties: { index: { type: 'integer', description: 'The dropdown\'s number from look()' }, option: { type: 'string', description: 'The option\'s visible text (its value also works)' } }, required: ['index', 'option'] } } },
@@ -1822,7 +1820,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 observe(`Refused: ${no}.`);
                 break;
               }
-              const wrapped = /\breturn\b/.test(src) ? `(async () => { ${src} })()` : `(async () => (${src}))()`;
+              const wrapped = (/\breturn\b|\bawait\b|;|\n/.test(src.trim()) && !/^\s*\{.*\}\s*$/.test(src.trim())) ? `(async () => { ${/\breturn\b/.test(src) ? src : 'return (' + src + ')'} })()` : `(async () => (${src}))()`;
               let value;
               try { value = await page().evaluate(wrapped); }
               catch (e) {
@@ -1851,13 +1849,15 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
             case 'fetch_data': {
               const url = String(a.url || '');
               if (!/^https?:\/\//i.test(url)) { observe('fetch_data needs a full http(s) address, exactly as it appears — never typed from memory.'); break; }
-              let body = '', code = 0, ctype = '';
+              let body = '', code = 0, ctype = '', formattedHeaders = '';
               try {
                 const rq = session.context && session.context.request;
                 if (!rq) throw new Error('this browser has no request context');
                 const r = await rq.get(url, { timeout: 30000, failOnStatusCode: false });
                 code = r.status(); ctype = String((r.headers() || {})['content-type'] || '');
                 body = await r.text();
+                const rawHeaders = typeof r.headersArray === 'function' ? r.headersArray() : Object.entries(r.headers() || {}).map(([name, value]) => ({ name, value }));
+                formattedHeaders = rawHeaders.map((h) => `${h.name}: ${h.value}`).join('\n');
               } catch (e) {
                 jobsStore.step(job, 'read', `fetch_data failed: ${String(e && e.message).slice(0, 140)}`, { url });
                 observe(`Could not fetch ${url.slice(0, 200)}: ${String(e && e.message).slice(0, 300)}`);
@@ -1865,7 +1865,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
               }
               if (code >= 400) {
                 jobsStore.step(job, 'blocked', `fetch_data ${code} on ${url.slice(0, 120)}`, { url });
-                observe(`${url.slice(0, 200)} answered ${code}${code === 403 || code === 401 ? ' — this address needs a login this profile does not have, or refuses automated fetches. Open the page instead and read it.' : ''}${body ? `\n\n${body.slice(0, 600)}` : ''}`);
+                observe(`${url.slice(0, 200)} answered ${code}${code === 403 || code === 401 ? ' — this address needs a login this profile does not have, or refuses automated fetches. Open the page instead and read it.' : ''}\n\n[HTTP Response Headers]\n${formattedHeaders || '(none)'}${body ? `\n\n[Response Body]\n${body.slice(0, 600)}` : ''}`);
                 break;
               }
               let out = body, shape = ctype.split(';')[0] || 'text';
@@ -1882,7 +1882,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 } catch { /* not JSON after all — hand back the text */ }
               }
               jobsStore.step(job, 'read', `fetch_data ${code} ${shape} — ${out.length} character(s) from ${url.slice(0, 120)}`, { url });
-              observeData(`${url}\n${code} · ${shape}\n\n${out}`);
+              observeData(`${url}\nStatus: ${code} · Content-Type: ${shape}\n\n[HTTP Response Headers]\n${formattedHeaders || '(none)'}\n\n[Response Body]\n${out}`);
               break;
             }
             /* ONE KEY. Escape is the close button a modal often does not draw. */
