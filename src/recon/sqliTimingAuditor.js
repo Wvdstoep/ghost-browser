@@ -9,6 +9,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { harvestTargetEndpoints } = require('./endpointHarvester');
 
 function timeRequest(urlStr, options = {}) {
   return new Promise((resolve) => {
@@ -84,9 +85,16 @@ async function auditSqliTimingDifferential(targetUrl, options = {}) {
   const findings = [];
   const secureControls = [];
 
+  let harvested = null;
+  if (!options.endpoints?.length) {
+    try { harvested = await harvestTargetEndpoints(origin, options); } catch (_) {}
+  }
+
   const candidateEndpoints = (options.endpoints && options.endpoints.length > 0)
     ? options.endpoints
-    : ['/api/search', '/api/users', '/api/items', '/api/posts', '/search'];
+    : (harvested?.queryEndpoints?.length > 0
+        ? harvested.queryEndpoints
+        : ['/api/search', '/api/users', '/api/items', '/api/posts', '/search']);
 
   const candidateParams = ['id', 'q', 'search', 'category', 'filter', 'sort'];
 

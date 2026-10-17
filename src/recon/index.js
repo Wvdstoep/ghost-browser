@@ -32,6 +32,17 @@ const secondOrderAuditor = require('./secondOrderAuditor');
 const openapiFuzzer = require('./openapiFuzzer');
 const subdomainTakeoverAuditor = require('./subdomainTakeoverAuditor');
 const jwtKeyConfusionAuditor = require('./jwtKeyConfusionAuditor');
+const endpointHarvester = require('./endpointHarvester');
+
+// Frontier Vectors
+const httpSmugglingAuditor = require('./httpSmugglingAuditor');
+const polyglotSstiAuditor = require('./polyglotSstiAuditor');
+const prototypeGadgetAuditor = require('./prototypeGadgetAuditor');
+const graphqlBatchAuditor = require('./graphqlBatchAuditor');
+const cswshAuditor = require('./cswshAuditor');
+const dependencyConfusionAuditor = require('./dependencyConfusionAuditor');
+const webCacheAuditor = require('./webCacheAuditor');
+const oauthPkceAuditor = require('./oauthPkceAuditor');
 
 module.exports = {
   ...advisory,
@@ -62,5 +73,14 @@ module.exports = {
   ...secondOrderAuditor,
   ...openapiFuzzer,
   ...subdomainTakeoverAuditor,
-  ...jwtKeyConfusionAuditor
+  ...jwtKeyConfusionAuditor,
+  ...endpointHarvester,
+  ...httpSmugglingAuditor,
+  ...polyglotSstiAuditor,
+  ...prototypeGadgetAuditor,
+  ...graphqlBatchAuditor,
+  ...cswshAuditor,
+  ...dependencyConfusionAuditor,
+  ...webCacheAuditor,
+  ...oauthPkceAuditor
 };
