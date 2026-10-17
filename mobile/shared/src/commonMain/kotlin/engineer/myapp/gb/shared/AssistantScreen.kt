@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -188,9 +189,11 @@ private fun UserTurn(t: AssistantTurn) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Surface(color = if (t.spoken) cs.surfaceVariant else Brand, contentColor = if (t.spoken) cs.onSurface else BrandOn,
             shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp), modifier = Modifier.widthIn(max = 320.dp)) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                if (t.spoken) Text("while it worked", fontSize = 10.sp, color = cs.onSurfaceVariant)
-                Text(t.text, fontSize = 15.sp, lineHeight = 21.sp)
+            SelectionContainer {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (t.spoken) Text("while it worked", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                    Text(t.text, fontSize = 15.sp, lineHeight = 21.sp)
+                }
             }
         }
     }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -109,7 +110,8 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, fontSize: TextUnit
     val cs = MaterialTheme.colorScheme
     val base = cs.onSurface; val accent = Brand; val codeBg = cs.surfaceVariant
     val lineH = fontSize * 1.45f
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    SelectionContainer(modifier = modifier) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (b in parseBlocks(text)) when (b) {
             is Block.Heading -> Text(inline(b.text, base, accent, codeBg), color = base, fontWeight = FontWeight.SemiBold,
                 fontSize = when (b.level) { 1 -> fontSize * 1.25f; 2 -> fontSize * 1.12f; else -> fontSize * 1.02f }, lineHeight = lineH * 1.1f,
@@ -142,6 +144,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, fontSize: TextUnit
                 modifier = Modifier.fillMaxWidth().background(codeBg, RoundedCornerShape(8.dp)).horizontalScroll(rememberScrollState()).padding(10.dp))
             Block.Rule -> Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.5f)))
         }
+    }
     }
 }
 
