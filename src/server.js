@@ -6226,6 +6226,7 @@ ${g}` : g;
         }
       },
       workspaceExec: async (command, timeoutMs = 25000) => {
+        const fs = require('fs');
         const { exec } = require('child_process');
         const path = require('path');
         const wsDir = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'workspace');
