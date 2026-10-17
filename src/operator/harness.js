@@ -75,27 +75,53 @@ class OperatorRun {
   /* built-ins: the plan as state, and the only way out */
   _registerBuiltins() {
     const reg = this.registry;
-    if (!reg.has('save_task_list')) reg.register('save_task_list', 'Write your plan as a task list (do this FIRST). Replaces or updates the list, preserving and recognizing done status.', { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' } }, required: ['title'] } } }, required: ['tasks'] }, async ({ tasks }) => {
+    if (!reg.has('save_task_list')) reg.register('save_task_list', 'Write your initial plan as a task list (CALL THIS ONLY ONCE AT THE START). Subsequent calls merge progress without unchecking completed tasks.', { type: 'object', properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' } }, required: ['title'] } } }, required: ['tasks'] }, async ({ tasks }) => {
+      if (!this._doneTasks) this._doneTasks = new Set();
+      // Record any tasks previously marked done so they NEVER get reset
+      this.tasks.forEach((existing, idx) => {
+        if (existing.done) {
+          this._doneTasks.add(idx);
+          this._doneTasks.add(existing.title.toLowerCase().trim());
+        }
+      });
+
       const prevDoneCount = this.tasks.filter(t => t.done).length;
       this.tasks = (Array.isArray(tasks) ? tasks : []).slice(0, 30).map((t, i) => {
-        const isDone = typeof t.done === 'boolean'
-          ? t.done
-          : (typeof t.note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(t.note) && !t.note.toLowerCase().includes('pending'));
+        const normTitle = String(t.title || '').toLowerCase().trim();
+        const previouslyDone = this._doneTasks.has(i) || this._doneTasks.has(normTitle);
+        const isDone = previouslyDone || t.done === true ||
+          (typeof t.note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(t.note) && !t.note.toLowerCase().includes('pending'));
+        if (isDone) {
+          this._doneTasks.add(i);
+          this._doneTasks.add(normTitle);
+        }
         return { i, title: String(t.title || '').slice(0, 200), note: String(t.note || '').slice(0, 500), done: isDone };
       });
       const newDoneCount = this.tasks.filter(t => t.done).length;
       if (newDoneCount > prevDoneCount) {
         this.budget = Math.min(this.maxIterations, this.budget + (newDoneCount - prevDoneCount) * 40);
       }
-      return { ok: true, tasks: this.tasks, budgetLeft: this.budget - this.iterations };
+      return {
+        ok: true,
+        tasks: this.tasks,
+        budgetLeft: this.budget - this.iterations,
+        advice: 'Do NOT call save_task_list repeatedly. Use update_task({ index, done: true, note }) and immediately execute the next pending audit engine.'
+      };
     });
     if (!reg.has('update_task')) reg.register('update_task', 'Mark a task done (and say what you learned in its note) or update its note. Done tasks earn more iterations.', { type: 'object', properties: { index: { type: 'number' }, done: { type: 'boolean' }, note: { type: 'string' } }, required: ['index'] }, async ({ index, done, note }) => {
       const t = this.tasks[Number(index)]; if (!t) return { error: `no task ${index}` };
-      const isDone = typeof done === 'boolean'
-        ? done
-        : (typeof note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(note) && !note.toLowerCase().includes('pending'));
-      if (isDone && !t.done) { t.done = true; this.budget = Math.min(this.maxIterations, this.budget + 40); }
-      else if (done === false) { t.done = false; }
+      if (!this._doneTasks) this._doneTasks = new Set();
+      const normTitle = String(t.title || '').toLowerCase().trim();
+      const previouslyDone = this._doneTasks.has(Number(index)) || this._doneTasks.has(normTitle);
+      const isDone = previouslyDone || done === true ||
+        (typeof note === 'string' && /(completed|verified|finished|grade [a-f]|score \d+)/i.test(note) && !note.toLowerCase().includes('pending'));
+      if (isDone) {
+        this._doneTasks.add(Number(index));
+        this._doneTasks.add(normTitle);
+        if (!t.done) { t.done = true; this.budget = Math.min(this.maxIterations, this.budget + 40); }
+      } else if (done === false && !previouslyDone) {
+        t.done = false;
+      }
       if (note) t.note = String(note).slice(0, 500);
       return { ok: true, task: t, budgetLeft: this.budget - this.iterations };
     });
