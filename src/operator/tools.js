@@ -13,7 +13,7 @@
  * `ctx` is handed in by server.js: closures over the modules there, so this file knows nothing about
  * express and can be tested with a fake ctx.
  */
-const clip = (v, n = 8000) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `… (${s.length - n} more chars)` : s; };
+const clip = (v, n = 6000) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `… (${s.length - n} more chars)` : s; };
 const obj = (props, required = []) => ({ type: 'object', properties: props, required });
 
 const isWatcher = (flow) => Array.isArray(flow && flow.nodes) && flow.nodes.some((n) => n && n.type === 'trigger' && n.trigger && n.trigger.type === 'schedule');
@@ -165,7 +165,38 @@ function registerOperatorTools(reg, ctx) {
     obj({ target: { type: 'string', description: 'domain or URL to audit, e.g. "useme.com" or "https://my-app.engineer"' } }, ['target']),
     async ({ target }) => {
       if (!ctx.recon || !ctx.recon.auditTarget) return { error: 'recon engine not wired in context' };
-      return ctx.recon.auditTarget(target);
+      const raw = await ctx.recon.auditTarget(target);
+      if (!raw || typeof raw !== 'object') return raw;
+      return {
+        target: raw.target,
+        url: raw.url,
+        timestamp: raw.timestamp,
+        score: raw.score,
+        grade: raw.grade,
+        findingsCount: raw.findingsCount,
+        findings: (raw.findings || []).map(f => ({
+          key: f.key,
+          title: f.title,
+          severity: f.severity,
+          impact: f.impact,
+          remediation: f.remediation
+        })),
+        headers: raw.headers ? {
+          missing: (raw.headers.audit || []).filter(h => !h.present).map(h => h.name),
+          present: (raw.headers.audit || []).filter(h => h.present).map(h => h.name)
+        } : undefined,
+        dns: raw.dns ? {
+          spf: raw.dns.spf,
+          dmarc: raw.dns.dmarc,
+          mx: raw.dns.mx,
+          takeoverRisk: raw.dns.takeoverRisk
+        } : undefined,
+        ports: raw.ports ? {
+          open: raw.ports.openPorts,
+          suspicious: raw.ports.suspiciousPorts
+        } : undefined,
+        waf: raw.waf ? raw.waf.detected : false
+      };
     }, { repeatable: true });
 
   R('gb_security_eval', 'CLIENT-SIDE DOM & STORAGE SECURITY AUDIT of the active browser tab: scans localStorage and sessionStorage for leaked auth tokens / JWTs / API keys, audits HTML forms for CSRF tokens and HTTP submissions, checks inline scripts and DOM XSS sinks.',
