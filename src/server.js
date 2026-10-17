@@ -6139,6 +6139,8 @@ ${g}` : g;
       auditGraphqlResilience: (targetUrl) => recon.auditGraphqlResilience(targetUrl),
       auditConcurrency: (targetUrl, opts) => recon.auditConcurrency(targetUrl, opts),
       auditNonDestructiveVerification: (targetUrl, opts) => recon.auditNonDestructiveVerification(targetUrl, opts),
+      auditOastCanaryProtocol: (targetUrl, opts) => recon.auditOastCanaryProtocol(targetUrl, opts),
+      auditAstReachability: (projectDir) => recon.auditAstReachability(projectDir),
       auditVibeSecurity: (targetUrl, opts) => recon.auditVibeSecurity(targetUrl, opts),
       generateComplianceScorecard: (findings) => recon.generateComplianceScorecard(findings),
       auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
