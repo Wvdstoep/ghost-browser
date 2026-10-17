@@ -19,6 +19,14 @@ const SENSITIVE_PATHS = [
 
 function httpRequest(urlStr, options = {}) {
   return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (result) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(result);
+      }
+    };
+
     try {
       const u = new URL(urlStr);
       const isHttps = u.protocol === 'https:';
@@ -35,17 +43,21 @@ function httpRequest(urlStr, options = {}) {
         let body = '';
         res.on('data', (d) => {
           body += d.toString();
-          if (body.length > 32768) req.destroy();
+          if (body.length > 32768) {
+            req.destroy();
+            finish({ status: res.statusCode, headers: res.headers, body });
+          }
         });
-        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+        res.on('end', () => finish({ status: res.statusCode, headers: res.headers, body }));
+        res.on('close', () => finish({ status: res.statusCode, headers: res.headers, body }));
       });
 
-      req.on('error', (err) => resolve({ error: err.message, status: 0, headers: {}, body: '' }));
-      req.on('timeout', () => { req.destroy(); resolve({ error: 'timeout', status: 0, headers: {}, body: '' }); });
+      req.on('error', (err) => finish({ error: err.message, status: 0, headers: {}, body: '' }));
+      req.on('timeout', () => { req.destroy(); finish({ error: 'timeout', status: 0, headers: {}, body: '' }); });
       if (options.body) req.write(options.body);
       req.end();
     } catch (e) {
-      resolve({ error: e.message, status: 0, headers: {}, body: '' });
+      finish({ error: e.message, status: 0, headers: {}, body: '' });
     }
   });
 }
