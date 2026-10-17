@@ -6110,6 +6110,7 @@ ${g}` : g;
     },
     recon: {
       auditTarget: (target) => recon.auditTarget(target),
+      probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.auditActivePage(s.page);

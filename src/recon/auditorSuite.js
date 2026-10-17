@@ -507,7 +507,7 @@ async function auditStorageHygiene(page) {
           cwe: 'CWE-922',
           storage: storageType,
           key,
-          description: `Sensitive credential stored in ${storageType} ("${key}"). JavaScript-accessible storage is vulnerable to XSS exfiltration.`
+          description: 'Sensitive credential stored in ' + storageType + ' ("' + key + '"). JavaScript-accessible storage is vulnerable to XSS exfiltration.'
         });
       }
     }
