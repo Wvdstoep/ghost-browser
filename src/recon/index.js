@@ -15,6 +15,8 @@ const canaryAuditor = require('./canaryAuditor');
 const semanticRouter = require('./semanticRouter');
 const authMatrixAuditor = require('./authMatrixAuditor');
 const patchGenerator = require('./patchGenerator');
+const jwtAuditor = require('./jwtAuditor');
+const throttlingAuditor = require('./throttlingAuditor');
 
 module.exports = {
   ...advisory,
@@ -28,5 +30,7 @@ module.exports = {
   ...canaryAuditor,
   ...semanticRouter,
   ...authMatrixAuditor,
-  ...patchGenerator
+  ...patchGenerator,
+  ...jwtAuditor,
+  ...throttlingAuditor
 };
