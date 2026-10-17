@@ -19,6 +19,8 @@ const jwtAuditor = require('./jwtAuditor');
 const throttlingAuditor = require('./throttlingAuditor');
 const dualSessionAuditor = require('./dualSessionAuditor');
 const graphqlAuditor = require('./graphqlAuditor');
+const concurrencyAuditor = require('./concurrencyAuditor');
+const complianceMapper = require('./complianceMapper');
 
 module.exports = {
   ...advisory,
@@ -36,5 +38,7 @@ module.exports = {
   ...jwtAuditor,
   ...throttlingAuditor,
   ...dualSessionAuditor,
-  ...graphqlAuditor
+  ...graphqlAuditor,
+  ...concurrencyAuditor,
+  ...complianceMapper
 };

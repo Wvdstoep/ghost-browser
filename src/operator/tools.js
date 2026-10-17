@@ -161,6 +161,20 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_concurrency', 'CONCURRENCY, TOCTOU & IDEMPOTENCY AUDIT (CWE-362): fires synchronized parallel requests with idempotency keys to verify state synchronization and prevent duplicate processing in state-changing operations.',
+    obj({ targetUrl: { type: 'string', description: 'target endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' }, concurrency: { type: 'number', description: 'burst count (default 6, max 10)' } }),
+    async ({ targetUrl, url, concurrency }) => {
+      if (!ctx.recon || !ctx.recon.auditConcurrency) return { error: 'auditConcurrency not wired in context' };
+      return ctx.recon.auditConcurrency(targetUrl || url, { concurrency });
+    }, { repeatable: true });
+
+  R('gb_audit_compliance', 'ENTERPRISE COMPLIANCE FRAMEWORK MAPPING: maps security findings directly to SOC 2 Type II (Trust Services Criteria), ISO 27001:2022 (Annex A Controls), and PCI-DSS v4.0 (Requirement 6).',
+    obj({ findings: { type: 'array', description: 'array of finding objects to map' } }),
+    async ({ findings }) => {
+      if (!ctx.recon || !ctx.recon.generateComplianceScorecard) return { error: 'generateComplianceScorecard not wired in context' };
+      return ctx.recon.generateComplianceScorecard(findings || []);
+    }, { repeatable: true });
+
   R('gb_audit_graphql_resilience', 'GRAPHQL QUERY COMPLEXITY, DEPTH & CONTRACT RESILIENCE AUDIT: discovers GraphQL endpoints, checks production introspection exposure, tests recursive query depth limits, and verifies query batching resilience against request flooding.',
     obj({ targetUrl: { type: 'string', description: 'target domain or GraphQL endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url }) => {
