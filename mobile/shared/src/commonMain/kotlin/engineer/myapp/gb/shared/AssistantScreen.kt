@@ -225,10 +225,31 @@ private fun AssistantTurnCard(t: AssistantTurn, expanded: Boolean, onToggle: () 
                         // a recording the turn started: its own card (live, then playable, then downloadable), once per recording
                         val recIds = (t.cards.filter { it.kind == "recording" }.map { it.id } + t.steps.map { it.recording }).filter { it.isNotBlank() }.distinct()
                         recIds.forEach { id -> Spacer(Modifier.height(8.dp)); RecordingCard(id) }
-                        val chips = t.cards.filter { it.kind != "recording" }
+                        val rawChips = t.cards.filter { it.kind != "recording" }
+                        val isReportTurn = t.text.contains("Audit", ignoreCase = true) ||
+                                           t.text.contains("Critical", ignoreCase = true) ||
+                                           t.text.contains("Remediation", ignoreCase = true) ||
+                                           t.text.contains("Vulnerabilit", ignoreCase = true) ||
+                                           t.text.contains("Exposed", ignoreCase = true) ||
+                                           rawChips.any { it.title.contains("Site", ignoreCase = true) || it.title.contains("Exposed", ignoreCase = true) }
+
+                        val hasPdf = rawChips.any { it.kind == "pdf" || it.title.contains("pdf", ignoreCase = true) }
+                        val chips = if (!hasPdf && isReportTurn) {
+                            rawChips + AssistantCard(kind = "pdf", title = "Save Report as PDF")
+                        } else {
+                            rawChips
+                        }
+
                         if (chips.isNotEmpty()) {
                             Spacer(Modifier.height(10.dp))
-                            FlowRowCompat(chips.map { c -> { CardChip(c) { onCard(c) } } })
+                            FlowRowCompat(chips.map { c ->
+                                {
+                                    CardChip(c) {
+                                        if (c.kind == "pdf") onCard(c.copy(url = t.text, id = t.details))
+                                        else onCard(c)
+                                    }
+                                }
+                            })
                         }
                         if (t.details.isNotBlank()) {
                             Spacer(Modifier.height(8.dp))
@@ -257,13 +278,60 @@ private fun Label(text: String, color: Color) {
 
 @Composable
 private fun CardChip(c: AssistantCard, onClick: () -> Unit) {
-    // a "choice" card is the agent asking you something: tapping it sends that option as your answer
-    val icon = when (c.kind) { "results" -> Icons.Default.Inbox; "approvals" -> Icons.Default.Verified; "choice" -> Icons.Default.TouchApp; "recon" -> Icons.Default.Shield; else -> Icons.Default.OpenInNew }
-    if (c.kind == "choice") Button(onClick = onClick, shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Brand.copy(alpha = 0.14f), contentColor = MaterialTheme.colorScheme.onSurface), border = BorderStroke(1.dp, Brand.copy(alpha = 0.55f))) {
-        Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp)); Text(c.title.ifBlank { "Yes" }, fontSize = 13.sp)
-    } else AssistChip(onClick = onClick, label = { Text(c.title.ifBlank { when (c.kind) { "results" -> "Open results"; "approvals" -> "Open approvals"; "recon" -> "Open ReconForge"; else -> "Open" } }, fontSize = 12.sp) },
-        leadingIcon = { Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)) }, border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Brand.copy(alpha = 0.5f)))
+    val pdfEmerald = Color(0xFF10B981)
+    val isPdf = c.kind == "pdf" || c.title.contains("pdf", ignoreCase = true)
+    val icon = when {
+        c.kind == "results" -> Icons.Default.Inbox
+        c.kind == "approvals" -> Icons.Default.Verified
+        c.kind == "choice" -> Icons.Default.TouchApp
+        c.kind == "recon" -> Icons.Default.Shield
+        isPdf -> Icons.Default.Download
+        else -> Icons.Default.OpenInNew
+    }
+
+    if (c.kind == "choice") {
+        Button(
+            onClick = onClick,
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Brand.copy(alpha = 0.14f), contentColor = MaterialTheme.colorScheme.onSurface),
+            border = BorderStroke(1.dp, Brand.copy(alpha = 0.55f))
+        ) {
+            Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(c.title.ifBlank { "Yes" }, fontSize = 13.sp)
+        }
+    } else if (isPdf) {
+        AssistChip(
+            onClick = onClick,
+            label = { Text(c.title.ifBlank { "Save Report as PDF" }, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+            leadingIcon = { Icon(icon, null, tint = pdfEmerald, modifier = Modifier.size(15.dp)) },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = pdfEmerald.copy(alpha = 0.12f),
+                labelColor = pdfEmerald
+            ),
+            border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = pdfEmerald.copy(alpha = 0.6f))
+        )
+    } else {
+        AssistChip(
+            onClick = onClick,
+            label = {
+                Text(
+                    c.title.ifBlank {
+                        when (c.kind) {
+                            "results" -> "Open results"
+                            "approvals" -> "Open approvals"
+                            "recon" -> "Open ReconForge"
+                            else -> "Open"
+                        }
+                    },
+                    fontSize = 12.sp
+                )
+            },
+            leadingIcon = { Icon(icon, null, tint = Brand, modifier = Modifier.size(15.dp)) },
+            border = AssistChipDefaults.assistChipBorder(enabled = true, borderColor = Brand.copy(alpha = 0.5f))
+        )
+    }
 }
 
 /** Chips that wrap onto the next line instead of squeezing each other (a chunked Row shrank the third chip to one character per line). */
