@@ -44,6 +44,13 @@ const dependencyConfusionAuditor = require('./dependencyConfusionAuditor');
 const webCacheAuditor = require('./webCacheAuditor');
 const oauthPkceAuditor = require('./oauthPkceAuditor');
 
+
+// Multi-Layer AppSec Pipelines
+const bolaLifecyclePipeline = require('./bolaLifecyclePipeline');
+const reachabilityProofPipeline = require('./reachabilityProofPipeline');
+const blindDetectionPipeline = require('./blindDetectionPipeline');
+const secondOrderPipeline = require('./secondOrderPipeline');
+
 module.exports = {
   ...advisory,
   ...perimeter,
@@ -82,5 +89,9 @@ module.exports = {
   ...cswshAuditor,
   ...dependencyConfusionAuditor,
   ...webCacheAuditor,
-  ...oauthPkceAuditor
+  ...oauthPkceAuditor,
+  ...bolaLifecyclePipeline,
+  ...reachabilityProofPipeline,
+  ...blindDetectionPipeline,
+  ...secondOrderPipeline
 };

@@ -312,6 +312,39 @@ function registerOperatorTools(reg, ctx) {
       return ctx.recon.auditOAuthPkceAndState(target, { endpoints });
     }, { repeatable: true });
 
+  // ── 4 MULTI-LAYER APPSEC PIPELINES ──
+  R('gb_pipeline_bola_lifecycle', '3-LAYER AUTHORIZATION & BOLA/IDOR LIFECYCLE PIPELINE (CWE-639 / OWASP API1:2023): executes Layer 1 (Public surface & route extraction, CORS credentials), Layer 2 (Single-tenant session baseline, token entropy & object ID mapping), and Layer 3 (Cross-tenant replay, parameter substitution & WebSocket invalidation check).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, sessionToken: { type: 'string', description: 'optional session JWT or bearer token' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints' } }),
+    async ({ targetUrl, url, sessionToken, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditBolaLifecyclePipeline) return { error: 'auditBolaLifecyclePipeline not wired in context' };
+      const target = targetUrl || url;
+      return ctx.recon.auditBolaLifecyclePipeline(target, { sessionToken, endpoints });
+    }, { repeatable: true });
+
+  R('gb_pipeline_reachability_proof', '3-PILLAR DETERMINISTIC VULNERABILITY PROOF & REACHABILITY PIPELINE (CWE-1336 / CWE-1321 / CWE-444): executes Pillar 1 (Manifest & dependency declaration audit for declared CVEs), Pillar 2 (Inter-file AST call-graph reachability from HTTP route handlers to vulnerable sinks), and Pillar 3 (In-vivo non-destructive behavioral differential via mathematical polyglots and framing desyncs).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, projectDir: { type: 'string', description: 'optional local directory path for AST reachability analysis' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional candidate endpoints' } }),
+    async ({ targetUrl, url, projectDir, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditReachabilityProofPipeline) return { error: 'auditReachabilityProofPipeline not wired in context' };
+      const target = targetUrl || url;
+      return ctx.recon.auditReachabilityProofPipeline(target, { projectDir, endpoints });
+    }, { repeatable: true });
+
+  R('gb_pipeline_blind_detection', '3-LAYER BLIND VULNERABILITY DETECTION PIPELINE (CWE-89 / CWE-918): executes Layer 1 (In-band boundary reflections & database syntax error disclosures), Layer 2 (3-pass statistical timing differentials with standard deviation analysis for blind SQLi), and Layer 3 (Out-of-band OAST ephemeral cryptographic canary callbacks for asynchronous workers).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional candidate query endpoints' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditBlindDetectionPipeline) return { error: 'auditBlindDetectionPipeline not wired in context' };
+      const target = targetUrl || url;
+      return ctx.recon.auditBlindDetectionPipeline(target, { endpoints });
+    }, { repeatable: true });
+
+  R('gb_pipeline_second_order', '3-LAYER SECOND-ORDER STORED INJECTION PIPELINE (CWE-79 / CWE-116): executes Layer 1 (Schema mutation injection with tracked boundary canaries into state-altering inputs), Layer 2 (Multi-step downstream route traversal across admin views, exports, and profiles), and Layer 3 (Headless DOM sink taint instrumentation checking innerHTML, eval, and unsafe DOM assignments).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific mutation endpoints' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditSecondOrderPipeline) return { error: 'auditSecondOrderPipeline not wired in context' };
+      const target = targetUrl || url;
+      return ctx.recon.auditSecondOrderPipeline(target, { endpoints });
+    }, { repeatable: true });
+
   R('gb_audit_vibe_security', 'AI-GENERATED APP & VIBE-CODER ARCHITECTURE AUDIT: evaluates client-side secrets & API key exposure (Stripe, Supabase service roles, AWS), unauthenticated API mutations (POST/PUT/DELETE on /api/user, /api/checkout), and prototype pollution integrity.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, apiRoutes: { type: 'array', items: { type: 'string' }, description: 'candidate API routes to test for unauthenticated mutations' } }),
     async ({ targetUrl, url, apiRoutes }) => {
