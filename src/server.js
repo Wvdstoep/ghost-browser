@@ -6135,6 +6135,7 @@ ${g}` : g;
       },
       auditAuthMatrix: (targetUrl, opts) => recon.auditAuthMatrix(targetUrl, opts),
       auditToken: (token) => recon.auditToken(token),
+      auditDualTenantIsolation: (opts) => recon.auditDualTenantIsolation(opts),
       auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {

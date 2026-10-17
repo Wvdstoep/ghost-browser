@@ -17,6 +17,7 @@ const authMatrixAuditor = require('./authMatrixAuditor');
 const patchGenerator = require('./patchGenerator');
 const jwtAuditor = require('./jwtAuditor');
 const throttlingAuditor = require('./throttlingAuditor');
+const dualSessionAuditor = require('./dualSessionAuditor');
 
 module.exports = {
   ...advisory,
@@ -32,5 +33,6 @@ module.exports = {
   ...authMatrixAuditor,
   ...patchGenerator,
   ...jwtAuditor,
-  ...throttlingAuditor
+  ...throttlingAuditor,
+  ...dualSessionAuditor
 };
