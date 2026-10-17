@@ -161,6 +161,13 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_dual_tenant', 'MULTI-TENANT CROSS-SESSION ISOLATION & BOLA AUDIT (OWASP API1:2023 / CWE-639): evaluates resource isolation by testing cross-session object substitution between Tenant A and Tenant B. Detects whether Tenant B can read, mutate, or access private assets belonging to Tenant A.',
+    obj({ targetUrl: { type: 'string', description: 'resource endpoint URL (e.g. https://api.site.com/projects/{id})' }, url: { type: 'string', description: 'alias for targetUrl' }, tokenA: { type: 'string', description: 'valid bearer token or session credentials for Tenant A' }, tokenB: { type: 'string', description: 'valid bearer token or session credentials for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
+    async ({ targetUrl, url, tokenA, tokenB, objectIds }) => {
+      if (!ctx.recon || !ctx.recon.auditDualTenantIsolation) return { error: 'auditDualTenantIsolation not wired in context' };
+      return ctx.recon.auditDualTenantIsolation({ targetUrl: targetUrl || url, tokenA, tokenB, objectIds });
+    }, { repeatable: true });
+
   R('gb_audit_token_hygiene', 'TOKEN CRYPTOGRAPHIC HYGIENE & CLAIM AUDIT: parses and cryptographically audits JSON Web Tokens (JWTs) or session bearer tokens for algorithm security (detects alg: "none", weak ciphers), expiration (exp claim enforcement), and sensitive PII or secrets leaked in unencrypted claims.',
     obj({ token: { type: 'string', description: 'raw JWT or bearer token string to audit' } }, ['token']),
     async ({ token }) => {
