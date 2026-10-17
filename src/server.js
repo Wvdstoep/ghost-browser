@@ -6138,6 +6138,8 @@ ${g}` : g;
       auditDualTenantIsolation: (opts) => recon.auditDualTenantIsolation(opts),
       auditGraphqlResilience: (targetUrl) => recon.auditGraphqlResilience(targetUrl),
       auditConcurrency: (targetUrl, opts) => recon.auditConcurrency(targetUrl, opts),
+      auditNonDestructiveVerification: (targetUrl, opts) => recon.auditNonDestructiveVerification(targetUrl, opts),
+      auditVibeSecurity: (targetUrl, opts) => recon.auditVibeSecurity(targetUrl, opts),
       generateComplianceScorecard: (findings) => recon.generateComplianceScorecard(findings),
       auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
       probeTarget: (target) => recon.runRedteamAudit(target),
