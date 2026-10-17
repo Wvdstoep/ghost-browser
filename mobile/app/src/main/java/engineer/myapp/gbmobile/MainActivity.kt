@@ -1927,11 +1927,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val id = assistantChatId
             val r = try { JSONObject(apiAwait("POST", "/v1/assistant/chats/$id/messages", JSONObject().put("text", text).toString())) } catch (e: Exception) { JSONObject().put("error", "no answer from the cluster: " + (e.message ?: "")) }
             if (r.has("error")) {
+                val err = r.optString("error", "Cluster request failed")
+                if (vm.clusterUrl.trim().isNotEmpty()) {
+                    runOnUiThread {
+                        ASSIST.error.value = "Cluster dispatch failed: $err"
+                        shellUi.agentBusy.value = false
+                    }
+                    vm.log("! cluster agent error: $err")
+                    return@execute
+                }
                 if (currentAgent == "recon") {
                     runOnDeviceReconTurn(text)
                     return@execute
                 }
-                runOnUiThread { ASSIST.error.value = r.optString("error"); shellUi.agentBusy.value = false }
+                runOnUiThread { ASSIST.error.value = err; shellUi.agentBusy.value = false }
+                return@execute
             }
             assistantLoad(id); assistantRefreshChats() // post-send
         }
@@ -1981,7 +1991,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val report = OnDeviceAuditor.audit(target)
 
         val sb = StringBuilder()
-        sb.append("### Security Recon Audit\n")
+        sb.append("### Security Recon Audit (Local On-Device Auditor)\n")
         sb.append("**Security Posture: Grade ${report.grade} · ${report.score}/100 · WAF: ${report.waf.name}**\n\n")
 
         if (report.findings.isNotEmpty()) {
@@ -3084,6 +3094,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             vm.endpoint = ep.trim(); vm.apiKey = ak.trim(); vm.model = m.trim(); vm.hfToken = hf.trim()
             settingsUi.endpoint.value = vm.endpoint; settingsUi.apiKey.value = vm.apiKey; settingsUi.ollamaModel.value = vm.model; settingsUi.hfToken = vm.hfToken
             vm.log("● endpoint saved")
+            if (vm.clusterUrl.trim().isNotEmpty()) {
+                agentExec.execute {
+                    aiModelSave(ep, ak, m)
+                }
+            }
         },
         onRefreshDevices = { if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices") },
         onOpenTailscale = { doOpenTailscale() },
