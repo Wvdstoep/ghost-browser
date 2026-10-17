@@ -135,18 +135,30 @@ class OperatorRun {
     if (size() > MAX_CONTEXT_CHARS * 0.5) {
       for (let i = 2; i < this.messages.length - 2 && size() > MAX_CONTEXT_CHARS * 0.5; i++) {
         const m = this.messages[i];
-        if (m.role === 'tool' && String(m.content || '').length > 400) {
+        if (m.role === 'tool' && String(m.content || '').length > 350) {
           try {
             const parsed = JSON.parse(m.content);
             const concise = {
-              target: parsed.target || parsed.url || parsed.targetUrl,
+              target: parsed.target || parsed.url || parsed.targetUrl || parsed.origin,
               score: parsed.score,
               grade: parsed.grade,
               findingsCount: parsed.findingsCount || (Array.isArray(parsed.findings) ? parsed.findings.length : undefined),
               findings: Array.isArray(parsed.findings) ? parsed.findings.slice(0, 5).map(f => typeof f === 'object' ? (f.title || f.key || f.id) : f) : undefined,
+              openPorts: parsed.openPorts || (parsed.ports ? parsed.ports.open : undefined),
+              harvestedRoutesCount: parsed.harvestedRoutesCount,
+              sampleRoutes: Array.isArray(parsed.harvestedRoutes) ? parsed.harvestedRoutes.slice(0, 10) : undefined,
+              storage: (parsed.localStorageItems !== undefined || parsed.sessionStorageItems !== undefined) ? { local: parsed.localStorageItems, session: parsed.sessionStorageItems, tokens: parsed.sensitiveTokensFound } : undefined,
               status: parsed.status || parsed.remediation || (parsed.advisories ? `${parsed.advisories.length} advisories` : undefined)
             };
-            m.content = JSON.stringify(concise);
+            // Clean undefined
+            for (const k of Object.keys(concise)) {
+              if (concise[k] === undefined) delete concise[k];
+            }
+            if (Object.keys(concise).length >= 2) {
+              m.content = JSON.stringify(concise);
+            } else {
+              m.content = String(m.content).slice(0, 300) + ' … [trimmed earlier result]';
+            }
           } catch (_) {
             m.content = String(m.content).slice(0, 300) + ' … [trimmed earlier result]';
           }
