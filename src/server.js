@@ -6121,26 +6121,61 @@ ${g}` : g;
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.executeSecurityScript(s.page, script);
       },
-      auditBola: (opts) => recon.auditBola(opts),
-      auditDomSinks: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+      authRegister: async (profile, opts) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        return recon.autoRegister(s.page, opts);
+      },
+      authLogin: async (profile, opts) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        return recon.autoLogin(s.page, opts);
+      },
+      auditBola: async (opts) => {
+        let pageA = null, pageB = null;
+        if (opts.profileA) {
+          try { const sA = await sessionFor(profiles.safeName(opts.profileA)); pageA = sA.page; } catch (_) {}
+        }
+        if (opts.profileB) {
+          try { const sB = await sessionFor(profiles.safeName(opts.profileB)); pageB = sB.page; } catch (_) {}
+        }
+        return recon.auditBola({ ...opts, pageA, pageB });
+      },
+      auditDomSinks: async (profile, targetUrl) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+        }
         return recon.auditDomSinks(s.page);
       },
-      auditPostMessages: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+      auditPostMessages: async (profile, targetUrl) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+        }
         return recon.auditPostMessages(s.page);
       },
       auditApiAndGraphql: async (targetUrl, profile) => {
         let page = null;
-        try { const s = await sessionFor(profiles.safeName(profile || 'facebook')); page = s.page; } catch {}
+        try {
+          const s = await sessionFor(profiles.safeName(profile || 'default'));
+          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+          }
+          page = s.page;
+        } catch (_) {}
         return recon.auditApiAndGraphql(page, targetUrl);
       },
-      auditWebSockets: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+      auditWebSockets: async (profile, targetUrl) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+        }
         return recon.auditWebSockets(s.page);
       },
-      auditStorageHygiene: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+      auditStorageHygiene: async (profile, targetUrl) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
+          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
+        }
         return recon.auditStorageHygiene(s.page);
       }
     },

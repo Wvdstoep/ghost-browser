@@ -9,6 +9,7 @@ const sessionProbe = require('./sessionProbe');
 const domAuditor = require('./domAuditor');
 const redteam = require('./redteam');
 const auditorSuite = require('./auditorSuite');
+const accountAutomation = require('./accountAutomation');
 
 module.exports = {
   ...advisory,
@@ -16,5 +17,6 @@ module.exports = {
   ...sessionProbe,
   ...domAuditor,
   ...redteam,
-  ...auditorSuite
+  ...auditorSuite,
+  ...accountAutomation
 };

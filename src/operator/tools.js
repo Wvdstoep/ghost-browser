@@ -198,46 +198,60 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── 6 advanced security auditor tools ──
+  R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials, fills form, submits, and establishes an authenticated session in the chosen profile. Essential for testing behind authentication without manual sign-in.',
+    obj({ targetUrl: { type: 'string', description: 'target website or base URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile to store the session into (e.g. "audit_tenant_a", "audit_tenant_b", "default")' }, username: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' } }),
+    async ({ targetUrl, url, profile, username, email, password }) => {
+      if (!ctx.recon || !ctx.recon.authRegister) return { error: 'Account automation not wired in context' };
+      return ctx.recon.authRegister(profile || 'default', { targetUrl: targetUrl || url, username, email, password });
+    }, { repeatable: true });
+
+  R('gb_auth_login', 'AUTONOMOUS LOGIN FOR AUDITING: automatically finds login on the target website, fills credentials, and establishes an authenticated session in the chosen profile.',
+    obj({ targetUrl: { type: 'string', description: 'target website URL' }, url: { type: 'string', description: 'alias for targetUrl' }, username: { type: 'string', description: 'username or email' }, password: { type: 'string', description: 'password' }, profile: { type: 'string', description: 'browser profile (default "default")' } }, ['password']),
+    async ({ targetUrl, url, username, password, profile }) => {
+      if (!ctx.recon || !ctx.recon.authLogin) return { error: 'Account automation not wired in context' };
+      return ctx.recon.authLogin(profile || 'default', { targetUrl: targetUrl || url, username, password });
+    }, { repeatable: true });
+
   R('gb_audit_bola', 'MULTI-SESSION AUTHORIZATION & BOLA / IDOR AUDIT (CWE-639 / OWASP API1:2023): tests cross-profile or dual-token access against sensitive resource endpoints to verify tenant boundary isolation.',
-    obj({ targetUrl: { type: 'string', description: 'target resource URL' }, tokenA: { type: 'string', description: 'session/bearer token for Tenant A' }, tokenB: { type: 'string', description: 'session/bearer token for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }, ['targetUrl']),
-    async ({ targetUrl, tokenA, tokenB, objectIds }) => {
+    obj({ targetUrl: { type: 'string', description: 'target resource URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profileA: { type: 'string', description: 'primary tenant browser profile (e.g. audit_tenant_a)' }, profileB: { type: 'string', description: 'secondary tenant browser profile (e.g. audit_tenant_b)' }, tokenA: { type: 'string', description: 'session/bearer token for Tenant A' }, tokenB: { type: 'string', description: 'session/bearer token for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
+    async ({ targetUrl, url, profileA, profileB, tokenA, tokenB, objectIds }) => {
       if (!ctx.recon || !ctx.recon.auditBola) return { error: 'BOLA auditor engine not wired in context' };
-      return ctx.recon.auditBola({ targetUrl, tokenA, tokenB, objectIds });
+      return ctx.recon.auditBola({ targetUrl: targetUrl || url, profileA, profileB, tokenA, tokenB, objectIds });
     }, { repeatable: true });
 
   R('gb_audit_dom_sinks', 'DYNAMIC DOM SINK & TAINT AUDIT: instruments and inspects browser DOM sinks (innerHTML, outerHTML, eval, Function, document.write, navigation sinks, and reflected query parameters) in the active page.',
-    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ profile }) => {
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditDomSinks) return { error: 'DOM sink auditor not wired in context' };
-      return ctx.recon.auditDomSinks(profile || 'default');
+      return ctx.recon.auditDomSinks(profile || 'default', targetUrl || url);
     }, { repeatable: true });
 
   R('gb_audit_postmessage', 'POSTMESSAGE & CROSS-WINDOW BOUNDARY AUDIT: inspects window message event listeners in the active page, checks for missing event.origin validation, and flags wildcard targetOrigin "*".',
-    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ profile }) => {
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditPostMessages) return { error: 'postMessage auditor not wired in context' };
-      return ctx.recon.auditPostMessages(profile || 'default');
+      return ctx.recon.auditPostMessages(profile || 'default', targetUrl || url);
     }, { repeatable: true });
 
   R('gb_audit_api_graphql', 'DYNAMIC API ROUTE HARVESTING & GRAPHQL INTROSPECTION AUDIT: harvests discovered REST endpoints and probes GraphQL endpoints for exposed __schema introspection, discovering queries, mutations, and sensitive fields.',
-    obj({ targetUrl: { type: 'string', description: 'target domain or URL' }, profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ targetUrl, profile }) => {
+    obj({ targetUrl: { type: 'string', description: 'target domain or URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ targetUrl, url, profile }) => {
       if (!ctx.recon || !ctx.recon.auditApiAndGraphql) return { error: 'API/GraphQL auditor not wired in context' };
-      return ctx.recon.auditApiAndGraphql(targetUrl, profile || 'default');
+      return ctx.recon.auditApiAndGraphql(targetUrl || url, profile || 'default');
     }, { repeatable: true });
 
   R('gb_audit_websockets', 'WEBSOCKET & STREAMING PROTOCOL AUDIT: verifies whether active WebSockets use secure wss:// encryption and audits URLs for sensitive tokens exposed in query parameters.',
-    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ profile }) => {
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditWebSockets) return { error: 'WebSocket auditor not wired in context' };
-      return ctx.recon.auditWebSockets(profile || 'default');
+      return ctx.recon.auditWebSockets(profile || 'default', targetUrl || url);
     }, { repeatable: true });
 
   R('gb_audit_storage', 'CLIENT STORAGE HYGIENE & TOKEN EXPOSURE AUDIT: deep inspection of localStorage, sessionStorage, and cookies for exposed JWTs, API tokens, passwords, and missing HttpOnly / Secure flags.',
-    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
-    async ({ profile }) => {
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' }, targetUrl: { type: 'string', description: 'target domain or URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ profile, targetUrl, url }) => {
       if (!ctx.recon || !ctx.recon.auditStorageHygiene) return { error: 'Storage hygiene auditor not wired in context' };
-      return ctx.recon.auditStorageHygiene(profile || 'default');
+      return ctx.recon.auditStorageHygiene(profile || 'default', targetUrl || url);
     }, { repeatable: true });
 
   return reg.names().length;
