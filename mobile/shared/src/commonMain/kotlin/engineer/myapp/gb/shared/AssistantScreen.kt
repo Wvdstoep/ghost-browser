@@ -92,69 +92,110 @@ data class StarterPrompt(val title: String, val subtitle: String, val prompt: St
 
 val RECON_PROMPT_CHIPS = listOf(
     StarterPrompt(
+        title = "💥 HTTP Request Smuggling & Desync (CWE-444)",
+        subtitle = "RFC 7230 dual Content-Length & obfuscated TE probes without socket desync",
+        prompt = "Audit https://target-domain.com for HTTP request smuggling and parser desyncs using gb_audit_http_smuggling. Probes RFC 7230 dual Content-Length normalization (400 Bad Request check) and obfuscated Transfer-Encoding requests (TE.TE / CL.TE) without pipeline corruption."
+    ),
+    StarterPrompt(
+        title = "🎯 Polyglot SSTI Engine Fingerprinting (CWE-1336)",
+        subtitle = "Mathematical polyglots (${31*37}, {{31*37}}, <%= 31*37 %>) evaluating to 1147",
+        prompt = "Audit https://target-domain.com for Server-Side Template Injection using gb_audit_polyglot_ssti. Injects non-destructive mathematical polyglots (${31*37}, {{31*37}}, <%= 31*37 %>, #{31*37}) across discovered endpoints to prove whether template engines (Jinja2, Twig, EJS, Pug) evaluate math to 1147."
+    ),
+    StarterPrompt(
+        title = "🧬 Prototype Pollution RCE Gadget Chains (CWE-1321)",
+        subtitle = "AST scan for child_process shell/env/NODE_OPTIONS and EJS gadgets",
+        prompt = "Scan backend code and dependencies for prototype pollution RCE gadget chains using gb_audit_prototype_gadgets. Cross-references active merge primitives against child_process (shell, env, NODE_OPTIONS) and template compiler execution sinks."
+    ),
+    StarterPrompt(
+        title = "⚡ GraphQL Batching & Alias Amplification (CWE-400)",
+        subtitle = "Safe aliased multi-call queries (a: __typename) and array batches",
+        prompt = "Audit https://target-domain.com for GraphQL query complexity and batch amplification using gb_audit_graphql_batch. Probes with non-destructive aliased multi-call queries (a: __typename, b: __typename) and array batches to test gateway batch limits."
+    ),
+    StarterPrompt(
+        title = "🔌 Cross-Site WebSocket Hijacking (CSWSH CWE-1385)",
+        subtitle = "Origin handshake differential with evil-attacker.com on 101 Upgrade",
+        prompt = "Audit https://target-domain.com for Cross-Site WebSocket Hijacking using gb_audit_cswsh. Probes WebSocket upgrade handshakes with untrusted cross-origin headers (Origin: https://evil-attacker.com) to verify whether the server enforces origin validation on 101 Switching Protocols."
+    ),
+    StarterPrompt(
+        title = "📦 Dependency Confusion & Private Namespace (CWE-427)",
+        subtitle = "Verify internal packages against public registry.npmjs.org",
+        prompt = "Audit package dependencies for dependency confusion and internal namespace squatting using gb_audit_dependency_confusion. Resolves private and scoped npm packages against public registry.npmjs.org to ensure no internal packages are unclaimed publicly."
+    ),
+    StarterPrompt(
+        title = "🗄️ Web Cache Deception & Poisoning (CWE-524)",
+        subtitle = "Static pseudo-extensions (.css, ;test.css) & unkeyed header delta probes",
+        prompt = "Audit https://target-domain.com for Web Cache Deception and Cache Poisoning using gb_audit_web_cache. Probes authenticated endpoints with static pseudo-extensions (.css, .js, ;test.css) and unkeyed headers to verify whether CDN caches store private account JSON."
+    ),
+    StarterPrompt(
+        title = "🛡️ OAuth2 PKCE & Pre-Account Takeover (CWE-287)",
+        subtitle = "Cryptographic state entropy & SHA-256 code_challenge verification",
+        prompt = "Audit OAuth2 login flows on https://target-domain.com using gb_audit_oauth_pkce. Verifies state parameter cryptographic entropy (>3.0 bits/char CSRF protection) and SHA-256 PKCE (code_challenge_method=S256) enforcement."
+    ),
+
+    StarterPrompt(
         title = "🛡️ Full Comprehensive Red-Team Audit",
         subtitle = "Perimeter, Headers, Canaries, Auth Matrix, OAST, AST, SQLi & Cloud SSRF",
-        prompt = "Perform a full-spectrum comprehensive red-team and AppSec audit on https://my-app.engineer. Execute all validation engines systematically: 1. Perimeter mapping (gb_recon) and HTTP headers/verbs (gb_audit_http_headers). 2. Semantic SPA route discovery (gb_audit_semantic_surface) and unauthenticated API auth matrix (gb_audit_auth_matrix). 3. Zero-false-positive canary reflection & DOM sinks (gb_audit_canary_reflection). 4. Token cryptographic hygiene (gb_audit_token_hygiene) and rate-limiting (gb_audit_throttling). 5. Out-of-band canary blind callback testing (gb_audit_oast_callbacks). 6. 3-Pillar deterministic CVE verification (gb_audit_cve_verification). 7. Deep inter-file AST reachability analysis (gb_audit_ast_reachability). 8. Statistical timing differential for blind SQLi (gb_audit_sqli_timing). 9. Cloud metadata SSRF boundary probing (gb_audit_cloud_metadata). 10. Mass assignment schema pollution (gb_audit_mass_assignment). 11. Multi-phase second-order stored injection (gb_audit_second_order). 12. OpenAPI contract fuzzing (gb_audit_openapi_fuzz). 13. Subdomain takeover analyzer (gb_audit_subdomain_takeover). 14. JWT key confusion verification (gb_audit_jwt_key_confusion). Map all findings to SOC 2 / ISO 27001 (gb_audit_compliance) and generate verified PR-ready code remediations."
+        prompt = "Perform a full-spectrum comprehensive red-team and AppSec audit on https://target-domain.com. Execute all validation engines systematically: 1. Perimeter mapping (gb_recon) and HTTP headers/verbs (gb_audit_http_headers). 2. Semantic SPA route discovery (gb_audit_semantic_surface) and unauthenticated API auth matrix (gb_audit_auth_matrix). 3. Zero-false-positive canary reflection & DOM sinks (gb_audit_canary_reflection). 4. Token cryptographic hygiene (gb_audit_token_hygiene) and rate-limiting (gb_audit_throttling). 5. Out-of-band canary blind callback testing (gb_audit_oast_callbacks). 6. 3-Pillar deterministic CVE verification (gb_audit_cve_verification). 7. Deep inter-file AST reachability analysis (gb_audit_ast_reachability). 8. Statistical timing differential for blind SQLi (gb_audit_sqli_timing). 9. Cloud metadata SSRF boundary probing (gb_audit_cloud_metadata). 10. Mass assignment schema pollution (gb_audit_mass_assignment). 11. Multi-phase second-order stored injection (gb_audit_second_order). 12. OpenAPI contract fuzzing (gb_audit_openapi_fuzz). 13. Subdomain takeover analyzer (gb_audit_subdomain_takeover). 14. JWT key confusion verification (gb_audit_jwt_key_confusion). Map all findings to SOC 2 / ISO 27001 (gb_audit_compliance) and generate verified PR-ready code remediations."
     ),
     StarterPrompt(
         title = "⏱️ Blind SQLi Timing Canary (CWE-89)",
         subtitle = "Statistical standard deviation over 3 requests (50ms vs 2000ms delay)",
-        prompt = "Audit https://my-app.engineer for blind boolean and time-based SQL injection using gb_audit_sqli_timing. Inject non-destructive timing differentials (50ms baseline vs 2000ms calibrated delay) and compute statistical standard deviation over 3 requests to prove blind SQLi without dumping data."
+        prompt = "Audit https://target-domain.com for blind boolean and time-based SQL injection using gb_audit_sqli_timing. Inject non-destructive timing differentials (50ms baseline vs 2000ms calibrated delay) and compute statistical standard deviation over 3 requests to prove blind SQLi without dumping data."
     ),
     StarterPrompt(
         title = "🔄 Second-Order Stored Injection Tracker",
         subtitle = "Multi-phase tracking: register in Step 1, detect in downstream sinks Step 2",
-        prompt = "Audit https://my-app.engineer for second-order stored injection using gb_audit_second_order. Track canaries across multi-step flows: register safe canary tokens into profile/mutation endpoints in Step 1, then crawl downstream admin views, exports, and profile displays in Step 2 to detect unescaped reflection."
+        prompt = "Audit https://target-domain.com for second-order stored injection using gb_audit_second_order. Track canaries across multi-step flows: register safe canary tokens into profile/mutation endpoints in Step 1, then crawl downstream admin views, exports, and profile displays in Step 2 to detect unescaped reflection."
     ),
     StarterPrompt(
         title = "☁️ Cloud Metadata SSRF & Boundary Probe (IMDSv2 & K8s)",
         subtitle = "Probe loopback, link-local (169.254.169.254) & K8s service tokens",
-        prompt = "Audit https://my-app.engineer using gb_audit_cloud_metadata. Probe URL fetchers, image proxies, and webhook endpoints with loopback and link-local IP addresses (169.254.169.254 AWS IMDSv1/v2, GCP, Azure, [::1], and /var/run/secrets/kubernetes.io) to verify whether cloud metadata boundaries are strictly enforced."
+        prompt = "Audit https://target-domain.com using gb_audit_cloud_metadata. Probe URL fetchers, image proxies, and webhook endpoints with loopback and link-local IP addresses (169.254.169.254 AWS IMDSv1/v2, GCP, Azure, [::1], and /var/run/secrets/kubernetes.io) to verify whether cloud metadata boundaries are strictly enforced."
     ),
     StarterPrompt(
         title = "🧬 Mass Assignment & Privileged Attribute Pollution",
         subtitle = "Inject privileged keys ('role': 'admin', 'credits': 99999) into API bodies",
-        prompt = "Audit https://my-app.engineer for mass assignment and schema attribute pollution using gb_audit_mass_assignment. Clone legitimate API mutation bodies with privileged parameters injected (role: 'admin', isAdmin: true, permissions: ['*'], credits: 99999) to verify whether ORM models reject unauthorized field mutation."
+        prompt = "Audit https://target-domain.com for mass assignment and schema attribute pollution using gb_audit_mass_assignment. Clone legitimate API mutation bodies with privileged parameters injected (role: 'admin', isAdmin: true, permissions: ['*'], credits: 99999) to verify whether ORM models reject unauthorized field mutation."
     ),
     StarterPrompt(
         title = "📜 OpenAPI / Swagger Contract Fuzzer",
         subtitle = "Discover /api-docs and fire boundary type mutations for all endpoints",
-        prompt = "Audit https://my-app.engineer with the autonomous schema fuzzer using gb_audit_openapi_fuzz. Discover /api-docs, /swagger.json, or OpenAPI contracts and automatically fire deterministic edge-case type mutations (negative numbers, integer overflows, null values) across every declared route."
+        prompt = "Audit https://target-domain.com with the autonomous schema fuzzer using gb_audit_openapi_fuzz. Discover /api-docs, /swagger.json, or OpenAPI contracts and automatically fire deterministic edge-case type mutations (negative numbers, integer overflows, null values) across every declared route."
     ),
     StarterPrompt(
         title = "🌐 Subdomain Takeover & Dangling DNS Analyzer",
         subtitle = "Resolve CNAMEs for NXDOMAIN responses on unclaimed S3, Vercel & GitHub",
-        prompt = "Audit https://my-app.engineer for subdomain takeover and dangling DNS using gb_audit_subdomain_takeover. Resolve all subdomains, check for NXDOMAIN responses on third-party cloud CNAME targets (AWS S3, GitHub Pages, Vercel, Heroku), and flag dangling pointers before attackers can claim them."
+        prompt = "Audit https://target-domain.com for subdomain takeover and dangling DNS using gb_audit_subdomain_takeover. Resolve all subdomains, check for NXDOMAIN responses on third-party cloud CNAME targets (AWS S3, GitHub Pages, Vercel, Heroku), and flag dangling pointers before attackers can claim them."
     ),
     StarterPrompt(
         title = "🔑 JWT Key Confusion (CVE-2015-9235)",
         subtitle = "Sign HMAC-SHA256 tokens using server public RSA key (JWKS)",
-        prompt = "Audit https://my-app.engineer for JWT key confusion and algorithm downgrade using gb_audit_jwt_key_confusion. Fetch server public keys (JWKS), forge token signatures using HMAC-SHA256 with the public key as HMAC secret, and verify if authenticated API routes strictly reject mismatched cryptographic algorithms."
+        prompt = "Audit https://target-domain.com for JWT key confusion and algorithm downgrade using gb_audit_jwt_key_confusion. Fetch server public keys (JWKS), forge token signatures using HMAC-SHA256 with the public key as HMAC secret, and verify if authenticated API routes strictly reject mismatched cryptographic algorithms."
     ),
     StarterPrompt(
         title = "🔬 Non-Destructive 3-Pillar CVE Verification",
         subtitle = "Behavioral differential, dependency reachability & mathematical canary",
-        prompt = "Run a non-destructive 3-pillar CVE verification audit on https://my-app.engineer using gb_audit_cve_verification and gb_audit_ast_reachability. Prove whether identified issues are live reachable risks or dormant dead code, verify header desync normalizations, and provide exact curl PoCs and regression tests."
+        prompt = "Run a non-destructive 3-pillar CVE verification audit on https://target-domain.com using gb_audit_cve_verification and gb_audit_ast_reachability. Prove whether identified issues are live reachable risks or dormant dead code, verify header desync normalizations, and provide exact curl PoCs and regression tests."
     ),
     StarterPrompt(
         title = "📡 Out-of-Band (OAST) Blind Canary Audit",
         subtitle = "Cryptographic tokens for blind SSRF & Host header callbacks",
-        prompt = "Audit https://my-app.engineer using Out-of-Band Canary Protocols (gb_audit_oast_callbacks). Probe candidate webhook, redirect, and proxy parameters with ephemeral cryptographic tokens to test for blind SSRF and Host header callbacks without causing harm."
+        prompt = "Audit https://target-domain.com using Out-of-Band Canary Protocols (gb_audit_oast_callbacks). Probe candidate webhook, redirect, and proxy parameters with ephemeral cryptographic tokens to test for blind SSRF and Host header callbacks without causing harm."
     ),
     StarterPrompt(
         title = "🔐 Business Logic & Access Control Matrix (BOLA)",
         subtitle = "Strip tokens to test unauthenticated API mutations and role escalation",
-        prompt = "Perform an authorization matrix and broken access control (BOLA/IDOR) audit on https://my-app.engineer using gb_audit_auth_matrix and gb_audit_semantic_surface. Extract administrative routes and test whether backend endpoints strictly enforce server-side authorization."
+        prompt = "Perform an authorization matrix and broken access control (BOLA/IDOR) audit on https://target-domain.com using gb_audit_auth_matrix and gb_audit_semantic_surface. Extract administrative routes and test whether backend endpoints strictly enforce server-side authorization."
     ),
     StarterPrompt(
         title = "⚡ Canary Reflection & Dynamic DOM Sink Taint",
         subtitle = "Harmless boundary probes ('><gbtest>) & innerHTML sinks",
-        prompt = "Audit input validation on https://my-app.engineer using gb_audit_canary_reflection and gb_audit_dom_sinks. Probe URL parameters and forms with harmless boundary delimiters (__gbcanary_xxxx'><gbtest>) to mathematically prove whether inputs are reflected unencoded, and trace DOM sink taint."
+        prompt = "Audit input validation on https://target-domain.com using gb_audit_canary_reflection and gb_audit_dom_sinks. Probe URL parameters and forms with harmless boundary delimiters (__gbcanary_xxxx'><gbtest>) to mathematically prove whether inputs are reflected unencoded, and trace DOM sink taint."
     ),
     StarterPrompt(
         title = "📊 Enterprise Compliance & Hardening Directives",
         subtitle = "Map findings to SOC 2 Type II, ISO 27001 & PCI-DSS v4.0",
-        prompt = "Perform a compliance and security hardening assessment on https://my-app.engineer. Run gb_recon, gb_audit_http_headers, and gb_audit_compliance to evaluate SOC 2 Trust Services Criteria, ISO 27001 controls, and PCI-DSS v4.0 requirements, and generate drop-in Nginx and application configuration patches."
+        prompt = "Perform a compliance and security hardening assessment on https://target-domain.com. Run gb_recon, gb_audit_http_headers, and gb_audit_compliance to evaluate SOC 2 Trust Services Criteria, ISO 27001 controls, and PCI-DSS v4.0 requirements, and generate drop-in Nginx and application configuration patches."
     )
 )
 
@@ -191,6 +232,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     val live = chat?.live
     var history by remember { mutableStateOf(false) }
     var stepsOpen by remember { mutableStateOf<Long?>(null) }   // which assistant turn shows its steps (by t)
+    var composerText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val turnCount = chat?.turns?.size ?: 0
     LaunchedEffect(turnCount, live?.steps?.size, live == null) { if (turnCount > 0) listState.animateScrollToItem(turnCount + 2) }
@@ -213,7 +255,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value) ConnectCard(act.onConnect)
-                        else if (chat == null || chat.turns.isEmpty()) EmptyState(ui.selectedAgent.value, act.onSend)
+                        else if (chat == null || chat.turns.isEmpty()) EmptyState(ui.selectedAgent.value, onSelectChip = { composerText = it })
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
                         if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
@@ -222,7 +264,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                     if (ui.error.value.isNotBlank()) item(key = "err") { ErrorRow(ui.error.value) }
                     item { Spacer(Modifier.height(6.dp)) }
                 }
-                Composer(live != null, ui.connected.value, act.onSend)
+                Composer(live != null, ui.connected.value, text = composerText, onTextChange = { composerText = it }, onSend = { prompt -> act.onSend(prompt); composerText = "" })
             }
         }
         if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
@@ -547,7 +589,7 @@ expect fun currentTimeMillisCompat(): Long
 
 /* ── empty, connect, error ─────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun EmptyState(agentType: String, onSend: (String) -> Unit) {
+private fun EmptyState(agentType: String, onSelectChip: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val isRecon = agentType == "recon"
     val accentColor = if (isRecon) Color(0xFFE5484D) else Brand
@@ -573,7 +615,7 @@ private fun EmptyState(agentType: String, onSend: (String) -> Unit) {
                 color = cs.surface,
                 shape = RoundedCornerShape(14.dp),
                 border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.6f)),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSend(chip.prompt) }
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSelectChip(chip.prompt) }
             ) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -614,20 +656,34 @@ private fun ErrorRow(msg: String) {
 
 /* ── composer ──────────────────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun Composer(working: Boolean, connected: Boolean, onSend: (String) -> Unit) {
+private fun Composer(working: Boolean, connected: Boolean, text: String, onTextChange: (String) -> Unit, onSend: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    var text by remember { mutableStateOf("") }
     val border by animateColorAsState(if (working) Brand.copy(alpha = 0.6f) else cs.outline.copy(alpha = 0.5f), label = "b")
     Row(Modifier.fillMaxWidth().background(cs.surface.copy(alpha = 0.88f)).padding(10.dp), verticalAlignment = Alignment.Bottom) {
         Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, border), modifier = Modifier.weight(1f)) {
-            BasicTextField(text, { text = it }, textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp), cursorBrush = SolidColor(Brand), maxLines = 5,
+            BasicTextField(
+                value = text,
+                onValueChange = onTextChange,
+                textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp),
+                cursorBrush = SolidColor(Brand),
+                maxLines = 5,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                decorationBox = { inner -> if (text.isEmpty()) Text(if (working) "Add something while I work…" else "Ask anything, or tell me what to do…", color = cs.onSurfaceVariant, fontSize = 15.sp); inner() })
+                decorationBox = { inner ->
+                    if (text.isEmpty()) Text(if (working) "Add something while I work…" else "Ask anything, or tell me what to do…", color = cs.onSurfaceVariant, fontSize = 15.sp)
+                    inner()
+                }
+            )
         }
         Spacer(Modifier.width(8.dp))
         val can = text.isNotBlank() && connected
-        FilledIconButton(onClick = { if (can) { onSend(text.trim()); text = "" } }, enabled = can, modifier = Modifier.size(46.dp),
-            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn, disabledContainerColor = cs.surfaceVariant)) { Icon(Icons.Default.ArrowUpward, "Send") }
+        FilledIconButton(
+            onClick = { if (can) onSend(text.trim()) },
+            enabled = can,
+            modifier = Modifier.size(46.dp),
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Brand, contentColor = BrandOn, disabledContainerColor = cs.surfaceVariant)
+        ) {
+            Icon(Icons.Default.ArrowUpward, "Send")
+        }
     }
 }
 
