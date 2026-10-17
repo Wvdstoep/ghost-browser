@@ -141,7 +141,21 @@ object ReconReportPdf {
             for (rawLine in lines) {
                 val line = rawLine.trim()
                 if (line.isBlank()) {
-                    y += 8f
+                    y += 6f
+                    continue
+                }
+
+                // Filter out raw action cards JSON syntax from PDF body
+                if (line.startsWith("cards:") || line.startsWith("{ kind:") || line == "{" || line == "}" || line == "]" || line.startsWith("Interactive Action Cards")) {
+                    continue
+                }
+
+                // Render horizontal markdown dividers
+                if (line == "---" || line == "***" || line == "___") {
+                    y += 4f
+                    paint.color = android.graphics.Color.parseColor("#E2E8F0")
+                    canvas.drawLine(MARGIN_X, y, MARGIN_X + PRINT_WIDTH, y, paint)
+                    y += 10f
                     continue
                 }
 
@@ -150,14 +164,14 @@ object ReconReportPdf {
                 }
 
                 val lower = line.lowercase()
-                val isCritical = lower.startsWith("critical") || lower.contains("critical")
-                val isHigh = lower.startsWith("high") || lower.contains("high")
-                val isMedium = lower.startsWith("medium") || lower.contains("medium")
-                val isLow = lower.startsWith("low") || lower.contains("low")
+                val isCritical = lower.startsWith("critical") || lower.contains("critical") || lower.contains("🔴")
+                val isHigh = lower.startsWith("high") || lower.contains("high") || lower.contains("🟠")
+                val isMedium = lower.startsWith("medium") || lower.contains("medium") || lower.contains("🟡")
+                val isLow = lower.startsWith("low") || lower.contains("low") || lower.contains("🟢")
 
                 val hasSeverityPrefix = isCritical || isHigh || isMedium || isLow
 
-                if (hasSeverityPrefix && (line.contains("min") || line.contains("REST") || line.contains("WP") || line.contains("Direct") || line.contains("Block") || line.contains("Disable") || line.contains("Add") || line.contains("Remove") || line.contains("Run"))) {
+                if (hasSeverityPrefix && (line.contains("min") || line.contains("REST") || line.contains("WP") || line.contains("Direct") || line.contains("Block") || line.contains("Disable") || line.contains("Add") || line.contains("Remove") || line.contains("Run") || line.contains("Exposure") || line.contains("Policy") || line.contains("Surface"))) {
                     val (badgeText, badgeColor) = when {
                         isCritical -> "CRITICAL" to "#EF4444"
                         isHigh -> "HIGH" to "#EA580C"
@@ -175,10 +189,13 @@ object ReconReportPdf {
                     paint.typeface = Typeface.DEFAULT_BOLD
                     canvas.drawText(badgeText, MARGIN_X + 6f, y, paint)
 
-                    // Draw rest of the text
+                    // Draw rest of the text, stripping Markdown syntax for clean print
                     var cleanText = line
-                        .replaceFirst(Regex("^(critical|high|medium|low)\\s*", RegexOption.IGNORE_CASE), "")
-                        .replace(Regex("^[|:\\[\\]·•\\-]+\\s*"), "")
+                        .replace(Regex("""^(critical|high|medium|low|[🔴🟠🟡🟢ℹ️\s])+""", RegexOption.IGNORE_CASE), "")
+                        .replace(Regex("""^[|:\[\]·•\-]+\s*"""), "")
+                        .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
+                        .replace(Regex("""\*([^*]+)\*"""), "$1")
+                        .replace(Regex("""`([^`]+)`"""), "$1")
                         .trim()
 
                     textPaint.color = android.graphics.Color.parseColor("#1E293B")
@@ -203,8 +220,17 @@ object ReconReportPdf {
                     y += (sl.height + 10f).coerceAtLeast(18f)
                 } else {
                     // Regular paragraph or heading
-                    val isHeading = line.startsWith("#") || line.endsWith(":")
-                    val cleanText = line.replace(Regex("^#+\\s*"), "")
+                    val isHeading = line.startsWith("#") || (line.endsWith(":") && line.length < 50 && !line.contains("http"))
+                    var cleanText = line
+                        .replace(Regex("""^#+\s*"""), "")
+                        .replace(Regex("""\*\*([^*]+)\*\*"""), "$1")
+                        .replace(Regex("""\*([^*]+)\*"""), "$1")
+                        .replace(Regex("""`([^`]+)`"""), "$1")
+                        .trim()
+
+                    if (isHeading) {
+                        y += 4f
+                    }
 
                     textPaint.color = if (isHeading) android.graphics.Color.parseColor("#0F172A") else android.graphics.Color.parseColor("#334155")
                     textPaint.textSize = if (isHeading) 10.5f else 9f
@@ -226,7 +252,7 @@ object ReconReportPdf {
                     sl.draw(canvas)
                     canvas.restore()
 
-                    y += sl.height + 6f
+                    y += sl.height + (if (isHeading) 6f else 4f)
                 }
             }
 

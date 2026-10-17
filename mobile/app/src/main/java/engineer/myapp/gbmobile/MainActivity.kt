@@ -2164,10 +2164,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun assistantCard(c: engineer.myapp.gb.shared.AssistantCard) {
         when {
             c.kind == "pdf" || c.title.contains("pdf", ignoreCase = true) -> {
-                val target = shellUi.reconUi.currentTarget.value.ifBlank { shellUi.url.value }
-                val model = ASSIST.model.value.ifBlank { "glm-5.2" }
                 val reportText = c.url.ifBlank { ASSIST.chat.value?.turns?.lastOrNull { it.role == "assistant" }?.text ?: "" }
                 val details = c.id.ifBlank { ASSIST.chat.value?.turns?.lastOrNull { it.role == "assistant" }?.details ?: "" }
+                // Extract audited target from report to avoid displaying an unrelated active browser tab URL
+                val extractedTarget = Regex("""(?:\*\*Target:\*\*|Target:)\s*`?([^\n`*]+)`?""", RegexOption.IGNORE_CASE)
+                    .find(reportText)?.groupValues?.get(1)?.trim()
+                val target = extractedTarget?.ifBlank { null }
+                    ?: shellUi.reconUi.currentTarget.value.ifBlank { shellUi.url.value }
+                val model = ASSIST.model.value.ifBlank { "gemma4:31b" }
                 ReconReportPdf.exportAndOpen(this, target, model, reportText, details)
             }
             c.kind == "results" -> if (c.watcherId.isNotBlank()) openWatcherResults(c.watcherId)

@@ -25,12 +25,17 @@ const COMMON_PORTS = [
   { port: 22, service: 'SSH', sensitive: true },
   { port: 25, service: 'SMTP', sensitive: true },
   { port: 21, service: 'FTP', sensitive: true },
+  { port: 2222, service: 'GitLab SSH / Alternate SSH', sensitive: true },
+  { port: 3000, service: 'Node.js / Internal App', sensitive: true },
   { port: 3306, service: 'MySQL', sensitive: true },
   { port: 5432, service: 'PostgreSQL', sensitive: true },
   { port: 6379, service: 'Redis', sensitive: true },
+  { port: 6443, service: 'Kubernetes API Server', sensitive: true },
   { port: 8080, service: 'HTTP-Alt' },
   { port: 8443, service: 'HTTPS-Alt' },
+  { port: 8929, service: 'GitLab HTTP Web UI', sensitive: true },
   { port: 9000, service: 'PHP-FPM / Admin Panel', sensitive: true },
+  { port: 9100, service: 'Prometheus Node Exporter Metrics', sensitive: true },
   { port: 27017, service: 'MongoDB', sensitive: true }
 ];
 
