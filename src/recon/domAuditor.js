@@ -109,7 +109,10 @@ async function executeSecurityScript(page, script) {
   const code = String(script || '').trim();
   if (!code) throw new Error('Script code is required');
   try {
-    const result = await page.evaluate(code);
+    const wrapped = (/\breturn\b|\bawait\b|;|\n/.test(code) && !/^\s*\{.*\}\s*$/.test(code))
+      ? `(async () => { ${/\breturn\b/.test(code) ? code : 'return (' + code + ')'} })()`
+      : `(async () => (${code}))()`;
+    const result = await page.evaluate(wrapped);
     return {
       url: page.url(),
       title: await page.title().catch(() => ''),
