@@ -21,6 +21,8 @@ const dualSessionAuditor = require('./dualSessionAuditor');
 const graphqlAuditor = require('./graphqlAuditor');
 const concurrencyAuditor = require('./concurrencyAuditor');
 const complianceMapper = require('./complianceMapper');
+const vibeSecurityAuditor = require('./vibeSecurityAuditor');
+const cveVerifier = require('./cveVerifier');
 
 module.exports = {
   ...advisory,
@@ -40,5 +42,7 @@ module.exports = {
   ...dualSessionAuditor,
   ...graphqlAuditor,
   ...concurrencyAuditor,
-  ...complianceMapper
+  ...complianceMapper,
+  ...vibeSecurityAuditor,
+  ...cveVerifier
 };

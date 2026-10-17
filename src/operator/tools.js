@@ -161,6 +161,20 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  R('gb_audit_cve_verification', 'NON-DESTRUCTIVE DETERMINISTIC CVE & REACHABILITY AUDIT: executes the 3-pillar validation protocol for site owners without destructive exploits: (1) Behavioral Differential Probing (header normalization, duplicate Content-Length, HTTP desync patch checks), (2) Static Call-Graph & Dependency Reachability Analysis (distinguishes live reachable sinks from dormant dead-code CVEs in Node.js packages), (3) Harmless Canary Protocol (safe mathematical evaluation ${9413*7} -> 65891 proving SSTI/RCE and isolated prototype pollution CWE-1321). Eliminates false positives and outputs PR-ready remediations.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints to probe' }, projectDir: { type: 'string', description: 'optional local directory path for AST reachability analysis' } }),
+    async ({ targetUrl, url, endpoints, projectDir }) => {
+      if (!ctx.recon || !ctx.recon.auditNonDestructiveVerification) return { error: 'auditNonDestructiveVerification not wired in context' };
+      return ctx.recon.auditNonDestructiveVerification(targetUrl || url, { endpoints, projectDir });
+    }, { repeatable: true });
+
+  R('gb_audit_vibe_security', 'AI-GENERATED APP & VIBE-CODER ARCHITECTURE AUDIT: evaluates client-side secrets & API key exposure (Stripe, Supabase service roles, AWS), unauthenticated API mutations (POST/PUT/DELETE on /api/user, /api/checkout), and prototype pollution integrity.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, apiRoutes: { type: 'array', items: { type: 'string' }, description: 'candidate API routes to test for unauthenticated mutations' } }),
+    async ({ targetUrl, url, apiRoutes }) => {
+      if (!ctx.recon || !ctx.recon.auditVibeSecurity) return { error: 'auditVibeSecurity not wired in context' };
+      return ctx.recon.auditVibeSecurity(targetUrl || url, { apiRoutes });
+    }, { repeatable: true });
+
   R('gb_audit_concurrency', 'CONCURRENCY, TOCTOU & IDEMPOTENCY AUDIT (CWE-362): fires synchronized parallel requests with idempotency keys to verify state synchronization and prevent duplicate processing in state-changing operations.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint URL' }, url: { type: 'string', description: 'alias for targetUrl' }, concurrency: { type: 'number', description: 'burst count (default 6, max 10)' } }),
     async ({ targetUrl, url, concurrency }) => {
