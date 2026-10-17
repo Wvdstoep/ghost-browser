@@ -25,6 +25,9 @@ const vibeSecurityAuditor = require('./vibeSecurityAuditor');
 const cveVerifier = require('./cveVerifier');
 const oastAuditor = require('./oastAuditor');
 const astReachability = require('./astReachability');
+const cloudMetadataAuditor = require('./cloudMetadataAuditor');
+const sqliTimingAuditor = require('./sqliTimingAuditor');
+const massAssignmentAuditor = require('./massAssignmentAuditor');
 
 module.exports = {
   ...advisory,
@@ -48,5 +51,8 @@ module.exports = {
   ...vibeSecurityAuditor,
   ...cveVerifier,
   ...oastAuditor,
-  ...astReachability
+  ...astReachability,
+  ...cloudMetadataAuditor,
+  ...sqliTimingAuditor,
+  ...massAssignmentAuditor
 };
