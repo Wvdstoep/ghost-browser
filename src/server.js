@@ -6118,8 +6118,108 @@ ${g}` : g;
       runRedteamAudit: (target) => recon.runRedteamAudit(target),
       testHttpSessionInvalidation: (opts) => recon.testHttpSessionInvalidation(opts),
       executeSecurityScript: async (profile, script) => {
-        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
         return recon.executeSecurityScript(s.page, script);
+      },
+      browserNavigate: async (profile, url) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        let res = null;
+        try {
+          res = await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        } catch (e) {
+          return { error: 'Navigation failed: ' + e.message, currentUrl: s.page.url() };
+        }
+        await s.page.waitForTimeout(1000);
+        const title = await s.page.title().catch(() => '');
+        const meta = await s.page.evaluate(() => {
+          return {
+            formsCount: document.querySelectorAll('form').length,
+            linksCount: document.querySelectorAll('a').length,
+            scriptsCount: document.querySelectorAll('script').length,
+            inputsCount: document.querySelectorAll('input').length,
+            textSnippet: (document.body.innerText || '').slice(0, 300)
+          };
+        }).catch(() => ({}));
+        return {
+          url: s.page.url(),
+          title,
+          status: res ? res.status() : 200,
+          ...meta
+        };
+      },
+      browserClick: async (profile, selector) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        try {
+          await s.page.click(selector, { timeout: 8000 });
+          await s.page.waitForTimeout(1500);
+          return { clicked: true, selector, currentUrl: s.page.url(), title: await s.page.title().catch(() => '') };
+        } catch (e) {
+          return { clicked: false, selector, error: e.message, currentUrl: s.page.url() };
+        }
+      },
+      browserType: async (profile, selector, text) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        try {
+          await s.page.fill(selector, text, { timeout: 8000 });
+          return { typed: true, selector, length: text.length, currentUrl: s.page.url() };
+        } catch (e) {
+          return { typed: false, selector, error: e.message };
+        }
+      },
+      browserDom: async (profile, selector) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        try {
+          const items = await s.page.evaluate((sel) => {
+            const list = Array.from(document.querySelectorAll(sel || 'a, form, input, button'));
+            return list.slice(0, 40).map(el => ({
+              tag: el.tagName.toLowerCase(),
+              text: (el.innerText || el.value || '').trim().slice(0, 80),
+              id: el.id || undefined,
+              name: el.getAttribute('name') || undefined,
+              type: el.getAttribute('type') || undefined,
+              href: el.getAttribute('href') || undefined,
+              action: el.getAttribute('action') || undefined
+            }));
+          }, selector);
+          return { count: items.length, items, currentUrl: s.page.url() };
+        } catch (e) {
+          return { error: 'DOM extraction failed: ' + e.message };
+        }
+      },
+      browserNetwork: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        try {
+          const entries = await s.page.evaluate(() => {
+            return performance.getEntriesByType('resource').slice(-30).map(e => ({
+              name: e.name,
+              type: e.initiatorType,
+              durationMs: Math.round(e.duration),
+              size: e.transferSize
+            }));
+          });
+          return { count: entries.length, entries, currentUrl: s.page.url() };
+        } catch (e) {
+          return { error: 'Network inspection failed: ' + e.message };
+        }
+      },
+      workspaceExec: async (command, timeoutMs = 25000) => {
+        const { exec } = require('child_process');
+        const path = require('path');
+        const wsDir = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'workspace');
+        if (!fs.existsSync(wsDir)) fs.mkdirSync(wsDir, { recursive: true });
+
+        return new Promise((resolve) => {
+          const t0 = Date.now();
+          exec(command, { cwd: wsDir, timeout: Math.min(60000, timeoutMs) }, (err, stdout, stderr) => {
+            resolve({
+              command,
+              exitCode: err ? (err.code || 1) : 0,
+              stdout: (stdout || '').slice(0, 4000),
+              stderr: (stderr || '').slice(0, 2000),
+              executionMs: Date.now() - t0
+            });
+          });
+        });
       },
       authRegister: async (profile, opts) => {
         const s = await sessionFor(profiles.safeName(profile || 'default'));

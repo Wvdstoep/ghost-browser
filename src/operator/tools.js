@@ -196,6 +196,49 @@ function registerOperatorTools(reg, ctx) {
       return ctx.recon.executeSecurityScript(profile || 'default', script);
     });
 
+  // ── Hands-on Interactive Browser & Workspace Tools for Adaptive Red-Team Agent ──
+  R('gb_browser_navigate', 'DIRECT BROWSER NAVIGATION: navigates the browser to any target URL, loads full client-side SPA, and returns HTTP status, title, forms count, links count, and page text. Use this to steer the browser as your hands.',
+    obj({ url: { type: 'string', description: 'URL to navigate to' }, profile: { type: 'string', description: 'browser profile, default "default"' } }, ['url']),
+    async ({ url, profile }) => {
+      if (!ctx.recon || !ctx.recon.browserNavigate) return { error: 'browserNavigate not wired in context' };
+      return ctx.recon.browserNavigate(profile || 'default', url);
+    }, { repeatable: true });
+
+  R('gb_browser_click', 'DIRECT BROWSER CLICK: clicks any button, link, tab, or interactive element by CSS selector or text locator (e.g. "button:has-text(\"Login\")", "#submit", "a[href*=\"/admin\"]").',
+    obj({ selector: { type: 'string', description: 'CSS selector or Playwright text locator to click' }, profile: { type: 'string', description: 'browser profile, default "default"' } }, ['selector']),
+    async ({ selector, profile }) => {
+      if (!ctx.recon || !ctx.recon.browserClick) return { error: 'browserClick not wired in context' };
+      return ctx.recon.browserClick(profile || 'default', selector);
+    }, { repeatable: true });
+
+  R('gb_browser_type', 'DIRECT BROWSER INPUT: fills input fields, search boxes, or form controls with specified text or test values.',
+    obj({ selector: { type: 'string', description: 'CSS selector of the input field' }, text: { type: 'string', description: 'text to type into the field' }, profile: { type: 'string', description: 'browser profile, default "default"' } }, ['selector', 'text']),
+    async ({ selector, text, profile }) => {
+      if (!ctx.recon || !ctx.recon.browserType) return { error: 'browserType not wired in context' };
+      return ctx.recon.browserType(profile || 'default', selector, text);
+    }, { repeatable: true });
+
+  R('gb_browser_dom', 'QUERY LIVE DOM ELEMENTS: inspects interactive elements, links, forms, input fields, and attributes on the current page.',
+    obj({ selector: { type: 'string', description: 'CSS selector (e.g. "a", "form", "input", ".btn"), defaults to all interactive elements' }, profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ selector, profile }) => {
+      if (!ctx.recon || !ctx.recon.browserDom) return { error: 'browserDom not wired in context' };
+      return ctx.recon.browserDom(profile || 'default', selector);
+    }, { repeatable: true });
+
+  R('gb_browser_network', 'INSPECT LIVE NETWORK ACTIVITY: inspects real-time API calls, XHR/fetch requests, backend endpoints, and assets triggered by the page.',
+    obj({ profile: { type: 'string', description: 'browser profile, default "default"' } }),
+    async ({ profile }) => {
+      if (!ctx.recon || !ctx.recon.browserNetwork) return { error: 'browserNetwork not wired in context' };
+      return ctx.recon.browserNetwork(profile || 'default');
+    }, { repeatable: true });
+
+  R('gb_workspace_exec', 'EXECUTE WORKSPACE COMMAND / SCRIPT: runs commands in the operator workspace shell (e.g. curl, dig, openssl, custom verification scripts) to perform low-level network and protocol checks.',
+    obj({ command: { type: 'string', description: 'shell command to execute' }, timeoutMs: { type: 'number', description: 'timeout in milliseconds (default 25000)' } }, ['command']),
+    async ({ command, timeoutMs }) => {
+      if (!ctx.recon || !ctx.recon.workspaceExec) return { error: 'workspaceExec not wired in context' };
+      return ctx.recon.workspaceExec(command, timeoutMs);
+    }, { repeatable: true });
+
   
   // ── 6 advanced security auditor tools ──
   R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials with Gmail alias (e.g. wesley.biab+audit123@gmail.com), fills form, submits, checks the logged-in Gmail inbox for verification links or OTP codes, and establishes an authenticated session in the chosen profile.',
