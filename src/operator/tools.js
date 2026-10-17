@@ -198,11 +198,18 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── 6 advanced security auditor tools ──
-  R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials, fills form, submits, and establishes an authenticated session in the chosen profile. Essential for testing behind authentication without manual sign-in.',
-    obj({ targetUrl: { type: 'string', description: 'target website or base URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile to store the session into (e.g. "audit_tenant_a", "audit_tenant_b", "default")' }, username: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' } }),
-    async ({ targetUrl, url, profile, username, email, password }) => {
+  R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials with Gmail alias (e.g. wesley.biab+audit123@gmail.com), fills form, submits, checks the logged-in Gmail inbox for verification links or OTP codes, and establishes an authenticated session in the chosen profile.',
+    obj({ targetUrl: { type: 'string', description: 'target website or base URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile to store the session into (e.g. "audit_tenant_a", "audit_tenant_b", "default")' }, username: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' }, useGmail: { type: 'boolean', description: 'whether to use logged-in Gmail alias (default true)' } }),
+    async ({ targetUrl, url, profile, username, email, password, useGmail }) => {
       if (!ctx.recon || !ctx.recon.authRegister) return { error: 'Account automation not wired in context' };
-      return ctx.recon.authRegister(profile || 'default', { targetUrl: targetUrl || url, username, email, password });
+      return ctx.recon.authRegister(profile || 'default', { targetUrl: targetUrl || url, username, email, password, useGmail: useGmail !== false });
+    }, { repeatable: true });
+
+  R('gb_auth_verify_email', 'AUTONOMOUS EMAIL VERIFICATION VIA LOGGED-IN GMAIL: checks the owner\'s logged-in Gmail account in the "google" profile for recent verification emails from the target site, extracts the verification link or OTP code, and automatically verifies the target account.',
+    obj({ profile: { type: 'string', description: 'target browser profile holding the registration session (default "default")' }, targetUrl: { type: 'string', description: 'target website URL' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ profile, targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.authVerifyEmail) return { error: 'Email verification automation not wired in context' };
+      return ctx.recon.authVerifyEmail(profile || 'default', { targetUrl: targetUrl || url });
     }, { repeatable: true });
 
   R('gb_auth_login', 'AUTONOMOUS LOGIN FOR AUDITING: automatically finds login on the target website, fills credentials, and establishes an authenticated session in the chosen profile.',

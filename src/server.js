@@ -6123,7 +6123,32 @@ ${g}` : g;
       },
       authRegister: async (profile, opts) => {
         const s = await sessionFor(profiles.safeName(profile || 'default'));
-        return recon.autoRegister(s.page, opts);
+        let googlePage = null;
+        try {
+          const gs = await sessionFor('google');
+          googlePage = gs.page;
+        } catch (_) {}
+        return recon.autoRegister(s.page, { ...opts, googlePage });
+      },
+      authVerifyEmail: async (profile, opts = {}) => {
+        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        let googlePage = null;
+        try {
+          const gs = await sessionFor('google');
+          googlePage = gs.page;
+        } catch (_) {}
+        if (!googlePage) return { error: 'Unable to open Google profile session to check Gmail' };
+
+        const gmailResult = await recon.fetchVerificationFromGmail(googlePage, {
+          targetDomain: opts.targetUrl || s.page.url(),
+          timeoutMs: opts.timeoutMs || 35000
+        });
+
+        if (!gmailResult.found) return gmailResult;
+        return recon.completeEmailVerification(s.page, {
+          verificationUrl: gmailResult.verificationUrl,
+          otp: gmailResult.otp
+        });
       },
       authLogin: async (profile, opts) => {
         const s = await sessionFor(profiles.safeName(profile || 'default'));
