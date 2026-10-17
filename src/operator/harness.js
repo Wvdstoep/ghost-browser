@@ -117,7 +117,7 @@ class OperatorRun {
         budgetLeft: this.budget - this.iterations,
         advice: 'Do NOT call save_task_list repeatedly. Use update_task({ index, done: true, note }) and immediately execute the next pending audit engine.'
       };
-    });
+    }, { repeatable: true });
     if (!reg.has('update_task')) reg.register('update_task', 'Mark a task done (and say what you learned in its note) or update its note. Done tasks earn more iterations.', { type: 'object', properties: { index: { type: 'number' }, title: { type: 'string' }, done: { type: 'boolean' }, note: { type: 'string' } }, required: [] }, async ({ index, title, done, note }) => {
       let idx = typeof index === 'number' ? index : (index !== undefined ? Number(index) : -1);
       let t = this.tasks[idx];
@@ -144,7 +144,7 @@ class OperatorRun {
       }
       if (note) t.note = String(note).slice(0, 500);
       return { ok: true, task: t, budgetLeft: this.budget - this.iterations };
-    });
+    }, { repeatable: true });
     const end = ({ status, summary, report }) => {
       this.report = report && typeof report === 'object' ? report : { summary };
       this.finalLine = `${status === 'done' ? 'DONE' : 'BLOCKED'}: ${String(summary || '').slice(0, 600)}`;
@@ -304,7 +304,8 @@ class OperatorRun {
           }
 
           const auditRepeated = auditTargetKey && this._completedAudits.has(auditTargetKey);
-          const repeat = (tool && !tool.repeatable && this._recentCalls.includes(sig)) || auditRepeated;
+          const isTaskTool = name === 'save_task_list' || name === 'update_task';
+          const repeat = (!isTaskTool && tool && !tool.repeatable && this._recentCalls.includes(sig)) || auditRepeated;
           this._recentCalls.push(sig); if (this._recentCalls.length > 20) this._recentCalls.shift();
           let out;
           if (repeat) {
