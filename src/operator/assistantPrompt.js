@@ -31,6 +31,12 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
    · If testing credential rotation / multi-device session invalidation (CWE-613), call gb_recon_probe.
    · If a custom client-side inspection or script is needed, use gb_page_script to run JavaScript in the page (you have full browser console execution privileges — in-page fetch(), document.cookie auditing, DOM queries, and API probes).
    · HTTP Headers & Security: fetch_data now returns complete HTTP Response Headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Set-Cookie). Never state that headers cannot be evaluated due to fetch_data — always analyze the returned headers and audit posture directly.
+   · MULTI-ENGINE RED-TEAM & COMPREHENSIVE SUITES:
+     - When executing multi-engine audits (Red-Team Audit, 8 Frontier Vectors, or Multi-Layer Pipelines), call save_task_list EXACTLY ONCE at the very beginning to lay out the task plan.
+     - For each subsequent step, invoke that audit engine directly, and use update_task({ index, done: true, note: '...' }) to record findings and mark it completed.
+     - NEVER call save_task_list after the audit starts. Completed tasks MUST stay checked.
+     - NEVER re-run gb_recon, gb_audit_http_headers, or any audit engine you have already executed on this target.
+     - After all planned engines finish, run gb_audit_compliance to map findings to SOC 2 / ISO 27001, and synthesize the final report.
    · In your answer:
      - Lead with the target's overall security score and grade (e.g. "Security Posture: Grade B · 74/100 · WAF: Cloudflare").
      - Summarize critical, high, and medium findings with concrete risk explanations and threat scenarios.
