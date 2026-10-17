@@ -161,6 +161,21 @@ function registerOperatorTools(reg, ctx) {
 
   
   // ── security recon & red-team intelligence ──
+  const getDiscovered = async (target) => {
+    if (!target) return null;
+    let origin = target;
+    try {
+      const u = new URL(target.startsWith('http') ? target : 'https://' + target);
+      origin = u.origin;
+    } catch (_) {}
+    ctx.discoveredEndpoints = ctx.discoveredEndpoints || {};
+    if (!ctx.discoveredEndpoints[origin] && ctx.recon && ctx.recon.harvestTargetEndpoints) {
+      try {
+        ctx.discoveredEndpoints[origin] = await ctx.recon.harvestTargetEndpoints(origin);
+      } catch (_) {}
+    }
+    return ctx.discoveredEndpoints[origin] || null;
+  };
   R('gb_audit_second_order', 'MULTI-PHASE SECOND-ORDER STORED INJECTION AUDIT (CWE-79 / CWE-116): injects benign canary tokens into mutation endpoints (Step 1) and crawls downstream profile, export, or administrative views (Step 2) to detect unescaped reflection in secondary sinks.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, mutationEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 1 injection endpoints' }, downstreamEndpoints: { type: 'array', items: { type: 'string' }, description: 'candidate Phase 2 downstream sink endpoints' } }),
     async ({ targetUrl, url, mutationEndpoints, downstreamEndpoints }) => {
@@ -229,6 +244,72 @@ function registerOperatorTools(reg, ctx) {
     async ({ targetUrl, url, endpoints, projectDir }) => {
       if (!ctx.recon || !ctx.recon.auditNonDestructiveVerification) return { error: 'auditNonDestructiveVerification not wired in context' };
       return ctx.recon.auditNonDestructiveVerification(targetUrl || url, { endpoints, projectDir });
+    }, { repeatable: true });
+
+  R('gb_audit_http_smuggling', 'HTTP REQUEST SMUGGLING & PARSER DESYNC AUDIT (CWE-444): non-destructively probes front-end reverse proxies (Cloudflare, Nginx, Traefik) and back-end application servers for HTTP request framing desyncs (CL.TE, TE.CL, TE.TE, RFC 7230 Dual Content-Length) without corrupting shared socket pipelines.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url }) => {
+      if (!ctx.recon || !ctx.recon.auditHttpRequestSmuggling) return { error: 'auditHttpRequestSmuggling not wired in context' };
+      return ctx.recon.auditHttpRequestSmuggling(targetUrl || url);
+    }, { repeatable: true });
+
+  R('gb_audit_polyglot_ssti', 'MATHEMATICAL POLYGLOT SSTI ENGINE FINGERPRINTING (CWE-1336): injects non-destructive mathematical polyglots (${31*37}, {{31*37}}, <%= 31*37 %>, #{31*37}) across discovered input fields to detect whether template engines (Jinja2, Twig, EJS, Pug, Freemarker) evaluate math to 1147.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate mutation or query endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditPolyglotSsti) return { error: 'auditPolyglotSsti not wired in context' };
+      const target = targetUrl || url;
+      const discovered = await getDiscovered(target);
+      return ctx.recon.auditPolyglotSsti(target, { endpoints: endpoints || (discovered ? [...(discovered.mutationEndpoints || []), ...(discovered.queryEndpoints || [])] : null) });
+    }, { repeatable: true });
+
+  R('gb_audit_prototype_gadgets', 'PROTOTYPE POLLUTION RCE GADGET CHAIN AUDIT (CWE-1321 / CWE-78): scans backend AST dependencies and recursive merges to prove whether an active prototype pollution vulnerability can reach child_process (shell, env, NODE_OPTIONS) or template compiler execution gadgets.',
+    obj({ projectDir: { type: 'string', description: 'optional directory path of the project to analyze (defaults to workspace)' } }),
+    async ({ projectDir }) => {
+      if (!ctx.recon || !ctx.recon.auditPrototypeGadgets) return { error: 'auditPrototypeGadgets not wired in context' };
+      return ctx.recon.auditPrototypeGadgets(projectDir || process.cwd());
+    }, { repeatable: true });
+
+  R('gb_audit_graphql_batch', 'GRAPHQL BATCHING & ALIAS AMPLIFICATION AUDIT (CWE-400): sends non-destructive safe aliased multi-call queries (a: __typename, b: __typename) and array batches to test whether GraphQL gateways enforce query complexity and batch limits.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate GraphQL endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditGraphQLBatchAmplification) return { error: 'auditGraphQLBatchAmplification not wired in context' };
+      const target = targetUrl || url;
+      const discovered = await getDiscovered(target);
+      return ctx.recon.auditGraphQLBatchAmplification(target, { endpoints: endpoints || discovered?.graphqlEndpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_cswsh', 'CROSS-SITE WEBSOCKET HIJACKING (CSWSH) AUDIT (CWE-1385): probes WebSocket upgrade endpoints with untrusted Origin headers (https://evil-attacker.com) to verify whether the server enforces Origin validation during the 101 Switching Protocols handshake.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate WebSocket endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditCrossSiteWebSocketHijacking) return { error: 'auditCrossSiteWebSocketHijacking not wired in context' };
+      const target = targetUrl || url;
+      const discovered = await getDiscovered(target);
+      return ctx.recon.auditCrossSiteWebSocketHijacking(target, { endpoints: endpoints || discovered?.websocketEndpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_dependency_confusion', 'DEPENDENCY CONFUSION & INTERNAL NAMESPACE SQUATTING AUDIT (CWE-427): scans package.json and .npmrc for internal dependencies and resolves against public registry.npmjs.org to ensure no private packages are unclaimed publicly.',
+    obj({ projectDir: { type: 'string', description: 'optional directory path of the project to analyze (defaults to workspace)' } }),
+    async ({ projectDir }) => {
+      if (!ctx.recon || !ctx.recon.auditDependencyConfusion) return { error: 'auditDependencyConfusion not wired in context' };
+      return ctx.recon.auditDependencyConfusion(projectDir || process.cwd());
+    }, { repeatable: true });
+
+  R('gb_audit_web_cache', 'WEB CACHE DECEPTION & CACHE POISONING AUDIT (CWE-524 / CWE-444): probes authenticated endpoints with static pseudo-extensions (.css, .js, .png, ;.css) and unkeyed headers to verify whether CDN caches store private account JSON.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate authenticated endpoints to probe' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditWebCacheDeception) return { error: 'auditWebCacheDeception not wired in context' };
+      const target = targetUrl || url;
+      const discovered = await getDiscovered(target);
+      return ctx.recon.auditWebCacheDeception(target, { endpoints: endpoints || discovered?.authEndpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_oauth_pkce', 'OAUTH2 PKCE & PRE-ACCOUNT TAKEOVER AUDIT (CWE-287 / RFC 7636): analyzes OAuth redirect flows (Google, GitHub, SSO) for high-entropy state parameters and SHA-256 PKCE (code_challenge_method=S256) enforcement.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'candidate OAuth initiate endpoints' } }),
+    async ({ targetUrl, url, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditOAuthPkceAndState) return { error: 'auditOAuthPkceAndState not wired in context' };
+      const target = targetUrl || url;
+      const discovered = await getDiscovered(target);
+      return ctx.recon.auditOAuthPkceAndState(target, { endpoints });
     }, { repeatable: true });
 
   R('gb_audit_vibe_security', 'AI-GENERATED APP & VIBE-CODER ARCHITECTURE AUDIT: evaluates client-side secrets & API key exposure (Stripe, Supabase service roles, AWS), unauthenticated API mutations (POST/PUT/DELETE on /api/user, /api/checkout), and prototype pollution integrity.',

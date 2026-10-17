@@ -10,6 +10,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { harvestTargetEndpoints } = require('./endpointHarvester');
 
 function httpRequest(urlStr, options = {}) {
   return new Promise((resolve) => {
@@ -74,15 +75,25 @@ async function auditSecondOrderInjection(targetUrl, options = {}) {
   const canaryId = '2nd_' + Math.random().toString(36).substring(2, 8);
   const canaryToken = `${canaryId}'"><gb2ndorder>`;
 
-  // Phase 1 Injection endpoints
+  // Dynamically harvest endpoints from target if not provided
+  let harvested = null;
+  if (!options.mutationEndpoints?.length || !options.downstreamEndpoints?.length) {
+    try { harvested = await harvestTargetEndpoints(origin, options); } catch (_) {}
+  }
+
+  // Phase 1 Injection endpoints (dynamic harvested > explicit options > fallback)
   const mutationEndpoints = (options.mutationEndpoints && options.mutationEndpoints.length > 0)
     ? options.mutationEndpoints
-    : ['/api/user/profile', '/api/settings', '/api/account', '/api/comment'];
+    : (harvested?.mutationEndpoints?.length > 0
+        ? harvested.mutationEndpoints
+        : ['/api/user/profile', '/api/settings', '/api/account', '/api/comment']);
 
-  // Phase 2 Downstream Sink endpoints
+  // Phase 2 Downstream Sink endpoints (dynamic harvested > explicit options > fallback)
   const downstreamEndpoints = (options.downstreamEndpoints && options.downstreamEndpoints.length > 0)
     ? options.downstreamEndpoints
-    : ['/api/user/profile', '/profile', '/admin/users', '/api/export', '/api/activity'];
+    : (harvested?.downstreamEndpoints?.length > 0
+        ? harvested.downstreamEndpoints
+        : ['/api/user/profile', '/profile', '/admin/users', '/api/export', '/api/activity']);
 
   let injectedEndpoint = null;
 

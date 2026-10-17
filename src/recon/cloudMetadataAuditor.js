@@ -15,6 +15,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { harvestTargetEndpoints } = require('./endpointHarvester');
 
 function httpRequest(urlStr, options = {}) {
   return new Promise((resolve) => {
@@ -120,9 +121,16 @@ async function auditCloudMetadataBoundaries(targetUrl, options = {}) {
   const findings = [];
   const secureControls = [];
 
+  let harvested = null;
+  if (!options.endpoints?.length) {
+    try { harvested = await harvestTargetEndpoints(origin, options); } catch (_) {}
+  }
+
   const candidateEndpoints = (options.endpoints && options.endpoints.length > 0)
     ? options.endpoints
-    : ['/api/fetch', '/api/proxy', '/api/preview', '/api/webhook', '/api/export'];
+    : (harvested?.queryEndpoints?.length > 0
+        ? harvested.queryEndpoints
+        : ['/api/fetch', '/api/proxy', '/api/preview', '/api/webhook', '/api/export']);
 
   const candidateParams = ['url', 'target', 'dest', 'feed', 'uri'];
 
