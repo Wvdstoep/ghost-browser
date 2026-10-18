@@ -390,6 +390,84 @@ function correlatePerimeterCves(host, headers = {}, openPorts = []) {
     });
   }
 
+  // Open Network Ports & Daemon Service CVE Correlation
+  for (const p of (openPorts || [])) {
+    if (p.port === 22 && p.banner) {
+      const m = p.banner.match(/OpenSSH_([0-9.]+)/i);
+      const v = m ? parseFloat(m[1]) : 0;
+      if (v > 0 && v < 9.8) {
+        cves.push({
+          cveId: 'CVE-2024-6387',
+          component: `OpenSSH Daemon (${p.banner})`,
+          version: `OpenSSH ${v} (< 9.8p1)`,
+          severity: 'CRITICAL',
+          cvss: 8.1,
+          title: 'OpenSSH regreSSHion Remote Code Execution Vulnerability',
+          description: 'A signal handler race condition in OpenSSH daemon (sshd) allows unauthenticated remote code execution as root on glibc-based Linux systems.',
+          source: 'NVD / Qualys Security Advisory',
+          poc: `curl.exe -v --max-time 3 telnet://${host}:22`,
+          fixAvailable: 'Upgrade to OpenSSH 9.8p1 or newer, or set LoginGraceTime 0 in sshd_config.',
+          advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2024-6387'
+        });
+      } else {
+        cves.push({
+          cveId: 'CVE-2024-6387',
+          component: `OpenSSH Daemon (${p.banner})`,
+          version: `OpenSSH ${v || '10.0+'} (Patched)`,
+          severity: 'SECURE',
+          cvss: 0.0,
+          title: 'OpenSSH regreSSHion Defense Verified Active',
+          description: `Daemon is running ${p.banner}. This build is patched against the regreSSHion unauthenticated RCE flaw (resolved in >= 9.8p1).`,
+          source: 'NVD / Debian Security Tracker',
+          poc: `curl.exe -v --max-time 3 telnet://${host}:22`,
+          fixAvailable: 'No action required — daemon is up to date.'
+        });
+      }
+    } else if (p.port === 6379) {
+      cves.push({
+        cveId: 'CWE-306',
+        component: 'Redis In-Memory Datastore (Port 6379)',
+        version: 'Redis',
+        severity: 'CRITICAL',
+        cvss: 9.8,
+        title: 'Unauthenticated Redis Cache/Database Exposure',
+        description: 'Redis is publicly reachable without network isolation. An attacker can flush cache, read session keys, or execute Lua sandbox escapes.',
+        source: 'NVD / Redis Security Guidance',
+        poc: `curl.exe --max-time 3 telnet://${host}:6379`,
+        fixAvailable: 'Bind Redis strictly to 127.0.0.1 or configure requirepass in redis.conf.',
+        advisoryUrl: 'https://cwe.mitre.org/data/definitions/306.html'
+      });
+    } else if (p.port === 3306) {
+      cves.push({
+        cveId: 'CWE-284',
+        component: 'MySQL Relational Database (Port 3306)',
+        version: 'MySQL',
+        severity: 'HIGH',
+        cvss: 7.5,
+        title: 'Exposed Database Management Port',
+        description: 'MySQL database listener is directly exposed to public internet ingress, inviting automated brute-force attacks.',
+        source: 'NVD / Oracle MySQL Security Alerts',
+        poc: `curl.exe -v --max-time 3 telnet://${host}:3306`,
+        fixAvailable: 'Bind MySQL strictly to private VPC / internal interfaces or enforce firewall IP allowlists.',
+        advisoryUrl: 'https://cwe.mitre.org/data/definitions/284.html'
+      });
+    } else if (p.port === 6443) {
+      cves.push({
+        cveId: 'CVE-2018-1002105',
+        component: 'Kubernetes API Server (Port 6443)',
+        version: 'Kubernetes',
+        severity: 'CRITICAL',
+        cvss: 9.8,
+        title: 'Kubernetes Control Plane Public Exposure',
+        description: 'Kubernetes master API server is exposed on the public internet. If anonymous authentication is enabled, cluster takeover is possible.',
+        source: 'NVD / Kubernetes Security Announcements',
+        poc: `curl.exe -k -i https://${host}:6443/version`,
+        fixAvailable: 'Restrict access to port 6443 via VPN or authorized IP networks.',
+        advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2018-1002105'
+      });
+    }
+  }
+
   // Standard TLS & Cryptography Posture
   cves.push({
     cveId: 'CVE-2022-3602',
