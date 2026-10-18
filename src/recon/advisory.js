@@ -338,10 +338,14 @@ function buildAdvisory(findingKey, customDetails = {}) {
     secondaryDefense: 'Ensure edge WAF and intrusion detection systems monitor anomalous activity.'
   };
 
+  const isPostureKey = ['csp', 'hsts', 'clickjacking', 'content_sniffing', 'spf', 'dmarc', 'cookie_security'].includes(findingKey);
+  const category = customDetails.category || (isPostureKey ? 'POSTURE_HARDENING' : 'EXPLOITABLE_VULNERABILITY');
+
   return {
     key: findingKey,
     title: customDetails.title || template.title,
     severity: customDetails.severity || template.severity,
+    category,
     cwe: template.cwe,
     owasp: template.owasp,
     impact: customDetails.impact || template.impact,
@@ -360,28 +364,54 @@ function buildAdvisory(findingKey, customDetails = {}) {
 }
 
 /**
- * Calculates a consolidated security score (0-100) and letter grade from findings.
+ * Calculates a consolidated security score (0-100), letter grade,
+ * and dual scores (defensive posture vs active exploitability) from findings.
  */
 function calculateGrade(findings = []) {
   let score = 100;
+  let postureDeductions = 0;
+  let exploitDeductions = 0;
+
   for (const f of findings) {
     const sev = (f.severity || '').toUpperCase();
-    if (sev === 'CRITICAL') score -= 30;
-    else if (sev === 'HIGH') score -= 15;
-    else if (sev === 'MEDIUM') score -= 8;
-    else if (sev === 'LOW') score -= 3;
+    const isPosture = f.category === 'POSTURE_HARDENING' || 
+      ['csp', 'hsts', 'clickjacking', 'content_sniffing', 'spf', 'dmarc', 'cookie_security'].includes(f.key);
+
+    let deduction = 0;
+    if (sev === 'CRITICAL') deduction = 30;
+    else if (sev === 'HIGH') deduction = 15;
+    else if (sev === 'MEDIUM') deduction = 8;
+    else if (sev === 'LOW') deduction = 3;
+
+    if (isPosture) {
+      postureDeductions += Math.min(deduction, 12);
+    } else {
+      exploitDeductions += deduction;
+    }
+    score -= deduction;
   }
   score = Math.max(0, Math.min(100, score));
 
-  let grade = 'A+';
-  if (score < 50) grade = 'F';
-  else if (score < 60) grade = 'D';
-  else if (score < 70) grade = 'C';
-  else if (score < 80) grade = 'B';
-  else if (score < 90) grade = 'A';
-  else grade = 'A+';
+  const postureScore = Math.max(0, 100 - postureDeductions);
+  const exploitabilityScore = Math.max(0, 100 - exploitDeductions);
 
-  return { score, grade };
+  const toGrade = (s) => {
+    if (s < 50) return 'F';
+    if (s < 60) return 'D';
+    if (s < 70) return 'C';
+    if (s < 80) return 'B';
+    if (s < 90) return 'A';
+    return 'A+';
+  };
+
+  return {
+    score,
+    grade: toGrade(score),
+    postureScore,
+    postureGrade: toGrade(postureScore),
+    exploitabilityScore,
+    exploitabilityGrade: toGrade(exploitabilityScore)
+  };
 }
 
 module.exports = {

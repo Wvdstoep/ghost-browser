@@ -577,10 +577,15 @@ async function auditTarget(rawTarget) {
     }
   }
 
-  // Check Frame Options (Clickjacking)
+  // Check Frame Options (Clickjacking Posture Gap)
   if (!headers['x-frame-options'] && (!headers['content-security-policy'] || !headers['content-security-policy'].includes('frame-ancestors'))) {
     findings.push(buildAdvisory('clickjacking', {
-      evidence: 'Neither X-Frame-Options nor CSP frame-ancestors is present.'
+      title: 'Missing Clickjacking Defense (X-Frame-Options / frame-ancestors)',
+      severity: 'LOW',
+      category: 'POSTURE_HARDENING',
+      evidence: 'Neither X-Frame-Options nor CSP frame-ancestors is present.',
+      impact: 'The target lacks explicit framing restrictions. However, modern browsers enforce Lax SameSite cookies by default, mitigating cross-site state-changing actions in framed contexts.',
+      threatScenario: 'If target hosts authenticated sensitive actions and does not set SameSite cookies or frame-ancestors, an attacker may attempt to overlay an invisible iframe to induce unintentional clicks.'
     }));
   }
 
@@ -625,8 +630,8 @@ async function auditTarget(rawTarget) {
     }
   }
 
-  // Calculate Consolidated Grade
-  const { score, grade } = calculateGrade(findings);
+  // Calculate Consolidated Grade and Dual Scores
+  const { score, grade, postureScore, postureGrade, exploitabilityScore, exploitabilityGrade } = calculateGrade(findings);
 
   // Normalized Open Ports with state
   const normalizedOpenPorts = openPorts.map((p) => ({
@@ -666,8 +671,15 @@ async function auditTarget(rawTarget) {
     timestamp: new Date().toISOString(),
     score,
     grade,
-    findingsCount: findings.length,
-    findings,
+    postureScore,
+    postureGrade,
+    exploitabilityScore,
+    exploitabilityGrade,
+    openPorts: normalizedOpenPorts,
+    network: {
+      openPorts: normalizedOpenPorts
+    },
+    cves,
     waf: wafInfo,
     dns: {
       a: dnsRecords.a,
@@ -679,11 +691,8 @@ async function auditTarget(rawTarget) {
       cname: dnsRecords.cname
     },
     dnsRecords: dnsRecordsList,
-    network: {
-      openPorts: normalizedOpenPorts
-    },
-    openPorts: normalizedOpenPorts,
-    cves,
+    findingsCount: findings.length,
+    findings,
     crawlEndpoints
   };
 }

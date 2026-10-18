@@ -13,7 +13,7 @@
  * `ctx` is handed in by server.js: closures over the modules there, so this file knows nothing about
  * express and can be tested with a fake ctx.
  */
-const clip = (v, n = 6000) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `… (${s.length - n} more chars)` : s; };
+const clip = (v, n = 24000) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `… (${s.length - n} more chars)` : s; };
 const obj = (props, required = []) => ({ type: 'object', properties: props, required });
 
 const isWatcher = (flow) => Array.isArray(flow && flow.nodes) && flow.nodes.some((n) => n && n.type === 'trigger' && n.trigger && n.trigger.type === 'schedule');
@@ -450,29 +450,28 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
         timestamp: raw.timestamp,
         score: raw.score,
         grade: raw.grade,
+        postureScore: raw.postureScore !== undefined ? raw.postureScore : raw.score,
+        postureGrade: raw.postureGrade || raw.grade,
+        exploitabilityScore: raw.exploitabilityScore !== undefined ? raw.exploitabilityScore : 100,
+        exploitabilityGrade: raw.exploitabilityGrade || 'A+',
+        openPorts: raw.openPorts || (raw.network && raw.network.openPorts) || [],
+        network: raw.network || { openPorts: raw.openPorts || [] },
+        cves: raw.cves || [],
+        waf: raw.waf || { fingerprints: [], serverHeader: null },
+        dns: raw.dns || {},
+        dnsRecords: raw.dnsRecords || [],
         findingsCount: raw.findingsCount,
         findings: (raw.findings || []).map(f => ({
           key: f.key,
           title: f.title,
           severity: f.severity,
+          category: f.category || (['csp', 'hsts', 'clickjacking', 'content_sniffing', 'spf', 'dmarc'].includes(f.key) ? 'POSTURE_HARDENING' : 'EXPLOITABLE_VULNERABILITY'),
           impact: f.impact,
+          evidence: f.evidence,
+          cwe: f.cwe,
+          poc: f.poc || null,
           remediation: f.remediation
-        })),
-        headers: raw.headers ? {
-          missing: (raw.headers.audit || []).filter(h => !h.present).map(h => h.name),
-          present: (raw.headers.audit || []).filter(h => h.present).map(h => h.name)
-        } : undefined,
-        dns: raw.dns ? {
-          spf: raw.dns.spf,
-          dmarc: raw.dns.dmarc,
-          mx: raw.dns.mx,
-          takeoverRisk: raw.dns.takeoverRisk
-        } : undefined,
-        ports: raw.ports ? {
-          open: raw.ports.openPorts,
-          suspicious: raw.ports.suspiciousPorts
-        } : undefined,
-        waf: raw.waf ? raw.waf.detected : false
+        }))
       };
     }, { repeatable: true });
 
