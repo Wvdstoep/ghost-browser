@@ -238,10 +238,21 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
     }, { repeatable: true });
 
   R('gb_audit_ast_reachability', 'DEEP INTER-FILE AST SYMBOL RESOLUTION & SERVER ACTION AUDIT: indexes JavaScript/TypeScript project files, identifies Next.js Server Actions (use server) and App Router routes, and traces cross-file import/export symbol call graphs down to dangerous sinks (CWE-1321, CWE-78, CWE-94, CWE-918). Separates PROVEN_LIVE_REACHABLE risks from DORMANT_DEAD_CODE.',
-    obj({ projectDir: { type: 'string', description: 'directory path of the project to analyze (defaults to workspace)' } }),
+    obj({ projectDir: { type: 'string', description: 'directory path of the project to analyze' } }),
     async ({ projectDir }) => {
       if (!ctx.recon || !ctx.recon.auditAstReachability) return { error: 'auditAstReachability not wired in context' };
-      return ctx.recon.auditAstReachability(projectDir || process.cwd());
+      const isInternal = (p) => {
+        if (!p) return true;
+        const abs = path.resolve(p);
+        return abs === process.cwd() || abs === '/app' || abs.startsWith('/app/') || abs.startsWith('/tmp');
+      };
+      if (!projectDir || !fs.existsSync(projectDir) || isInternal(projectDir)) {
+        return {
+          status: 'skipped',
+          notice: 'AST reachability analysis requires an external source code repository path. When auditing remote websites (https://...), do not call this tool because remote servers do not expose their local filesystem.'
+        };
+      }
+      return ctx.recon.auditAstReachability(projectDir);
     }, { repeatable: true });
 
   R('gb_audit_cve_verification', 'NON-DESTRUCTIVE DETERMINISTIC CVE & REACHABILITY AUDIT: executes the 3-pillar validation protocol for site owners without destructive exploits: (1) Behavioral Differential Probing (header normalization, duplicate Content-Length, HTTP desync patch checks), (2) Static Call-Graph & Dependency Reachability Analysis (distinguishes live reachable sinks from dormant dead-code CVEs in Node.js packages), (3) Harmless Canary Protocol (safe mathematical evaluation ${9413*7} -> 65891 proving SSTI/RCE and isolated prototype pollution CWE-1321). Eliminates false positives and outputs PR-ready remediations.',

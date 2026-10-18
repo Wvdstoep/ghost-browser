@@ -48,6 +48,18 @@ function auditToken(tokenString) {
     return { validJwt: false, error: 'Failed to decode JWT header or payload JSON' };
   }
 
+  // Reject hallucinated/sample tokens (e.g. jwt.io John Doe placeholder)
+  if (payload.name === 'John Doe' || payload.sub === '1234567890' || (typeof payload.email === 'string' && payload.email.includes('example.com'))) {
+    return {
+      validJwt: true,
+      sampleToken: true,
+      status: 'skipped',
+      notice: 'The token provided is a dummy/sample JWT (e.g. standard jwt.io placeholder), not a token extracted from the live target. Suppressing findings to avoid false alarms.',
+      findings: [],
+      secureControls: []
+    };
+  }
+
   const findings = [];
   const secureControls = [];
 

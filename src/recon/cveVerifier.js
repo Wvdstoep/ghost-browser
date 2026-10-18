@@ -363,6 +363,36 @@ async function auditHarmlessCanaryProtocol(targetUrl, options = {}) {
     });
   }
 
+  // C. Non-Destructive External OS Command Injection Probing (CWE-78)
+  const cmdCanaryPayload = '$(expr 7731 + 42)';
+  const cmdExpected = '7773';
+  for (const ep of testEndpoints.slice(0, 4)) {
+    const epUrl = `${origin}${ep.startsWith('/') ? ep : '/' + ep}?cmd=${encodeURIComponent(cmdCanaryPayload)}&exec=${encodeURIComponent(cmdCanaryPayload)}&run=${encodeURIComponent(cmdCanaryPayload)}`;
+    const res = await httpRequest(epUrl, { method: 'GET' });
+    if (res.body && res.body.includes(cmdExpected) && !res.body.includes(cmdCanaryPayload)) {
+      findings.push({
+        severity: 'CRITICAL',
+        title: `External OS Command Execution (CWE-78) on '${ep}'`,
+        cwe: 'CWE-78: Improper Neutralization of Special Elements used in an OS Command',
+        cvss: 9.8,
+        proofType: 'Deterministic Command Output Reflection',
+        proofDetails: `Server evaluated non-destructive shell expression '${cmdCanaryPayload}' and returned computed output '${cmdExpected}'. Conclusive proof of external OS command injection.`,
+        pocCurl: `curl -i "${epUrl}"`,
+        remediation: {
+          rootCause: 'Untrusted user input concatenated into child_process.exec or system shell command.',
+          fixSnippet: `// Use child_process.execFile with argument array instead of shell execution:\nconst { execFile } = require('child_process');\nexecFile('/usr/bin/tool', [sanitizedArg], callback);`
+        }
+      });
+      break;
+    }
+  }
+  if (!findings.some(f => f.cwe && f.cwe.includes('CWE-78'))) {
+    secureControls.push({
+      control: 'COMMAND_INJECTION_IMMUNITY',
+      note: 'Zero external OS command execution or shell evaluation detected across tested parameters.'
+    });
+  }
+
   // B. Isolated Prototype Mutation Canary (CWE-1321)
   const canaryKey = '__gb_probe_' + Math.random().toString(36).substring(2, 8);
   const protoProbeUrl = `${origin}/api/action`;
@@ -432,11 +462,25 @@ async function auditNonDestructiveVerification(targetUrl, options = {}) {
   const canaryVerification = await auditHarmlessCanaryProtocol(targetUrl, options);
 
   let reachability = null;
-  const projectDir = options.projectDir || process.cwd();
-  try {
-    reachability = analyzeDependencyReachability(projectDir);
-  } catch (err) {
-    reachability = { error: err.message, reachableVulnerabilities: [], dormantPackages: [] };
+  const projectDir = options.projectDir;
+  const isInternalGbPath = (p) => {
+    if (!p) return true;
+    const abs = path.resolve(p);
+    return abs === process.cwd() || abs === '/app' || abs.startsWith('/app/') || abs.startsWith(path.resolve(__dirname, '..')) || abs.startsWith('/tmp');
+  };
+
+  if (projectDir && fs.existsSync(projectDir) && !isInternalGbPath(projectDir)) {
+    try {
+      reachability = analyzeDependencyReachability(projectDir);
+    } catch (err) {
+      reachability = { error: err.message, reachableVulnerabilities: [], dormantPackages: [] };
+    }
+  } else {
+    reachability = {
+      reachableVulnerabilities: [],
+      dormantPackages: [],
+      summary: 'Remote web target audit: local AST source code reachability skipped (remote web target has no local source code mounted).'
+    };
   }
 
   const allFindings = [
