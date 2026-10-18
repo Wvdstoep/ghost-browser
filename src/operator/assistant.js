@@ -187,8 +187,31 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
       const e = ev[i];
       if (e.kind === 'thought' && e.text) {
         const clean = String(e.text).trim().replace(/<\/?think>/g, '');
-        if (clean && clean.length > 5) {
+        // Exclude full final reports from duplicating as a tiny step
+        if (clean && clean.length > 5 && !clean.startsWith('# Enterprise Security Audit Report')) {
           out.push({ name: 'thought', label: 'Thinking & Strategy', args: '', text: clean.slice(0, 1200), t: e.t });
+        }
+        continue;
+      }
+      if (e.kind === 'tool' && e.name === 'update_task') {
+        let note = '';
+        try {
+          const parsed = typeof e.args === 'object' ? e.args : JSON.parse(e.args || '{}');
+          note = parsed.note || '';
+        } catch (_) {}
+        if (note && note.length > 3) {
+          out.push({ name: 'thought', label: 'Reasoning & Audit Progress', args: '', text: String(note).slice(0, 300), t: e.t });
+        }
+        continue;
+      }
+      if (e.kind === 'tool' && e.name === 'save_task_list') {
+        let count = 0;
+        try {
+          const parsed = typeof e.args === 'object' ? e.args : JSON.parse(e.args || '{}');
+          count = Array.isArray(parsed.tasks) ? parsed.tasks.length : 0;
+        } catch (_) {}
+        if (count > 0) {
+          out.push({ name: 'thought', label: 'Audit Strategy Plan', args: '', text: `Initialized ${count}-phase systematic verification roadmap.`, t: e.t });
         }
         continue;
       }
