@@ -6435,7 +6435,8 @@ function startOperatorJob(goal, cfg, restore = null, opts = {}) {
 
   const notes = () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; };
   const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
-  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
+  const allKeys = [cfg.llmKey, ...String(cfg.llmKeys || '').split(/[\s,]+/)].map((k) => k && k.trim()).filter(Boolean);
+  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: allKeys[0] || cfg.llmKey, keys: allKeys }, registry: reg,
     systemPrompt, orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
     startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: { ...(opts.meta || {}), agentType: mode }, maxMs: opts.maxMs || 0 });
   ctx.stopped = () => run.stopped();                       // a waiting tool sees the owner's stop
