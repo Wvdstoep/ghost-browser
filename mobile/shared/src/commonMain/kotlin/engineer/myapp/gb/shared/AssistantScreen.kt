@@ -93,6 +93,42 @@ data class StarterPrompt(val title: String, val subtitle: String, val prompt: St
 val RECON_PROMPT_CHIPS = listOf(
     // ── MASTER ORCHESTRATOR SUITES ──
     StarterPrompt(
+        title = "🛡️ 6-Point State-of-the-Art Recon Suite",
+        subtitle = "Passive CT Subdomains, CMS & Tech Fingerprint, Sensitive Paths, Service Banners & CVEs, Visual Proof & TLS Health",
+        prompt = "Perform a state-of-the-art 6-point defensive reconnaissance and AppSec audit on https://target-domain.com. Systematically execute all 6 advanced recon engines: 1. Passive Subdomain & Certificate Transparency Enumeration (gb_audit_subdomains), 2. CMS & Technology Stack Deep Fingerprinting (gb_audit_tech_stack), 3. Sensitive Paths, Config Leaks & RFC 9116 security.txt (gb_audit_sensitive_paths), 4. Service Version Banner Grabbing & Official CVE Correlation (gb_audit_service_banners), 5. Automated Visual Proof for Exposed Portals (gb_capture_proof), 6. TLS/SSL Cipher & Protocol Health Deep-Dive (gb_audit_tls_health). Connect observations across layers, follow the Red Team Ladder of Research, and output an executive dual-scorecard report."
+    ),
+    StarterPrompt(
+        title = "🌐 Passive Subdomain & CT Logs (CWE-200)",
+        subtitle = "Query crt.sh Certificate Transparency, TLS SANs & active DNS A/AAAA resolution",
+        prompt = "Enumerate subdomains and historical certificates on https://target-domain.com using gb_audit_subdomains. Queries crt.sh Certificate Transparency logs, extracts live TLS Subject Alternative Names (SANs), actively resolves DNS A/AAAA records for discovered subdomains, and detects wildcard DNS configurations."
+    ),
+    StarterPrompt(
+        title = "🧩 CMS & Tech Stack Deep Fingerprint",
+        subtitle = "Identify WordPress/LiteSpeed/Next.js, probe /wp-json users & xmlrpc.php",
+        prompt = "Deeply fingerprint the CMS, hosting stack, and web framework on https://target-domain.com using gb_audit_tech_stack. Identifies web servers (LiteSpeed, Nginx, Apache), checks for WordPress REST API user enumeration (/wp-json/wp/v2/users), tests XML-RPC multicall abuse (/xmlrpc.php), and audits admin login access."
+    ),
+    StarterPrompt(
+        title = "📂 Sensitive Paths & RFC 9116 Security.txt",
+        subtitle = "Probe security.txt, robots.txt, /.git/HEAD, /.env & phpinfo.php with SPA validation",
+        prompt = "Audit sensitive paths and configuration leaks on https://target-domain.com using gb_audit_sensitive_paths. Probes RFC 9116 security.txt, robots.txt, sitemap.xml, exposed .git/HEAD, leaked .env files, and phpinfo.php configuration disclosures with strict false-positive validation against custom SPA 404 pages."
+    ),
+    StarterPrompt(
+        title = "🔍 Service Banners & CVE Correlation (CWE-306)",
+        subtitle = "Probe FTP 21 SYST, SSH 22, DirectAdmin 2222, MySQL 3306 & NVD CVE correlation",
+        prompt = "Interrogate open port daemon banners and correlate known CVEs on https://target-domain.com using gb_audit_service_banners. Connects directly to open ports (FTP 21 SYST, SSH 22, DirectAdmin 2222, MySQL/MariaDB 3306 handshake) to extract exact service daemon versions and correlates them against official NVD/MITRE CVE registries."
+    ),
+    StarterPrompt(
+        title = "📸 Automated Visual Proof for Portals (CWE-284)",
+        subtitle = "Capture headless browser screenshot of exposed login & admin interfaces",
+        prompt = "Capture automated photographic screenshot proof of exposed portals on https://target-domain.com using gb_capture_proof. Navigates headless browser to exposed administrative web services (DirectAdmin on port 2222, /wp-login.php, cPanel on port 2083) and captures irrefutable photographic screenshot proof embedded directly into the security deliverable."
+    ),
+    StarterPrompt(
+        title = "🔒 TLS/SSL Cipher & Protocol Health (CWE-326)",
+        subtitle = "Test deprecated TLS 1.0/1.1, ciphers, PFS, certificate validity & assign TLS Grade",
+        prompt = "Audit TLS/SSL transport and cryptographic health on https://target-domain.com using gb_audit_tls_health. Performs multi-protocol TLS handshakes testing for deprecated TLS 1.0 and TLS 1.1, validates cipher suites and Perfect Forward Secrecy (PFS), inspects certificate expiration and SANs, and assigns a TLS Health Grade (A+ to F)."
+    ),
+    // ── MASTER ORCHESTRATOR SUITES ──
+    StarterPrompt(
         title = "🏆 8 Frontier Vectors Abyss Audit",
         subtitle = "Smuggling, SSTI, Prototype RCE, GraphQL batch, CSWSH, Dependency Confusion, Cache & PKCE",
         prompt = "Execute a non-destructive 8 Frontier Vectors Abyss Audit on https://target-domain.com. Systematically invoke all 8 frontier engines: 1. HTTP Request Smuggling (gb_audit_http_smuggling), 2. Polyglot SSTI Engine Fingerprinting (gb_audit_polyglot_ssti), 3. Prototype Pollution RCE Gadget Chains (gb_audit_prototype_gadgets), 4. GraphQL Batching & Alias Amplification (gb_audit_graphql_batch), 5. Cross-Site WebSocket Hijacking (gb_audit_cswsh), 6. Dependency Confusion & Namespace Squatting (gb_audit_dependency_confusion), 7. Web Cache Deception & Poisoning (gb_audit_web_cache), 8. OAuth2 PKCE & State Entropy (gb_audit_oauth_pkce). Map all findings to SOC 2 and ISO 27001 (gb_audit_compliance) and generate PR-ready code remediations."

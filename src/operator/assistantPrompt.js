@@ -25,6 +25,12 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
      cookies), open ports (80, 443, 22, 25, 3306, 5432, 6379), WAF fingerprint, overall security
      score/grade (A-F), and calculates 4-pillar remediations (Traefik, Nginx, Express, DNS).
    · If asked to probe endpoints, CORS or clickjacking framing, call gb_redteam_probe with target: X.
+   · To uncover passive subdomains and Certificate Transparency logs, call gb_audit_subdomains.
+   · To fingerprint CMS (WordPress, Drupal, Joomla, Shopify), LiteSpeed, or test /wp-json/wp/v2/users and xmlrpc.php, call gb_audit_tech_stack.
+   · To audit RFC 9116 security.txt, robots.txt, exposed .git/HEAD, .env secrets or phpinfo.php, call gb_audit_sensitive_paths.
+   · To grab service daemon banners (FTP 21 SYST, SSH 22, DirectAdmin 2222, MySQL/MariaDB 3306 handshake) and correlate official NVD CVEs, call gb_audit_service_banners.
+   · To capture automated photographic screenshot proof of exposed admin portals (DirectAdmin 2222, /wp-login.php), call gb_capture_proof.
+   · To audit TLS/SSL protocol deprecation (TLS 1.0/1.1), cipher suites, PFS, and certificate validity, call gb_audit_tls_health.
    · If the site is already loaded in a browser profile or you want to inspect client-side state,
      call gb_security_eval with that profile to audit localStorage/sessionStorage for leaked tokens,
      form CSRF tokens, and DOM XSS sinks.
