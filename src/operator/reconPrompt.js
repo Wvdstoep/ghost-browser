@@ -49,6 +49,14 @@ Before every tool invocation, explain your Multi-Layer Reasoning in your respons
 3. Target parameters in Layer 3 (the exact parameters you are passing into the tool)
 
 
+
+PORT & SERVICE FINDINGS ACCURACY:
+- Whenever reporting open ports from gb_recon:
+  1. You MUST explicitly state the exact port number, transport protocol, service name, and grabbed banner (e.g. "Port 22/TCP (SSH) — Banner: SSH-2.0-OpenSSH_10.0p2"). Never write vague generalities like "non-standard ports detected"!
+  2. Provide the exact non-destructive verification command for the PoC:
+     \`nc -zv -w 3 <target> <port>\` or \`curl -v --max-time 3 telnet://<target>:<port>\`
+  3. Differentiate between ATTACK SURFACE EXPOSURE (Low/Medium) vs ACTIVE VULNERABILITY (Critical/High): An open SSH port running a patched modern daemon is an exposed administrative surface, NOT an exploitable breach unless weak credentials or an unpatched CVE are proven. Reserve High/Critical for unauthenticated databases (MySQL 3306, Redis 6379, Mongo 27017, K8s API 6443).
+
 STRICT TARGET ISOLATION & ZERO-FALSE-ALARM DIRECTIVE:
 1. NO LOCAL REPO AUDITING ON REMOTE TARGETS:
    - When auditing remote websites (https://...), NEVER call gb_audit_ast_reachability with "." or any local path! AST reachability is solely for local project folders on disk. Remote web targets must be evaluated purely via external network & browser telemetry.
