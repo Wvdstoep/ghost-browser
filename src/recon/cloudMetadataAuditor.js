@@ -79,7 +79,7 @@ const CLOUD_PROBES = [
     name: 'GCP Metadata Endpoint',
     targetUrl: 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
     headers: { 'Metadata-Flavor': 'Google' },
-    signature: 'access_token',
+    signature: '"access_token":"ya29.',
     cwe: 'CWE-918: Server-Side Request Forgery (SSRF)',
     cvss: 9.8,
     severity: 'CRITICAL'
@@ -88,7 +88,7 @@ const CLOUD_PROBES = [
     name: 'Azure Instance Metadata Service',
     targetUrl: 'http://169.254.169.254/metadata/instance?api-version=2021-02-01',
     headers: { 'Metadata': 'true' },
-    signature: 'compute',
+    signature: '"compute":{',
     cwe: 'CWE-918: Server-Side Request Forgery (SSRF)',
     cvss: 9.8,
     severity: 'CRITICAL'
@@ -96,7 +96,7 @@ const CLOUD_PROBES = [
   {
     name: 'Kubernetes Internal API Server',
     targetUrl: 'https://kubernetes.default.svc/api/v1/namespaces',
-    signature: 'NamespaceList',
+    signature: '"kind":"NamespaceList"',
     cwe: 'CWE-918: Server-Side Request Forgery (SSRF)',
     cvss: 9.8,
     severity: 'CRITICAL'
@@ -140,8 +140,13 @@ async function auditCloudMetadataBoundaries(targetUrl, options = {}) {
         const testUrl = `${origin}${ep.startsWith('/') ? ep : '/' + ep}?${encodeURIComponent(param)}=${encodeURIComponent(probe.targetUrl)}`;
         const res = await httpRequest(testUrl, { method: 'GET', headers: probe.headers || {} });
 
-        // If response status is 200 and matches cloud metadata signatures
-        if (res.status === 200 && probe.signature && res.body && res.body.includes(probe.signature)) {
+        // Baseline check: ensure the target endpoint doesn't already contain this text in normal operation
+        const baselineUrl = `${origin}${ep.startsWith('/') ? ep : '/' + ep}`;
+        const resBaseline = await httpRequest(baselineUrl, { method: 'GET' });
+        const alreadyInBaseline = resBaseline.body && probe.signature && resBaseline.body.includes(probe.signature);
+
+        // If response status is 200, matches cloud metadata signature, AND was not already in the baseline page
+        if (res.status === 200 && probe.signature && res.body && res.body.includes(probe.signature) && !alreadyInBaseline) {
           findings.push({
             severity: probe.severity,
             title: `Cloud Metadata SSRF Vulnerability on '${ep}' via '${param}' (${probe.name})`,
