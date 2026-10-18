@@ -67,10 +67,11 @@ function grabFtpBanner(host, port = 21, timeoutMs = 3000) {
     socket.on('timeout', () => socket.destroy());
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
+      const isFtp = banner && (banner.startsWith('220') || banner.toLowerCase().includes('ftp'));
       resolve({
         port,
         service: 'FTP',
-        banner: banner.slice(0, 160) || null,
+        banner: isFtp ? banner.slice(0, 160) : null,
         detail: syst ? `SYST: ${syst.slice(0, 80)}` : null
       });
     });
@@ -100,11 +101,12 @@ function grabSshBanner(host, port = 22, timeoutMs = 3000) {
     socket.on('error', () => socket.destroy());
     socket.on('close', () => {
       const firstLine = banner.split('\n')[0].trim();
+      const validSsh = firstLine.startsWith('SSH-');
       resolve({
         port,
         service: 'SSH',
-        banner: firstLine || null,
-        isOpenSsh: /OpenSSH/i.test(firstLine)
+        banner: validSsh ? firstLine : null,
+        isOpenSsh: validSsh && /OpenSSH/i.test(firstLine)
       });
     });
 
@@ -119,7 +121,7 @@ function grabMysqlBanner(host, port = 3306, timeoutMs = 3000) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
     let version = null;
-    let authPlugin = null;
+    let receivedHandshake = false;
     socket.setTimeout(timeoutMs);
 
     socket.on('connect', () => {});
@@ -128,6 +130,7 @@ function grabMysqlBanner(host, port = 3306, timeoutMs = 3000) {
         // MySQL Initial Handshake Packet:
         // 3 bytes packet length, 1 byte sequence (0), 1 byte protocol version (10 = 0x0a)
         if (buf.length > 5 && buf[4] === 0x0a) {
+          receivedHandshake = true;
           let nullIdx = buf.indexOf(0x00, 5);
           if (nullIdx > 5) {
             version = buf.toString('ascii', 5, nullIdx);
@@ -144,7 +147,7 @@ function grabMysqlBanner(host, port = 3306, timeoutMs = 3000) {
         port,
         service: 'MySQL/MariaDB',
         version: version || null,
-        banner: version ? `MariaDB/MySQL Handshake Version: ${version}` : 'MySQL Handshake received'
+        banner: version ? `MariaDB/MySQL Handshake Version: ${version}` : (receivedHandshake ? 'MySQL Handshake received' : null)
       });
     });
 
@@ -177,7 +180,7 @@ function grabDirectAdminBanner(host, port = 2222, timeoutMs = 3500) {
         resolve({
           port,
           service: isDirectAdmin ? 'DirectAdmin Web Control Panel' : 'Web Service (HTTPS)',
-          banner: serverHeader || 'HTTPS Web Service',
+          banner: isDirectAdmin ? (serverHeader || 'DirectAdmin Web Control Panel') : (serverHeader ? `HTTPS: ${serverHeader}` : null),
           isDirectAdmin,
           statusCode: res.statusCode
         });
