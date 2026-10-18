@@ -184,7 +184,15 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
   function stepsOf(run) {
     const out = []; const ev = run.events || [];
     for (let i = 0; i < ev.length; i++) {
-      const e = ev[i]; if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
+      const e = ev[i];
+      if (e.kind === 'thought' && e.text) {
+        const clean = String(e.text).trim().replace(/<\/?think>/g, '');
+        if (clean && clean.length > 5) {
+          out.push({ name: 'thought', label: 'Thinking & Strategy', args: '', text: clean.slice(0, 1200), t: e.t });
+        }
+        continue;
+      }
+      if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
       // the harness keeps the args as clipped JSON TEXT (sometimes an object): both are fine here
       const argText = typeof e.args === 'string' ? e.args : (e.args && typeof e.args === 'object' ? JSON.stringify(e.args) : '');

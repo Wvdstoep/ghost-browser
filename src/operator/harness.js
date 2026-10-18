@@ -278,7 +278,13 @@ class OperatorRun {
         }
         const calls = Array.isArray(reply.toolCalls) ? reply.toolCalls : [];
         const content = String(reply.content || '');
-        if (content) this._event('thought', { text: content.slice(0, 1200) });
+        let thought = reply.thinking || '';
+        if (!thought) {
+          const m = content.match(/<think>([\s\S]*?)<\/think>/);
+          if (m) thought = m[1];
+          else if (content.trim()) thought = content.trim();
+        }
+        if (thought) this._event('thought', { text: thought.slice(0, 2000) });
         // the assistant turn, with its calls, in the provider's own shape
         this.messages.push({ role: 'assistant', content, ...(reply.raw && reply.raw.message && reply.raw.message.tool_calls ? { tool_calls: reply.raw.message.tool_calls } : {}) });
         if (!calls.length) {
@@ -371,7 +377,7 @@ class OperatorRun {
     return this.view();
   }
 
-  _pushTool(call, out) { this.messages.push({ role: 'tool', content: clip(out), ...(call.id ? { tool_call_id: call.id } : {}) }); }
+  _pushTool(call, out) { this.messages.push({ role: 'tool', content: clip(out), ...(call && call.id ? { tool_call_id: call.id } : {}) }); }
   _finishAs(status, summary) { if (this.status !== 'running') return; this.status = status; this.finalLine = `${status === 'done' ? 'DONE' : 'BLOCKED'}: ${String(summary || '').slice(0, 600)}`; if (!this.report) this.report = { summary }; }
 }
 

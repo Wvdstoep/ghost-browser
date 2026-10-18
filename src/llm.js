@@ -31,7 +31,7 @@ async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET
   // Stopping a job must stop the request it is waiting on, not wait out the timeout first.
   if (signal) signal.addEventListener('abort', () => ctl.abort(), { once: true });
 
-  let r;
+  let r, text;
   try {
     r = await fetchImpl(`${base}/api/chat`, {
       method: 'POST',
@@ -45,28 +45,22 @@ async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET
         ...(tools && tools.length ? { tools } : {}),
         stream: false,
         options: {
-          // Low, because this agent decides between listed options rather than writing prose. The
-          // creative part — what a comment says — is reviewed by a person before it is sent.
           temperature: 0.3,
-          /* A caller that knows better - the student wants a context its prompt fits in and a
-             deterministic, short answer - says so here. */
           ...(extra && typeof extra === 'object' ? extra : {}),
         },
         ...(keepAlive ? { keep_alive: keepAlive } : {}),
       }),
       signal: ctl.signal,
     });
+    text = await r.text();
   } catch (e) {
     if (e.name === 'AbortError') {
       throw Object.assign(new Error(signal?.aborted ? 'stopped' : `the model did not answer within ${Math.round(timeoutMs / 1000)}s`), { status: 504 });
     }
-    // DNS, TLS, refused — all of which mean the host setting, not the model.
     throw Object.assign(new Error(`could not reach ${base}: ${e.message}`), { status: 502 });
   } finally {
     clearTimeout(timer);
   }
-
-  const text = await r.text();
   if (!r.ok) {
     let detail = text.slice(0, 400);
     try { detail = JSON.parse(text).error || detail; } catch { /* not JSON, keep the raw body */ }
@@ -94,16 +88,15 @@ async function chat({ host, model, key, messages, tools, signal, timeoutMs = NET
   const msg = body.message || {};
   return {
     content: typeof msg.content === 'string' ? msg.content : '',
+    thinking: typeof msg.thinking === 'string' ? msg.thinking : '',
     /*
-     * Ollama returns { function: { name, arguments } } and `arguments` is usually already an object
-     * — but not always. A model that emits it as a JSON string is not misbehaving badly enough to
-     * fail the turn over, so both are accepted.
+     * Preserve c.id so tool responses match tool_call_id strictly for models that enforce ID alignment (e.g. Gemma/DeepSeek).
      */
     toolCalls: (msg.tool_calls || []).map((c) => {
       const fn = c.function || {};
       let args = fn.arguments;
       if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = { _raw: args }; } }
-      return { name: fn.name, args: args && typeof args === 'object' ? args : {} };
+      return { id: c.id, name: fn.name, args: args && typeof args === 'object' ? args : {} };
     }),
     raw: body,
   };
