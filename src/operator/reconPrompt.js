@@ -69,8 +69,8 @@ PORT & SERVICE FINDINGS ACCURACY & LADDER OF RESEARCH:
      * CVE & Vulnerability Lookup: Check the banner version against known CVEs (e.g. checking whether OpenSSH is < 9.8p1 for CVE-2024-6387 regreSSHion, or verified patched and clean). Cite official vulnerability sources (NVD NIST, Debian Security Tracker, MITRE).
      * Attacker Perspective (Threat Modeling): Detail what a malicious actor would attempt based on the discovery (e.g. automated SSH credential brute-forcing, dictionary attacks, or probing for weak ciphers).
      * Non-Destructive Proof-of-Concept: Provide the exact verification command:
-       For SSH: `curl.exe -v --max-time 3 telnet://<target>:22` (note: specify curl.exe for Windows PowerShell compatibility) or `nc -zv -w 3 <target> 22`
-       For HTTP/S: `curl.exe -I https://<target>`
+        For SSH: \`curl.exe -v --max-time 3 telnet://<target>:22\` (note: specify curl.exe for Windows PowerShell compatibility) or \`nc -zv -w 3 <target> 22\`
+        For HTTP/S: \`curl.exe -I https://<target>\`
        For Databases / Redis: specify protocol-specific inspection commands.
   2. Differentiate between ATTACK SURFACE EXPOSURE (Low/Medium) vs ACTIVE VULNERABILITY (Critical/High): An open SSH port running a patched modern daemon is an exposed administrative surface, NOT an exploitable breach unless weak credentials or an unpatched CVE are proven. Reserve High/Critical for unauthenticated databases (MySQL 3306, Redis 6379, Mongo 27017, K8s API 6443).
   3. COMPREHENSIVE & INFORMATIVE REPORTS (PDF-READY):
