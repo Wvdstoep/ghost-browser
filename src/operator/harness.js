@@ -27,7 +27,7 @@ const path = require('path');
 
 const JOB_DIR = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'jobs');
 const MAX_RESULT_CHARS = 8000;
-const MAX_CONTEXT_CHARS = 128000;
+const MAX_CONTEXT_CHARS = 48000;
 const RE_ANCHOR_EVERY = 20;
 
 const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars trimmed — ask for less, or a narrower filter)` : (s || ''); };
@@ -230,7 +230,7 @@ class OperatorRun {
     }
     if (size() > MAX_CONTEXT_CHARS) {
       // still too big: drop oldest middle turns, keeping head and recent 4 turns
-      const head = this.messages.slice(0, 2), tail = this.messages.slice(-16);
+      const head = this.messages.slice(0, 2), tail = this.messages.slice(-10);
       this.messages = [...head, { role: 'user', content: '[Earlier turns were trimmed to fit the context. Your task list and notes carry what was learned.]' }, ...tail];
     }
   }

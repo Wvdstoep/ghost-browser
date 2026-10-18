@@ -6419,13 +6419,25 @@ ${g}` : g;
 function startOperatorJob(goal, cfg, restore = null, opts = {}) {
   try { for (const k of Object.keys(require.cache)) { if (k.includes('/operator/') || k.includes('/recon/')) delete require.cache[k]; } } catch (_) {}
   const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
-  const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
-  const reg = new Registry(); const ctx = operatorContext(); registerOperatorTools(reg, ctx);
+  const { OperatorRun } = require('./operator/harness');
+  const { operatorPrompt } = require('./operator/prompt');
+  const { reconPrompt } = require('./operator/reconPrompt');
+  const { assistantPrompt } = require('./operator/assistantPrompt');
+
+  const isRecon = (opts.mode === 'recon') || (opts.meta && opts.meta.agentType === 'recon') || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|owasp|frontier|soc\s*2/i.test(goal));
+  const mode = opts.mode || (isRecon ? 'recon' : 'browser');
+
+  const defaultPrompt = isRecon ? reconPrompt() : (opts.finishSpec ? assistantPrompt() : operatorPrompt());
+  const systemPrompt = opts.systemPrompt || defaultPrompt;
+
+  const reg = new Registry(); const ctx = operatorContext();
+  registerOperatorTools(reg, ctx, { mode });
+
   const notes = () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; };
   const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
   const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
-    systemPrompt: opts.systemPrompt || operatorPrompt(), orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
-    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null, maxMs: opts.maxMs || 0 });
+    systemPrompt, orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
+    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: { ...(opts.meta || {}), agentType: mode }, maxMs: opts.maxMs || 0 });
   ctx.stopped = () => run.stopped();                       // a waiting tool sees the owner's stop
   run.onStop(() => ctx.stopWalks());                        // and the walk it waited on ends at once
   operatorRuns.set(run.id, run);
@@ -6440,11 +6452,8 @@ const assistant = require('./operator/assistant').makeAssistant({
   log,
   startTurn: ({ goal, orientation, finishSpec, meta, maxMs }) => {
     const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
-    const { assistantPrompt } = require('./operator/assistantPrompt');
-    const { reconPrompt } = require('./operator/reconPrompt');
-    const isRecon = (meta && meta.agentType === 'recon');
-    const systemPrompt = isRecon ? reconPrompt() : assistantPrompt();
-    return startOperatorJob(goal, cfg, null, { systemPrompt, orientation, finishSpec, meta, maxMs, startIterations: 60, maxIterations: 200 });
+    const isRecon = (meta && meta.agentType === 'recon') || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|frontier/i.test(goal));
+    return startOperatorJob(goal, cfg, null, { orientation, finishSpec, meta: { ...(meta || {}), agentType: isRecon ? 'recon' : 'browser' }, mode: isRecon ? 'recon' : 'browser', maxMs, startIterations: 60, maxIterations: 200 });
   },
 });
 /** Jobs the last process died on come back by themselves — the journal carries the task list and the
@@ -6472,8 +6481,10 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
   if (!goal) return res.status(400).json({ error: 'goal required — what should the operator do, in plain words' });
   const cfg = settingsStore.read();
   if (!cfg.llmModel) return res.status(400).json({ error: 'no AI model configured — set it under agent Settings first' });
+  const agentType = (req.body || {}).agentType || (req.body || {}).mode;
+  const isRecon = agentType === 'recon' || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|frontier/i.test(goal));
   try {
-    const run = startOperatorJob(goal, cfg);
+    const run = startOperatorJob(goal, cfg, null, { mode: isRecon ? 'recon' : 'browser', meta: { agentType: isRecon ? 'recon' : 'browser' } });
     res.json({ id: run.id, status: 'running' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
