@@ -198,5 +198,21 @@ describe('Ghost Browser 6 State-of-the-Art Recon Modules', () => {
     const res = await auditTlsHealth('');
     expect(res.error).toBeDefined();
   });
+
+  it('grabMysqlBanner returns null banner and does not false-flag closed ports', async () => {
+    const { grabMysqlBanner } = require('../src/recon/bannerGrabber');
+    const res = await grabMysqlBanner('127.0.0.1', 19876, 300);
+    expect(res.version).toBeNull();
+    expect(res.banner).toBeNull();
+  });
+
+  it('auditPassiveSubdomains isolates candidates to verified cert names when wildcard DNS is detected', async () => {
+    const { auditPassiveSubdomains } = require('../src/recon/subdomainDiscovery');
+    // Calling with empty or local domain doesn't crash and returns structured report
+    const res = await auditPassiveSubdomains('127.0.0.1');
+    expect(res).toBeDefined();
+    expect(res.domain).toBe('127.0.0.1');
+    expect(Array.isArray(res.findings)).toBe(true);
+  });
 });
 

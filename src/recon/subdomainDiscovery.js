@@ -203,16 +203,25 @@ async function auditPassiveSubdomains(domainOrUrl) {
   ]);
 
   // Combine and deduplicate
-  const allCandidates = Array.from(new Set([
-    apex,
-    `www.${apex}`,
-    `mail.${apex}`,
-    `directadmin.${apex}`,
-    `cpanel.${apex}`,
-    `admin.${apex}`,
-    ...ctNames,
-    ...tlsSans
-  ])).sort();
+  // If wildcard DNS is active, arbitrary dictionary names (like directadmin, cpanel, etc.)
+  // will all resolve to the wildcard IP and generate false positive assets!
+  // In that case, we MUST only trust names verified in CT logs or TLS Subject Alternative Names.
+  const verifiedCertNames = new Set([...ctNames, ...tlsSans]);
+  verifiedCertNames.add(apex);
+  verifiedCertNames.add(`www.${apex}`);
+
+  let allCandidates = [];
+  if (hasWildcard) {
+    allCandidates = Array.from(verifiedCertNames).sort();
+  } else {
+    allCandidates = Array.from(new Set([
+      apex,
+      `www.${apex}`,
+      `api.${apex}`,
+      `app.${apex}`,
+      ...verifiedCertNames
+    ])).sort();
+  }
 
   // 2. Actively resolve live vs dormant
   const { live, dormant } = await resolveSubdomains(allCandidates);
