@@ -93,6 +93,14 @@ async function auditJwtKeyConfusion(targetUrl, options = {}) {
 
   for (const ep of authEndpoints.slice(0, 3)) {
     const testUrl = `${origin}${ep.startsWith('/') ? ep : '/' + ep}`;
+    
+    // Baseline check: verify endpoint is actually protected (must return 401 or 403 when unauthenticated)
+    const resBaseline = await httpRequest(testUrl, { method: 'GET' });
+    if (resBaseline.status !== 401 && resBaseline.status !== 403) {
+      // Endpoint is public or unauthenticated; testing token bypass on a public page is a false positive
+      continue;
+    }
+
     const resAuth = await httpRequest(testUrl, {
       method: 'GET',
       headers: {
@@ -100,6 +108,7 @@ async function auditJwtKeyConfusion(targetUrl, options = {}) {
       }
     });
 
+    // Only if baseline was 401/403 AND the forged HS256 token bypassed it to return 200
     if (resAuth.status === 200) {
       findings.push({
         severity: 'CRITICAL',
