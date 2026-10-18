@@ -89,15 +89,19 @@ function analyzeReflectionContext(body, canary) {
   const idx = body.indexOf(canary.id);
   const snippet = body.substring(Math.max(0, idx - 40), Math.min(body.length, idx + 80));
 
-  // Check if delimiters were reflected raw without encoding
-  const rawLt = body.includes(`${canary.id}'"><gbtest>`) || body.includes(`${canary.id}'&quot;<gbtest>`) || body.includes('<gbtest>');
-  const rawQuotes = body.includes(`${canary.id}'`) || body.includes(`${canary.id}"`);
-
   // Detect context: inside <script>, inside HTML tag attribute, or regular HTML body
   const precedingText = body.substring(0, idx);
   const lastScriptOpen = precedingText.lastIndexOf('<script');
   const lastScriptClose = precedingText.lastIndexOf('</script>');
   const inScript = lastScriptOpen > lastScriptClose;
+
+  let isJsonScript = false;
+  if (inScript) {
+    const scriptTag = body.substring(lastScriptOpen, body.indexOf('>', lastScriptOpen) + 1);
+    if (/type\s*=\s*["'](?:application\/json|application\/ld\+json)["']/i.test(scriptTag)) {
+      isJsonScript = true;
+    }
+  }
 
   const lastTagOpen = precedingText.lastIndexOf('<');
   const lastTagClose = precedingText.lastIndexOf('>');
@@ -107,18 +111,32 @@ function analyzeReflectionContext(body, canary) {
   if (inScript) context = 'SCRIPT_BLOCK';
   else if (inTagAttribute) context = 'HTML_ATTRIBUTE';
 
+  const rawLt = body.includes(`${canary.id}'"><gbtest>`) || body.includes(`${canary.id}'&quot;<gbtest>`) || body.includes('<gbtest>');
+  const probeQuote = canary.id + '\'"';
+  const probeQuoteIdx = body.indexOf(probeQuote);
+  const isBackslashEscaped = probeQuoteIdx > 0 && body[probeQuoteIdx + canary.id.length] === '\\';
+
   let dangerous = false;
   let reason = '';
 
-  if (context === 'HTML_BODY' && rawLt) {
+  if (isJsonScript) {
+    // In application/json script blocks (e.g. Next.js __NEXT_DATA__, Nuxt state), scripts do NOT execute.
+    // The only breakout is by closing the script tag itself.
+    if (body.includes(canary.id + '</script>') || body.includes('</script><script>')) {
+      dangerous = true;
+      reason = 'Canary closes <script> block, allowing tag breakout.';
+    }
+  } else if (context === 'HTML_BODY' && rawLt) {
     dangerous = true;
     reason = 'Canary tag delimiters (<, >) reflected raw without HTML entity encoding (&lt;, &gt;). Allows injecting arbitrary elements.';
-  } else if (context === 'HTML_ATTRIBUTE' && rawQuotes) {
+  } else if (context === 'HTML_ATTRIBUTE' && (body.includes(`${canary.id}"`) || body.includes(`${canary.id}'`)) && !isBackslashEscaped) {
     dangerous = true;
     reason = 'Canary quotes (\', ") reflected raw inside attribute boundary without escaping (&quot;, &#39;). Allows attribute breakout.';
-  } else if (context === 'SCRIPT_BLOCK' && rawQuotes) {
-    dangerous = true;
-    reason = 'Canary quotes reflected raw inside <script> context without backslash escaping. Allows string literal breakout.';
+  } else if (context === 'SCRIPT_BLOCK' && !isJsonScript && !isBackslashEscaped) {
+    if (rawLt || body.includes(`${canary.id}"`) || body.includes(`${canary.id}'`)) {
+      dangerous = true;
+      reason = 'Canary quotes reflected raw inside executable <script> context without backslash escaping. Allows string literal breakout.';
+    }
   }
 
   return {
