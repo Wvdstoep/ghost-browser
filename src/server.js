@@ -6109,62 +6109,8 @@ ${g}` : g;
       return { jobId: job.id, profile: s.profile || null, status: 'running' };
     },
     recon: {
+      ...recon,
       auditTarget: (target) => recon.auditTarget(target),
-      auditHttpHeaders: (target, opts) => recon.auditHttpHeaders(target, opts),
-      auditCanaryReflections: async (profile, targetUrl) => {
-        let page = null;
-        try {
-          const s = await sessionFor(profiles.safeName(profile || 'default'));
-          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-          }
-          page = s.page;
-        } catch (_) {}
-        return recon.auditCanaryReflections(page, targetUrl);
-      },
-      auditSemanticSurface: async (profile, targetUrl) => {
-        let page = null;
-        try {
-          const s = await sessionFor(profiles.safeName(profile || 'default'));
-          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-          }
-          page = s.page;
-        } catch (_) {}
-        return recon.auditSemanticSurface(page, targetUrl);
-      },
-      auditAuthMatrix: (targetUrl, opts) => recon.auditAuthMatrix(targetUrl, opts),
-      auditToken: (token) => recon.auditToken(token),
-      auditDualTenantIsolation: (opts) => recon.auditDualTenantIsolation(opts),
-      auditGraphqlResilience: (targetUrl) => recon.auditGraphqlResilience(targetUrl),
-      auditConcurrency: (targetUrl, opts) => recon.auditConcurrency(targetUrl, opts),
-      auditNonDestructiveVerification: (targetUrl, opts) => recon.auditNonDestructiveVerification(targetUrl, opts),
-      auditOastCanaryProtocol: (targetUrl, opts) => recon.auditOastCanaryProtocol(targetUrl, opts),
-      auditCloudMetadataBoundaries: (targetUrl, opts) => recon.auditCloudMetadataBoundaries(targetUrl, opts),
-      auditSecondOrderInjection: (targetUrl, opts) => recon.auditSecondOrderInjection(targetUrl, opts),
-      auditOpenApiContractFuzzing: (targetUrl) => recon.auditOpenApiContractFuzzing(targetUrl),
-      auditSubdomainTakeover: (targetUrl, opts) => recon.auditSubdomainTakeover(targetUrl, opts),
-      auditJwtKeyConfusion: (targetUrl, opts) => recon.auditJwtKeyConfusion(targetUrl, opts),
-      auditSqliTimingDifferential: (targetUrl, opts) => recon.auditSqliTimingDifferential(targetUrl, opts),
-      auditMassAssignment: (targetUrl, opts) => recon.auditMassAssignment(targetUrl, opts),
-      auditAstReachability: (projectDir) => recon.auditAstReachability(projectDir),
-      auditHttpRequestSmuggling: (targetUrl, opts) => recon.auditHttpRequestSmuggling(targetUrl, opts),
-      auditPolyglotSsti: (targetUrl, opts) => recon.auditPolyglotSsti(targetUrl, opts),
-      auditPrototypeGadgets: (projectDir) => recon.auditPrototypeGadgets(projectDir),
-      auditGraphQLBatchAmplification: (targetUrl, opts) => recon.auditGraphQLBatchAmplification(targetUrl, opts),
-      auditCrossSiteWebSocketHijacking: (targetUrl, opts) => recon.auditCrossSiteWebSocketHijacking(targetUrl, opts),
-      auditDependencyConfusion: (projectDir) => recon.auditDependencyConfusion(projectDir),
-      auditWebCacheDeception: (targetUrl, opts) => recon.auditWebCacheDeception(targetUrl, opts),
-      auditOAuthPkceAndState: (targetUrl, opts) => recon.auditOAuthPkceAndState(targetUrl, opts),
-      auditBolaLifecyclePipeline: (targetUrl, opts) => recon.auditBolaLifecyclePipeline(targetUrl, opts),
-      auditReachabilityProofPipeline: (targetUrl, opts) => recon.auditReachabilityProofPipeline(targetUrl, opts),
-      auditBlindDetectionPipeline: (targetUrl, opts) => recon.auditBlindDetectionPipeline(targetUrl, opts),
-      auditSecondOrderPipeline: (targetUrl, opts) => recon.auditSecondOrderPipeline(targetUrl, opts),
-      harvestTargetEndpoints: (targetUrl, opts) => recon.harvestTargetEndpoints(targetUrl, opts),
-      classifyEndpoints: (routes) => recon.classifyEndpoints(routes),
-      auditVibeSecurity: (targetUrl, opts) => recon.auditVibeSecurity(targetUrl, opts),
-      generateComplianceScorecard: (findings) => recon.generateComplianceScorecard(findings),
-      auditThrottling: (targetUrl) => recon.auditThrottling(targetUrl),
       probeTarget: (target) => recon.runRedteamAudit(target),
       auditActivePage: async (profile) => {
         const s = await sessionFor(profiles.safeName(profile || 'facebook'));
@@ -6173,243 +6119,29 @@ ${g}` : g;
       runRedteamAudit: (target) => recon.runRedteamAudit(target),
       testHttpSessionInvalidation: (opts) => recon.testHttpSessionInvalidation(opts),
       executeSecurityScript: async (profile, script) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.executeSecurityScript(s.page, script);
       },
-      browserNavigate: async (profile, url) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        try {
-          await s.page.addInitScript(() => {
-            window.__gbSinkAlerts = window.__gbSinkAlerts || [];
-            const sinks = [
-              { obj: Element.prototype, prop: 'innerHTML' },
-              { obj: Element.prototype, prop: 'outerHTML' },
-              { obj: Document.prototype, prop: 'write' }
-            ];
-            sinks.forEach(({ obj, prop }) => {
-              try {
-                const desc = Object.getOwnPropertyDescriptor(obj, prop);
-                if (desc && desc.set && !desc.set.__gbInstrumented) {
-                  const orig = desc.set;
-                  const hook = function(val) {
-                    if (typeof val === 'string' && val.includes('gbc_')) {
-                      window.__gbSinkAlerts.push({
-                        sink: prop,
-                        tagName: this.tagName || 'DOCUMENT',
-                        value: val.substring(0, 300),
-                        stack: new Error().stack
-                      });
-                    }
-                    return orig.call(this, val);
-                  };
-                  hook.__gbInstrumented = true;
-                  Object.defineProperty(obj, prop, { set: hook, get: desc.get });
-                }
-              } catch (_) {}
-            });
-          });
-        } catch (_) {}
-        let res = null;
-        try {
-          res = await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
-        } catch (e) {
-          return { error: 'Navigation failed: ' + e.message, currentUrl: s.page.url() };
-        }
-        await s.page.waitForTimeout(1000);
-        const title = await s.page.title().catch(() => '');
-        const meta = await s.page.evaluate(() => {
-          return {
-            formsCount: document.querySelectorAll('form').length,
-            linksCount: document.querySelectorAll('a').length,
-            scriptsCount: document.querySelectorAll('script').length,
-            inputsCount: document.querySelectorAll('input').length,
-            textSnippet: (document.body.innerText || '').slice(0, 300)
-          };
-        }).catch(() => ({}));
-        return {
-          url: s.page.url(),
-          title,
-          status: res ? res.status() : 200,
-          ...meta
-        };
-      },
-      browserClick: async (profile, selector) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        try {
-          await s.page.click(selector, { timeout: 8000 });
-          await s.page.waitForTimeout(1500);
-          return { clicked: true, selector, currentUrl: s.page.url(), title: await s.page.title().catch(() => '') };
-        } catch (e) {
-          return { clicked: false, selector, error: e.message, currentUrl: s.page.url() };
-        }
-      },
-      browserType: async (profile, selector, text) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        try {
-          await s.page.fill(selector, text, { timeout: 4000 });
-          return { typed: true, selector, length: text.length, currentUrl: s.page.url() };
-        } catch (e) {
-          // If hidden inside a tabbed modal or form, attempt to reveal the tab or force value via DOM
-          try {
-            const revealed = await s.page.evaluate(({ sel, val }) => {
-              const el = document.querySelector(sel);
-              if (!el) return { found: false };
-              // Try clicking parent tab buttons (e.g. Sign up, Create account, Register)
-              const modal = el.closest('.modal, [role="dialog"], form, body');
-              if (modal) {
-                const tabs = Array.from(modal.querySelectorAll('button, a, [role="tab"], .tab, span'));
-                const trigger = tabs.find(t => /(?:sign\s*up|create\s*account|register)/i.test(t.innerText || ''));
-                if (trigger && typeof trigger.click === 'function') trigger.click();
-              }
-              el.focus();
-              el.value = val;
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return { found: true, forced: true };
-            }, { sel: selector, val: text });
-            if (revealed && revealed.found) {
-              return { typed: true, selector, length: text.length, forced: true, currentUrl: s.page.url() };
-            }
-          } catch (_) {}
-          return { typed: false, selector, error: e.message };
-        }
-      },
-      browserDom: async (profile, selector) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        try {
-          const items = await s.page.evaluate((sel) => {
-            const list = Array.from(document.querySelectorAll(sel || 'a, form, input, button'));
-            return list.slice(0, 40).map(el => ({
-              tag: el.tagName.toLowerCase(),
-              text: (el.innerText || el.value || '').trim().slice(0, 80),
-              id: el.id || undefined,
-              name: el.getAttribute('name') || undefined,
-              type: el.getAttribute('type') || undefined,
-              href: el.getAttribute('href') || undefined,
-              action: el.getAttribute('action') || undefined
-            }));
-          }, selector);
-          return { count: items.length, items, currentUrl: s.page.url() };
-        } catch (e) {
-          return { error: 'DOM extraction failed: ' + e.message };
-        }
-      },
-      browserNetwork: async (profile) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        try {
-          const entries = await s.page.evaluate(() => {
-            return performance.getEntriesByType('resource').slice(-30).map(e => ({
-              name: e.name,
-              type: e.initiatorType,
-              durationMs: Math.round(e.duration),
-              size: e.transferSize
-            }));
-          });
-          return { count: entries.length, entries, currentUrl: s.page.url() };
-        } catch (e) {
-          return { error: 'Network inspection failed: ' + e.message };
-        }
-      },
-      workspaceExec: async (command, timeoutMs = 25000) => {
-        const fs = require('fs');
-        const { exec } = require('child_process');
-        const path = require('path');
-        const wsDir = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'workspace');
-        if (!fs.existsSync(wsDir)) fs.mkdirSync(wsDir, { recursive: true });
-
-        return new Promise((resolve) => {
-          const t0 = Date.now();
-          exec(command, { cwd: wsDir, timeout: Math.min(60000, timeoutMs) }, (err, stdout, stderr) => {
-            resolve({
-              command,
-              exitCode: err ? (err.code || 1) : 0,
-              stdout: (stdout || '').slice(0, 4000),
-              stderr: (stderr || '').slice(0, 2000),
-              executionMs: Date.now() - t0
-            });
-          });
-        });
-      },
-      authRegister: async (profile, opts) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        let googlePage = null;
-        try {
-          const gs = await sessionFor('google');
-          googlePage = gs.page;
-        } catch (_) {}
-        return recon.autoRegister(s.page, { ...opts, googlePage });
-      },
-      authVerifyEmail: async (profile, opts = {}) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        let googlePage = null;
-        try {
-          const gs = await sessionFor('google');
-          googlePage = gs.page;
-        } catch (_) {}
-        if (!googlePage) return { error: 'Unable to open Google profile session to check Gmail' };
-
-        const gmailResult = await recon.fetchVerificationFromGmail(googlePage, {
-          targetDomain: opts.targetUrl || s.page.url(),
-          timeoutMs: opts.timeoutMs || 35000
-        });
-
-        if (!gmailResult.found) return gmailResult;
-        return recon.completeEmailVerification(s.page, {
-          verificationUrl: gmailResult.verificationUrl,
-          otp: gmailResult.otp
-        });
-      },
-      authLogin: async (profile, opts) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        return recon.autoLogin(s.page, opts);
-      },
-      auditBola: async (opts) => {
-        let pageA = null, pageB = null;
-        if (opts.profileA) {
-          try { const sA = await sessionFor(profiles.safeName(opts.profileA)); pageA = sA.page; } catch (_) {}
-        }
-        if (opts.profileB) {
-          try { const sB = await sessionFor(profiles.safeName(opts.profileB)); pageB = sB.page; } catch (_) {}
-        }
-        return recon.auditBola({ ...opts, pageA, pageB });
-      },
-      auditDomSinks: async (profile, targetUrl) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-        }
+      auditBola: (opts) => recon.auditBola(opts),
+      auditDomSinks: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.auditDomSinks(s.page);
       },
-      auditPostMessages: async (profile, targetUrl) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-        }
+      auditPostMessages: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.auditPostMessages(s.page);
       },
       auditApiAndGraphql: async (targetUrl, profile) => {
         let page = null;
-        try {
-          const s = await sessionFor(profiles.safeName(profile || 'default'));
-          if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-            try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-          }
-          page = s.page;
-        } catch (_) {}
+        try { const s = await sessionFor(profiles.safeName(profile || 'facebook')); page = s.page; } catch {}
         return recon.auditApiAndGraphql(page, targetUrl);
       },
-      auditWebSockets: async (profile, targetUrl) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-        }
+      auditWebSockets: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.auditWebSockets(s.page);
       },
-      auditStorageHygiene: async (profile, targetUrl) => {
-        const s = await sessionFor(profiles.safeName(profile || 'default'));
-        if (targetUrl && s.page && (!s.page.url() || !s.page.url().startsWith(targetUrl))) {
-          try { await s.page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }); } catch (_) {}
-        }
+      auditStorageHygiene: async (profile) => {
+        const s = await sessionFor(profiles.safeName(profile || 'facebook'));
         return recon.auditStorageHygiene(s.page);
       }
     },
@@ -6417,28 +6149,14 @@ ${g}` : g;
 }
 /** One job: fresh from a goal, or resumed from the journal a restart left behind (restore = the record). */
 function startOperatorJob(goal, cfg, restore = null, opts = {}) {
-  try { for (const k of Object.keys(require.cache)) { if (k.includes('/operator/') || k.includes('/recon/')) delete require.cache[k]; } } catch (_) {}
   const { Registry } = require('./operator/registry'); const { registerOperatorTools } = require('./operator/tools');
-  const { OperatorRun } = require('./operator/harness');
-  const { operatorPrompt } = require('./operator/prompt');
-  const { reconPrompt } = require('./operator/reconPrompt');
-  const { assistantPrompt } = require('./operator/assistantPrompt');
-
-  const isRecon = (opts.mode === 'recon') || (opts.meta && opts.meta.agentType === 'recon') || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|owasp|frontier|soc\s*2/i.test(goal));
-  const mode = opts.mode || (isRecon ? 'recon' : 'browser');
-
-  const defaultPrompt = isRecon ? reconPrompt() : (opts.finishSpec ? assistantPrompt() : operatorPrompt());
-  const systemPrompt = opts.systemPrompt || defaultPrompt;
-
-  const reg = new Registry(); const ctx = operatorContext();
-  registerOperatorTools(reg, ctx, { mode });
-
+  const { OperatorRun } = require('./operator/harness'); const { operatorPrompt } = require('./operator/prompt');
+  const reg = new Registry(); const ctx = operatorContext(); registerOperatorTools(reg, ctx);
   const notes = () => { const m = ops.readMemory(); return m ? 'YOUR NOTES (newest last):\n' + m.slice(-3000) : ''; };
   const extra = typeof opts.orientation === 'function' ? opts.orientation : () => '';
-  const allKeys = [cfg.llmKey, ...String(cfg.llmKeys || '').split(/[\s,]+/)].map((k) => k && k.trim()).filter(Boolean);
-  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: allKeys[0] || cfg.llmKey, keys: allKeys }, registry: reg,
-    systemPrompt, orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
-    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: { ...(opts.meta || {}), agentType: mode }, maxMs: opts.maxMs || 0 });
+  const run = new OperatorRun({ goal, restore, chat: (o) => llm.chat(o), llm: { host: cfg.llmHost, model: cfg.llmModel, key: cfg.llmKey }, registry: reg,
+    systemPrompt: opts.systemPrompt || operatorPrompt(), orientation: () => [extra(), notes()].filter(Boolean).join('\n\n'), log,
+    startIterations: opts.startIterations, maxIterations: opts.maxIterations, finishSpec: opts.finishSpec || null, meta: opts.meta || null, maxMs: opts.maxMs || 0 });
   ctx.stopped = () => run.stopped();                       // a waiting tool sees the owner's stop
   run.onStop(() => ctx.stopWalks());                        // and the walk it waited on ends at once
   operatorRuns.set(run.id, run);
@@ -6453,8 +6171,11 @@ const assistant = require('./operator/assistant').makeAssistant({
   log,
   startTurn: ({ goal, orientation, finishSpec, meta, maxMs }) => {
     const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
-    const isRecon = (meta && meta.agentType === 'recon') || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|frontier/i.test(goal));
-    return startOperatorJob(goal, cfg, null, { orientation, finishSpec, meta: { ...(meta || {}), agentType: isRecon ? 'recon' : 'browser' }, mode: isRecon ? 'recon' : 'browser', maxMs, startIterations: 60, maxIterations: 200 });
+    const { assistantPrompt } = require('./operator/assistantPrompt');
+    const { reconPrompt } = require('./operator/reconPrompt');
+    const isRecon = (meta && meta.agentType === 'recon');
+    const systemPrompt = isRecon ? reconPrompt() : assistantPrompt();
+    return startOperatorJob(goal, cfg, null, { systemPrompt, orientation, finishSpec, meta, maxMs, startIterations: 60, maxIterations: 200 });
   },
 });
 /** Jobs the last process died on come back by themselves — the journal carries the task list and the
@@ -6482,10 +6203,8 @@ app.post('/v1/operator/jobs', authed, (req, res) => {
   if (!goal) return res.status(400).json({ error: 'goal required — what should the operator do, in plain words' });
   const cfg = settingsStore.read();
   if (!cfg.llmModel) return res.status(400).json({ error: 'no AI model configured — set it under agent Settings first' });
-  const agentType = (req.body || {}).agentType || (req.body || {}).mode;
-  const isRecon = agentType === 'recon' || (/recon|audit|security|vulnerability|pentest|red-team|cve|ssti|sqli|frontier/i.test(goal));
   try {
-    const run = startOperatorJob(goal, cfg, null, { mode: isRecon ? 'recon' : 'browser', meta: { agentType: isRecon ? 'recon' : 'browser' } });
+    const run = startOperatorJob(goal, cfg);
     res.json({ id: run.id, status: 'running' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

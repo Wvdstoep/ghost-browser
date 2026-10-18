@@ -431,6 +431,49 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
       return ctx.recon.auditAuthMatrix(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
+  // ── 6 State-of-the-Art Reconnaissance & Deep-Dive Audit Tools ──
+  R('gb_audit_subdomains', 'PASSIVE SUBDOMAIN & CERTIFICATE TRANSPARENCY ENUMERATION (CWE-200 / CWE-284): queries crt.sh Certificate Transparency logs, extracts live TLS Subject Alternative Names (SANs), actively resolves DNS A/AAAA records for discovered subdomains, and detects wildcard DNS configurations.',
+    obj({ domain: { type: 'string', description: 'domain or URL to discover subdomains for, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for domain' }, url: { type: 'string', description: 'alias for domain' } }),
+    async ({ domain, target, url }) => {
+      if (!ctx.recon || !ctx.recon.auditPassiveSubdomains) return { error: 'auditPassiveSubdomains not wired in context' };
+      return ctx.recon.auditPassiveSubdomains(domain || target || url);
+    }, { repeatable: true });
+
+  R('gb_audit_tech_stack', 'CMS & TECHNOLOGY STACK DEEP FINGERPRINTING (CWE-200 / CWE-307): identifies CMS (WordPress, Drupal, Joomla, Shopify) and web frameworks (Next.js, Laravel, LiteSpeed, Nginx, Apache), and probes WordPress REST API user enumeration (/wp-json/wp/v2/users), XML-RPC pingback/bruteforce (/xmlrpc.php), and admin login.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to fingerprint' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url, target }) => {
+      if (!ctx.recon || !ctx.recon.auditTechStack) return { error: 'auditTechStack not wired in context' };
+      return ctx.recon.auditTechStack(targetUrl || url || target);
+    }, { repeatable: true });
+
+  R('gb_audit_sensitive_paths', 'SENSITIVE PATH, CONFIG LEAK & RFC 9116 SECURITY.TXT AUDIT (CWE-200 / CWE-538): non-destructively probes for RFC 9116 security.txt, robots.txt, sitemap.xml, exposed .git/HEAD, leaked .env files, and phpinfo.php configuration disclosures with strict false-positive validation against custom SPA 404 pages.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url, target }) => {
+      if (!ctx.recon || !ctx.recon.auditSensitivePaths) return { error: 'auditSensitivePaths not wired in context' };
+      return ctx.recon.auditSensitivePaths(targetUrl || url || target);
+    }, { repeatable: true });
+
+  R('gb_audit_service_banners', 'SERVICE VERSION BANNER GRABBING & OFFICIAL CVE CORRELATION (CWE-200 / CWE-306): connects directly to open ports (FTP 21 SYST, SSH 22, DirectAdmin 2222, MySQL/MariaDB 3306 handshake) to extract exact service daemon versions and correlates them against official NVD/MITRE CVE registries.',
+    obj({ host: { type: 'string', description: 'target hostname or IP, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for host' }, openPorts: { type: 'array', description: 'optional list of open ports discovered by gb_recon' } }),
+    async ({ host, target, openPorts }) => {
+      if (!ctx.recon || !ctx.recon.auditServiceBanners) return { error: 'auditServiceBanners not wired in context' };
+      return ctx.recon.auditServiceBanners(host || target, openPorts);
+    }, { repeatable: true });
+
+  R('gb_capture_proof', 'AUTOMATED VISUAL PROOF FOR EXPOSED PORTALS & SERVICES (CWE-284): navigates headless browser to exposed administrative web services (DirectAdmin on port 2222, /wp-login.php, cPanel on port 2083) and captures irrefutable photographic screenshot proof embedded directly into the security deliverable.',
+    obj({ targetUrl: { type: 'string', description: 'target portal URL or host (e.g. "https://soluti.nl:2222" or "https://soluti.nl/wp-login.php")' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' }, port: { type: 'number', description: 'optional specific port' } }),
+    async ({ targetUrl, url, target, port }) => {
+      if (!ctx.recon || !ctx.recon.captureVisualProof) return { error: 'captureVisualProof not wired in context' };
+      return ctx.recon.captureVisualProof(targetUrl || url || target, { port });
+    }, { repeatable: true });
+
+  R('gb_audit_tls_health', 'TLS/SSL CIPHER & PROTOCOL HEALTH DEEP-DIVE (CWE-326 / PCI-DSS v4.0): performs multi-protocol TLS handshakes testing for deprecated TLS 1.0 and TLS 1.1, validates cipher suites and Perfect Forward Secrecy (PFS), inspects certificate expiration and SANs, and assigns a TLS Health Grade (A+ to F).',
+    obj({ host: { type: 'string', description: 'target hostname or domain, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for host' }, port: { type: 'number', description: 'port to audit (default 443)' } }),
+    async ({ host, target, port }) => {
+      if (!ctx.recon || !ctx.recon.auditTlsHealth) return { error: 'auditTlsHealth not wired in context' };
+      return ctx.recon.auditTlsHealth(host || target, port || 443);
+    }, { repeatable: true });
+
   R('gb_audit_http_headers', 'ENTERPRISE BURP SUITE-STYLE DIFFERENTIAL HTTP HEADER & VERB AUDIT: probes target endpoints with verb tampering (OPTIONS, HEAD, TRACE, PUT, DELETE, PATCH), Host Header injection / reverse proxy cache poisoning (X-Forwarded-Host), internal IP trust spoofing (X-Forwarded-For: 127.0.0.1), CORS differential origin matrix (null, arbitrary attacker, subdomain reflection with credentials), Cache-Control PII leakage, and modern enterprise defense header compliance (HSTS, CSP, XFO, XCTO, Permissions-Policy, COOP). Returns structured CWE vulnerabilities, proof-of-concept curl commands, and 4-pillar hardening directives.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url, target }) => {

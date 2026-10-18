@@ -51,6 +51,14 @@ const reachabilityProofPipeline = require('./reachabilityProofPipeline');
 const blindDetectionPipeline = require('./blindDetectionPipeline');
 const secondOrderPipeline = require('./secondOrderPipeline');
 
+// 6 State-of-the-Art Recon Modules
+const subdomainDiscovery = require('./subdomainDiscovery');
+const techFingerprint = require('./techFingerprint');
+const sensitiveFiles = require('./sensitiveFiles');
+const bannerGrabber = require('./bannerGrabber');
+const visualProof = require('./visualProof');
+const tlsAuditor = require('./tlsAuditor');
+
 module.exports = {
   ...advisory,
   ...perimeter,
@@ -93,5 +101,11 @@ module.exports = {
   ...bolaLifecyclePipeline,
   ...reachabilityProofPipeline,
   ...blindDetectionPipeline,
-  ...secondOrderPipeline
+  ...secondOrderPipeline,
+  ...subdomainDiscovery,
+  ...techFingerprint,
+  ...sensitiveFiles,
+  ...bannerGrabber,
+  ...visualProof,
+  ...tlsAuditor
 };
