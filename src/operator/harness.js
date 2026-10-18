@@ -52,7 +52,10 @@ class OperatorRun {
     this.finishSpec = finishSpec || null; this.finishName = (finishSpec && finishSpec.name) || 'finish';
     /* meta rides in the journal untouched — the assistant keeps its chat id here so a resumed turn finds its chat. */
     this.meta = meta && typeof meta === 'object' ? meta : ((restore && restore.meta) || null);
-    this.chat = chat; this.llm = llm || {}; this.registry = registry; this.systemPrompt = systemPrompt;
+    this.chat = chat; this.llm = llm || {};
+    this._keys = Array.isArray(this.llm.keys) && this.llm.keys.length ? this.llm.keys : (this.llm.key ? [this.llm.key] : []);
+    this._keyIdx = 0;
+    this.registry = registry; this.systemPrompt = systemPrompt;
     this.orientation = typeof orientation === 'function' ? orientation : () => '';
     this.log = log || { info() {}, warn() {}, error() {} }; this.now = now;
     this.startIterations = startIterations; this.maxIterations = maxIterations; this.persistDir = persistDir;
@@ -263,17 +266,27 @@ class OperatorRun {
         if (this.iterations % RE_ANCHOR_EVERY === 0) this.messages.push({ role: 'user', content: this._orientationMessage() });
         this._prune();
         let reply;
-        try { reply = await this.chat({ host: this.llm.host, model: this.llm.model, key: this.llm.key, messages: this.messages, tools: this.registry.definitions() }); }
+        const curKey = this._keys.length ? this._keys[this._keyIdx % this._keys.length] : this.llm.key;
+        try {
+          reply = await this.chat({ host: this.llm.host, model: this.llm.model, key: curKey, messages: this.messages, tools: this.registry.definitions() });
+          this._failStreak = 0;
+        }
         catch (e) {
           this._event('llm-error', { message: e.message });
+          if (this._keys.length > 1) {
+            this._keyIdx = (this._keyIdx + 1) % this._keys.length;
+            const nextKey = this._keys[this._keyIdx % this._keys.length];
+            this.llm.key = nextKey;
+            this._event('thought', { text: `Rate limit or provider response received (${String(e.message).slice(0, 60)}). Automatically switching to alternate API key (${this._keyIdx + 1}/${this._keys.length}).` });
+          }
           // If the model hits a limit or 500 error, aggressively condense historical messages before retry
           for (let i = 2; i < this.messages.length - 1; i++) {
             if (this.messages[i].role === 'tool' && String(this.messages[i].content || '').length > 250) {
               this.messages[i].content = String(this.messages[i].content).slice(0, 200) + ' … [trimmed on error]';
             }
           }
-          if (++this._failStreak >= 4) { this._finishAs('error', `the model stopped answering: ${e.message}`); break; }
-          await new Promise((r) => setTimeout(r, 4000));
+          if (++this._failStreak >= 6) { this._finishAs('error', `the model stopped answering: ${e.message}`); break; }
+          await new Promise((r) => setTimeout(r, 3000));
           continue;
         }
         const calls = Array.isArray(reply.toolCalls) ? reply.toolCalls : [];
