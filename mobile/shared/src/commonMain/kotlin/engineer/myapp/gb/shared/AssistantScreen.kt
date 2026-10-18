@@ -553,25 +553,201 @@ private fun FlowRowCompat(items: List<@Composable () -> Unit>) {
 }
 
 @Composable
-private fun StepTimeline(steps: List<AssistantStep>, done: Boolean, current: Boolean = false, decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null, showMedia: Boolean = true) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.padding(start = 8.dp, top = 6.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun StepTimeline(
+    steps: List<AssistantStep>,
+    done: Boolean,
+    current: Boolean = false,
+    decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
+    showMedia: Boolean = true
+) {
+    Column(Modifier.padding(start = 4.dp, top = 6.dp, end = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { i, s ->
             val last = i == steps.lastIndex
-            Row(verticalAlignment = Alignment.Top) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(14.dp)) {
-                    if (current && last) PulseDot(Brand, 8) else Box(Modifier.padding(top = 5.dp).size(6.dp).clip(CircleShape).background(if (done || !last) cs.onSurfaceVariant else Brand))
+            val isCurrentActive = current && last
+            if (s.name == "thought") {
+                ThoughtStepCard(s, isLive = isCurrentActive)
+            } else {
+                ToolStepCard(s, isCurrent = isCurrentActive, done = done, decode = decode, showMedia = showMedia)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThoughtStepCard(s: AssistantStep, isLive: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    val cleanText = s.text.trim()
+    var expanded by remember(cleanText) { mutableStateOf(isLive || cleanText.length <= 260) }
+    val words = remember(cleanText) { if (cleanText.isBlank()) 0 else cleanText.split(Regex("\\s+")).filter { it.isNotBlank() }.size }
+
+    Surface(
+        color = Brand.copy(alpha = 0.07f),
+        contentColor = cs.onSurface,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, Brand.copy(alpha = if (isLive) 0.55f else 0.25f)),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }
+            ) {
+                if (isLive) {
+                    PulseDot(Brand, 8)
+                } else {
+                    Icon(Icons.Default.AutoAwesome, null, tint = Brand, modifier = Modifier.size(15.dp))
                 }
-                Spacer(Modifier.width(6.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(s.label, color = cs.onSurface, fontSize = 13.sp)
-                    val sub = s.args.takeIf { it.isNotBlank() && it != "{}" }?.let { humanArgs(it) } ?: ""
-                    if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    // the server sends a human line per result; raw JSON (older turns) stays hidden
-                    if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[") && (done || !last)) Text(s.text.take(160), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (showMedia) StepMedia(s, decode, showRecording = !done)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = if (isLive) "Thinking & Strategy (live)" else s.label.ifBlank { "Thinking & Reasoning" },
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Brand,
+                    modifier = Modifier.weight(1f)
+                )
+                if (words > 0) {
+                    Text(
+                        text = "$words words",
+                        fontSize = 10.5.sp,
+                        color = cs.onSurfaceVariant.copy(alpha = 0.8f),
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = cs.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            if (cleanText.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                SelectionContainer {
+                    if (expanded || cleanText.length <= 260) {
+                        Text(
+                            text = cleanText,
+                            fontSize = 12.sp,
+                            lineHeight = 17.5.sp,
+                            color = cs.onSurface.copy(alpha = 0.92f)
+                        )
+                    } else {
+                        Text(
+                            text = cleanText.take(240) + "…",
+                            fontSize = 12.sp,
+                            lineHeight = 17.5.sp,
+                            color = cs.onSurface.copy(alpha = 0.82f)
+                        )
+                    }
+                }
+                if (!isLive && cleanText.length > 260) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (expanded) "Show less ↑" else "Show full thinking (" + cleanText.length + " chars) ↓",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Brand,
+                        modifier = Modifier.clickable { expanded = !expanded }
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ToolStepCard(
+    s: AssistantStep,
+    isCurrent: Boolean,
+    done: Boolean,
+    decode: ((String) -> androidx.compose.ui.graphics.ImageBitmap?)?,
+    showMedia: Boolean
+) {
+    val cs = MaterialTheme.colorScheme
+    var showFullArgs by remember { mutableStateOf(false) }
+    var showFullResult by remember { mutableStateOf(false) }
+
+    val isVuln = s.text.contains("VULNERABLE", ignoreCase = true) || s.text.contains("CRITICAL", ignoreCase = true)
+    val isSecure = s.text.contains("SECURE", ignoreCase = true) || s.text.contains("Grade A", ignoreCase = true)
+
+    Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(18.dp).padding(top = 3.dp)) {
+            when {
+                isCurrent -> PulseDot(Brand, 8)
+                isVuln -> Icon(Icons.Default.Warning, null, tint = Color(0xFFE5484D), modifier = Modifier.size(15.dp))
+                isSecure -> Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF10B981), modifier = Modifier.size(15.dp))
+                else -> Box(Modifier.size(6.dp).clip(CircleShape).background(if (done) cs.onSurfaceVariant.copy(alpha = 0.6f) else Brand))
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(s.label, color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                if (isVuln) {
+                    Surface(color = Color(0xFFE5484D).copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                        Text("FINDING", color = Color(0xFFE5484D), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                    }
+                } else if (isSecure) {
+                    Surface(color = Color(0xFF10B981).copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
+                        Text("PASS", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                    }
+                }
+            }
+
+            // Arguments row
+            val sub = s.args.takeIf { it.isNotBlank() && it != "{}" }?.let { humanArgs(it) } ?: ""
+            if (sub.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (showFullArgs) s.args else sub,
+                        color = cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        maxLines = if (showFullArgs) 8 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (s.args.length > 50) {
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = if (showFullArgs) "less" else "args",
+                            color = Brand,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clickable { showFullArgs = !showFullArgs }
+                        )
+                    }
+                }
+            }
+
+            // Results row
+            if (s.text.isNotBlank() && !s.text.trimStart().startsWith("{") && !s.text.trimStart().startsWith("[")) {
+                Spacer(Modifier.height(3.dp))
+                val resColor = if (isVuln) Color(0xFFE5484D) else if (isSecure) Color(0xFF10B981) else cs.onSurfaceVariant
+                if (s.text.length <= 180) {
+                    SelectionContainer {
+                        Text(s.text, color = resColor, fontSize = 11.5.sp, lineHeight = 16.sp)
+                    }
+                } else {
+                    SelectionContainer {
+                        Text(
+                            text = if (showFullResult) s.text else (s.text.take(170) + "…"),
+                            color = resColor,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    Text(
+                        text = if (showFullResult) "Collapse output ↑" else "Show full output (" + s.text.length + " chars) ↓",
+                        color = Brand,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 2.dp).clickable { showFullResult = !showFullResult }
+                    )
+                }
+            }
+
+            if (showMedia) StepMedia(s, decode, showRecording = !done)
         }
     }
 }
@@ -660,7 +836,30 @@ private fun LiveCard(live: AssistantLive, onStop: () -> Unit, decode: ((String) 
                         }
                     }
                 }
-                if (live.steps.isNotEmpty()) StepTimeline(live.steps.takeLast(4), done = false, current = true, decode = decode)
+                var showAllSteps by remember { mutableStateOf(false) }
+                if (live.steps.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        Text(
+                            text = "Live Execution Steps (" + live.steps.size + ")",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = cs.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (live.steps.size > 4) {
+                            Text(
+                                text = if (showAllSteps) "Show recent (4)" else "Show all (" + live.steps.size + ")",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Brand,
+                                modifier = Modifier.clickable { showAllSteps = !showAllSteps }
+                            )
+                        }
+                    }
+                    val visibleSteps = if (showAllSteps) live.steps else live.steps.takeLast(4)
+                    StepTimeline(visibleSteps, done = false, current = true, decode = decode)
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(if (stopping) "Wrapping up — the browser stops within a few seconds." else "You can keep typing — it reads while it works.", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.weight(1f))

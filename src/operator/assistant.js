@@ -133,12 +133,22 @@ function briefOf(name, text) {
       case 'record_status': return v && v.state ? `${v.state} · ${v.seconds || 0}s · ${Math.round((v.bytes || 0) / 1048576)} MB${v.reason ? ' · ' + v.reason : ''}` : '';
       case 'record_stop': return v && v.ok ? 'stopping' : v && v.error ? v.error : '';
       case 'record_list': return v && Array.isArray(v.recordings) ? `${v.recordings.length} recording(s)${v.queue && v.queue.length ? ', ' + v.queue.length + ' in the queue' : ''}, ${v.freeGB} GB free` : '';
+      case 'gb_audit_subdomains': return v ? `${v.count || 0} subdomains discovered across CT logs` : '';
+      case 'gb_audit_tech_stack': return v && v.technologies ? `Identified ${v.technologies.map((t) => t.name).slice(0, 3).join(', ') || 'stack'}` : '';
+      case 'gb_audit_sensitive_paths': return v ? `${(v.findings || []).length} exposed files/paths found` : '';
+      case 'gb_audit_service_banners': return v ? `${(v.openPorts || []).length} open ports detected` : '';
+      case 'gb_capture_proof': return v ? `Visual proof screenshot captured (${v.title || 'page'})` : '';
+      case 'gb_audit_tls_health': return v ? `TLS Grade ${v.grade || 'A'} · Cipher: ${v.cipher || 'strong'}` : '';
+      case 'gb_workspace_exec': return v && v.stdout ? String(v.stdout).trim().slice(0, 500) : (v && v.stderr ? 'stderr: ' + String(v.stderr).slice(0, 300) : (v ? 'completed' : ''));
+      case 'gb_audit_prototype_gadgets': return v ? `Found ${(v.gadgets || []).length} gadget sinks` : '';
+      case 'gb_audit_polyglot_ssti': return v ? (v.reflected ? 'VULNERABLE: SSTI evaluation confirmed' : 'SECURE: No SSTI reflection') : '';
+      case 'gb_audit_ast_reachability': return v ? `Analyzed ${v.routesCount || 0} routes for reachability` : '';
       case 'gb_file_show': return v && v.shown ? `showing ${v.name}` : v && v.name ? `${v.name} (${v.kind})` : '';
       case 'gb_memory_write': return 'noted';
       case 'gb_guide': case 'gb_memory_read': return 'read';
     }
   } catch { /* fall through */ }
-  return v && typeof v === 'object' ? '' : s.slice(0, 120);
+  return v && typeof v === 'object' ? '' : s.slice(0, 600);
 }
 
 /** A turn's wall clock: past this the turn ends as blocked instead of browsing for an hour. */
@@ -189,7 +199,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
         const clean = String(e.text).trim().replace(/<\/?think>/g, '');
         // Exclude full final reports from duplicating as a tiny step
         if (clean && clean.length > 5 && !clean.startsWith('# Enterprise Security Audit Report')) {
-          out.push({ name: 'thought', label: 'Thinking & Strategy', args: '', text: clean.slice(0, 1200), t: e.t });
+          out.push({ name: 'thought', label: 'Thinking & Strategy', args: '', text: clean.slice(0, 32000), t: e.t });
         }
         continue;
       }
@@ -200,7 +210,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
           note = parsed.note || '';
         } catch (_) {}
         if (note && note.length > 3) {
-          out.push({ name: 'thought', label: 'Reasoning & Audit Progress', args: '', text: String(note).slice(0, 300), t: e.t });
+          out.push({ name: 'thought', label: 'Reasoning & Audit Progress', args: '', text: String(note).slice(0, 5000), t: e.t });
         }
         continue;
       }
@@ -219,9 +229,9 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
       const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
       // the harness keeps the args as clipped JSON TEXT (sometimes an object): both are fine here
       const argText = typeof e.args === 'string' ? e.args : (e.args && typeof e.args === 'object' ? JSON.stringify(e.args) : '');
-      out.push({ name: e.name, label: labelOf(e.name), args: String(argText || '').slice(0, 200), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}), ...(r && r.recording ? { recording: r.recording } : {}) });
+      out.push({ name: e.name, label: labelOf(e.name), args: String(argText || '').slice(0, 2500), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}), ...(r && r.recording ? { recording: r.recording } : {}) });
     }
-    return out.slice(-60);
+    return out.slice(-250);
   }
 
   /** The pictures the tools took, inlined for the app (it has no byte channel of its own): the last few
