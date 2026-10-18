@@ -121,24 +121,26 @@ async function inspectDns(domain) {
 /**
  * Checks a single TCP port with a fast timeout.
  */
-function probePort(host, port, timeoutMs = 1200) {
+function probePort(host, port, timeoutMs = 1500) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
     let status = 'closed';
+    let banner = '';
 
     socket.setTimeout(timeoutMs);
     socket.on('connect', () => {
       status = 'open';
+      // Wait briefly for text-based banners (SSH, FTP, SMTP, HTTP)
+      setTimeout(() => socket.destroy(), 600);
+    });
+    socket.on('data', (d) => {
+      banner += d.toString('utf8', 0, Math.min(d.length, 256)).trim();
       socket.destroy();
     });
-    socket.on('timeout', () => {
-      socket.destroy();
-    });
-    socket.on('error', () => {
-      socket.destroy();
-    });
+    socket.on('timeout', () => socket.destroy());
+    socket.on('error', () => socket.destroy());
     socket.on('close', () => {
-      resolve({ port, status });
+      resolve({ port, status, banner: banner.slice(0, 120) || null });
     });
 
     socket.connect(port, host);
@@ -154,7 +156,8 @@ async function probePorts(host) {
       port: p.port,
       service: p.service,
       sensitive: !!p.sensitive,
-      status: res.status
+      status: res.status,
+      banner: res.banner || null
     }))
   );
   const results = await Promise.all(probes);
@@ -522,9 +525,26 @@ async function auditTarget(rawTarget) {
   const openPorts = await probePorts(target.hostname);
   const sensitivePorts = openPorts.filter((p) => p.sensitive);
   if (sensitivePorts.length > 0) {
-    findings.push(buildAdvisory('open_ports', {
-      evidence: `Exposed sensitive ports on ${target.hostname}: ${sensitivePorts.map((p) => `${p.port}/${p.service}`).join(', ')}`
-    }));
+    const hasRawDatabaseOrK8s = sensitivePorts.some((p) => [3306, 5432, 6379, 27017, 6443, 9000, 9100].includes(p.port));
+    const portDetails = sensitivePorts.map((p) => `Port ${p.port}/TCP (${p.service})${p.banner ? ` [Banner: ${p.banner}]` : ''} - PoC: nc -zv -w 3 ${target.hostname} ${p.port}`).join('; ');
+    
+    if (hasRawDatabaseOrK8s) {
+      findings.push(buildAdvisory('open_ports', {
+        severity: 'HIGH',
+        evidence: `High-risk internal database/management ports exposed on ${target.hostname}: ${portDetails}`,
+        ports: sensitivePorts
+      }));
+    } else {
+      // Standard administration interface (e.g. SSH 22) - Attack surface exposure, not automatic exploit
+      findings.push(buildAdvisory('open_ports', {
+        title: 'Remote Administration Port Exposed (Attack Surface)',
+        severity: 'LOW',
+        evidence: `Administrative ports reachable on ${target.hostname}: ${portDetails}`,
+        impact: 'An open administration port increases the attack surface for automated brute-force attempts. It is an exposure, not an immediate exploit unless weak credentials or an unpatched CVE exists.',
+        poc: `nc -zv -w 3 ${target.hostname} 22`,
+        ports: sensitivePorts
+      }));
+    }
   }
 
   // Calculate Consolidated Grade
@@ -534,8 +554,10 @@ async function auditTarget(rawTarget) {
   const normalizedOpenPorts = openPorts.map((p) => ({
     port: p.port,
     service: p.service,
+    banner: p.banner || null,
     sensitive: !!p.sensitive,
-    state: 'OPEN'
+    state: 'OPEN',
+    poc: `nc -zv -w 3 ${target.hostname} ${p.port}`
   }));
 
   // Normalized DNS records for mobile presentation
