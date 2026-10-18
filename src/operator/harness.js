@@ -27,7 +27,7 @@ const path = require('path');
 
 const JOB_DIR = path.join(process.env.PROFILE_DIR || '/profiles', 'operator', 'jobs');
 const MAX_RESULT_CHARS = 8000;
-const MAX_CONTEXT_CHARS = 24000;
+const MAX_CONTEXT_CHARS = 128000;
 const RE_ANCHOR_EVERY = 20;
 
 const clip = (v, n = MAX_RESULT_CHARS) => { const s = typeof v === 'string' ? v : JSON.stringify(v); return s && s.length > n ? s.slice(0, n) + `\n… (${s.length - n} more chars trimmed — ask for less, or a narrower filter)` : (s || ''); };
@@ -186,14 +186,17 @@ class OperatorRun {
     const open = this.tasks.filter((t) => !t.done).map((t) => `- [ ] ${t.i}. ${t.title}${t.note ? ' — ' + t.note : ''}`);
     const done = this.tasks.filter((t) => t.done).map((t) => `- [x] ${t.i}. ${t.title}${t.note ? ' — ' + t.note : ''}`);
     let o = ''; try { o = String(this.orientation() || ''); } catch { o = ''; }
+    if (this.tasks.length > 0 && open.length === 0) {
+      return `[Orientation]\nGOAL: ${this.goal}\n${o ? '\n' + o + '\n' : ''}\nALL TASKS ARE COMPLETED (100% DONE)!\nTASKS:\n${done.join('\n')}\nCRITICAL MANDATE: All objectives and controls are verified. Do NOT execute any more tools or task updates. You MUST call ${this.finishName}(…) IMMEDIATELY with the final executive summary.`;
+    }
     return `[Orientation]\nGOAL: ${this.goal}\n${o ? '\n' + o + '\n' : ''}\nTASKS:\n${[...open, ...done].join('\n') || '(none yet)'}\nBudget: ${Math.max(0, this.budget - this.iterations)} iterations left. End with ${this.finishName}(…).`;
   }
 
   _prune() {
     const size = () => this.messages.reduce((n, m) => n + String(m.content || '').length, 0);
     // Keep head (0,1) and the most recent 2 turns intact. Condense earlier tool results to prevent payload blowup
-    if (size() > MAX_CONTEXT_CHARS * 0.5) {
-      for (let i = 2; i < this.messages.length - 2 && size() > MAX_CONTEXT_CHARS * 0.5; i++) {
+    if (size() > MAX_CONTEXT_CHARS * 0.7) {
+      for (let i = 2; i < this.messages.length - 8 && size() > MAX_CONTEXT_CHARS * 0.7; i++) {
         const m = this.messages[i];
         if (m.role === 'tool' && String(m.content || '').length > 350) {
           try {
@@ -227,7 +230,7 @@ class OperatorRun {
     }
     if (size() > MAX_CONTEXT_CHARS) {
       // still too big: drop oldest middle turns, keeping head and recent 4 turns
-      const head = this.messages.slice(0, 2), tail = this.messages.slice(-4);
+      const head = this.messages.slice(0, 2), tail = this.messages.slice(-16);
       this.messages = [...head, { role: 'user', content: '[Earlier turns were trimmed to fit the context. Your task list and notes carry what was learned.]' }, ...tail];
     }
   }
@@ -305,8 +308,21 @@ class OperatorRun {
 
           const auditRepeated = auditTargetKey && this._completedAudits.has(auditTargetKey);
           const isTaskTool = name === 'save_task_list' || name === 'update_task';
-          const repeat = (!isTaskTool && tool && !tool.repeatable && this._recentCalls.includes(sig)) || auditRepeated;
-          this._recentCalls.push(sig); if (this._recentCalls.length > 20) this._recentCalls.shift();
+
+          // Prevent infinite task spinning when all tasks are already done
+          const allTasksDone = this.tasks.length > 0 && this.tasks.every(t => t.done);
+          if (isTaskTool && allTasksDone) {
+            out = { ok: true, notice: `All ${this.tasks.length} tasks are 100% complete! Stop updating tasks and immediately call ${this.finishName}(...) with the final report.` };
+            this._pushTool(call, out);
+            continue;
+          }
+
+          // Count occurrences in recent history to catch multi-tool rotating loops
+          const sigCount = this._recentCalls.filter(s => s === sig).length;
+          const multiRepeat = sigCount >= 3;
+
+          const repeat = (!isTaskTool && tool && !tool.repeatable && this._recentCalls.includes(sig)) || auditRepeated || multiRepeat;
+          this._recentCalls.push(sig); if (this._recentCalls.length > 30) this._recentCalls.shift();
           let out;
           if (repeat) {
             this._repeatStreak++;
@@ -317,10 +333,21 @@ class OperatorRun {
                 cached: true,
                 notice: `${name} has already executed on target '${args.target || args.targetUrl || args.url}' in this run. Telemetry is preserved in transcript above. Mark task done (done: true) and advance to the next audit engine.`
               };
+            } else if (multiRepeat) {
+              out = {
+                ok: true,
+                status: "cached_result",
+                notice: `You have called ${name} multiple times with identical parameters. The environment state is unchanged. Do NOT call ${name} again; synthesize the findings or proceed to the next task/report.`
+              };
+              if (this._repeatStreak >= 6) {
+                this._finishAs("done", `completed tasks after repeated checks of ${name}`);
+                this._pushTool(call, out);
+                break;
+              }
             } else {
               out = { error: `you already called ${name} with exactly these arguments and have its result above — do something different (a different argument, another tool, or finish)` };
             }
-            if (this._repeatStreak >= 4 && !auditRepeated) { this._finishAs("blocked", `stuck repeating ${name} — no progress`); this._pushTool(call, out); break; }
+            if (this._repeatStreak >= 4 && !auditRepeated && !multiRepeat) { this._finishAs("blocked", `stuck repeating ${name} — no progress`); this._pushTool(call, out); break; }
           } else {
             this._repeatStreak = 0;
             this._event('tool', { name, args: clip(args, 400) });
