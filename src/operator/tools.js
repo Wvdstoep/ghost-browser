@@ -52,11 +52,14 @@ function summarizeRun(run) {
   return { runId: run.id, workflowId: run.workflow_id, status: run.status, started_at: run.started_at, ended_at: run.ended_at, error: run.error || null, verified, steps };
 }
 
-function registerOperatorTools(reg, ctx) {
+function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
+  const includeBrowser = mode === "all" || mode === "browser";
+  const includeRecon = mode === "all" || mode === "recon";
   const sleep = ctx.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const now = ctx.now || Date.now;
   const R = (name, description, parameters, fn, opts) => reg.register(name, description, parameters, async (a) => clip(await fn(a || {})), opts);
 
+  if (includeBrowser) {
   // ── knowing ──
   R('gb_guide', 'THE OPERATOR GUIDE — read it FIRST on every job (a section to narrow it): how roles, flows, watchers, feeds, routing, the post watcher, the approval gate and the poster work; the platform facts already learned; the debugging method.', obj({ section: { type: 'string', description: 'optional heading, e.g. "watchers", "facebook", "debugging"' } }), async ({ section }) => ctx.ops.readGuide(section), { repeatable: true });
   R('gb_memory_read', 'Your notebook from earlier jobs: what worked, what a platform does, what to avoid.', obj({}), async () => ctx.ops.readMemory() || '(empty)', { repeatable: true });
@@ -158,8 +161,10 @@ function registerOperatorTools(reg, ctx) {
   R('gb_flow_runs', 'Recent runs of one automation, newest first, summarized.', obj({ flowId: { type: 'string' } }, ['flowId']), async ({ flowId }) => ctx.workflows.runsFor(flowId, 10).map(summarizeRun), { repeatable: true });
   R('gb_people', 'The PEOPLE the owner talks with on a platform — memory across posts: exchanges, what the owner promised them, what they asked, COMMERCIAL SIGNALS (leads). One name for the full record + the drafter\'s profile; leadsOnly for the leads. Also the draft OUTCOMES (posted as-is / edited / rewritten).', obj({ platform: { type: 'string', description: 'default facebook' }, name: { type: 'string' }, leadsOnly: { type: 'boolean' } }), async ({ platform, name, leadsOnly }) => ctx.people ? ctx.people(platform, name, leadsOnly) : { error: 'not wired' }, { repeatable: true });
   R('gb_platforms', 'The platform registry: where a login exists (signedIn), which profile holds it, what may be done there.', obj({}), async () => ctx.platforms(), { repeatable: true });
+  }
 
   
+  if (includeRecon) {
   // ── security recon & red-team intelligence ──
   const getDiscovered = async (target) => {
     if (!target) return null;
@@ -488,6 +493,7 @@ function registerOperatorTools(reg, ctx) {
       return ctx.recon.executeSecurityScript(profile || 'default', script);
     });
 
+  }
   // ── Hands-on Interactive Browser & Workspace Tools for Adaptive Red-Team Agent ──
   R('gb_browser_navigate', 'DIRECT BROWSER NAVIGATION: navigates the browser to any target URL, loads full client-side SPA, and returns HTTP status, title, forms count, links count, and page text. Use this to steer the browser as your hands.',
     obj({ url: { type: 'string', description: 'URL to navigate to' }, profile: { type: 'string', description: 'browser profile, default "default"' } }, ['url']),
@@ -554,6 +560,7 @@ function registerOperatorTools(reg, ctx) {
       return ctx.recon.authLogin(profile || 'default', { targetUrl: targetUrl || url || target, username, password });
     }, { repeatable: true });
 
+  if (includeRecon) {
   R('gb_audit_bola', 'MULTI-SESSION AUTHORIZATION & BOLA / IDOR AUDIT (CWE-639 / OWASP API1:2023): tests cross-profile or dual-token access against sensitive resource endpoints to verify tenant boundary isolation.',
     obj({ targetUrl: { type: 'string', description: 'target resource URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profileA: { type: 'string', description: 'primary tenant browser profile (e.g. audit_tenant_a)' }, profileB: { type: 'string', description: 'secondary tenant browser profile (e.g. audit_tenant_b)' }, tokenA: { type: 'string', description: 'session/bearer token for Tenant A' }, tokenB: { type: 'string', description: 'session/bearer token for Tenant B' }, objectIds: { type: 'array', items: { type: 'string' }, description: 'resource IDs to probe' } }),
     async ({ targetUrl, url, target, profileA, profileB, tokenA, tokenB, objectIds }) => {
@@ -595,7 +602,11 @@ function registerOperatorTools(reg, ctx) {
       if (!ctx.recon || !ctx.recon.auditStorageHygiene) return { error: 'Storage hygiene auditor not wired in context' };
       return ctx.recon.auditStorageHygiene(profile || 'default', targetUrl || url || target);
     }, { repeatable: true });
+  }
 
+  if (!reg.has('gb_look')) {
+    R('gb_look', 'LOOK at a live profile\'s current page: its url, title, the numbered controls and text — what is on the screen right now.', obj({ profile: { type: 'string', description: 'default default' } }), async ({ profile }) => ctx.look ? ctx.look(profile || 'default') : { error: 'look not wired' }, { repeatable: true });
+  }
   return reg.names().length;
 }
 
