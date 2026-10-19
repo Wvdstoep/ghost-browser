@@ -427,8 +427,14 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
   R('gb_audit_auth_matrix', 'BUSINESS LOGIC & BROKEN ACCESS CONTROL (BOLA/IDOR) AUDIT (OWASP A01:2021 / CWE-285): tests whether backend API and administrative endpoints enforce server-side authorization or merely rely on UI button hiding. Strips session cookies and tokens to test unauthenticated access to privileged routes. Generates reproducible curl PoC and pull-request ready authorization middleware patches.',
     obj({ targetUrl: { type: 'string', description: 'base target URL' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'list of candidate endpoints or routes to test' } }),
     async ({ targetUrl, url, target, endpoints }) => {
-      if (!ctx.recon || !ctx.recon.auditAuthMatrix) return { error: 'auditAuthMatrix not wired in context' };
       return ctx.recon.auditAuthMatrix(targetUrl || url || target, { endpoints });
+    }, { repeatable: true });
+
+  R('gb_audit_business_logic', 'ENTERPRISE BUSINESS LOGIC, PRICING & FINANCIAL STATE TAMPERING AUDIT (OWASP A04:2021 / CWE-840 / CWE-472): probes shopping cart, checkout, subscription, and credit endpoints for critical business logic flaws that syntax scanners miss: negative quantity arithmetic underflow (CWE-1284), client-controlled price/amount parameter tampering (CWE-602), high-concurrency coupon/promo stacking race conditions (CWE-362), and zero-decimal currency confusion. Generates reproducible non-destructive curl PoCs and turnkey server-side canonical price recalculation patches.',
+    obj({ targetUrl: { type: 'string', description: 'base target URL or specific checkout/cart endpoint' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific checkout, cart, or credit endpoints to probe' } }),
+    async ({ targetUrl, url, target, endpoints }) => {
+      if (!ctx.recon || !ctx.recon.auditBusinessLogic) return { error: 'auditBusinessLogic not wired in context' };
+      return ctx.recon.auditBusinessLogic(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
   // ── 6 State-of-the-Art Reconnaissance & Deep-Dive Audit Tools ──

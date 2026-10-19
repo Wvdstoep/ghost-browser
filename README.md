@@ -173,17 +173,18 @@ Ghost Browser is designed to bridge the gap between simple vulnerability scanner
                /                    •                    \• HTTP Request Smuggling & Cache Poisoning
               /                     •                     \• Cross-Site WebSocket Hijacking (CSWSH)
              /                      •                      \• OAuth 2.0 PKCE & Redirect Boundary Auditing
-            /                       •                       \• Subdomain Takeover & Dangling Cloud Buckets
-           /                        •                        \• Non-Destructive 3-Pillar CVE Verification
-          /                         •                         \• Deep Inter-File AST Symbol Resolution
-         /                          •                          \• Photographic Visual Proof (gb_capture_proof)
-        /                           •                           \• SOC 2 / ISO 27001 Compliance Auto-Mapping
-~~~~~~~/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (Waterline)
+            /                       •                       \• Business Logic & Price Tampering (businessLogicAuditor)
+           /                        •                        \• Subdomain Takeover & Dangling Cloud Buckets
+          /                         •                         \• Non-Destructive 3-Pillar CVE Verification
+         /                          •                          \• Deep Inter-File AST Symbol Resolution
+        /                           •                           \• Photographic Visual Proof (gb_capture_proof)
+       /                            •                            \• SOC 2 / ISO 27001 Compliance Auto-Mapping
+~~~~~~/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (Waterline)
       /                                                           \
      /                 [WHAT'S BELOW THE SURFACE]                  \  ◄── THE NEXT-GEN FRONTIER
     /                                                               \     (CONTRIBUTIONS WELCOME!)
    /  [ ] 1. Stateful WebSocket Binary Frame Fuzzing (CWE-1385)       \
-  /   [ ] 2. Business Logic Pricing, Cart & Currency Race Tampering     \
+  /   [x] 2. Business Logic Pricing, Cart & Currency Race Tampering     \ (COMPLETED & VALIDATED!)
  /    [ ] 3. AI Agent Prompt Injection & Tool Jailbreaks (OWASP LLM01)   \
 /     [ ] 4. WebAuthn, FIDO2 & Passkey Attestation Bypass Probes          \
 \     [ ] 5. SAML 2.0 XML Signature Wrapping (XSW) & Entity Expansion     /
@@ -208,6 +209,7 @@ The top of the iceberg represents our core autonomous DAST and perimeter suite, 
 | **Client-Side SPA** | SPA route harvesting, dynamic `/api/*` extraction, React/Vue soft-404 detection | `semanticRouter.js`, `endpointHarvester.js` |
 | **XSS & DOM Taint** | Safe mathematical delimiter canaries (`__gbcanary_...`) with zero false positives | `canaryAuditor.js`, `domAuditor.js` |
 | **Access Control** | Unauthenticated mutation auditing, BOLA/IDOR permission boundary matrix | `authMatrixAuditor.js`, `dualSessionAuditor.js` |
+| **Business Logic** | Negative quantity underflow, client-controlled price tampering, coupon race stacking | `businessLogicAuditor.js` |
 | **Authentication** | JWT expiration, algorithm confusion (`none`), RSA $\to$ HMAC HS256 key downgrade | `jwtAuditor.js`, `jwtKeyConfusionAuditor.js` |
 | **OAuth & Identity** | OAuth 2.0 PKCE downgrade, open redirect URI boundaries, state tampering | `oauthPkceAuditor.js` |
 | **Server-Side Probes** | Statistical timing-differential SQLi, multi-step second-order stored injection | `sqliTimingAuditor.js`, `secondOrderAuditor.js` |

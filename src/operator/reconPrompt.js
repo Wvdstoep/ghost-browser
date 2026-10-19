@@ -186,6 +186,7 @@ When asked for a "full", "comprehensive", "complete", or "state-of-the-art" audi
    - Run gb_audit_canary_reflection against discovered parameters and forms to mathematically test for unencoded reflection and DOM sinks using safe canary tokens.
 4. BUSINESS LOGIC & ACCESS CONTROL MATRIX:
    - Run gb_audit_auth_matrix on discovered sensitive routes (/admin, /api/billing, /api/keys, /settings/team) to verify server-side authorization enforcement.
+   - Run gb_audit_business_logic on checkout, cart, subscription, and promo endpoints to probe for negative quantity underflows, client-side price tampering, and concurrent coupon race stacking.
    - When testing multi-tenant access, use gb_audit_bola or gb_audit_dual_tenant to verify tenant boundary isolation.
 5. CRYPTOGRAPHIC TOKENS & THROTTLING RESILIENCE:
    - Run gb_audit_token_hygiene on observed JWTs or bearer tokens to verify algorithm security (alg: "none" rejection) and expiration claims.
