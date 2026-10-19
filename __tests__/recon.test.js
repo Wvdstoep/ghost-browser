@@ -214,5 +214,62 @@ describe('Ghost Browser 6 State-of-the-Art Recon Modules', () => {
     expect(res.domain).toBe('127.0.0.1');
     expect(Array.isArray(res.findings)).toBe(true);
   });
+
+  it('auditBusinessLogic detects negative quantity and client-side price tampering', async () => {
+    const http = require('http');
+    const { auditBusinessLogic, generateBusinessLogicPatch } = require('../src/recon/businessLogicAuditor');
+
+    // Spin up an in-memory test server simulating a vulnerable vibe-coded checkout API
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          // Vulnerable logic: accepts negative quantities and client prices
+          if (data.quantity === -1 || (data.items && data.items.some(i => i.quantity === -1))) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: true, orderId: 1337, total: -10 }));
+          }
+          if (data.price === 0.01 || data.amount === 1) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: true, orderId: 1338, clientPriceAccepted: true, total: 0.01 }));
+          }
+        } catch (e) {}
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'invalid' }));
+      });
+    });
+
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    const testBaseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const result = await auditBusinessLogic(testBaseUrl, {
+        endpoints: ['/api/checkout']
+      });
+
+      expect(result).toBeDefined();
+      expect(result.clean).toBe(false);
+      expect(result.findings.length).toBeGreaterThanOrEqual(2);
+
+      const negFinding = result.findings.find(f => f.key === 'negative_quantity_underflow');
+      expect(negFinding).toBeDefined();
+      expect(negFinding.severity).toBe('CRITICAL');
+      expect(negFinding.cwe).toContain('CWE-840');
+      expect(negFinding.pocCurl).toContain('-1');
+
+      const priceFinding = result.findings.find(f => f.key === 'client_price_tampering');
+      expect(priceFinding).toBeDefined();
+      expect(priceFinding.severity).toBe('CRITICAL');
+      expect(priceFinding.cwe).toContain('CWE-472');
+
+      const patch = generateBusinessLogicPatch('negative_quantity_underflow');
+      expect(patch).toContain('validateOrderQuantities');
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
 });
 

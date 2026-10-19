@@ -43,6 +43,7 @@ const cswshAuditor = require('./cswshAuditor');
 const dependencyConfusionAuditor = require('./dependencyConfusionAuditor');
 const webCacheAuditor = require('./webCacheAuditor');
 const oauthPkceAuditor = require('./oauthPkceAuditor');
+const businessLogicAuditor = require('./businessLogicAuditor');
 
 
 // Multi-Layer AppSec Pipelines
@@ -98,6 +99,7 @@ module.exports = {
   ...dependencyConfusionAuditor,
   ...webCacheAuditor,
   ...oauthPkceAuditor,
+  ...businessLogicAuditor,
   ...bolaLifecyclePipeline,
   ...reachabilityProofPipeline,
   ...blindDetectionPipeline,
