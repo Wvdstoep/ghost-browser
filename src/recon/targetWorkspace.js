@@ -20,7 +20,9 @@ const { calculateGrade } = require('./advisory');
 
 const DATA_DIR = process.env.DATA_DIR 
   ? path.join(process.env.DATA_DIR, 'targets') 
-  : path.join(__dirname, '..', '..', 'data', 'targets');
+  : fs.existsSync('/profiles')
+    ? '/profiles/targets'
+    : path.join(__dirname, '..', '..', 'data', 'targets');
 
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -148,14 +150,32 @@ function ingestAuditData(targetUrl, auditResult = {}) {
     }
   }
 
-  // 3. Merge Services & Banners
-  if (Array.isArray(auditResult.banners) || Array.isArray(auditResult.services) || Array.isArray(auditResult.ports)) {
-    const svcs = auditResult.banners || auditResult.services || auditResult.ports;
+  // 1b. Merge DNS Hygiene & Apex IP
+  if (auditResult.dns || auditResult.dnsRecords) {
+    const dnsObj = auditResult.dns || {};
+    ws.perimeter = {
+      ...ws.perimeter,
+      apexIp: dnsObj.a || dnsObj.ip || (Array.isArray(auditResult.dnsRecords) && auditResult.dnsRecords.find(r => r.type === 'A')?.value) || ws.perimeter.apexIp,
+      mx: dnsObj.mx || ws.perimeter.mx,
+      dnsHygiene: {
+        ...(ws.perimeter.dnsHygiene || {}),
+        spf: dnsObj.spf || ws.perimeter.dnsHygiene?.spf,
+        dmarc: dnsObj.dmarc || ws.perimeter.dnsHygiene?.dmarc,
+        caa: dnsObj.caa || ws.perimeter.dnsHygiene?.caa
+      }
+    };
+  }
+
+  // 3. Merge Services, Banners & Open Ports
+  const portList = auditResult.banners || auditResult.services || auditResult.ports || auditResult.openPorts || (auditResult.network && auditResult.network.openPorts);
+  if (Array.isArray(portList)) {
     const existingPorts = new Set(ws.services.map(s => s.port));
-    for (const svc of svcs) {
-      if (svc.port && !existingPorts.has(svc.port)) {
-        existingPorts.add(svc.port);
-        ws.services.push(svc);
+    for (const svc of portList) {
+      const portNum = typeof svc === 'number' ? svc : (svc && svc.port);
+      if (portNum && !existingPorts.has(portNum)) {
+        existingPorts.add(portNum);
+        const defaultSvc = portNum === 443 ? 'https' : portNum === 80 ? 'http' : portNum === 25 ? 'smtp' : portNum === 22 ? 'ssh' : portNum === 3306 ? 'mysql' : 'tcp';
+        ws.services.push(typeof svc === 'number' ? { port: portNum, service: defaultSvc, banner: null } : svc);
       }
     }
   }

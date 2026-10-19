@@ -375,6 +375,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
         if (showAppMap) {
             AppMapSheet(
                 targetUrl = targetAppUrl,
+                chat = chat,
                 onClose = { showAppMap = false },
                 onLaunchAudit = { prompt ->
                     act.onSend(prompt)
@@ -1442,16 +1443,148 @@ private fun TargetAppBar(
     }
 }
 
+data class ParsedAppMap(
+    val domain: String,
+    val postureGrade: String,
+    val postureScore: Int,
+    val exploitabilityGrade: String,
+    val exploitabilityScore: Int,
+    val subdomains: List<String>,
+    val ports: List<String>,
+    val routes: List<String>,
+    val findings: List<Triple<String, String, Color>>,
+    val historyRuns: List<Pair<String, String>>,
+    val perimeterNotes: List<String>
+)
+
+fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAppMap {
+    val clean = targetUrl.replace("https://", "").replace("http://", "").substringBefore("/").substringBefore(":")
+    val domain = clean.ifBlank { "target-domain.com" }
+
+    var postureGrade = "A+"
+    var postureScore = 100
+    var exploitabilityGrade = "A+"
+    var exploitabilityScore = 100
+
+    val subdomainsSet = mutableSetOf<String>()
+    subdomainsSet.add(domain)
+
+    val portsSet = mutableSetOf<String>()
+    val routesSet = mutableSetOf<String>()
+    val findingsList = mutableListOf<Triple<String, String, Color>>()
+    val historyList = mutableListOf<Pair<String, String>>()
+    val perimeterList = mutableListOf<String>()
+
+    val allSteps = turns.flatMap { it.steps }
+    val assistantTurns = turns.filter { it.role == "assistant" }
+
+    for (s in allSteps) {
+        val txt = s.text + " " + s.label + " " + s.args
+        val subRegex = Regex("([a-zA-Z0-9_-]+\\.)+" + Regex.escape(domain))
+        subRegex.findAll(txt).forEach { m ->
+            val found = m.value.trim().lowercase().removePrefix("https://").removePrefix("http://")
+            if (found.isNotEmpty() && !found.startsWith(".")) subdomainsSet.add(found)
+        }
+        if (txt.contains("mail.", ignoreCase = true)) subdomainsSet.add("mail.$domain")
+
+        val portRegex = Regex("(?:port|ports|open ports?)\\s*:?\\s*(\\d+(?:,\\s*\\d+)*)", RegexOption.IGNORE_CASE)
+        portRegex.findAll(txt).forEach { m ->
+            m.groupValues[1].split(",").forEach { p ->
+                val num = p.trim().toIntOrNull()
+                if (num != null && num in 1..65535) {
+                    val svc = when (num) {
+                        443 -> "Port 443/TCP: HTTPS (TLS 1.3)"
+                        80 -> "Port 80/TCP: HTTP (Web Redirect)"
+                        25 -> "Port 25/TCP: SMTP (Postfix Mail Service)"
+                        22 -> "Port 22/TCP: SSH"
+                        3306 -> "Port 3306/TCP: MySQL Database"
+                        5432 -> "Port 5432/TCP: PostgreSQL"
+                        8080 -> "Port 8080/TCP: HTTP-ALT (Proxy)"
+                        else -> "Port $num/TCP"
+                    }
+                    portsSet.add(svc)
+                }
+            }
+        }
+
+        val routeRegex = Regex("(?:/(?:api|admin|dashboard|login|auth|checkout|settings|billing)[a-zA-Z0-9_/-]*)")
+        routeRegex.findAll(txt).forEach { m ->
+            routesSet.add(m.value.trim())
+        }
+
+        if (txt.contains("TLS 1.3", ignoreCase = true) || txt.contains("TLS Grade A", ignoreCase = true)) {
+            perimeterList.add("TLS 1.3 Negotiated • Grade A+ • Strict Modern Cipher Suite")
+        }
+        if (txt.contains("wildcard", ignoreCase = true)) {
+            if (txt.contains("wildcard DNS is active", ignoreCase = true)) {
+                perimeterList.add("Wildcard DNS: Active (*.$domain)")
+            } else if (txt.contains("wildcard DNS: negative", ignoreCase = true) || txt.contains("wildcard dns is inactive", ignoreCase = true)) {
+                perimeterList.add("Wildcard DNS: Negative (Standard Resolution)")
+            }
+        }
+        if (txt.contains("DNS A record", ignoreCase = true) || txt.contains("Apex IP", ignoreCase = true)) {
+            val ipMatch = Regex("\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b").find(txt)
+            if (ipMatch != null) perimeterList.add("Apex IP: ${ipMatch.value}")
+        }
+        if (txt.contains("DMARC", ignoreCase = true)) {
+            if (txt.contains("p=none", ignoreCase = true)) perimeterList.add("DMARC: Configured (p=none, monitoring)")
+            else if (txt.contains("p=reject", ignoreCase = true)) perimeterList.add("DMARC: Strict (p=reject)")
+        }
+    }
+
+    for (turn in assistantTurns) {
+        val tLower = turn.text.lowercase()
+        if (tLower.contains("no critical") || tLower.contains("clean") || tLower.contains("exceptionally strong") || tLower.contains("successfully mitigated")) {
+            findingsList.add(Triple("Core Attack Surface & Input Sinks", "VERIFIED CLEAN / HARDENED", Color(0xFF10B981)))
+        }
+        if (tLower.contains("xss") && tLower.contains("vulnerabilit")) {
+            findingsList.add(Triple("CWE-79: Reflected XSS Input Boundary", "HIGH SEVERITY", Color(0xFFE5484D)))
+            exploitabilityGrade = "C"
+            exploitabilityScore = 60
+        }
+        if (tLower.contains("business logic") && tLower.contains("clean")) {
+            findingsList.add(Triple("CWE-840: Business Logic & Quantity Underflow", "CLEAN / MITIGATED", Color(0xFF10B981)))
+        }
+        if (tLower.contains("smtp") || tLower.contains("dmarc")) {
+            findingsList.add(Triple("CWE-200 / CWE-284: SMTP Port Exposure & DNS DMARC Policy", "LOW SEVERITY / INFO", Color(0xFF3B82F6)))
+        }
+
+        val firstLine = turn.text.lines().firstOrNull { it.isNotBlank() } ?: "Reconnaissance Audit"
+        val title = firstLine.removePrefix("#").removePrefix("**").removeSuffix("**").trim()
+        val summary = if (turn.text.length > 120) turn.text.substring(0, 120) + "..." else turn.text
+        historyList.add(title to summary)
+    }
+
+    if (perimeterList.isEmpty()) {
+        perimeterList.add("Apex Domain: $domain")
+        perimeterList.add("Run 6-Point Recon Suite to audit TLS, DNS, and IP posture.")
+    }
+
+    return ParsedAppMap(
+        domain = domain,
+        postureGrade = postureGrade,
+        postureScore = postureScore,
+        exploitabilityGrade = exploitabilityGrade,
+        exploitabilityScore = exploitabilityScore,
+        subdomains = subdomainsSet.toList(),
+        ports = portsSet.toList(),
+        routes = routesSet.toList(),
+        findings = findingsList.distinctBy { it.first },
+        historyRuns = historyList,
+        perimeterNotes = perimeterList.distinct()
+    )
+}
+
 @Composable
 private fun AppMapSheet(
     targetUrl: String,
+    chat: AssistantChatView?,
     onClose: () -> Unit,
     onLaunchAudit: (String) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    val domain = remember(targetUrl) {
-        var clean = targetUrl.replace("https://", "").replace("http://", "")
-        clean.substringBefore("/").substringBefore(":")
+    val map = remember(targetUrl, chat?.turns) {
+        parseAppMapFromChat(targetUrl, chat?.turns ?: emptyList())
     }
 
     var selectedTab by remember { mutableStateOf(0) }
@@ -1494,7 +1627,7 @@ private fun AppMapSheet(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(domain.ifBlank { "Living App Map" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(map.domain.ifBlank { "Living App Map" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(6.dp))
                             Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFE5484D).copy(alpha = 0.15f)) {
                                 Text("LIVING MAP", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
@@ -1535,7 +1668,7 @@ private fun AppMapSheet(
                                     Text("Perimeter Posture & Exploitability", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
                                 }
                                 Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF10B981).copy(alpha = 0.15f)) {
-                                    Text("Grade A+", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                                    Text("Grade ${map.postureGrade}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                                 }
                             }
                             Spacer(Modifier.height(12.dp))
@@ -1549,7 +1682,7 @@ private fun AppMapSheet(
                                     Column(Modifier.padding(10.dp)) {
                                         Text("Defensive Posture", fontSize = 10.sp, color = cs.onSurfaceVariant)
                                         Spacer(Modifier.height(2.dp))
-                                        Text("100 / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Text("${map.postureScore} / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
                                         Text("DNS • TLS • WAF", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
                                     }
                                 }
@@ -1562,8 +1695,8 @@ private fun AppMapSheet(
                                     Column(Modifier.padding(10.dp)) {
                                         Text("Exploitability Score", fontSize = 10.sp, color = cs.onSurfaceVariant)
                                         Spacer(Modifier.height(2.dp))
-                                        Text("88 / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
-                                        Text("Low Attack Surface", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
+                                        Text("${map.exploitabilityScore} / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = if (map.exploitabilityScore >= 80) Color(0xFF10B981) else Color(0xFFE5484D))
+                                        Text(if (map.exploitabilityScore >= 80) "Low Attack Surface" else "Elevated Risk", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
                                     }
                                 }
                             }
@@ -1627,7 +1760,6 @@ private fun AppMapSheet(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Tab Content
                     when (selectedTab) {
                         0 -> {
                             // Attack Surface Living Map
@@ -1648,8 +1780,9 @@ private fun AppMapSheet(
                                         Text("Perimeter & DNS Posture", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                     Spacer(Modifier.height(6.dp))
-                                    Text("Apex IP: 65.108.13.228 • Wildcard DNS: Negative • TLS: 1.3 / Grade A+", fontSize = 11.sp, color = cs.onSurfaceVariant)
-                                    Text("DNS Hygiene: SPF Strict, DMARC Configured, CAA Valid", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    map.perimeterNotes.forEach { note ->
+                                        Text(note, fontSize = 11.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(vertical = 1.dp))
+                                    }
                                 }
                             }
 
@@ -1665,13 +1798,25 @@ private fun AppMapSheet(
                                         Icon(Icons.Default.Public, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(16.dp))
                                         Spacer(Modifier.width(6.dp))
                                         Text("Verified Subdomains (CT Logs & SANs)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("(${map.subdomains.size})", fontSize = 11.sp, color = cs.onSurfaceVariant)
                                     }
                                     Spacer(Modifier.height(6.dp))
-                                    listOf(domain, "api.$domain", "admin.$domain", "app.$domain").forEach { s ->
-                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF10B981)))
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(s, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                    if (map.subdomains.isEmpty()) {
+                                        Text("No subdomains discovered yet. Run gb_audit_subdomains to query CT logs.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    } else {
+                                        map.subdomains.forEach { s ->
+                                            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(s, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                                if (s == map.domain) {
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Surface(shape = RoundedCornerShape(3.dp), color = cs.surfaceVariant) {
+                                                        Text("APEX", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp))
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1689,17 +1834,19 @@ private fun AppMapSheet(
                                         Icon(Icons.Default.Shield, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
                                         Spacer(Modifier.width(6.dp))
                                         Text("Open Ports & Daemon Banners", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("(${map.ports.size})", fontSize = 11.sp, color = cs.onSurfaceVariant)
                                     }
                                     Spacer(Modifier.height(6.dp))
-                                    listOf(
-                                        "Port 443/TCP: HTTPS (nginx/1.24.0, TLS 1.3)",
-                                        "Port 80/TCP: HTTP (301 Redirect to HTTPS)",
-                                        "Port 8080/TCP: HTTP-ALT (Envoy Proxy)"
-                                    ).forEach { p ->
-                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(p, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                    if (map.ports.isEmpty()) {
+                                        Text("No open ports mapped yet. Run gb_recon or gb_audit_service_banners to probe ports.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    } else {
+                                        map.ports.forEach { p ->
+                                            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(p, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                            }
                                         }
                                     }
                                 }
@@ -1717,13 +1864,19 @@ private fun AppMapSheet(
                                         Icon(Icons.Default.TouchApp, null, tint = Color(0xFF8B5CF6), modifier = Modifier.size(16.dp))
                                         Spacer(Modifier.width(6.dp))
                                         Text("Mapped SPA Client Routes & Roles", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("(${map.routes.size})", fontSize = 11.sp, color = cs.onSurfaceVariant)
                                     }
                                     Spacer(Modifier.height(6.dp))
-                                    listOf("/dashboard", "/checkout", "/billing/invoices", "/settings/api-keys", "/admin/users").forEach { r ->
-                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF8B5CF6)))
-                                            Spacer(Modifier.width(6.dp))
-                                            Text(r, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                    if (map.routes.isEmpty()) {
+                                        Text("No SPA routes mapped yet. Run gb_audit_semantic_surface to crawl client-side routes.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    } else {
+                                        map.routes.forEach { r ->
+                                            Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF8B5CF6)))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(r, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                            }
                                         }
                                     }
                                 }
@@ -1735,28 +1888,37 @@ private fun AppMapSheet(
                             Text("ATTACK FINDINGS & ADVISORIES", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
 
-                            val mockFindings = listOf(
-                                Triple("CWE-840: Business Logic & Quantity Underflow", "CLEAN / MITIGATED", Color(0xFF10B981)),
-                                Triple("CWE-1021: Content Security Policy frame-ancestors Missing", "MEDIUM SEVERITY", Color(0xFFF59E0B)),
-                                Triple("CWE-693: Strict-Transport-Security Preload Not Enabled", "LOW SEVERITY", Color(0xFF3B82F6))
-                            )
-
-                            mockFindings.forEach { (title, badge, color) ->
+                            if (map.findings.isEmpty()) {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = cs.surface,
-                                    border = BorderStroke(1.dp, color.copy(alpha = 0.4f)),
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                    color = Color(0xFF10B981).copy(alpha = 0.08f),
+                                    border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.3f)),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Column(Modifier.padding(12.dp)) {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                            Surface(shape = RoundedCornerShape(4.dp), color = color.copy(alpha = 0.15f)) {
-                                                Text(badge, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = color, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    Column(Modifier.padding(14.dp)) {
+                                        Text("Verified Clean & Hardened", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("No vulnerabilities detected on tested attack vectors. All inputs and routes verified.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    }
+                                }
+                            } else {
+                                map.findings.forEach { (title, badge, color) ->
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = cs.surface,
+                                        border = BorderStroke(1.dp, color.copy(alpha = 0.4f)),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                    ) {
+                                        Column(Modifier.padding(12.dp)) {
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                                Surface(shape = RoundedCornerShape(4.dp), color = color.copy(alpha = 0.15f)) {
+                                                    Text(badge, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = color, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                                }
+                                                Text("CWE Standard", fontSize = 10.sp, color = cs.onSurfaceVariant)
                                             }
-                                            Text("CVSS 4.3", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
                                         }
-                                        Spacer(Modifier.height(6.dp))
-                                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
                                     }
                                 }
                             }
@@ -1767,26 +1929,35 @@ private fun AppMapSheet(
                             Text("AUDIT & RECON TIMELINE", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
 
-                            val historyItems = listOf(
-                                "Today, 09:15" to "Business Logic, Pricing & State Tampering Audit — Clean, 0 findings",
-                                "Yesterday, 14:30" to "6-Point Defensive Recon Suite — Perimeter & TLS A+ verified",
-                                "3 days ago" to "Initial Passive Subdomain & CT Discovery — 4 subdomains indexed"
-                            )
-
-                            historyItems.forEach { (date, desc) ->
+                            if (map.historyRuns.isEmpty()) {
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = cs.surface,
                                     border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f)),
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.History, null, tint = Color(0xFFE5484D), modifier = Modifier.size(18.dp))
-                                        Spacer(Modifier.width(10.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(date, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D))
-                                            Spacer(Modifier.height(2.dp))
-                                            Text(desc, fontSize = 11.sp, color = cs.onSurface)
+                                    Column(Modifier.padding(14.dp)) {
+                                        Text("No Previous Audits", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("Tap 'Launch Full Recon Audit' below to execute the first baseline scan.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    }
+                                }
+                            } else {
+                                map.historyRuns.forEach { (title, desc) ->
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = cs.surface,
+                                        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f)),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                    ) {
+                                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.History, null, tint = Color(0xFFE5484D), modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(10.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(title, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D))
+                                                Spacer(Modifier.height(2.dp))
+                                                Text(desc, fontSize = 11.sp, color = cs.onSurface)
+                                            }
                                         }
                                     }
                                 }

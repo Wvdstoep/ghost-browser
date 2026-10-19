@@ -413,28 +413,40 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
   R('gb_audit_canary_reflection', 'ENTERPRISE ZERO-FALSE-POSITIVE BENIGN CANARY REFLECTION & DOM TAINT AUDIT: probes target URL query parameters and discovered DOM forms with harmless boundary delimiter tokens (__gbcanary_xxxx\'"><gbtest>) to mathematically prove whether input is reflected unencoded (CWE-79) or safely entity-escaped. Also checks Playwright DOM sink traces (innerHTML, outerHTML, document.write) for active taint. Returns reproducible curl PoC, exact response snippet, and ready-to-merge remediation patch.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
     async ({ targetUrl, url, target, profile }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditCanaryReflections) return { error: 'auditCanaryReflections not wired in context' };
-      return ctx.recon.auditCanaryReflections(profile || 'default', targetUrl || url || target);
+      const res = await ctx.recon.auditCanaryReflections(profile || 'default', tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_semantic_surface', 'IN-BROWSER SEMANTIC ROUTE & ROLE SURFACE AUDIT: inspects client-side SPA runtime (Next.js, Remix, Vue Router, Nuxt) and DOM elements to extract application routes, privileged role-gated buttons/forms (Admin, Billing, Delete, Team, API Keys), and internal API endpoints that traditional crawlers miss.',
     obj({ targetUrl: { type: 'string', description: 'target domain or endpoint URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile (default "default")' } }),
     async ({ targetUrl, url, target, profile }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditSemanticSurface) return { error: 'auditSemanticSurface not wired in context' };
-      return ctx.recon.auditSemanticSurface(profile || 'default', targetUrl || url || target);
+      const res = await ctx.recon.auditSemanticSurface(profile || 'default', tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_auth_matrix', 'BUSINESS LOGIC & BROKEN ACCESS CONTROL (BOLA/IDOR) AUDIT (OWASP A01:2021 / CWE-285): tests whether backend API and administrative endpoints enforce server-side authorization or merely rely on UI button hiding. Strips session cookies and tokens to test unauthenticated access to privileged routes. Generates reproducible curl PoC and pull-request ready authorization middleware patches.',
     obj({ targetUrl: { type: 'string', description: 'base target URL' }, url: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'list of candidate endpoints or routes to test' } }),
     async ({ targetUrl, url, target, endpoints }) => {
-      return ctx.recon.auditAuthMatrix(targetUrl || url || target, { endpoints });
+      const tgt = targetUrl || url || target;
+      const res = await ctx.recon.auditAuthMatrix(tgt, { endpoints });
+      if (ctx.recon && ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_business_logic', 'ENTERPRISE BUSINESS LOGIC, PRICING & FINANCIAL STATE TAMPERING AUDIT (OWASP A04:2021 / CWE-840 / CWE-472): probes shopping cart, checkout, subscription, and credit endpoints for critical business logic flaws that syntax scanners miss: negative quantity arithmetic underflow (CWE-1284), client-controlled price/amount parameter tampering (CWE-602), high-concurrency coupon/promo stacking race conditions (CWE-362), and zero-decimal currency confusion. Generates reproducible non-destructive curl PoCs and turnkey server-side canonical price recalculation patches.',
     obj({ targetUrl: { type: 'string', description: 'base target URL or specific checkout/cart endpoint' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific checkout, cart, or credit endpoints to probe' } }),
     async ({ targetUrl, url, target, endpoints }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditBusinessLogic) return { error: 'auditBusinessLogic not wired in context' };
-      return ctx.recon.auditBusinessLogic(targetUrl || url || target, { endpoints });
+      const res = await ctx.recon.auditBusinessLogic(tgt, { endpoints });
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_workspace_app_map', 'LIVING APP MAP & CONTINUOUS TARGET WORKSPACE: retrieves, persists, or enriches the persistent living attack surface map and asset dossier for the target application (subdomains, routes, APIs, open ports, dual scorecards, historical audit timeline).',
@@ -450,29 +462,41 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
   R('gb_audit_subdomains', 'PASSIVE SUBDOMAIN & CERTIFICATE TRANSPARENCY ENUMERATION (CWE-200 / CWE-284): queries crt.sh Certificate Transparency logs, extracts live TLS Subject Alternative Names (SANs), actively resolves DNS A/AAAA records for discovered subdomains, and detects wildcard DNS configurations.',
     obj({ domain: { type: 'string', description: 'domain or URL to discover subdomains for, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for domain' }, url: { type: 'string', description: 'alias for domain' } }),
     async ({ domain, target, url }) => {
+      const tgt = domain || target || url;
       if (!ctx.recon || !ctx.recon.auditPassiveSubdomains) return { error: 'auditPassiveSubdomains not wired in context' };
-      return ctx.recon.auditPassiveSubdomains(domain || target || url);
+      const res = await ctx.recon.auditPassiveSubdomains(tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_tech_stack', 'CMS & TECHNOLOGY STACK DEEP FINGERPRINTING (CWE-200 / CWE-307): identifies CMS (WordPress, Drupal, Joomla, Shopify) and web frameworks (Next.js, Laravel, LiteSpeed, Nginx, Apache), and probes WordPress REST API user enumeration (/wp-json/wp/v2/users), XML-RPC pingback/bruteforce (/xmlrpc.php), and admin login.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to fingerprint' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url, target }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditTechStack) return { error: 'auditTechStack not wired in context' };
-      return ctx.recon.auditTechStack(targetUrl || url || target);
+      const res = await ctx.recon.auditTechStack(tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_sensitive_paths', 'SENSITIVE PATH, CONFIG LEAK & RFC 9116 SECURITY.TXT AUDIT (CWE-200 / CWE-538): non-destructively probes for RFC 9116 security.txt, robots.txt, sitemap.xml, exposed .git/HEAD, leaked .env files, and phpinfo.php configuration disclosures with strict false-positive validation against custom SPA 404 pages.',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, target: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url, target }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditSensitivePaths) return { error: 'auditSensitivePaths not wired in context' };
-      return ctx.recon.auditSensitivePaths(targetUrl || url || target);
+      const res = await ctx.recon.auditSensitivePaths(tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_service_banners', 'SERVICE VERSION BANNER GRABBING & OFFICIAL CVE CORRELATION (CWE-200 / CWE-306): connects directly to open ports (FTP 21 SYST, SSH 22, DirectAdmin 2222, MySQL/MariaDB 3306 handshake) to extract exact service daemon versions and correlates them against official NVD/MITRE CVE registries.',
     obj({ host: { type: 'string', description: 'target hostname or IP, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for host' }, openPorts: { type: 'array', description: 'optional list of open ports discovered by gb_recon' } }),
     async ({ host, target, openPorts }) => {
+      const tgt = host || target;
       if (!ctx.recon || !ctx.recon.auditServiceBanners) return { error: 'auditServiceBanners not wired in context' };
-      return ctx.recon.auditServiceBanners(host || target, openPorts);
+      const res = await ctx.recon.auditServiceBanners(tgt, openPorts);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, { services: res.banners || res.services || [] });
+      return res;
     }, { repeatable: true });
 
   R('gb_capture_proof', 'AUTOMATED VISUAL PROOF FOR EXPOSED PORTALS & SERVICES (CWE-284): navigates headless browser to exposed administrative web services (DirectAdmin on port 2222, /wp-login.php, cPanel on port 2083) and captures irrefutable photographic screenshot proof embedded directly into the security deliverable.',
@@ -485,15 +509,21 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
   R('gb_audit_tls_health', 'TLS/SSL CIPHER & PROTOCOL HEALTH DEEP-DIVE (CWE-326 / PCI-DSS v4.0): performs multi-protocol TLS handshakes testing for deprecated TLS 1.0 and TLS 1.1, validates cipher suites and Perfect Forward Secrecy (PFS), inspects certificate expiration and SANs, and assigns a TLS Health Grade (A+ to F).',
     obj({ host: { type: 'string', description: 'target hostname or domain, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for host' }, port: { type: 'number', description: 'port to audit (default 443)' } }),
     async ({ host, target, port }) => {
+      const tgt = host || target;
       if (!ctx.recon || !ctx.recon.auditTlsHealth) return { error: 'auditTlsHealth not wired in context' };
-      return ctx.recon.auditTlsHealth(host || target, port || 443);
+      const res = await ctx.recon.auditTlsHealth(tgt, port || 443);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, { perimeter: { tlsGrade: res.grade, tlsProtocol: res.negotiatedProtocol, tlsCipher: res.cipher } });
+      return res;
     }, { repeatable: true });
 
   R('gb_audit_http_headers', 'ENTERPRISE BURP SUITE-STYLE DIFFERENTIAL HTTP HEADER & VERB AUDIT: probes target endpoints with verb tampering (OPTIONS, HEAD, TRACE, PUT, DELETE, PATCH), Host Header injection / reverse proxy cache poisoning (X-Forwarded-Host), internal IP trust spoofing (X-Forwarded-For: 127.0.0.1), CORS differential origin matrix (null, arbitrary attacker, subdomain reflection with credentials), Cache-Control PII leakage, and modern enterprise defense header compliance (HSTS, CSP, XFO, XCTO, Permissions-Policy, COOP). Returns structured CWE vulnerabilities, proof-of-concept curl commands, and 4-pillar hardening directives.',
     obj({ targetUrl: { type: 'string', description: 'target endpoint or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
     async ({ targetUrl, url, target }) => {
+      const tgt = targetUrl || url || target;
       if (!ctx.recon || !ctx.recon.auditHttpHeaders) return { error: 'auditHttpHeaders not wired in context' };
-      return ctx.recon.auditHttpHeaders(targetUrl || url || target);
+      const res = await ctx.recon.auditHttpHeaders(tgt);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(tgt, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_recon', 'FULL SECURITY RECON & ATTACK SURFACE AUDIT of any website, domain, or URL: evaluates HTTP security headers (CSP, HSTS, XFO, XCTO, Referrer-Policy, Cookies), DNS posture (SPF, DMARC, DKIM, CAA, MX, CNAME takeover risk), perimeter port exposure (80, 443, 22, 25, 3306, 5432, 6379), WAF fingerprinting, overall security score & grade (A-F), and actionable 4-pillar remediations (Traefik, Nginx, Express, DNS). Always call this when asked for "recon", "audit", "security scan", "vulnerabilities", or "check attack surface".',
@@ -502,6 +532,7 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
       if (!ctx.recon || !ctx.recon.auditTarget) return { error: 'recon engine not wired in context' };
       const raw = await ctx.recon.auditTarget(target);
       if (!raw || typeof raw !== 'object') return raw;
+      if (ctx.recon && ctx.recon.ingestAuditData) ctx.recon.ingestAuditData(target, raw);
       return {
         target: raw.target,
         url: raw.url,
