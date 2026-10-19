@@ -140,6 +140,121 @@ Ghost Browser includes a fully autonomous, production-grade security auditing an
   - **Application Logic & Exploitability**: Evaluates verified vulnerabilities (BOLA/IDOR, SQLi, SSRF, RCE, broken auth). When no active exploits succeed, targets achieve a **100/100 Grade A+ (Clean)** rating.
 - **Turnkey Remediation**: Every single advisory automatically generates an exact, non-destructive `curl` reproduction command and a ready-to-merge configuration or middleware code patch.
 
+---
+
+## 🏔️ The AppSec & Red Team Iceberg
+
+Ghost Browser is designed to bridge the gap between simple vulnerability scanners and elite red team operations. Below is our security architecture iceberg — displaying what is already fully implemented, battle-tested, and validated, alongside the open-source frontier we are actively building with the community.
+
+```
+                      THE APPSEC & RED TEAM ICEBERG
+                      
+                                    ▲
+                                   / \
+                                  /   \    [WHAT WE HAVE IMPLEMENTED & VALIDATED]
+                                 /     \
+                                /   •   \  • Autonomous Perimeter, DNS & Wildcard Isolation (gb_recon)
+                               /    •    \ • Subdomain Discovery via CT Logs & TLS SANs (crt.sh)
+                              /     •     \• Burp-Style HTTP Verb, CORS & Header Tampering
+                             /      •      \• Semantic SPA Route & Dynamic API Discovery
+                            /       •       \• Zero-False-Positive Canary DOM Taint & XSS Proof
+                           /        •        \• Unauthenticated Mutation & BOLA/IDOR Matrix (authMatrix)
+                          /         •         \• Dual-Session Cross-Tenant Privilege Escalation
+                         /          •          \• JWT Hygiene, Exp Claims & Algorithm Confusion
+                        /           •           \• JWT Key Confusion (RSA to HMAC HS256 Downgrade)
+                       /            •            \• RFC 6585 Throttling, Concurrency & TOCTOU Race Testing
+                      /             •             \• GraphQL Introspection, Depth & Batching DoS Probes
+                     /              •              \• OAST Ephemeral Canary Blind SSRF & Callbacks
+                    /               •               \• Cloud Metadata SSRF & Token Traversal (IMDSv2/K8s)
+                   /                •                \• Statistical Timing-Differential SQLi (sqliTiming)
+                  /                 •                 \• Multi-Step Second-Order Stored Injection
+                 /                  •                  \• Polyglot Server-Side Template Injection (SSTI)
+                /                   •                   \• Client-Side Prototype Pollution & Gadgets
+               /                    •                    \• HTTP Request Smuggling & Cache Poisoning
+              /                     •                     \• Cross-Site WebSocket Hijacking (CSWSH)
+             /                      •                      \• OAuth 2.0 PKCE & Redirect Boundary Auditing
+            /                       •                       \• Subdomain Takeover & Dangling Cloud Buckets
+           /                        •                        \• Non-Destructive 3-Pillar CVE Verification
+          /                         •                         \• Deep Inter-File AST Symbol Resolution
+         /                          •                          \• Photographic Visual Proof (gb_capture_proof)
+        /                           •                           \• SOC 2 / ISO 27001 Compliance Auto-Mapping
+~~~~~~~/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ (Waterline)
+      /                                                           \
+     /                 [WHAT'S BELOW THE SURFACE]                  \  ◄── THE NEXT-GEN FRONTIER
+    /                                                               \     (CONTRIBUTIONS WELCOME!)
+   /  [ ] 1. Stateful WebSocket Binary Frame Fuzzing (CWE-1385)       \
+  /   [ ] 2. Business Logic Pricing, Cart & Currency Race Tampering     \
+ /    [ ] 3. AI Agent Prompt Injection & Tool Jailbreaks (OWASP LLM01)   \
+/     [ ] 4. WebAuthn, FIDO2 & Passkey Attestation Bypass Probes          \
+\     [ ] 5. SAML 2.0 XML Signature Wrapping (XSW) & Entity Expansion     /
+ \    [ ] 6. eBPF-Powered Kernel-Level Network & Memory Taint Tracing     /
+  \   [ ] 7. Mobile App Deep Link & Intent Scheme Injection Fuzzing      /
+   \  [ ] 8. Dynamic Multi-Step WAF Bypass & Obfuscation Mutation        /
+    \ [ ] 9. GraphQL WebSocket Subscription Injection & Stream DoS       /
+     \[ ] 10. HTTP/2 & gRPC Multiplexing Desync & Stream Reset Flooding /
+      \________________________________________________________________/
+```
+
+### 🚢 Above the Surface: Validated & Live in Ghost Browser
+
+The top of the iceberg represents our core autonomous DAST and perimeter suite, running with zero dependencies and production-safe guards:
+
+| Category | Validated Capability | Core Engine / Module |
+|---|---|---|
+| **Perimeter & DNS** | Wildcard DNS isolation, SPF/DMARC/CAA hygiene, CT-log subdomain harvesting | `perimeter.js`, `subdomainDiscovery.js` |
+| **Transport & SSL** | TLS cipher suites, SNI routing, SAN discovery, expiration tracking | `tlsAuditor.js` |
+| **HTTP Hardening** | Verb tampering (TRACE/OPTIONS), CORS misconfig, Host/X-Forwarded poisoning | `headersAuditor.js` |
+| **Service Discovery** | Non-destructive TCP banner grabbing (SSH, MySQL, Redis, DirectAdmin) | `bannerGrabber.js` |
+| **Client-Side SPA** | SPA route harvesting, dynamic `/api/*` extraction, React/Vue soft-404 detection | `semanticRouter.js`, `endpointHarvester.js` |
+| **XSS & DOM Taint** | Safe mathematical delimiter canaries (`__gbcanary_...`) with zero false positives | `canaryAuditor.js`, `domAuditor.js` |
+| **Access Control** | Unauthenticated mutation auditing, BOLA/IDOR permission boundary matrix | `authMatrixAuditor.js`, `dualSessionAuditor.js` |
+| **Authentication** | JWT expiration, algorithm confusion (`none`), RSA $\to$ HMAC HS256 key downgrade | `jwtAuditor.js`, `jwtKeyConfusionAuditor.js` |
+| **OAuth & Identity** | OAuth 2.0 PKCE downgrade, open redirect URI boundaries, state tampering | `oauthPkceAuditor.js` |
+| **Server-Side Probes** | Statistical timing-differential SQLi, multi-step second-order stored injection | `sqliTimingAuditor.js`, `secondOrderAuditor.js` |
+| **Template & Logic** | Polyglot SSTI (Jinja/Twig/Smarty), Client-side prototype pollution gadgets | `polyglotSstiAuditor.js`, `prototypeGadgetAuditor.js` |
+| **SSRF & Callbacks** | Out-Of-Band (OAST) callbacks, Cloud Metadata traversal (IMDSv2, K8s, GCP) | `oastAuditor.js`, `cloudMetadataAuditor.js` |
+| **Protocols & Cache** | HTTP Request Smuggling (CL.TE/TE.CL), Web Cache Deception, CSWSH Hijacking | `httpSmugglingAuditor.js`, `webCacheAuditor.js`, `cswshAuditor.js` |
+| **API & Cloud** | GraphQL batching DoS / introspection, OpenAPI contract schema fuzzing | `graphqlAuditor.js`, `openapiFuzzer.js`, `subdomainTakeoverAuditor.js` |
+| **Proof & Compliance** | Photographic visual proof capture, SOC 2 Type II & ISO 27001 mapping | `visualProof.js`, `complianceMapper.js` |
+
+---
+
+### 🌊 Below the Surface: The Community Roadmap & Help Wanted
+
+To surpass commercial $20k enterprise red team engagements, we are expanding Ghost Browser into deep, stateful protocol and application logic territory. **We welcome contributions, PRs, and research proposals for these items:**
+
+1. **Stateful WebSocket Binary Frame Fuzzing (`CWE-1385`)**:
+   - *Goal:* Mutate real-time binary payloads (Protobuf, MessagePack, custom framing) across active WebSocket sessions.
+2. **Business Logic Pricing & Currency Tampering**:
+   - *Goal:* Automated checks for negative item quantities, race conditions on checkout coupon stacking, and rounding exploitation.
+3. **AI Agent Prompt Injection & Tool Jailbreaks (`OWASP LLM01`)**:
+   - *Goal:* Test AI-driven user interfaces for indirect prompt injection, tool calling privilege escalation, and system prompt leakage.
+4. **WebAuthn, FIDO2 & Passkey Attestation Bypass**:
+   - *Goal:* Audit WebAuthn registration and authentication flows for missing origin checks, challenge reuse, or RP ID spoofing.
+5. **SAML 2.0 XML Signature Wrapping (`XSW`)**:
+   - *Goal:* Probing enterprise SSO portals for XML entity expansion and assertion signature wrapping vulnerabilities.
+6. **eBPF-Powered Kernel-Level Network & Memory Taint Tracing**:
+   - *Goal:* Deep container inspection to monitor kernel syscalls and memory taint tracking during local containerized target runs.
+7. **Mobile App Deep Link & Intent Scheme Injection**:
+   - *Goal:* Audit custom URL schemes (`myapp://...`) and Android App Links / Universal Links for parameter injection and account takeover.
+8. **Dynamic Multi-Step WAF Bypass & Payload Mutation**:
+   - *Goal:* Genetic algorithm-based payload mutation to systematically evade Cloudflare, AWS WAF, and ModSecurity rule sets.
+9. **GraphQL WebSocket Subscription Stream Injection**:
+   - *Goal:* Test persistent GraphQL subscriptions for resource exhaustion and unauthenticated event eavesdropping.
+10. **HTTP/2 & gRPC Multiplexing Desynchronization**:
+    - *Goal:* Rapid-reset stream flooding (CVE-2023-44487 style) and gRPC header desync detection.
+
+---
+
+### 🤝 How to Contribute
+
+Whether you're an AppSec engineer, red teamer, or open-source contributor:
+1. **Pick an item from the Iceberg** (or propose a new module in [Issues](https://github.com/Wvdstoep/ghost-browser/issues)).
+2. **Follow the Non-Destructive Design Pattern**: All security tools in Ghost Browser must be non-destructive, safe for production environments, and emit reproducible `curl` PoCs and patch recommendations.
+3. **Submit a Pull Request**: Check out `src/recon/` for examples of existing modules and unit test conventions.
+
+---
+
 ## The agent
 
 The console has a second half: an agent that drives the same browser, in the same logged-in session,
