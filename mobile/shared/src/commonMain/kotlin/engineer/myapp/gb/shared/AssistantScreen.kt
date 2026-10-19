@@ -327,162 +327,7 @@ data class ManagedAppTarget(
     val description: String = ""
 )
 
-val DEFAULT_MANAGED_APPS = listOf(
-    ManagedAppTarget(
-        id = "cluster-myapp-root",
-        name = "Platform Root Portal",
-        url = "https://my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 98,
-        subdomainsCount = 17,
-        category = "Platform Core",
-        description = "K3s Traefik Gateway and Main Authentication Portal"
-    ),
-    ManagedAppTarget(
-        id = "cluster-mavicshop",
-        name = "MavicShop E-Commerce",
-        url = "https://mavicshop.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 95,
-        subdomainsCount = 2,
-        category = "E-Commerce",
-        description = "Storefront, Shopping Cart and Checkout API"
-    ),
-    ManagedAppTarget(
-        id = "cluster-reconforge",
-        name = "ReconForge OSINT",
-        url = "https://reconforge.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 1,
-        category = "Security Suite",
-        description = "Autonomous Attack Surface Discovery Service"
-    ),
-    ManagedAppTarget(
-        id = "cluster-reconsweep",
-        name = "ReconSweep Scanner",
-        url = "https://reconsweep.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 97,
-        subdomainsCount = 1,
-        category = "Security Suite",
-        description = "Continuous Daemon and Ingress Surface Prober"
-    ),
-    ManagedAppTarget(
-        id = "cluster-deskwork",
-        name = "DeskWork Workspace",
-        url = "https://deskwork.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 94,
-        subdomainsCount = 1,
-        category = "SaaS Workspace",
-        description = "Productivity Hub, Task Management and Documents"
-    ),
-    ManagedAppTarget(
-        id = "cluster-garage",
-        name = "Garage Control IoT",
-        url = "https://garage-control.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 96,
-        subdomainsCount = 1,
-        category = "IoT and Hardware",
-        description = "Telemetry and Hardware Control System"
-    ),
-    ManagedAppTarget(
-        id = "cluster-saltline",
-        name = "SaltLine API Gateway",
-        url = "https://saltline.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 99,
-        subdomainsCount = 1,
-        category = "API Gateway",
-        description = "Edge Routing, Microservices and Rate Limiting"
-    ),
-    ManagedAppTarget(
-        id = "cluster-trendwire",
-        name = "TrendWire News",
-        url = "https://trendwire.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 92,
-        subdomainsCount = 1,
-        category = "Media and Feeds",
-        description = "Automated News Aggregation and Sentiment Pipeline"
-    ),
-    ManagedAppTarget(
-        id = "cluster-leanbuddy",
-        name = "LeanBuddy Fitness",
-        url = "https://leanbuddy.fit",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 98,
-        subdomainsCount = 1,
-        category = "Health and Fitness",
-        description = "Personalized Coaching and Workout Analytics"
-    ),
-    ManagedAppTarget(
-        id = "cluster-director",
-        name = "Director Studio",
-        url = "https://director-studio.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 93,
-        subdomainsCount = 1,
-        category = "Creative Studio",
-        description = "Video and Media Asset Orchestration"
-    ),
-    ManagedAppTarget(
-        id = "cluster-maya",
-        name = "Maya Autonomous Agent",
-        url = "https://maya.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 1,
-        category = "AI Agent",
-        description = "LLM Worker and Platform Automation Engine"
-    ),
-    ManagedAppTarget(
-        id = "cluster-voicestudio",
-        name = "VoiceStudio Store",
-        url = "https://voicestudio.store",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 96,
-        subdomainsCount = 1,
-        category = "Audio and TTS",
-        description = "Neural Text-To-Speech and Audio Synthesis"
-    ),
-    ManagedAppTarget(
-        id = "cluster-product-a",
-        name = "Product A Service",
-        url = "https://product-a.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 95,
-        subdomainsCount = 1,
-        category = "SaaS Product",
-        description = "Customer Facing Web App"
-    ),
-    ManagedAppTarget(
-        id = "target-soluti",
-        name = "Soluti BV",
-        url = "https://soluti.nl",
-        isCluster = false,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 2,
-        category = "External Target",
-        description = "Managed IT, Hosting and Cloud Infrastructure"
-    )
-)
+val DEFAULT_MANAGED_APPS = emptyList<ManagedAppTarget>()
 
 val RECON_SUGGESTIONS = RECON_PROMPT_CHIPS.map { it.title }
 val ASSISTANT_SUGGESTIONS = ASSISTANT_PROMPT_CHIPS.map { it.title }
@@ -495,7 +340,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     var history by remember { mutableStateOf(false) }
     var stepsOpen by remember { mutableStateOf<Long?>(null) }   // which assistant turn shows its steps (by t)
     var composerText by remember { mutableStateOf("") }
-    var targetAppUrl by remember { mutableStateOf("https://soluti.nl") }
+    var targetAppUrl by remember { mutableStateOf("") }
     var showUrlInput by remember { mutableStateOf(false) }
     var showAppMap by remember { mutableStateOf(false) }
     var showAppManager by remember { mutableStateOf(false) }
@@ -1659,32 +1504,6 @@ private fun TargetAppBar(
                             Text("Set App", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Presets:", fontSize = 10.sp, color = cs.onSurfaceVariant)
-                        listOf("https://soluti.nl", "https://my-app.engineer", "https://mavicshop.my-app.engineer").forEach { preset ->
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = cs.surfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.clickable {
-                                    tempUrl = preset
-                                    onChangeUrl(preset)
-                                    onToggleInput()
-                                }
-                            ) {
-                                Text(
-                                    preset.replace("https://", ""),
-                                    fontSize = 10.sp,
-                                    color = cs.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -2281,7 +2100,7 @@ private fun AppManagerSheet(
 ) {
     val cs = MaterialTheme.colorScheme
     var selectedFilter by remember { mutableStateOf(0) } // 0: All, 1: Cluster, 2: External
-    var showAddForm by remember { mutableStateOf(false) }
+    var showAddForm by remember(apps.isEmpty()) { mutableStateOf(apps.isEmpty()) }
     var newAppName by remember { mutableStateOf("") }
     var newAppUrl by remember { mutableStateOf("") }
 
@@ -2494,7 +2313,36 @@ private fun AppManagerSheet(
                     Text("MANAGED APPLICATIONS (${filteredApps.size})", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
 
-                    filteredApps.forEach { app ->
+                    if (filteredApps.isEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = cs.surfaceVariant.copy(alpha = 0.35f),
+                            border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        ) {
+                            Column(
+                                Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    Modifier.size(40.dp).clip(CircleShape).background(Color(0xFFE5484D).copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Security, null, tint = Color(0xFFE5484D), modifier = Modifier.size(20.dp))
+                                }
+                                Spacer(Modifier.height(10.dp))
+                                Text("No Application Workspaces Yet", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Add a target domain above, or connect to your Ghost Browser cluster to auto-discover deployed apps.",
+                                    fontSize = 11.sp,
+                                    color = cs.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    } else {
+                        filteredApps.forEach { app ->
                         val isActive = app.url.trimEnd('/') == activeUrl.trimEnd('/')
                         Surface(
                             shape = RoundedCornerShape(14.dp),
@@ -2614,6 +2462,7 @@ private fun AppManagerSheet(
                                     }
                                 }
                             }
+                        }
                         }
                     }
 

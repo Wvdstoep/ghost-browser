@@ -575,7 +575,9 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
     obj({ target: { type: 'string', description: 'target domain or URL' } }, ['target']),
     async ({ target }) => {
       if (!ctx.recon || !ctx.recon.runRedteamAudit) return { error: 'red team probe engine not wired in context' };
-      return ctx.recon.runRedteamAudit(target);
+      const res = await ctx.recon.runRedteamAudit(target);
+      if (ctx.recon.ingestAuditData && res) ctx.recon.ingestAuditData(target, res);
+      return res;
     }, { repeatable: true });
 
   R('gb_recon_probe', 'BROKEN MULTI-SESSION INVALIDATION AUDIT (CWE-613): verifies whether user password change / credential rotation terminates active concurrent sessions across secondary browsers and mobile devices.',
