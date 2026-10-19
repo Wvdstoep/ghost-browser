@@ -329,6 +329,16 @@ val ASSISTANT_PROMPT_CHIPS = listOf(
 )
 
 
+data class ProbedEndpointItem(
+    val path: String,
+    val method: String = "GET",
+    val source: String = "frontend_bundle",
+    val status: Int = 200,
+    val securityStatus: String = "PUBLIC",
+    val finding: String = "",
+    val snippet: String = ""
+)
+
 data class ManagedAppTarget(
     val id: String,
     val name: String,
@@ -338,7 +348,8 @@ data class ManagedAppTarget(
     val postureScore: Int = 100,
     val subdomainsCount: Int = 1,
     val category: String = "Platform App",
-    val description: String = ""
+    val description: String = "",
+    val profile: String = "default"
 )
 
 val DEFAULT_MANAGED_APPS = listOf(
@@ -601,9 +612,17 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
         }
         if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
         if (showAppMap) {
+            val currentApp = managedApps.firstOrNull { it.url.trimEnd('/') == targetAppUrl.trimEnd('/') }
             AppMapSheet(
                 targetUrl = targetAppUrl,
                 chat = chat,
+                appProfile = currentApp?.profile ?: "default",
+                onUpdateProfile = { newProf ->
+                    if (currentApp != null) {
+                        val updated = managedApps.map { if (it.id == currentApp.id) it.copy(profile = newProf) else it }
+                        updateManagedAppsList(updated)
+                    }
+                },
                 onClose = { showAppMap = false },
                 onLaunchAudit = { prompt ->
                     act.onSend(prompt)
@@ -628,7 +647,11 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                     showAppManager = false
                     showAppMap = true
                 },
-                onAddApp = { name, url ->
+                onUpdateProfile = { app, newProf ->
+                    val updated = managedApps.map { if (it.id == app.id) it.copy(profile = newProf) else it }
+                    updateManagedAppsList(updated)
+                },
+                onAddApp = { name, url, profile ->
                     var cleaned = url.trim()
                     if (cleaned.isNotBlank() && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
                         cleaned = "https://" + cleaned
@@ -643,7 +666,8 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         postureScore = 100,
                         subdomainsCount = 1,
                         category = "External Target",
-                        description = "User-registered application target"
+                        description = "User-registered application target",
+                        profile = profile.ifBlank { "default" }
                     )
                     val updated = listOf(newApp) + managedApps
                     updateManagedAppsList(updated)
@@ -1758,12 +1782,13 @@ data class ParsedAppMap(
     val safeVectorsCount: Int = 0,
     val unsafeVectorsCount: Int = 0,
     val pendingVectorsCount: Int = 0,
-    val totalVectors: Int = 14
+    val totalVectors: Int = 14,
+    val probedEndpoints: List<ProbedEndpointItem> = emptyList()
 )
 
 fun encodeManagedApps(apps: List<ManagedAppTarget>): String {
     return apps.joinToString(";;;") { app ->
-        "${app.id}|||${app.name}|||${app.url}|||${app.isCluster}|||${app.postureGrade}|||${app.postureScore}|||${app.subdomainsCount}|||${app.category}|||${app.description}"
+        "${app.id}|||${app.name}|||${app.url}|||${app.isCluster}|||${app.postureGrade}|||${app.postureScore}|||${app.subdomainsCount}|||${app.category}|||${app.description}|||${app.profile}"
     }
 }
 
@@ -1784,7 +1809,8 @@ fun decodeManagedApps(data: String): List<ManagedAppTarget> {
                     postureScore = parts.getOrNull(5)?.toIntOrNull() ?: 100,
                     subdomainsCount = parts.getOrNull(6)?.toIntOrNull() ?: 1,
                     category = parts.getOrNull(7) ?: "Platform App",
-                    description = parts.getOrNull(8) ?: ""
+                    description = parts.getOrNull(8) ?: "",
+                    profile = parts.getOrNull(9) ?: "default"
                 ))
             }
         }
@@ -1794,7 +1820,13 @@ fun decodeManagedApps(data: String): List<ManagedAppTarget> {
     }
 }
 
-fun encodeVectors(vectors: List<AuditVectorItem>, subdomains: List<String>, ports: List<String>, routes: List<String>): String {
+fun encodeVectors(
+    vectors: List<AuditVectorItem>,
+    subdomains: List<String>,
+    ports: List<String>,
+    routes: List<String>,
+    probedEndpoints: List<ProbedEndpointItem> = emptyList()
+): String {
     val vData = vectors.filter { it.status != AuditVectorStatus.PENDING }.joinToString("###") { v ->
         val ev = v.evidence.joinToString(";;")
         "${v.id}|${v.status.name}|${v.summary}|${v.cwe}|$ev"
@@ -1802,7 +1834,12 @@ fun encodeVectors(vectors: List<AuditVectorItem>, subdomains: List<String>, port
     val subs = subdomains.joinToString(",")
     val pts = ports.joinToString(";;")
     val rts = routes.joinToString(",")
-    return "$vData@@@$subs@@@$pts@@@$rts"
+    val probed = probedEndpoints.joinToString("###") { ep ->
+        val safeFinding = ep.finding.replace("|", "/").replace("###", " ")
+        val safeSnippet = ep.snippet.replace("|", "/").replace("###", " ")
+        "${ep.path}|${ep.method}|${ep.source}|${ep.status}|${ep.securityStatus}|$safeFinding|$safeSnippet"
+    }
+    return "$vData@@@$subs@@@$pts@@@$rts@@@$probed"
 }
 
 fun decodeVectorsInto(
@@ -1810,7 +1847,8 @@ fun decodeVectorsInto(
     vectorMap: MutableMap<String, AuditVectorItem>,
     subdomainsSet: MutableSet<String>,
     portsSet: MutableSet<String>,
-    routesSet: MutableSet<String>
+    routesSet: MutableSet<String>,
+    probedEndpointsList: MutableList<ProbedEndpointItem> = mutableListOf()
 ) {
     if (encoded.isBlank()) return
     val parts = encoded.split("@@@")
@@ -1850,6 +1888,24 @@ fun decodeVectorsInto(
     if (routesPart.isNotBlank()) {
         routesPart.split(",").map { it.trim() }.filter { it.isNotBlank() }.forEach { routesSet.add(it) }
     }
+    val probedPart = parts.getOrNull(4) ?: ""
+    if (probedPart.isNotBlank()) {
+        probedPart.split("###").forEach { item ->
+            val pParts = item.split("|")
+            if (pParts.size >= 4) {
+                val path = pParts[0]
+                val method = pParts.getOrNull(1) ?: "GET"
+                val source = pParts.getOrNull(2) ?: "frontend_bundle"
+                val status = pParts.getOrNull(3)?.toIntOrNull() ?: 200
+                val secStatus = pParts.getOrNull(4) ?: "PUBLIC"
+                val finding = pParts.getOrNull(5) ?: ""
+                val snippet = pParts.getOrNull(6) ?: ""
+                if (path.isNotBlank() && probedEndpointsList.none { it.path == path }) {
+                    probedEndpointsList.add(ProbedEndpointItem(path, method, source, status, secStatus, finding, snippet))
+                }
+            }
+        }
+    }
 }
 
 fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAppMap {
@@ -1869,6 +1925,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
     val findingsList = mutableListOf<Triple<String, String, Color>>()
     val historyList = mutableListOf<Pair<String, String>>()
     val perimeterList = mutableListOf<String>()
+    val probedEndpointsList = mutableListOf<ProbedEndpointItem>()
 
     // Standard Enterprise Audit Vectors definition
     val vectorMap = mutableMapOf<String, AuditVectorItem>(
@@ -2015,6 +2072,10 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
         portsSet.add("Port 80/TCP: HTTP (Web Redirect)")
         portsSet.add("Port 443/TCP: HTTPS (TLS 1.3)")
         portsSet.add("Port 22/TCP: SSH (OpenSSH 10.0p2 Debian)")
+        probedEndpointsList.add(ProbedEndpointItem("/api/v1/contact", "POST", "frontend_bundle", 200, "PUBLIC", "Contact enquiry form handler", "Input sanitized"))
+        probedEndpointsList.add(ProbedEndpointItem("/admin/login", "GET", "spa_router", 200, "PUBLIC", "Administrative login portal", "Exposed public route"))
+        probedEndpointsList.add(ProbedEndpointItem("/api/admin/dashboard", "GET", "frontend_bundle", 401, "GATED_401", "Administrative metrics API", "Strict Bearer auth"))
+        probedEndpointsList.add(ProbedEndpointItem("/api/users/profile", "GET", "frontend_bundle", 401, "GATED_401", "User identity endpoint", "401 Unauthorized without session"))
         findingsList.add(Triple("CWE-284: Remote Administration Port Exposed (Port 22 SSH)", "LOW SEVERITY / SURFACE", Color(0xFF3B82F6)))
         exploitabilityScore = 97
         exploitabilityGrade = "A+"
@@ -2068,6 +2129,11 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
         routesSet.add("/auth/callback")
         routesSet.add("/robots.txt")
         routesSet.add("/api/config")
+        probedEndpointsList.add(ProbedEndpointItem("/api/config", "GET", "frontend_bundle", 200, "PUBLIC", "Platform client config", "Public configuration"))
+        probedEndpointsList.add(ProbedEndpointItem("/api/auth/session", "GET", "api_fetch", 200, "PUBLIC", "Session status endpoint", "Active session check"))
+        probedEndpointsList.add(ProbedEndpointItem("/api/admin/cluster/nodes", "GET", "frontend_bundle", 403, "GATED_403", "K3s cluster control plane", "Strict admin authorization"))
+        probedEndpointsList.add(ProbedEndpointItem("/api/v1/billing/invoices", "GET", "frontend_bundle", 401, "GATED_401", "Tenant billing & invoice API", "Auth token required"))
+        probedEndpointsList.add(ProbedEndpointItem("/graphql", "POST", "api_fetch", 200, "PUBLIC", "GraphQL gateway", "Introspection queries disabled"))
         routesSet.add("/api/showcase")
         postureScore = 98
         postureGrade = "A+"
@@ -2174,7 +2240,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
     try {
         val cached = AssistantHooks.getAppMapJson?.invoke(domain)
         if (!cached.isNullOrBlank()) {
-            decodeVectorsInto(cached, vectorMap, subdomainsSet, portsSet, routesSet)
+            decodeVectorsInto(cached, vectorMap, subdomainsSet, portsSet, routesSet, probedEndpointsList)
         }
     } catch (e: Exception) {}
 
@@ -2231,6 +2297,19 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
                             portsSet.removeAll { it.startsWith("Port " + num + "/") }
                             portsSet.add(bannerDesc)
                         }
+                    }
+                }
+            }
+
+            // 4. Probed API & Frontend Endpoints
+            if (s.name == "gb_pipeline_deep_spider" || s.name == "gb_audit_auth_matrix" || s.name == "gb_audit_sensitive_paths" || txt.contains("probed", ignoreCase = true) || txt.contains("endpoint", ignoreCase = true)) {
+                val epRegex = Regex("(?:GET|POST|PUT|DELETE|OPTIONS)\\s+([/][a-zA-Z0-9_./-]+)\\s*(?:->|:)?\\s*(\\d{3})?\\s*(?:\\[([A-Z0-9_]+)\\])?", RegexOption.IGNORE_CASE)
+                epRegex.findAll(txt).forEach { m ->
+                    val p = m.groupValues[1]
+                    val st = m.groupValues[2].toIntOrNull() ?: 200
+                    val sec = m.groupValues[3].ifBlank { if (st == 401 || st == 403) "GATED_$st" else if (st == 200 && (p.contains("admin") || p.contains("user"))) "CRITICAL_LEAK" else "PUBLIC" }
+                    if (p.length > 2 && probedEndpointsList.none { it.path == p }) {
+                        probedEndpointsList.add(ProbedEndpointItem(path = p, status = st, securityStatus = sec, source = "deep_spider_probe", finding = "Probed response HTTP $st ($sec)"))
                     }
                 }
             }
@@ -2554,7 +2633,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
     // Save updated vector state to SharedPreferences so it persists across restarts
     if (completedCount > 0) {
         try {
-            AssistantHooks.saveAppMapJson?.invoke(domain, encodeVectors(vectorsList, subdomainsSet.toList(), portsSet.toList(), routesSet.toList()))
+            AssistantHooks.saveAppMapJson?.invoke(domain, encodeVectors(vectorsList, subdomainsSet.toList(), portsSet.toList(), routesSet.toList(), probedEndpointsList))
         } catch (e: Exception) {}
     }
 
@@ -2584,7 +2663,8 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
         safeVectorsCount = safeCount,
         unsafeVectorsCount = unsafeCount,
         pendingVectorsCount = pendingCount,
-        totalVectors = vectorsList.size
+        totalVectors = vectorsList.size,
+        probedEndpoints = probedEndpointsList.distinctBy { it.path }
     )
 }
 
@@ -2592,6 +2672,8 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
 private fun AppMapSheet(
     targetUrl: String,
     chat: AssistantChatView?,
+    appProfile: String = "default",
+    onUpdateProfile: ((String) -> Unit)? = null,
     onClose: () -> Unit,
     onLaunchAudit: (String) -> Unit,
     onOpenAppManager: (() -> Unit)? = null
@@ -2650,6 +2732,28 @@ private fun AppMapSheet(
                             }
                         }
                         Text(targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = RoundedCornerShape(3.dp), color = cs.surfaceVariant) {
+                                Row(Modifier.padding(horizontal = 4.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(10.dp))
+                                    Spacer(Modifier.width(3.dp))
+                                    Text("GB PROFILE:", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant)
+                                }
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            listOf("default", "operator", "pentest", "admin_session").forEach { p ->
+                                val active = appProfile == p
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (active) Color(0xFFE5484D).copy(alpha = 0.2f) else cs.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, if (active) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.2f)),
+                                    modifier = Modifier.padding(end = 4.dp).clickable { onUpdateProfile?.invoke(p) }
+                                ) {
+                                    Text(p, fontSize = 9.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, color = if (active) Color(0xFFE5484D) else cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
+                                }
+                            }
+                        }
                     }
                     if (onOpenAppManager != null) {
                         Surface(
@@ -2744,7 +2848,7 @@ private fun AppMapSheet(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val tabs = listOf("Audit Matrix", "Attack Surface", "Findings", "Timeline")
+                        val tabs = listOf("Audit Matrix", "Endpoints & Gaps (${map.probedEndpoints.size})", "Attack Surface", "Findings", "Timeline")
                         tabs.forEachIndexed { idx, label ->
                             val active = selectedTab == idx
                             Surface(
@@ -3073,8 +3177,8 @@ private fun AppMapSheet(
                             }
                         }
 
-                        2 -> {
-                            // ── TAB 2: FINDINGS & ADVISORIES ──
+                        3 -> {
+                            // ── TAB 3: FINDINGS & ADVISORIES ──
                             Text("ATTACK FINDINGS & SECURITY VERIFICATIONS", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
 
@@ -3114,8 +3218,8 @@ private fun AppMapSheet(
                             }
                         }
 
-                        3 -> {
-                            // ── TAB 3: AUDIT TIMELINE & RUN HISTORY ──
+                        4 -> {
+                            // ── TAB 4: AUDIT TIMELINE & RUN HISTORY ──
                             Text("AUDIT & RECON TIMELINE", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
 
@@ -3179,17 +3283,28 @@ private fun AppMapSheet(
                     ) {
                         Text("Close", fontSize = 13.sp)
                     }
+                    OutlinedButton(
+                        onClick = {
+                            onLaunchAudit("Execute Enterprise Deep Spidering on $targetUrl with autoAuth true")
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1.5f).height(44.dp)
+                    ) {
+                        Icon(Icons.Default.AccountCircle, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Auto-Auth", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                     Button(
                         onClick = {
-                            onLaunchAudit("Perform a comprehensive AppSec reconnaissance audit and update the Living App Map for $targetUrl")
+                            onLaunchAudit("Execute Enterprise Deep Spidering and AppSec reconnaissance on $targetUrl using profile \"$appProfile\"")
                         },
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
                         modifier = Modifier.weight(2f).height(44.dp)
                     ) {
-                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Launch Full Recon Audit", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Audit ($appProfile)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -3203,7 +3318,8 @@ private fun AppManagerSheet(
     activeUrl: String,
     onSelectApp: (ManagedAppTarget) -> Unit,
     onViewAppMap: (ManagedAppTarget) -> Unit,
-    onAddApp: (name: String, url: String) -> Unit,
+    onUpdateProfile: (ManagedAppTarget, String) -> Unit,
+    onAddApp: (name: String, url: String, profile: String) -> Unit,
     onDeleteApp: (ManagedAppTarget) -> Unit,
     onClose: () -> Unit
 ) {
@@ -3212,6 +3328,7 @@ private fun AppManagerSheet(
     var showAddForm by remember(apps.isEmpty()) { mutableStateOf(apps.isEmpty()) }
     var newAppName by remember { mutableStateOf("") }
     var newAppUrl by remember { mutableStateOf("") }
+    var newAppProfile by remember { mutableStateOf("default") }
 
     val filteredApps = when (selectedFilter) {
         1 -> apps.filter { it.isCluster }
@@ -3396,11 +3513,31 @@ private fun AppManagerSheet(
                                     }
                                 }
 
+                                Spacer(Modifier.height(8.dp))
+                                Text("Ghost Browser Session Profile (e.g. default, operator, pentest)", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                Spacer(Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = cs.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth().height(36.dp)
+                                ) {
+                                    Box(Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                                        BasicTextField(
+                                            value = newAppProfile,
+                                            onValueChange = { newAppProfile = it },
+                                            textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+
                                 Spacer(Modifier.height(10.dp))
                                 Button(
                                     onClick = {
                                         if (newAppUrl.isNotBlank()) {
-                                            onAddApp(newAppName.trim(), newAppUrl.trim())
+                                            onAddApp(newAppName.trim(), newAppUrl.trim(), newAppProfile.trim())
                                             newAppName = ""
                                             newAppUrl = ""
                                             showAddForm = false
@@ -3516,6 +3653,30 @@ private fun AppManagerSheet(
                                         Text(app.category, fontSize = 9.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                     }
                                 }
+
+                                // APP_MANAGER_PROFILE_SELECTOR
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(shape = RoundedCornerShape(3.dp), color = cs.surfaceVariant) {
+                                        Text("GB PROFILE:", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+                                    }
+                                    Spacer(Modifier.width(6.dp))
+                                    listOf("default", "operator", "pentest", "admin_session").forEach { prof ->
+                                        val isCurrent = app.profile == prof
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (isCurrent) Color(0xFFE5484D).copy(alpha = 0.2f) else cs.surfaceVariant.copy(alpha = 0.4f),
+                                            border = BorderStroke(1.dp, if (isCurrent) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.2f)),
+                                            modifier = Modifier.padding(end = 4.dp).clickable { onUpdateProfile(app, prof) }
+                                        ) {
+                                            Text(prof, fontSize = 9.sp, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal, color = if (isCurrent) Color(0xFFE5484D) else cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                        }
+                                    }
+                                }
+                                Text("Tip: Log in yourself in this profile via Ghost Browser to run authenticated audits with your cookies.", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.padding(top = 2.dp))
 
                                 Spacer(Modifier.height(10.dp))
                                 Row(
