@@ -2287,7 +2287,12 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
 
         // SSTI Vector
         if (turn.steps.any { it.name == "gb_audit_polyglot_ssti" } || allTurnContent.contains("ssti", ignoreCase = true) || allTurnContent.contains("template injection", ignoreCase = true)) {
-            val isVuln = allTurnContent.contains("evaluated to 1147", ignoreCase = true) || allTurnContent.contains("vulnerable", ignoreCase = true)
+            val isVuln = (allTurnContent.contains("evaluated to 1147", ignoreCase = true) ||
+                          allTurnContent.contains("evaluated to 49", ignoreCase = true) ||
+                          allTurnContent.contains("ssti confirmed", ignoreCase = true) ||
+                          allTurnContent.contains("ssti expression evaluated", ignoreCase = true)) &&
+                         !allTurnContent.contains("immunity to ssti", ignoreCase = true) &&
+                         !allTurnContent.contains("zero vulnerabilities", ignoreCase = true)
             if (isVuln) {
                 vectorMap["polyglot_ssti"] = vectorMap["polyglot_ssti"]!!.copy(
                     status = AuditVectorStatus.UNSAFE,
@@ -2309,7 +2314,10 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
 
         // Business Logic & Pricing Vector
         if (turn.steps.any { it.name == "gb_audit_business_logic" } || allTurnContent.contains("business logic", ignoreCase = true) || allTurnContent.contains("price tampering", ignoreCase = true)) {
-            val isVuln = allTurnContent.contains("tampering detected", ignoreCase = true) || (allTurnContent.contains("vulnerable", ignoreCase = true) && !allTurnContent.contains("no vulnerabilities", ignoreCase = true))
+            val isVuln = (allTurnContent.contains("tampering detected", ignoreCase = true) ||
+                          allTurnContent.contains("price tampering confirmed", ignoreCase = true)) &&
+                         !allTurnContent.contains("zero vulnerabilities", ignoreCase = true) &&
+                         !allTurnContent.contains("no vulnerabilities", ignoreCase = true)
             if (isVuln) {
                 vectorMap["business_logic"] = vectorMap["business_logic"]!!.copy(
                     status = AuditVectorStatus.UNSAFE,
