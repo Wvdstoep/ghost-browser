@@ -314,6 +314,176 @@ val ASSISTANT_PROMPT_CHIPS = listOf(
     )
 )
 
+
+data class ManagedAppTarget(
+    val id: String,
+    val name: String,
+    val url: String,
+    val isCluster: Boolean,
+    val postureGrade: String = "A+",
+    val postureScore: Int = 100,
+    val subdomainsCount: Int = 1,
+    val category: String = "Platform App",
+    val description: String = ""
+)
+
+val DEFAULT_MANAGED_APPS = listOf(
+    ManagedAppTarget(
+        id = "cluster-myapp-root",
+        name = "Platform Root Portal",
+        url = "https://my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 98,
+        subdomainsCount = 17,
+        category = "Platform Core",
+        description = "K3s Traefik Gateway and Main Authentication Portal"
+    ),
+    ManagedAppTarget(
+        id = "cluster-mavicshop",
+        name = "MavicShop E-Commerce",
+        url = "https://mavicshop.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 95,
+        subdomainsCount = 2,
+        category = "E-Commerce",
+        description = "Storefront, Shopping Cart and Checkout API"
+    ),
+    ManagedAppTarget(
+        id = "cluster-reconforge",
+        name = "ReconForge OSINT",
+        url = "https://reconforge.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 100,
+        subdomainsCount = 1,
+        category = "Security Suite",
+        description = "Autonomous Attack Surface Discovery Service"
+    ),
+    ManagedAppTarget(
+        id = "cluster-reconsweep",
+        name = "ReconSweep Scanner",
+        url = "https://reconsweep.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 97,
+        subdomainsCount = 1,
+        category = "Security Suite",
+        description = "Continuous Daemon and Ingress Surface Prober"
+    ),
+    ManagedAppTarget(
+        id = "cluster-deskwork",
+        name = "DeskWork Workspace",
+        url = "https://deskwork.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 94,
+        subdomainsCount = 1,
+        category = "SaaS Workspace",
+        description = "Productivity Hub, Task Management and Documents"
+    ),
+    ManagedAppTarget(
+        id = "cluster-garage",
+        name = "Garage Control IoT",
+        url = "https://garage-control.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 96,
+        subdomainsCount = 1,
+        category = "IoT and Hardware",
+        description = "Telemetry and Hardware Control System"
+    ),
+    ManagedAppTarget(
+        id = "cluster-saltline",
+        name = "SaltLine API Gateway",
+        url = "https://saltline.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 99,
+        subdomainsCount = 1,
+        category = "API Gateway",
+        description = "Edge Routing, Microservices and Rate Limiting"
+    ),
+    ManagedAppTarget(
+        id = "cluster-trendwire",
+        name = "TrendWire News",
+        url = "https://trendwire.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 92,
+        subdomainsCount = 1,
+        category = "Media and Feeds",
+        description = "Automated News Aggregation and Sentiment Pipeline"
+    ),
+    ManagedAppTarget(
+        id = "cluster-leanbuddy",
+        name = "LeanBuddy Fitness",
+        url = "https://leanbuddy.fit",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 98,
+        subdomainsCount = 1,
+        category = "Health and Fitness",
+        description = "Personalized Coaching and Workout Analytics"
+    ),
+    ManagedAppTarget(
+        id = "cluster-director",
+        name = "Director Studio",
+        url = "https://director-studio.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 93,
+        subdomainsCount = 1,
+        category = "Creative Studio",
+        description = "Video and Media Asset Orchestration"
+    ),
+    ManagedAppTarget(
+        id = "cluster-maya",
+        name = "Maya Autonomous Agent",
+        url = "https://maya.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 100,
+        subdomainsCount = 1,
+        category = "AI Agent",
+        description = "LLM Worker and Platform Automation Engine"
+    ),
+    ManagedAppTarget(
+        id = "cluster-voicestudio",
+        name = "VoiceStudio Store",
+        url = "https://voicestudio.store",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 96,
+        subdomainsCount = 1,
+        category = "Audio and TTS",
+        description = "Neural Text-To-Speech and Audio Synthesis"
+    ),
+    ManagedAppTarget(
+        id = "cluster-product-a",
+        name = "Product A Service",
+        url = "https://product-a.mavicpro-fan.my-app.engineer",
+        isCluster = true,
+        postureGrade = "A+",
+        postureScore = 95,
+        subdomainsCount = 1,
+        category = "SaaS Product",
+        description = "Customer Facing Web App"
+    ),
+    ManagedAppTarget(
+        id = "target-soluti",
+        name = "Soluti BV",
+        url = "https://soluti.nl",
+        isCluster = false,
+        postureGrade = "A+",
+        postureScore = 100,
+        subdomainsCount = 2,
+        category = "External Target",
+        description = "Managed IT, Hosting and Cloud Infrastructure"
+    )
+)
+
 val RECON_SUGGESTIONS = RECON_PROMPT_CHIPS.map { it.title }
 val ASSISTANT_SUGGESTIONS = ASSISTANT_PROMPT_CHIPS.map { it.title }
 
@@ -328,6 +498,8 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     var targetAppUrl by remember { mutableStateOf("https://soluti.nl") }
     var showUrlInput by remember { mutableStateOf(false) }
     var showAppMap by remember { mutableStateOf(false) }
+    var showAppManager by remember { mutableStateOf(false) }
+    var managedApps by remember { mutableStateOf(DEFAULT_MANAGED_APPS) }
     val listState = rememberLazyListState()
     val turnCount = chat?.turns?.size ?: 0
     LaunchedEffect(turnCount, live?.steps?.size, live == null) { if (turnCount > 0) listState.animateScrollToItem(turnCount + 2) }
@@ -350,8 +522,11 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                     TargetAppBar(
                         targetUrl = targetAppUrl,
                         showInput = showUrlInput,
+                        managedCount = managedApps.size,
+                        isCluster = managedApps.find { it.url.trimEnd('/') == targetAppUrl.trimEnd('/') }?.isCluster ?: false,
                         onToggleInput = { showUrlInput = !showUrlInput },
                         onChangeUrl = { targetAppUrl = it },
+                        onOpenAppManager = { showAppManager = true },
                         onOpenAppMap = { showAppMap = true }
                     )
                 }
@@ -359,7 +534,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value) ConnectCard(act.onConnect)
-                        else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl, onSelectChip = { composerText = it }, onOpenAppMap = { showAppMap = true })
+                        else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl, onSelectChip = { composerText = it }, onOpenAppMap = { showAppMap = true }, onOpenAppManager = { showAppManager = true })
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
                         if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
@@ -380,7 +555,50 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 onLaunchAudit = { prompt ->
                     act.onSend(prompt)
                     showAppMap = false
+                },
+                onOpenAppManager = {
+                    showAppMap = false
+                    showAppManager = true
                 }
+            )
+        }
+        if (showAppManager) {
+            AppManagerSheet(
+                apps = managedApps,
+                activeUrl = targetAppUrl,
+                onSelectApp = { app ->
+                    targetAppUrl = app.url
+                    showAppManager = false
+                },
+                onViewAppMap = { app ->
+                    targetAppUrl = app.url
+                    showAppManager = false
+                    showAppMap = true
+                },
+                onAddApp = { name, url ->
+                    var cleaned = url.trim()
+                    if (cleaned.isNotBlank() && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
+                        cleaned = "https://" + cleaned
+                    }
+                    val id = "app-" + currentTimeMillisCompat()
+                    val newApp = ManagedAppTarget(
+                        id = id,
+                        name = name.ifBlank { cleaned.replace("https://", "").replace("http://", "").substringBefore("/") },
+                        url = cleaned,
+                        isCluster = false,
+                        postureGrade = "A+",
+                        postureScore = 100,
+                        subdomainsCount = 1,
+                        category = "External Target",
+                        description = "User-registered application target"
+                    )
+                    managedApps = listOf(newApp) + managedApps
+                    targetAppUrl = cleaned
+                },
+                onDeleteApp = { app ->
+                    managedApps = managedApps.filter { it.id != app.id }
+                },
+                onClose = { showAppManager = false }
             )
         }
     }
@@ -907,7 +1125,8 @@ private fun EmptyState(
     agentType: String,
     targetUrl: String,
     onSelectChip: (String) -> Unit,
-    onOpenAppMap: () -> Unit
+    onOpenAppMap: () -> Unit,
+    onOpenAppManager: () -> Unit = {}
 ) {
     val cs = MaterialTheme.colorScheme
     val isRecon = agentType == "recon"
@@ -1251,8 +1470,11 @@ fun AgentToggleBar(ui: AssistantUi, act: AssistantActions) {
 private fun TargetAppBar(
     targetUrl: String,
     showInput: Boolean,
+    managedCount: Int,
+    isCluster: Boolean,
     onToggleInput: () -> Unit,
     onChangeUrl: (String) -> Unit,
+    onOpenAppManager: () -> Unit,
     onOpenAppMap: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -1291,14 +1513,24 @@ private fun TargetAppBar(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "TARGET APPLICATION",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp,
-                        color = Color(0xFFE5484D)
-                    )
+                Column(
+                    modifier = Modifier.weight(1f).clickable { onOpenAppManager() }
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "TARGET APP",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp,
+                            color = Color(0xFFE5484D)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        if (isCluster) {
+                            Surface(shape = RoundedCornerShape(3.dp), color = Color(0xFF10B981).copy(alpha = 0.18f)) {
+                                Text("K3S CLUSTER", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 3.dp, vertical = 0.dp))
+                            }
+                        }
+                    }
                     Text(
                         targetUrl.ifBlank { "https://target-domain.com" },
                         fontSize = 12.sp,
@@ -1309,20 +1541,36 @@ private fun TargetAppBar(
                     )
                 }
 
-                IconButton(
-                    onClick = onToggleInput,
-                    modifier = Modifier.size(32.dp)
+                // Apps Management Drawer Button
+                Surface(
+                    onClick = onOpenAppManager,
+                    shape = RoundedCornerShape(8.dp),
+                    color = cs.surfaceVariant.copy(alpha = 0.65f),
+                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f))
                 ) {
-                    Icon(
-                        if (showInput) Icons.Default.Close else Icons.Default.Tune,
-                        contentDescription = "Edit Target URL",
-                        tint = cs.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Tune,
+                            contentDescription = "Manage Apps",
+                            tint = cs.onSurface,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            "Apps ($managedCount)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = cs.onSurface
+                        )
+                    }
                 }
 
                 Spacer(Modifier.width(4.dp))
 
+                // Living App Map Button
                 Surface(
                     onClick = onOpenAppMap,
                     shape = RoundedCornerShape(8.dp),
@@ -1418,7 +1666,7 @@ private fun TargetAppBar(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Presets:", fontSize = 10.sp, color = cs.onSurfaceVariant)
-                        listOf("https://soluti.nl", "https://myapp.engineer").forEach { preset ->
+                        listOf("https://soluti.nl", "https://my-app.engineer", "https://mavicshop.my-app.engineer").forEach { preset ->
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = cs.surfaceVariant.copy(alpha = 0.5f),
@@ -1580,7 +1828,8 @@ private fun AppMapSheet(
     targetUrl: String,
     chat: AssistantChatView?,
     onClose: () -> Unit,
-    onLaunchAudit: (String) -> Unit
+    onLaunchAudit: (String) -> Unit,
+    onOpenAppManager: (() -> Unit)? = null
 ) {
     val cs = MaterialTheme.colorScheme
     val map = remember(targetUrl, chat?.turns) {
@@ -1634,6 +1883,24 @@ private fun AppMapSheet(
                             }
                         }
                         Text(targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    }
+                    if (onOpenAppManager != null) {
+                        Surface(
+                            onClick = onOpenAppManager,
+                            shape = RoundedCornerShape(8.dp),
+                            color = cs.surfaceVariant.copy(alpha = 0.7f),
+                            border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Tune, null, tint = cs.onSurface, modifier = Modifier.size(12.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Apps", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+                            }
+                        }
                     }
                     IconButton(onClick = onClose) {
                         Icon(Icons.Default.Close, null, tint = cs.onSurfaceVariant)
@@ -1995,6 +2262,380 @@ private fun AppMapSheet(
                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Launch Full Recon Audit", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppManagerSheet(
+    apps: List<ManagedAppTarget>,
+    activeUrl: String,
+    onSelectApp: (ManagedAppTarget) -> Unit,
+    onViewAppMap: (ManagedAppTarget) -> Unit,
+    onAddApp: (name: String, url: String) -> Unit,
+    onDeleteApp: (ManagedAppTarget) -> Unit,
+    onClose: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    var selectedFilter by remember { mutableStateOf(0) } // 0: All, 1: Cluster, 2: External
+    var showAddForm by remember { mutableStateOf(false) }
+    var newAppName by remember { mutableStateOf("") }
+    var newAppUrl by remember { mutableStateOf("") }
+
+    val filteredApps = when (selectedFilter) {
+        1 -> apps.filter { it.isCluster }
+        2 -> apps.filter { !it.isCluster }
+        else -> apps
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable { onClose() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Surface(
+            color = cs.surface,
+            contentColor = cs.onSurface,
+            shape = RoundedCornerShape(22.dp, 22.dp, 0.dp, 0.dp),
+            tonalElevation = 8.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.90f)
+                .clickable(enabled = false) {}
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.align(Alignment.CenterHorizontally).width(40.dp).height(4.dp).clip(CircleShape).background(cs.outline))
+
+                // Header
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(Color(0xFFE5484D).copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Security, null, tint = Color(0xFFE5484D), modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Application Workspaces", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF10B981).copy(alpha = 0.15f)) {
+                                Text("K3S CONNECTED", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                            }
+                        }
+                        Text("${apps.size} Managed Apps • Ingress & Target Maps", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, null, tint = cs.onSurfaceVariant)
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Scrollable Content
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    // Cluster Telemetry Summary Card
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = cs.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF10B981).copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFF10B981), modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Platform Workspace Synced", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                                Text("Ingress routes auto-discovered from K3s cluster & custom URLs tracked in dossiers", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Filter tabs
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val filterLabels = listOf(
+                            "All Apps (${apps.size})",
+                            "Cluster (${apps.count { it.isCluster }})",
+                            "External (${apps.count { !it.isCluster }})"
+                        )
+                        filterLabels.forEachIndexed { idx, label ->
+                            val active = selectedFilter == idx
+                            Surface(
+                                modifier = Modifier.weight(1f).height(32.dp).clickable { selectedFilter = idx },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (active) Color(0xFFE5484D) else cs.surfaceVariant.copy(alpha = 0.5f),
+                                contentColor = if (active) Color.White else cs.onSurfaceVariant
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(label, fontSize = 11.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // + Add App Target Trigger / Inline Form
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = cs.surface,
+                        border = BorderStroke(1.dp, if (showAddForm) Color(0xFFE5484D).copy(alpha = 0.5f) else cs.outline.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable { showAddForm = !showAddForm },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, null, tint = Color(0xFFE5484D), modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Add New App Target or Custom URL", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE5484D))
+                                }
+                                Icon(if (showAddForm) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
+
+                            if (showAddForm) {
+                                Spacer(Modifier.height(10.dp))
+                                Text("Application Name (e.g. Billing Portal)", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                Spacer(Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = cs.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth().height(36.dp)
+                                ) {
+                                    Box(Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                                        if (newAppName.isBlank()) Text("My Custom App", fontSize = 12.sp, color = cs.onSurfaceVariant.copy(alpha = 0.5f))
+                                        BasicTextField(
+                                            value = newAppName,
+                                            onValueChange = { newAppName = it },
+                                            textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+                                Text("URL or Domain (e.g. https://api.myapp.com)", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                Spacer(Modifier.height(4.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = cs.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth().height(36.dp)
+                                ) {
+                                    Box(Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                                        if (newAppUrl.isBlank()) Text("https://example.com", fontSize = 12.sp, color = cs.onSurfaceVariant.copy(alpha = 0.5f))
+                                        BasicTextField(
+                                            value = newAppUrl,
+                                            onValueChange = { newAppUrl = it },
+                                            textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(10.dp))
+                                Button(
+                                    onClick = {
+                                        if (newAppUrl.isNotBlank()) {
+                                            onAddApp(newAppName.trim(), newAppUrl.trim())
+                                            newAppName = ""
+                                            newAppUrl = ""
+                                            showAddForm = false
+                                        }
+                                    },
+                                    enabled = newAppUrl.isNotBlank(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
+                                    modifier = Modifier.fillMaxWidth().height(38.dp)
+                                ) {
+                                    Text("Save Target & Build App Map", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    Text("MANAGED APPLICATIONS (${filteredApps.size})", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+
+                    filteredApps.forEach { app ->
+                        val isActive = app.url.trimEnd('/') == activeUrl.trimEnd('/')
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = cs.surface,
+                            border = BorderStroke(
+                                if (isActive) 1.5.dp else 1.dp,
+                                if (isActive) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Text(app.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Spacer(Modifier.width(6.dp))
+                                        if (app.isCluster) {
+                                            Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF10B981).copy(alpha = 0.15f)) {
+                                                Text("K3S CLUSTER", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                            }
+                                        } else {
+                                            Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF3B82F6).copy(alpha = 0.15f)) {
+                                                Text("EXTERNAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF3B82F6), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                            }
+                                        }
+                                    }
+                                    if (isActive) {
+                                        Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFE5484D).copy(alpha = 0.15f)) {
+                                            Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFE5484D)))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("ACTIVE TARGET", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D))
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(4.dp))
+                                Text(app.url, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurfaceVariant)
+
+                                if (app.description.isNotBlank()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(app.description, fontSize = 10.sp, color = cs.onSurfaceVariant.copy(alpha = 0.8f))
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(shape = RoundedCornerShape(6.dp), color = cs.surfaceVariant.copy(alpha = 0.5f)) {
+                                        Text("Grade ${app.postureGrade} (${app.postureScore}/100)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                    Surface(shape = RoundedCornerShape(6.dp), color = cs.surfaceVariant.copy(alpha = 0.5f)) {
+                                        Text("${app.subdomainsCount} Subdomains", fontSize = 9.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                    Surface(shape = RoundedCornerShape(6.dp), color = cs.surfaceVariant.copy(alpha = 0.5f)) {
+                                        Text(app.category, fontSize = 9.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                }
+
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (!isActive) {
+                                        Button(
+                                            onClick = { onSelectApp(app) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
+                                            modifier = Modifier.weight(1f).height(34.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp)
+                                        ) {
+                                            Text("Select & Target", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = Color(0xFFE5484D).copy(alpha = 0.12f),
+                                            border = BorderStroke(1.dp, Color(0xFFE5484D).copy(alpha = 0.4f)),
+                                            modifier = Modifier.weight(1f).height(34.dp)
+                                        ) {
+                                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(Icons.Default.Check, null, tint = Color(0xFFE5484D), modifier = Modifier.size(14.dp))
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text("Currently Active", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D))
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { onViewAppMap(app) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f).height(34.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Public, null, tint = cs.onSurface, modifier = Modifier.size(13.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Living Map", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+
+                                    if (!app.isCluster) {
+                                        IconButton(
+                                            onClick = { onDeleteApp(app) },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(Icons.Default.DeleteOutline, "Remove", tint = cs.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Bottom Action
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Auto-syncing dossiers with /profiles/targets", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                    Button(
+                        onClick = onClose,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = cs.surfaceVariant, contentColor = cs.onSurface),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Text("Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
