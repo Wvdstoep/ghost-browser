@@ -1492,7 +1492,28 @@ app.post('/v1/recon/app-map', authed, (req, res) => {
 app.get('/v1/recon/app-maps', authed, (_req, res) => {
   try {
     const apps = recon.listTargetWorkspaces ? recon.listTargetWorkspaces() : [];
-    res.json({ apps });
+    const clusterApps = recon.getDeployedClusterApps ? recon.getDeployedClusterApps() : [];
+    res.json({ apps, clusterApps });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.delete('/v1/recon/app-map', authed, (req, res) => {
+  try {
+    const target = req.query?.target || req.body?.target;
+    if (!target) return res.status(400).json({ error: 'Target URL or domain is required.' });
+    const ok = recon.deleteTargetWorkspace ? recon.deleteTargetWorkspace(target) : false;
+    res.json({ ok, target });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.get('/v1/recon/cluster-apps', authed, (_req, res) => {
+  try {
+    const clusterApps = recon.getDeployedClusterApps ? recon.getDeployedClusterApps() : [];
+    res.json({ clusterApps });
   } catch (err) {
     fail(res, err);
   }
