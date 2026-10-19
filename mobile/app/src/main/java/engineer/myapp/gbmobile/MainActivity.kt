@@ -1846,6 +1846,28 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (ASSIST.decodeImage == null) ASSIST.decodeImage = { data ->
             try { val b64 = data.substringAfter("base64,", ""); val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT); android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() } catch (e: Exception) { null }
         }
+        if (engineer.myapp.gb.shared.AssistantHooks.getAppMapJson == null) {
+            val spMaps = getSharedPreferences("gb_app_maps", MODE_PRIVATE)
+            engineer.myapp.gb.shared.AssistantHooks.getAppMapJson = { domain ->
+                spMaps.getString("map_" + domain, null)
+            }
+            engineer.myapp.gb.shared.AssistantHooks.saveAppMapJson = { domain, data ->
+                spMaps.edit().putString("map_" + domain, data).apply()
+            }
+            engineer.myapp.gb.shared.AssistantHooks.getSelectedTargetUrl = {
+                spMaps.getString("active_target_url", null)
+            }
+            engineer.myapp.gb.shared.AssistantHooks.saveSelectedTargetUrl = { url ->
+                spMaps.edit().putString("active_target_url", url).apply()
+            }
+            engineer.myapp.gb.shared.AssistantHooks.getManagedAppsJson = {
+                spMaps.getString("managed_apps_list", null)
+            }
+            engineer.myapp.gb.shared.AssistantHooks.saveManagedAppsJson = { data ->
+                spMaps.edit().putString("managed_apps_list", data).apply()
+            }
+        }
+
     }
 
     private fun assistantOpenLoad() {

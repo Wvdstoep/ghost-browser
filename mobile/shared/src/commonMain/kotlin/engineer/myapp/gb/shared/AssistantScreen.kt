@@ -74,6 +74,12 @@ object AssistantHooks {
     /** Persistent storage for living App Map so completed audit runs survive app restarts */
     var getAppMapJson: ((domain: String) -> String?)? = null
     var saveAppMapJson: ((domain: String, data: String) -> Unit)? = null
+    /** Persistent storage for selected target App URL so the active selection stays across app restarts */
+    var getSelectedTargetUrl: (() -> String?)? = null
+    var saveSelectedTargetUrl: ((url: String) -> Unit)? = null
+    /** Persistent storage for managed apps list */
+    var getManagedAppsJson: (() -> String?)? = null
+    var saveManagedAppsJson: ((data: String) -> Unit)? = null
 }
 
 class AssistantActions(
@@ -498,11 +504,50 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     var history by remember { mutableStateOf(false) }
     var stepsOpen by remember { mutableStateOf<Long?>(null) }   // which assistant turn shows its steps (by t)
     var composerText by remember { mutableStateOf("") }
-    var targetAppUrl by remember { mutableStateOf("https://my-app.engineer") }
+    val initialSavedUrl = remember {
+        try { AssistantHooks.getSelectedTargetUrl?.invoke()?.takeIf { it.isNotBlank() } } catch (e: Exception) { null } ?: "https://my-app.engineer"
+    }
+    var targetAppUrl by remember { mutableStateOf(initialSavedUrl) }
+
+    val initialSavedApps = remember {
+        try {
+            val raw = AssistantHooks.getManagedAppsJson?.invoke()
+            if (!raw.isNullOrBlank()) decodeManagedApps(raw) else DEFAULT_MANAGED_APPS
+        } catch (e: Exception) { DEFAULT_MANAGED_APPS }
+    }
+    var managedApps by remember { mutableStateOf(initialSavedApps) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val u = AssistantHooks.getSelectedTargetUrl?.invoke()
+            if (!u.isNullOrBlank() && u != targetAppUrl) {
+                targetAppUrl = u
+            }
+            val a = AssistantHooks.getManagedAppsJson?.invoke()
+            if (!a.isNullOrBlank()) {
+                val decoded = decodeManagedApps(a)
+                if (decoded.isNotEmpty()) managedApps = decoded
+            }
+        } catch (e: Exception) {}
+    }
+
+    val updateTargetUrl: (String) -> Unit = { newUrl ->
+        targetAppUrl = newUrl
+        try {
+            AssistantHooks.saveSelectedTargetUrl?.invoke(newUrl)
+        } catch (e: Exception) {}
+    }
+
+    val updateManagedAppsList: (List<ManagedAppTarget>) -> Unit = { newList ->
+        managedApps = newList
+        try {
+            AssistantHooks.saveManagedAppsJson?.invoke(encodeManagedApps(newList))
+        } catch (e: Exception) {}
+    }
+
     var showUrlInput by remember { mutableStateOf(false) }
     var showAppMap by remember { mutableStateOf(false) }
     var showAppManager by remember { mutableStateOf(false) }
-    var managedApps by remember { mutableStateOf(DEFAULT_MANAGED_APPS) }
     val listState = rememberLazyListState()
     val turnCount = chat?.turns?.size ?: 0
     LaunchedEffect(turnCount, live?.steps?.size, live == null) { if (turnCount > 0) listState.animateScrollToItem(turnCount + 2) }
@@ -528,7 +573,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         managedCount = managedApps.size,
                         isCluster = managedApps.find { it.url.trimEnd('/') == targetAppUrl.trimEnd('/') }?.isCluster ?: false,
                         onToggleInput = { showUrlInput = !showUrlInput },
-                        onChangeUrl = { targetAppUrl = it },
+                        onChangeUrl = { updateTargetUrl(it) },
                         onOpenAppManager = { showAppManager = true },
                         onOpenAppMap = { showAppMap = true }
                     )
@@ -570,11 +615,11 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 apps = managedApps,
                 activeUrl = targetAppUrl,
                 onSelectApp = { app ->
-                    targetAppUrl = app.url
+                    updateTargetUrl(app.url)
                     showAppManager = false
                 },
                 onViewAppMap = { app ->
-                    targetAppUrl = app.url
+                    updateTargetUrl(app.url)
                     showAppManager = false
                     showAppMap = true
                 },
@@ -595,11 +640,16 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         category = "External Target",
                         description = "User-registered application target"
                     )
-                    managedApps = listOf(newApp) + managedApps
-                    targetAppUrl = cleaned
+                    val updated = listOf(newApp) + managedApps
+                    updateManagedAppsList(updated)
+                    updateTargetUrl(cleaned)
                 },
                 onDeleteApp = { app ->
-                    managedApps = managedApps.filter { it.id != app.id }
+                    val updated = managedApps.filter { it.id != app.id }
+                    updateManagedAppsList(updated)
+                    if (targetAppUrl.trimEnd('/') == app.url.trimEnd('/') && updated.isNotEmpty()) {
+                        updateTargetUrl(updated.first().url)
+                    }
                 },
                 onClose = { showAppManager = false }
             )
@@ -1705,6 +1755,39 @@ data class ParsedAppMap(
     val pendingVectorsCount: Int = 0,
     val totalVectors: Int = 14
 )
+
+fun encodeManagedApps(apps: List<ManagedAppTarget>): String {
+    return apps.joinToString(";;;") { app ->
+        "${app.id}|||${app.name}|||${app.url}|||${app.isCluster}|||${app.postureGrade}|||${app.postureScore}|||${app.subdomainsCount}|||${app.category}|||${app.description}"
+    }
+}
+
+fun decodeManagedApps(data: String): List<ManagedAppTarget> {
+    if (data.isBlank()) return DEFAULT_MANAGED_APPS
+    return try {
+        val list = mutableListOf<ManagedAppTarget>()
+        val entries = data.split(";;;")
+        for (entry in entries) {
+            val parts = entry.split("|||")
+            if (parts.size >= 3) {
+                list.add(ManagedAppTarget(
+                    id = parts[0],
+                    name = parts[1],
+                    url = parts[2],
+                    isCluster = parts.getOrNull(3)?.toBooleanStrictOrNull() ?: false,
+                    postureGrade = parts.getOrNull(4) ?: "A+",
+                    postureScore = parts.getOrNull(5)?.toIntOrNull() ?: 100,
+                    subdomainsCount = parts.getOrNull(6)?.toIntOrNull() ?: 1,
+                    category = parts.getOrNull(7) ?: "Platform App",
+                    description = parts.getOrNull(8) ?: ""
+                ))
+            }
+        }
+        if (list.isEmpty()) DEFAULT_MANAGED_APPS else list
+    } catch (e: Exception) {
+        DEFAULT_MANAGED_APPS
+    }
+}
 
 fun encodeVectors(vectors: List<AuditVectorItem>, subdomains: List<String>, ports: List<String>, routes: List<String>): String {
     val vData = vectors.filter { it.status != AuditVectorStatus.PENDING }.joinToString("###") { v ->
