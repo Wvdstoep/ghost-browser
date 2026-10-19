@@ -325,6 +325,9 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
     var history by remember { mutableStateOf(false) }
     var stepsOpen by remember { mutableStateOf<Long?>(null) }   // which assistant turn shows its steps (by t)
     var composerText by remember { mutableStateOf("") }
+    var targetAppUrl by remember { mutableStateOf("https://soluti.nl") }
+    var showUrlInput by remember { mutableStateOf(false) }
+    var showAppMap by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val turnCount = chat?.turns?.size ?: 0
     LaunchedEffect(turnCount, live?.steps?.size, live == null) { if (turnCount > 0) listState.animateScrollToItem(turnCount + 2) }
@@ -343,11 +346,20 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
             Column(Modifier.fillMaxSize().then(topInset)) {
                 Header(chat, live, ui, onHistory = { act.onRefreshChats(); history = true }, onNew = { act.onNewWithAgent?.invoke(ui.selectedAgent.value) ?: act.onNew() }, onSettings = act.onSettings, onClose = act.onClose)
                 AgentToggleBar(ui = ui, act = act)
+                if (ui.selectedAgent.value == "recon") {
+                    TargetAppBar(
+                        targetUrl = targetAppUrl,
+                        showInput = showUrlInput,
+                        onToggleInput = { showUrlInput = !showUrlInput },
+                        onChangeUrl = { targetAppUrl = it },
+                        onOpenAppMap = { showAppMap = true }
+                    )
+                }
                 // selectedAgent is user-controlled via AgentToggleBar and HistorySheet
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value) ConnectCard(act.onConnect)
-                        else if (chat == null || chat.turns.isEmpty()) EmptyState(ui.selectedAgent.value, onSelectChip = { composerText = it })
+                        else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl, onSelectChip = { composerText = it }, onOpenAppMap = { showAppMap = true })
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
                         if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
@@ -360,6 +372,16 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
             }
         }
         if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
+        if (showAppMap) {
+            AppMapSheet(
+                targetUrl = targetAppUrl,
+                onClose = { showAppMap = false },
+                onLaunchAudit = { prompt ->
+                    act.onSend(prompt)
+                    showAppMap = false
+                }
+            )
+        }
     }
 }
 
@@ -880,12 +902,17 @@ expect fun currentTimeMillisCompat(): Long
 
 /* ── empty, connect, error ─────────────────────────────────────────────────────────────────────── */
 @Composable
-private fun EmptyState(agentType: String, onSelectChip: (String) -> Unit) {
+private fun EmptyState(
+    agentType: String,
+    targetUrl: String,
+    onSelectChip: (String) -> Unit,
+    onOpenAppMap: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
     val isRecon = agentType == "recon"
     val accentColor = if (isRecon) Color(0xFFE5484D) else Brand
     val suggestions = if (isRecon) RECON_SUGGESTIONS else ASSISTANT_SUGGESTIONS
-    Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)) {
         Box(Modifier.size(44.dp).clip(CircleShape).background(accentColor.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
             Icon(if (isRecon) Icons.Default.Security else Icons.Default.AutoAwesome, null, tint = accentColor, modifier = Modifier.size(22.dp))
         }
@@ -897,16 +924,58 @@ private fun EmptyState(agentType: String, onSelectChip: (String) -> Unit) {
             else "I run inside your Ghost Browser with your logins. Ask a question, hand me a task, or tell me what to keep an eye on — I'll read what your watchers already gathered, run them, browse, or build what's missing.",
             color = cs.onSurfaceVariant, fontSize = 14.sp, lineHeight = 20.sp
         )
+        if (isRecon) {
+            Spacer(Modifier.height(14.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = cs.surface,
+                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth().clickable { onOpenAppMap() }
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(34.dp).clip(CircleShape).background(accentColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Public, null, tint = accentColor, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Living App Map & History", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.15f)
+                            ) {
+                                Text("A+ Posture", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                            }
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text("Active target: " + targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    }
+                    Icon(Icons.Default.ArrowForward, null, tint = accentColor, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
         Spacer(Modifier.height(18.dp))
-        Text(if (isRecon) "SUGGESTED RECON SCANS" else "TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (isRecon) "SUGGESTED RECON SCANS (PREFILLED FOR ACTIVE APP)" else "TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         val promptChips = if (isRecon) RECON_PROMPT_CHIPS else ASSISTANT_PROMPT_CHIPS
         promptChips.forEach { chip ->
+            val prefilledPrompt = if (isRecon) {
+                chip.prompt.replace("https://target-domain.com", targetUrl.ifBlank { "https://target-domain.com" })
+            } else {
+                chip.prompt
+            }
             Surface(
                 color = cs.surface,
                 shape = RoundedCornerShape(14.dp),
                 border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.6f)),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSelectChip(chip.prompt) }
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSelectChip(prefilledPrompt) }
             ) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -920,7 +989,6 @@ private fun EmptyState(agentType: String, onSelectChip: (String) -> Unit) {
         }
     }
 }
-
 @Composable
 private fun ConnectCard(onConnect: () -> Unit) {
     val cs = MaterialTheme.colorScheme
@@ -1172,6 +1240,592 @@ fun AgentToggleBar(ui: AssistantUi, act: AssistantActions) {
                 Icon(Icons.Default.Security, null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Security Recon", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+/* ── Target App & Living App Map Workspace ────────────────────────────────────────────────────────── */
+@Composable
+private fun TargetAppBar(
+    targetUrl: String,
+    showInput: Boolean,
+    onToggleInput: () -> Unit,
+    onChangeUrl: (String) -> Unit,
+    onOpenAppMap: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    var tempUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(cs.surface.copy(alpha = 0.95f))
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = cs.surfaceVariant.copy(alpha = 0.45f),
+            border = BorderStroke(1.dp, Color(0xFFE5484D).copy(alpha = 0.4f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE5484D).copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Security,
+                        contentDescription = null,
+                        tint = Color(0xFFE5484D),
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "TARGET APPLICATION",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp,
+                        color = Color(0xFFE5484D)
+                    )
+                    Text(
+                        targetUrl.ifBlank { "https://target-domain.com" },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = cs.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                IconButton(
+                    onClick = onToggleInput,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        if (showInput) Icons.Default.Close else Icons.Default.Tune,
+                        contentDescription = "Edit Target URL",
+                        tint = cs.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                Surface(
+                    onClick = onOpenAppMap,
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFE5484D).copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, Color(0xFFE5484D).copy(alpha = 0.6f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Public,
+                            contentDescription = null,
+                            tint = Color(0xFFE5484D),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "App Map",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE5484D)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showInput) {
+            Spacer(Modifier.height(6.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = cs.surface,
+                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(10.dp)) {
+                    Text(
+                        "Set Target App URL (auto-prefilled in all recon prompts & workspace)",
+                        fontSize = 11.sp,
+                        color = cs.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = cs.surfaceVariant.copy(alpha = 0.4f),
+                            border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                            modifier = Modifier.weight(1f).height(38.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (tempUrl.isBlank()) {
+                                    Text("https://example.com", fontSize = 13.sp, color = cs.onSurfaceVariant.copy(alpha = 0.5f))
+                                }
+                                BasicTextField(
+                                    value = tempUrl,
+                                    onValueChange = { tempUrl = it },
+                                    textStyle = TextStyle(fontSize = 13.sp, color = cs.onSurface, fontWeight = FontWeight.Medium),
+                                    singleLine = true,
+                                    cursorBrush = SolidColor(Color(0xFFE5484D)),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                var cleaned = tempUrl.trim()
+                                if (cleaned.isNotBlank() && !cleaned.startsWith("http://") && !cleaned.startsWith("https://")) {
+                                    cleaned = "https://$cleaned"
+                                }
+                                onChangeUrl(cleaned)
+                                onToggleInput()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
+                            modifier = Modifier.height(38.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp)
+                        ) {
+                            Text("Set App", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Presets:", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                        listOf("https://soluti.nl", "https://myapp.engineer").forEach { preset ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = cs.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.clickable {
+                                    tempUrl = preset
+                                    onChangeUrl(preset)
+                                    onToggleInput()
+                                }
+                            ) {
+                                Text(
+                                    preset.replace("https://", ""),
+                                    fontSize = 10.sp,
+                                    color = cs.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppMapSheet(
+    targetUrl: String,
+    onClose: () -> Unit,
+    onLaunchAudit: (String) -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    val domain = remember(targetUrl) {
+        var clean = targetUrl.replace("https://", "").replace("http://", "")
+        clean.substringBefore("/").substringBefore(":")
+    }
+
+    var selectedTab by remember { mutableStateOf(0) }
+    var watchEnabled by remember { mutableStateOf(true) }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable { onClose() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Surface(
+            color = cs.surface,
+            contentColor = cs.onSurface,
+            shape = RoundedCornerShape(22.dp, 22.dp, 0.dp, 0.dp),
+            tonalElevation = 8.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.88f)
+                .clickable(enabled = false) {}
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.align(Alignment.CenterHorizontally).width(40.dp).height(4.dp).clip(CircleShape).background(cs.outline))
+
+                // Header
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(Color(0xFFE5484D).copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Public, null, tint = Color(0xFFE5484D), modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(domain.ifBlank { "Living App Map" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFE5484D).copy(alpha = 0.15f)) {
+                                Text("LIVING MAP", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                            }
+                        }
+                        Text(targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, null, tint = cs.onSurfaceVariant)
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Scrollable content
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    // Dual-Scorecard Glassmorphic Banner
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = cs.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("APP DUAL-SCORECARD", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
+                                    Spacer(Modifier.height(2.dp))
+                                    Text("Perimeter Posture & Exploitability", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+                                }
+                                Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF10B981).copy(alpha = 0.15f)) {
+                                    Text("Grade A+", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = cs.surface,
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f))
+                                ) {
+                                    Column(Modifier.padding(10.dp)) {
+                                        Text("Defensive Posture", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("100 / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Text("DNS • TLS • WAF", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
+                                    }
+                                }
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = cs.surface,
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f))
+                                ) {
+                                    Column(Modifier.padding(10.dp)) {
+                                        Text("Exploitability Score", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("88 / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Text("Low Attack Surface", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Continuous Watch Switch Row
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (watchEnabled) Color(0xFFE5484D).copy(alpha = 0.08f) else cs.surfaceVariant.copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, if (watchEnabled) Color(0xFFE5484D).copy(alpha = 0.4f) else cs.outline.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth().clickable { watchEnabled = !watchEnabled }
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier.size(28.dp).clip(CircleShape).background(if (watchEnabled) Color(0xFFE5484D).copy(alpha = 0.2f) else cs.surfaceVariant),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Security, null, tint = if (watchEnabled) Color(0xFFE5484D) else cs.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Continuous Autonomous Watcher", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+                                Text("Ghost Browser scans daily & diffs for new routes or ports", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                            }
+                            Switch(
+                                checked = watchEnabled,
+                                onCheckedChange = { watchEnabled = it },
+                                colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFE5484D), checkedTrackColor = Color(0xFFE5484D).copy(alpha = 0.3f))
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // Segmented Tabs
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val tabs = listOf("Attack Surface", "Vulnerabilities", "Timeline")
+                        tabs.forEachIndexed { idx, label ->
+                            val active = selectedTab == idx
+                            Surface(
+                                modifier = Modifier.weight(1f).height(34.dp).clickable { selectedTab = idx },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (active) Color(0xFFE5484D) else cs.surfaceVariant.copy(alpha = 0.5f),
+                                contentColor = if (active) Color.White else cs.onSurfaceVariant
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(label, fontSize = 11.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // Tab Content
+                    when (selectedTab) {
+                        0 -> {
+                            // Attack Surface Living Map
+                            Text("DISCOVERED ATTACK SURFACE", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+
+                            // Perimeter & DNS Card
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = cs.surface,
+                                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Public, null, tint = Color(0xFFE5484D), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Perimeter & DNS Posture", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    Text("Apex IP: 65.108.13.228 • Wildcard DNS: Negative • TLS: 1.3 / Grade A+", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                    Text("DNS Hygiene: SPF Strict, DMARC Configured, CAA Valid", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                }
+                            }
+
+                            // Subdomains
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = cs.surface,
+                                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Public, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Verified Subdomains (CT Logs & SANs)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    listOf(domain, "api.$domain", "admin.$domain", "app.$domain").forEach { s ->
+                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(s, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Open Ports & Services
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = cs.surface,
+                                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Shield, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Open Ports & Daemon Banners", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    listOf(
+                                        "Port 443/TCP: HTTPS (nginx/1.24.0, TLS 1.3)",
+                                        "Port 80/TCP: HTTP (301 Redirect to HTTPS)",
+                                        "Port 8080/TCP: HTTP-ALT (Envoy Proxy)"
+                                    ).forEach { p ->
+                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(p, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Mapped SPA Client Routes
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = cs.surface,
+                                border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.TouchApp, null, tint = Color(0xFF8B5CF6), modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Mapped SPA Client Routes & Roles", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                    listOf("/dashboard", "/checkout", "/billing/invoices", "/settings/api-keys", "/admin/users").forEach { r ->
+                                        Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF8B5CF6)))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(r, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        1 -> {
+                            // Vulnerabilities & Findings
+                            Text("ATTACK FINDINGS & ADVISORIES", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+
+                            val mockFindings = listOf(
+                                Triple("CWE-840: Business Logic & Quantity Underflow", "CLEAN / MITIGATED", Color(0xFF10B981)),
+                                Triple("CWE-1021: Content Security Policy frame-ancestors Missing", "MEDIUM SEVERITY", Color(0xFFF59E0B)),
+                                Triple("CWE-693: Strict-Transport-Security Preload Not Enabled", "LOW SEVERITY", Color(0xFF3B82F6))
+                            )
+
+                            mockFindings.forEach { (title, badge, color) ->
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = cs.surface,
+                                    border = BorderStroke(1.dp, color.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                ) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                            Surface(shape = RoundedCornerShape(4.dp), color = color.copy(alpha = 0.15f)) {
+                                                Text(badge, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = color, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                            }
+                                            Text("CVSS 4.3", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
+                                    }
+                                }
+                            }
+                        }
+
+                        2 -> {
+                            // History Timeline
+                            Text("AUDIT & RECON TIMELINE", fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = cs.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+
+                            val historyItems = listOf(
+                                "Today, 09:15" to "Business Logic, Pricing & State Tampering Audit — Clean, 0 findings",
+                                "Yesterday, 14:30" to "6-Point Defensive Recon Suite — Perimeter & TLS A+ verified",
+                                "3 days ago" to "Initial Passive Subdomain & CT Discovery — 4 subdomains indexed"
+                            )
+
+                            historyItems.forEach { (date, desc) ->
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = cs.surface,
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f)),
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                ) {
+                                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.History, null, tint = Color(0xFFE5484D), modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(10.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(date, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D))
+                                            Spacer(Modifier.height(2.dp))
+                                            Text(desc, fontSize = 11.sp, color = cs.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Bottom Action Bar
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onClose,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(44.dp)
+                    ) {
+                        Text("Close", fontSize = 13.sp)
+                    }
+                    Button(
+                        onClick = {
+                            onLaunchAudit("Perform a comprehensive AppSec reconnaissance audit and update the Living App Map for $targetUrl")
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
+                        modifier = Modifier.weight(2f).height(44.dp)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Launch Full Recon Audit", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }

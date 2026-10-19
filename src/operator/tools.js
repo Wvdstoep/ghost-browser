@@ -437,6 +437,15 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
       return ctx.recon.auditBusinessLogic(targetUrl || url || target, { endpoints });
     }, { repeatable: true });
 
+  R('gb_workspace_app_map', 'LIVING APP MAP & CONTINUOUS TARGET WORKSPACE: retrieves, persists, or enriches the persistent living attack surface map and asset dossier for the target application (subdomains, routes, APIs, open ports, dual scorecards, historical audit timeline).',
+    obj({ targetUrl: { type: 'string', description: 'target domain or URL' }, action: { type: 'string', description: 'action: "get", "update", or "list"' }, updates: { type: 'object', description: 'optional updates to ingest into the living map' } }),
+    async ({ targetUrl, action, updates }) => {
+      if (!ctx.recon || !ctx.recon.getTargetWorkspace) return { error: 'targetWorkspace not wired in context' };
+      if (action === 'list') return { apps: ctx.recon.listTargetWorkspaces() };
+      if (action === 'update' && updates) return { appMap: ctx.recon.ingestAuditData(targetUrl, updates) };
+      return { appMap: ctx.recon.getTargetWorkspace(targetUrl) };
+    }, { repeatable: true });
+
   // ── 6 State-of-the-Art Reconnaissance & Deep-Dive Audit Tools ──
   R('gb_audit_subdomains', 'PASSIVE SUBDOMAIN & CERTIFICATE TRANSPARENCY ENUMERATION (CWE-200 / CWE-284): queries crt.sh Certificate Transparency logs, extracts live TLS Subject Alternative Names (SANs), actively resolves DNS A/AAAA records for discovered subdomains, and detects wildcard DNS configurations.',
     obj({ domain: { type: 'string', description: 'domain or URL to discover subdomains for, e.g. "soluti.nl"' }, target: { type: 'string', description: 'alias for domain' }, url: { type: 'string', description: 'alias for domain' } }),
