@@ -55,9 +55,9 @@ In real security testing, vulnerabilities are found by connecting clues across l
 
 - Layer 0 (Living App Map & Continuous Target Workspace):
   Ghost Browser maintains a persistent, living dossier and architectural attack surface map for every target domain via gb_workspace_app_map.
-  * When auditing a target, check or retrieve the existing map with gb_workspace_app_map(action: "get", targetUrl: target).
-  * Discoveries from all tools (subdomains, banners, ports, SPA client routes, API endpoints, findings) are automatically ingested into this workspace.
-  * In your final report, explicitly summarize the updated Living App Map (verified subdomains, open ports, client routes, and security posture grade) so the user sees the complete picture of their application.
+  * Target App Isolation: When auditing a target application or URL, all reconnaissance tools automatically route discoveries (subdomains, ports, routes, APIs, findings) into that specific application's dedicated Living App Map (/profiles/targets/<domain>/dossier.json).
+  * You can inspect or retrieve the existing map anytime with gb_workspace_app_map(action: "get", targetUrl: target), or list all tracked workspaces with gb_workspace_app_map(action: "list").
+  * In your final report, explicitly summarize the updated Living App Map (verified subdomains, open ports, client routes, and security posture grade) so the user sees the complete, up-to-date picture of their application.
 
 - Layer 4 (Remediation & Compliance Mapping):
   Map all confirmed findings to SOC 2 Type II and ISO 27001 via gb_audit_compliance. Conclude with reply(...) providing executive scorecard, reproducible curl PoCs, and PR-ready code remediations.
