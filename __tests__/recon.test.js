@@ -271,5 +271,66 @@ describe('Ghost Browser 6 State-of-the-Art Recon Modules', () => {
       await new Promise(resolve => server.close(resolve));
     }
   });
+
+  describe('Living App Map & Target Workspace Engine', () => {
+    const {
+      getTargetWorkspace,
+      saveTargetWorkspace,
+      ingestAuditData,
+      listTargetWorkspaces,
+      normalizeDomain
+    } = require('../src/recon/targetWorkspace');
+
+    it('normalizes target URLs into clean domain keys', () => {
+      expect(normalizeDomain('https://app.example.com/login?ref=1')).toBe('app.example.com');
+      expect(normalizeDomain('http://sub.domain.org:8080/')).toBe('sub.domain.org');
+      expect(normalizeDomain('target.io')).toBe('target.io');
+    });
+
+    it('scaffolds a fresh target workspace dossier', () => {
+      const ws = getTargetWorkspace('https://unit-test-app.com');
+      expect(ws).toBeDefined();
+      expect(ws.apexDomain).toBe('unit-test-app.com');
+      expect(ws.scores.postureGrade).toBe('A+');
+      expect(Array.isArray(ws.subdomains)).toBe(true);
+      expect(Array.isArray(ws.spaRoutes)).toBe(true);
+      expect(Array.isArray(ws.findings)).toBe(true);
+      expect(Array.isArray(ws.history)).toBe(true);
+    });
+
+    it('ingests multi-phase audit findings, ports, routes, and updates attack surface map', () => {
+      const target = 'https://unit-test-app.com';
+      const ingested = ingestAuditData(target, {
+        perimeter: { apexIp: '1.2.3.4', tlsGrade: 'A' },
+        wildcardDns: false,
+        liveSubdomains: ['api.unit-test-app.com', 'admin.unit-test-app.com'],
+        ports: [{ port: 443, service: 'https', banner: 'nginx/1.24' }],
+        spaRoutes: ['/dashboard', '/settings/billing'],
+        apiEndpoints: ['/api/v1/auth/me', '/api/v1/checkout'],
+        findings: [
+          { key: 'test_cors', severity: 'HIGH', title: 'Permissive CORS' },
+          { key: 'test_cve', severity: 'CRITICAL', title: 'RCE in Webpack Dev Server' }
+        ]
+      });
+
+      expect(ingested.domain).toBe('unit-test-app.com');
+      expect(ingested.perimeter.apexIp).toBe('1.2.3.4');
+      expect(ingested.subdomains.length).toBe(2);
+      expect(ingested.services.length).toBe(1);
+      expect(ingested.services[0].port).toBe(443);
+      expect(ingested.spaRoutes).toContain('/dashboard');
+      expect(ingested.apiEndpoints).toContain('/api/v1/checkout');
+      expect(ingested.findings.length).toBe(2);
+      expect(ingested.history.length).toBeGreaterThanOrEqual(1);
+      // Exploitability score should drop due to CRITICAL and HIGH findings
+      expect(ingested.scores.exploitabilityScore).toBeLessThan(100);
+      expect(['F', 'D', 'C']).toContain(ingested.scores.exploitabilityGrade);
+
+      // Verify listTargetWorkspaces includes this domain
+      const list = listTargetWorkspaces();
+      expect(list.some(item => item.domain === 'unit-test-app.com')).toBe(true);
+    });
+  });
 });
+
 

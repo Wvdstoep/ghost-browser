@@ -1445,7 +1445,54 @@ app.post('/v1/recon/scan', authed, async (req, res) => {
     const target = req.body?.target || req.query?.target;
     if (!target) return res.status(400).json({ error: 'Target domain or URL is required.' });
     const result = await recon.auditTarget(target);
+    // Automatically ingest findings into the persistent Living App Map
+    if (recon.ingestAuditData) {
+      recon.ingestAuditData(target, result);
+    }
     res.json(result);
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.get('/v1/recon/app-map', authed, (req, res) => {
+  try {
+    const target = req.query?.target;
+    if (!target) return res.status(400).json({ error: 'Target URL or domain is required.' });
+    const map = recon.getTargetWorkspace(target);
+    res.json({ appMap: map });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.post('/v1/recon/app-map', authed, (req, res) => {
+  try {
+    const { target, watchEnabled, scheduleInterval, title, auditData } = req.body || {};
+    if (!target) return res.status(400).json({ error: 'Target URL or domain is required.' });
+    let map = recon.getTargetWorkspace(target);
+    if (!map) return res.status(404).json({ error: 'Target not found.' });
+
+    if (watchEnabled !== undefined) map.watchEnabled = !!watchEnabled;
+    if (scheduleInterval) map.scheduleInterval = scheduleInterval;
+    if (title) map.title = title;
+
+    if (auditData) {
+      map = recon.ingestAuditData(target, auditData);
+    } else {
+      map = recon.saveTargetWorkspace(map);
+    }
+
+    res.json({ appMap: map });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+app.get('/v1/recon/app-maps', authed, (_req, res) => {
+  try {
+    const apps = recon.listTargetWorkspaces ? recon.listTargetWorkspaces() : [];
+    res.json({ apps });
   } catch (err) {
     fail(res, err);
   }

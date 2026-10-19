@@ -44,6 +44,7 @@ const dependencyConfusionAuditor = require('./dependencyConfusionAuditor');
 const webCacheAuditor = require('./webCacheAuditor');
 const oauthPkceAuditor = require('./oauthPkceAuditor');
 const businessLogicAuditor = require('./businessLogicAuditor');
+const targetWorkspace = require('./targetWorkspace');
 
 
 // Multi-Layer AppSec Pipelines
@@ -100,6 +101,7 @@ module.exports = {
   ...webCacheAuditor,
   ...oauthPkceAuditor,
   ...businessLogicAuditor,
+  ...targetWorkspace,
   ...bolaLifecyclePipeline,
   ...reachabilityProofPipeline,
   ...blindDetectionPipeline,
