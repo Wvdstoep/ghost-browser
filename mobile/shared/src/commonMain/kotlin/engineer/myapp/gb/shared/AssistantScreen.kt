@@ -93,6 +93,11 @@ data class StarterPrompt(val title: String, val subtitle: String, val prompt: St
 val RECON_PROMPT_CHIPS = listOf(
     // ── MASTER ORCHESTRATOR SUITES ──
     StarterPrompt(
+        title = "💰 Business Logic & Pricing Tampering (CWE-840)",
+        subtitle = "Negative quantities, price parameter tampering, coupon race conditions & currency confusion",
+        prompt = "Perform an autonomous Business Logic, Pricing & State Tampering audit on https://target-domain.com using gb_audit_business_logic. Systematically probes shopping cart, checkout, subscription, and promo endpoints for critical financial logic flaws: 1. Negative quantity arithmetic underflow (CWE-1284), 2. Client-controlled price and total amount tampering (CWE-602), 3. High-concurrency coupon and discount stacking race conditions (CWE-362), and 4. Zero-decimal currency discrepancy confusion (CWE-682). Output exact reproducible curl PoCs and turnkey server-side validation patches."
+    ),
+    StarterPrompt(
         title = "🛡️ 6-Point State-of-the-Art Recon Suite",
         subtitle = "Passive CT Subdomains, CMS & Tech Fingerprint, Sensitive Paths, Service Banners & CVEs, Visual Proof & TLS Health",
         prompt = "Perform a state-of-the-art 6-point defensive reconnaissance and AppSec audit on https://target-domain.com. Systematically execute all 6 advanced recon engines: 1. Passive Subdomain & Certificate Transparency Enumeration (gb_audit_subdomains), 2. CMS & Technology Stack Deep Fingerprinting (gb_audit_tech_stack), 3. Sensitive Paths, Config Leaks & RFC 9116 security.txt (gb_audit_sensitive_paths), 4. Service Version Banner Grabbing & Official CVE Correlation (gb_audit_service_banners), 5. Automated Visual Proof for Exposed Portals (gb_capture_proof), 6. TLS/SSL Cipher & Protocol Health Deep-Dive (gb_audit_tls_health). Connect observations across layers, follow the Red Team Ladder of Research, and output an executive dual-scorecard report."
