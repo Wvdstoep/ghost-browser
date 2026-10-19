@@ -221,37 +221,41 @@ The top of the iceberg represents our core autonomous DAST and perimeter suite, 
 
 ---
 
-### 🌊 Below the Surface: The Community Roadmap & Help Wanted
+### 🌊 Below the Surface: The Open Security Research Frontier
 
-To surpass commercial $20k enterprise red team engagements, we are expanding Ghost Browser into deep, stateful protocol and application logic territory. **We welcome contributions, PRs, and research proposals for these items:**
+Ghost Browser is designed as an open-source **force multiplier for red teamers, penetration testers, bug bounty hunters, and AppSec engineers**. 
+
+Every offensive practitioner knows the frustration of spending 20 hours clicking buttons, enumerating subdomains, and writing repetitive boilerplate reports. Ghost Browser automates the repetitive reconnaissance and perimeter grind so researchers can focus their creative expertise on high-impact, complex logic flaws and earn higher bug bounties.
+
+We invite security researchers, tool authors, and community contributors to collaborate on these next-generation research frontiers:
 
 1. **Stateful WebSocket Binary Frame Fuzzing (`CWE-1385`)**:
    - *Goal:* Mutate real-time binary payloads (Protobuf, MessagePack, custom framing) across active WebSocket sessions.
-2. **Business Logic Pricing & Currency Tampering**:
-   - *Goal:* Automated checks for negative item quantities, race conditions on checkout coupon stacking, and rounding exploitation.
-3. **AI Agent Prompt Injection & Tool Jailbreaks (`OWASP LLM01`)**:
+2. **AI Agent Prompt Injection & Tool Jailbreaks (`OWASP LLM01 / LLM02`)**:
    - *Goal:* Test AI-driven user interfaces for indirect prompt injection, tool calling privilege escalation, and system prompt leakage.
-4. **WebAuthn, FIDO2 & Passkey Attestation Bypass**:
+3. **WebAuthn, FIDO2 & Passkey Attestation Bypass**:
    - *Goal:* Audit WebAuthn registration and authentication flows for missing origin checks, challenge reuse, or RP ID spoofing.
-5. **SAML 2.0 XML Signature Wrapping (`XSW`)**:
+4. **SAML 2.0 XML Signature Wrapping (`XSW`)**:
    - *Goal:* Probing enterprise SSO portals for XML entity expansion and assertion signature wrapping vulnerabilities.
-6. **eBPF-Powered Kernel-Level Network & Memory Taint Tracing**:
+5. **eBPF-Powered Kernel-Level Network & Memory Taint Tracing**:
    - *Goal:* Deep container inspection to monitor kernel syscalls and memory taint tracking during local containerized target runs.
-7. **Mobile App Deep Link & Intent Scheme Injection**:
+6. **Mobile App Deep Link & Intent Scheme Injection**:
    - *Goal:* Audit custom URL schemes (`myapp://...`) and Android App Links / Universal Links for parameter injection and account takeover.
-8. **Dynamic Multi-Step WAF Bypass & Payload Mutation**:
+7. **Dynamic Multi-Step WAF Bypass & Payload Mutation**:
    - *Goal:* Genetic algorithm-based payload mutation to systematically evade Cloudflare, AWS WAF, and ModSecurity rule sets.
-9. **GraphQL WebSocket Subscription Stream Injection**:
+8. **GraphQL WebSocket Subscription Stream Injection**:
    - *Goal:* Test persistent GraphQL subscriptions for resource exhaustion and unauthenticated event eavesdropping.
-10. **HTTP/2 & gRPC Multiplexing Desynchronization**:
-    - *Goal:* Rapid-reset stream flooding (CVE-2023-44487 style) and gRPC header desync detection.
+9. **HTTP/2 & gRPC Multiplexing Desynchronization**:
+   - *Goal:* Rapid-reset stream flooding (CVE-2023-44487 style) and gRPC header desync detection.
+10. **Client-Side Storage & Token Cryptographic Tampering**:
+    - *Goal:* Automated entropy analysis and session replay validation across encrypted IndexedDB and Web Crypto API stores.
 
 ---
 
-### 🤝 How to Contribute
+### 🤝 How to Collaborate & Contribute
 
-Whether you're an AppSec engineer, red teamer, or open-source contributor:
-1. **Pick an item from the Iceberg** (or propose a new module in [Issues](https://github.com/Wvdstoep/ghost-browser/issues)).
+Whether you're an AppSec engineer, red team operator, bug bounty hunter, or open-source developer:
+1. **Explore the Iceberg**: Check out our research frontiers above or propose new ideas in [GitHub Issues](https://github.com/Wvdstoep/ghost-browser/issues).
 2. **Follow the Non-Destructive Design Pattern**: All security tools in Ghost Browser must be non-destructive, safe for production environments, and emit reproducible `curl` PoCs and patch recommendations.
 3. **Submit a Pull Request**: Check out `src/recon/` for examples of existing modules and unit test conventions.
 
