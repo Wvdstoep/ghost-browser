@@ -306,7 +306,13 @@ function listTargetWorkspaces() {
         scores: data.scores || null,
         findingsCount: (data.findings || []).length,
         subdomainCount: (data.subdomains || []).length,
-        serviceCount: (data.services || []).length
+        serviceCount: (data.services || []).length,
+        isCluster: data.isCluster !== undefined ? data.isCluster : (data.targetUrl && data.targetUrl.includes('my-app.engineer')),
+        subdomains: data.subdomains || [],
+        services: data.services || [],
+        spaRoutes: data.spaRoutes || [],
+        perimeter: data.perimeter || {},
+        findings: data.findings || []
       });
     } catch (e) {}
   }
