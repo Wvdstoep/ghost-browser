@@ -334,7 +334,13 @@ function listTargetWorkspaces() {
         scores: { postureScore: 100, postureGrade: 'A+', exploitabilityScore: 100, exploitabilityGrade: 'A+', status: 'Cluster Deployed (Ready for Audit)' },
         findingsCount: 0,
         subdomainCount: 1,
-        serviceCount: 0
+        serviceCount: 0,
+        isCluster: true,
+        subdomains: [dom],
+        services: [],
+        spaRoutes: [],
+        perimeter: {},
+        findings: []
       });
     }
   }
