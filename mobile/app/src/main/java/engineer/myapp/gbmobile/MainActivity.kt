@@ -160,6 +160,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         gbControlJs = try { assets.open("gb-control.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
 
         restoreTabs()
+        assistantHooksInstall()
         try { agentChats = if (vm.agentChatsJson.isNotBlank()) JSONArray(vm.agentChatsJson) else JSONArray() } catch (e: Exception) { agentChats = JSONArray() }
 
         // The real browser lives in this FrameLayout, hosted inside the Compose shell via AndroidView.
