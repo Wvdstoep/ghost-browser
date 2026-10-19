@@ -1866,6 +1866,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             engineer.myapp.gb.shared.AssistantHooks.saveManagedAppsJson = { data ->
                 spMaps.edit().putString("managed_apps_list", data).apply()
             }
+            engineer.myapp.gb.shared.AssistantHooks.getAvailableProfiles = {
+                if (shellUi.profileCards.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) {
+                    try { profilesLoad() } catch (e: Exception) {}
+                }
+                val fromCards = shellUi.profileCards.value.map { it.name }.filter { it.isNotBlank() }
+                val fromVm = vm.profiles.value ?: emptyList()
+                val fromWatcher = shellUi.watcherProfiles.value ?: emptyList()
+                val combined = (fromCards + fromVm + fromWatcher).filter { it.isNotBlank() }.distinct()
+                if (combined.isNotEmpty()) combined else listOf("default", "operator")
+            }
         }
 
     }

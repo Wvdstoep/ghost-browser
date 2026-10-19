@@ -5,6 +5,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -80,6 +81,8 @@ object AssistantHooks {
     /** Persistent storage for managed apps list */
     var getManagedAppsJson: (() -> String?)? = null
     var saveManagedAppsJson: ((data: String) -> Unit)? = null
+    /** Return all cluster & device profiles available to the user */
+    var getAvailableProfiles: (() -> List<String>)? = null
 }
 
 class AssistantActions(
@@ -611,12 +614,27 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
             }
         }
         if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
+        val defaultClusterProfiles = remember {
+            listOf(
+                "default", "operator", "pentest", "admin_session", "bugcrowd", "hackerone",
+                "facebook", "linkedin", "google", "github", "reddit", "youtube", "upwork",
+                "producthunt", "indiehackers", "hackernews", "klingai", "adobefirefly", "elevenlabs",
+                "algora", "capcut", "googleads", "googletrends", "suno", "realjob", "remoteok"
+            )
+        }
+        val allAvailableProfiles = remember(managedApps) {
+            val fromHook = AssistantHooks.getAvailableProfiles?.invoke() ?: emptyList<String>()
+            val fromApps = managedApps.map { it.profile }.filter { it.isNotBlank() }
+            (fromHook + fromApps + defaultClusterProfiles).filter { it.isNotBlank() }.distinct()
+        }
+
         if (showAppMap) {
             val currentApp = managedApps.firstOrNull { it.url.trimEnd('/') == targetAppUrl.trimEnd('/') }
             AppMapSheet(
                 targetUrl = targetAppUrl,
                 chat = chat,
                 appProfile = currentApp?.profile ?: "default",
+                availableProfiles = allAvailableProfiles,
                 onUpdateProfile = { newProf ->
                     if (currentApp != null) {
                         val updated = managedApps.map { if (it.id == currentApp.id) it.copy(profile = newProf) else it }
@@ -638,6 +656,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
             AppManagerSheet(
                 apps = managedApps,
                 activeUrl = targetAppUrl,
+                availableProfiles = allAvailableProfiles,
                 onSelectApp = { app ->
                     updateTargetUrl(app.url)
                     showAppManager = false
@@ -2673,6 +2692,7 @@ private fun AppMapSheet(
     targetUrl: String,
     chat: AssistantChatView?,
     appProfile: String = "default",
+    availableProfiles: List<String> = listOf("default", "operator"),
     onUpdateProfile: ((String) -> Unit)? = null,
     onClose: () -> Unit,
     onLaunchAudit: (String) -> Unit,
@@ -2687,6 +2707,19 @@ private fun AppMapSheet(
     var selectedFilter by remember { mutableStateOf("all") } // all | unsafe | safe | pending
     var expandedVectorId by remember { mutableStateOf<String?>(null) }
     var watchEnabled by remember { mutableStateOf(true) }
+    var showProfilePicker by remember { mutableStateOf(false) }
+
+    if (showProfilePicker) {
+        ProfilePickerSheet(
+            currentProfile = appProfile,
+            availableProfiles = availableProfiles,
+            onSelectProfile = { newProf ->
+                onUpdateProfile?.invoke(newProf)
+                showProfilePicker = false
+            },
+            onClose = { showProfilePicker = false }
+        )
+    }
 
     Box(
         Modifier
@@ -2709,11 +2742,11 @@ private fun AppMapSheet(
                 Spacer(Modifier.height(10.dp))
                 Box(Modifier.align(Alignment.CenterHorizontally).width(40.dp).height(4.dp).clip(CircleShape).background(cs.outline))
 
-                // Header
+                // Header (Clean, uncompressed layout)
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
@@ -2725,35 +2758,13 @@ private fun AppMapSheet(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(map.domain.ifBlank { "Living App Map" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(map.domain.ifBlank { "Living App Map" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.width(6.dp))
                             Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFE5484D).copy(alpha = 0.15f)) {
                                 Text("LIVING MAP", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE5484D), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                             }
                         }
-                        Text(targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant)
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(shape = RoundedCornerShape(3.dp), color = cs.surfaceVariant) {
-                                Row(Modifier.padding(horizontal = 4.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.AccountCircle, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(10.dp))
-                                    Spacer(Modifier.width(3.dp))
-                                    Text("GB PROFILE:", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant)
-                                }
-                            }
-                            Spacer(Modifier.width(4.dp))
-                            listOf("default", "operator", "pentest", "admin_session").forEach { p ->
-                                val active = appProfile == p
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (active) Color(0xFFE5484D).copy(alpha = 0.2f) else cs.surfaceVariant.copy(alpha = 0.4f),
-                                    border = BorderStroke(1.dp, if (active) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.2f)),
-                                    modifier = Modifier.padding(end = 4.dp).clickable { onUpdateProfile?.invoke(p) }
-                                ) {
-                                    Text(p, fontSize = 9.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, color = if (active) Color(0xFFE5484D) else cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
-                                }
-                            }
-                        }
+                        Text(targetUrl.ifBlank { "https://target-domain.com" }, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (onOpenAppManager != null) {
                         Surface(
@@ -2764,10 +2775,10 @@ private fun AppMapSheet(
                             modifier = Modifier.padding(end = 4.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Tune, null, tint = cs.onSurface, modifier = Modifier.size(12.dp))
+                                Icon(Icons.Default.Tune, null, tint = cs.onSurface, modifier = Modifier.size(13.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Apps", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
                             }
@@ -2785,8 +2796,48 @@ private fun AppMapSheet(
                     Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
+                    // Dedicated Ghost Browser Audit Profile Banner
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = cs.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth().clickable { showProfilePicker = true }
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Box(
+                                    Modifier.size(28.dp).clip(CircleShape).background(Color(0xFFE5484D).copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.AccountCircle, null, tint = Color(0xFFE5484D), modifier = Modifier.size(16.dp))
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text("AUDIT SESSION PROFILE", fontSize = 8.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp, color = cs.onSurfaceVariant)
+                                    Text(appProfile, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFFE5484D).copy(alpha = 0.15f),
+                                border = BorderStroke(1.dp, Color(0xFFE5484D).copy(alpha = 0.4f))
+                            ) {
+                                Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Change", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE5484D))
+                                    Spacer(Modifier.width(2.dp))
+                                    Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFFE5484D), modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
                     // Dual-Scorecard Glassmorphic Banner with Audit Progress
                     Surface(
                         shape = RoundedCornerShape(16.dp),
@@ -2843,22 +2894,30 @@ private fun AppMapSheet(
 
                     Spacer(Modifier.height(14.dp))
 
-                    // Segmented Tabs: [Audit Matrix, Attack Surface, Findings, Timeline]
+                    // Segmented Tabs: Horizontally scrollable so labels never squeeze or wrap
                     Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val tabs = listOf("Audit Matrix", "Endpoints & Gaps (${map.probedEndpoints.size})", "Attack Surface", "Findings", "Timeline")
                         tabs.forEachIndexed { idx, label ->
                             val active = selectedTab == idx
                             Surface(
-                                modifier = Modifier.weight(1f).height(34.dp).clickable { selectedTab = idx },
+                                modifier = Modifier.height(34.dp).clickable { selectedTab = idx },
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (active) Color(0xFFE5484D) else cs.surfaceVariant.copy(alpha = 0.5f),
                                 contentColor = if (active) Color.White else cs.onSurfaceVariant
                             ) {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(label, fontSize = 11.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
+                                Box(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
                                 }
                             }
                         }
@@ -3273,26 +3332,29 @@ private fun AppMapSheet(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
                         onClick = onClose,
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f).height(44.dp)
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                        modifier = Modifier.height(42.dp)
                     ) {
-                        Text("Close", fontSize = 13.sp)
+                        Text("Close", fontSize = 12.sp, maxLines = 1)
                     }
                     OutlinedButton(
                         onClick = {
                             onLaunchAudit("Execute Enterprise Deep Spidering on $targetUrl with autoAuth true")
                         },
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1.5f).height(44.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        modifier = Modifier.weight(1f).height(42.dp)
                     ) {
-                        Icon(Icons.Default.AccountCircle, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(15.dp))
+                        Icon(Icons.Default.AccountCircle, null, tint = Color(0xFF3B82F6), modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Auto-Auth", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Auto-Auth", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     }
                     Button(
                         onClick = {
@@ -3300,11 +3362,18 @@ private fun AppMapSheet(
                         },
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
-                        modifier = Modifier.weight(2f).height(44.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.weight(1.3f).height(42.dp)
                     ) {
                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Audit ($appProfile)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (appProfile.isNotBlank() && appProfile != "default") "Audit ($appProfile)" else "Audit Target",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -3316,6 +3385,7 @@ private fun AppMapSheet(
 private fun AppManagerSheet(
     apps: List<ManagedAppTarget>,
     activeUrl: String,
+    availableProfiles: List<String> = listOf("default", "operator"),
     onSelectApp: (ManagedAppTarget) -> Unit,
     onViewAppMap: (ManagedAppTarget) -> Unit,
     onUpdateProfile: (ManagedAppTarget, String) -> Unit,
@@ -3329,6 +3399,32 @@ private fun AppManagerSheet(
     var newAppName by remember { mutableStateOf("") }
     var newAppUrl by remember { mutableStateOf("") }
     var newAppProfile by remember { mutableStateOf("default") }
+    var pickingProfileForApp by remember { mutableStateOf<ManagedAppTarget?>(null) }
+    var pickingProfileForNewApp by remember { mutableStateOf(false) }
+
+    if (pickingProfileForApp != null) {
+        val targetApp = pickingProfileForApp!!
+        ProfilePickerSheet(
+            currentProfile = targetApp.profile,
+            availableProfiles = availableProfiles,
+            onSelectProfile = { newProf ->
+                onUpdateProfile(targetApp, newProf)
+                pickingProfileForApp = null
+            },
+            onClose = { pickingProfileForApp = null }
+        )
+    }
+    if (pickingProfileForNewApp) {
+        ProfilePickerSheet(
+            currentProfile = newAppProfile,
+            availableProfiles = availableProfiles,
+            onSelectProfile = { newProf ->
+                newAppProfile = newProf
+                pickingProfileForNewApp = false
+            },
+            onClose = { pickingProfileForNewApp = false }
+        )
+    }
 
     val filteredApps = when (selectedFilter) {
         1 -> apps.filter { it.isCluster }
@@ -3514,22 +3610,25 @@ private fun AppManagerSheet(
                                 }
 
                                 Spacer(Modifier.height(8.dp))
-                                Text("Ghost Browser Session Profile (e.g. default, operator, pentest)", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                Text("Ghost Browser Session Profile", fontSize = 10.sp, color = cs.onSurfaceVariant)
                                 Spacer(Modifier.height(4.dp))
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = cs.surfaceVariant.copy(alpha = 0.4f),
                                     border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
-                                    modifier = Modifier.fillMaxWidth().height(36.dp)
+                                    modifier = Modifier.fillMaxWidth().height(36.dp).clickable { pickingProfileForNewApp = true }
                                 ) {
-                                    Box(Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
-                                        BasicTextField(
-                                            value = newAppProfile,
-                                            onValueChange = { newAppProfile = it },
-                                            textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
+                                    Row(
+                                        Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.AccountCircle, null, tint = Color(0xFFE5484D), modifier = Modifier.size(15.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(newAppProfile.ifBlank { "default" }, fontSize = 12.sp, color = cs.onSurface, fontWeight = FontWeight.SemiBold)
+                                        }
+                                        Text("Select Profile ▾", fontSize = 10.sp, color = Color(0xFFE5484D), fontWeight = FontWeight.SemiBold)
                                     }
                                 }
 
@@ -3656,23 +3755,33 @@ private fun AppManagerSheet(
 
                                 // APP_MANAGER_PROFILE_SELECTOR
                                 Spacer(Modifier.height(8.dp))
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = cs.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.3f)),
+                                    modifier = Modifier.fillMaxWidth().clickable { pickingProfileForApp = app }
                                 ) {
-                                    Surface(shape = RoundedCornerShape(3.dp), color = cs.surfaceVariant) {
-                                        Text("GB PROFILE:", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                    listOf("default", "operator", "pentest", "admin_session").forEach { prof ->
-                                        val isCurrent = app.profile == prof
+                                    Row(
+                                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.AccountCircle, null, tint = Color(0xFFE5484D), modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("GB PROFILE:", fontSize = 8.5.sp, fontWeight = FontWeight.Bold, color = cs.onSurfaceVariant)
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(app.profile.ifBlank { "default" }, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                                        }
                                         Surface(
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = if (isCurrent) Color(0xFFE5484D).copy(alpha = 0.2f) else cs.surfaceVariant.copy(alpha = 0.4f),
-                                            border = BorderStroke(1.dp, if (isCurrent) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.2f)),
-                                            modifier = Modifier.padding(end = 4.dp).clickable { onUpdateProfile(app, prof) }
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFFE5484D).copy(alpha = 0.15f)
                                         ) {
-                                            Text(prof, fontSize = 9.sp, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal, color = if (isCurrent) Color(0xFFE5484D) else cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                            Row(Modifier.padding(horizontal = 6.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Text("Change", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFE5484D))
+                                                Spacer(Modifier.width(2.dp))
+                                                Icon(Icons.Default.ArrowDropDown, null, tint = Color(0xFFE5484D), modifier = Modifier.size(12.dp))
+                                            }
                                         }
                                     }
                                 }
@@ -3755,6 +3864,223 @@ private fun AppManagerSheet(
                         modifier = Modifier.height(36.dp)
                     ) {
                         Text("Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfilePickerSheet(
+    currentProfile: String,
+    availableProfiles: List<String>,
+    onSelectProfile: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    var searchQuery by remember { mutableStateOf("") }
+    var customName by remember { mutableStateOf("") }
+
+    val filteredProfiles = remember(searchQuery, availableProfiles) {
+        if (searchQuery.isBlank()) availableProfiles
+        else availableProfiles.filter { it.contains(searchQuery.trim(), ignoreCase = true) }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable { onClose() },
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Surface(
+            color = cs.surface,
+            contentColor = cs.onSurface,
+            shape = RoundedCornerShape(22.dp, 22.dp, 0.dp, 0.dp),
+            tonalElevation = 10.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.75f)
+                .clickable(enabled = false) {}
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Spacer(Modifier.height(10.dp))
+                Box(Modifier.align(Alignment.CenterHorizontally).width(40.dp).height(4.dp).clip(CircleShape).background(cs.outline))
+
+                // Title bar
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(32.dp).clip(CircleShape).background(Color(0xFFE5484D).copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.AccountCircle, null, tint = Color(0xFFE5484D), modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("Select Ghost Browser Profile", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("${availableProfiles.size} profiles with active logins & cookies", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                        }
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, null, tint = cs.onSurfaceVariant)
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Search field
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = cs.surfaceVariant.copy(alpha = 0.4f),
+                    border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .height(40.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                            if (searchQuery.isBlank()) {
+                                Text("Search ${availableProfiles.size} profiles…", fontSize = 12.sp, color = cs.onSurfaceVariant.copy(alpha = 0.6f))
+                            }
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+                }
+
+                // Scrollable Profiles List
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    if (filteredProfiles.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                            Text("No profile matching \"$searchQuery\"", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                        }
+                    } else {
+                        filteredProfiles.forEach { prof ->
+                            val isSelected = prof == currentProfile
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) Color(0xFFE5484D).copy(alpha = 0.15f) else cs.surfaceVariant.copy(alpha = 0.25f),
+                                border = BorderStroke(1.dp, if (isSelected) Color(0xFFE5484D) else cs.outline.copy(alpha = 0.2f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp)
+                                    .clickable {
+                                        onSelectProfile(prof)
+                                        onClose()
+                                    }
+                            ) {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.AccountCircle,
+                                            null,
+                                            tint = if (isSelected) Color(0xFFE5484D) else cs.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            prof,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) Color(0xFFE5484D) else cs.onSurface
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color(0xFFE5484D)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp).padding(2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outline.copy(alpha = 0.25f)))
+
+                // Custom profile input row at bottom
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = cs.surfaceVariant.copy(alpha = 0.4f),
+                        border = BorderStroke(1.dp, cs.outline.copy(alpha = 0.4f)),
+                        modifier = Modifier.weight(1f).height(38.dp)
+                    ) {
+                        Box(Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                            if (customName.isBlank()) {
+                                Text("Or type new profile…", fontSize = 12.sp, color = cs.onSurfaceVariant.copy(alpha = 0.6f))
+                            }
+                            BasicTextField(
+                                value = customName,
+                                onValueChange = { customName = it },
+                                textStyle = TextStyle(fontSize = 12.sp, color = cs.onSurface),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            if (customName.isNotBlank()) {
+                                onSelectProfile(customName.trim())
+                                onClose()
+                            }
+                        },
+                        enabled = customName.isNotBlank(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE5484D), contentColor = Color.White),
+                        modifier = Modifier.height(38.dp)
+                    ) {
+                        Text("Apply", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
