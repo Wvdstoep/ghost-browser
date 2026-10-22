@@ -56,7 +56,10 @@ function readProductDocument() {
 
 async function extractProduct(page) {
   const facts = await page.evaluate(readProductDocument);
-  if (!facts.title && !facts.images.length) throw Object.assign(new Error('No product data found on this page'), { status: 422 });
+  const challenge = /captcha|verify.{0,20}human|access denied|security check|sign[ -]?in|log[ -]?in/i.test(facts.title);
+  if (!facts.title || challenge || (facts.evidence !== 'schema.org/Product' && facts.price === null && !facts.images.length)) {
+    throw Object.assign(new Error('No product data found on this page'), { status: 422 });
+  }
   return facts;
 }
 

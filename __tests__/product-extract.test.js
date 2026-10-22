@@ -33,5 +33,9 @@ describe('product facts from a browser page', () => {
       const dom = new JSDOM('<html><body>Sign in</body></html>', { url: 'https://example.com', runScripts: 'outside-only' });
       try { return dom.window.eval('(' + fn.toString() + ')()'); } finally { dom.window.close(); }
     } })).rejects.toThrow('No product data found');
+    await expect(extractor.extractProduct({ evaluate: async fn => {
+      const dom = new JSDOM('<h1>Verify you are human</h1><meta property="og:image" content="/logo.png">', { url: 'https://www.aliexpress.com/item/123.html', runScripts: 'outside-only' });
+      try { return dom.window.eval('(' + fn.toString() + ')()'); } finally { dom.window.close(); }
+    } })).rejects.toThrow('No product data found');
   });
 });
