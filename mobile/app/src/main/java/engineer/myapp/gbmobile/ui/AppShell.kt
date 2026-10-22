@@ -110,7 +110,7 @@ class ShellUi {
     val profileRoleNames = mutableStateOf<List<String>>(emptyList())
     val profileRoleDetail = mutableStateOf<engineer.myapp.gb.shared.RoleChoice?>(null)
     val profileStatus = mutableStateOf("")
-    /* The address bar and nav bar slide away while a page is scrolled down. Fed by the WebView's
+    /* The address bar slides away while a page is scrolled down. Fed by the WebView's
        own scroll reports; see ChromeScroll for why it is direction-with-a-threshold and not position. */
     val chrome = engineer.myapp.gb.shared.ChromeScroll()
 }
@@ -125,7 +125,7 @@ class ShellActions(
     val onCloseSwitcher: () -> Unit,
     val onSelectTab: (Int) -> Unit,
     val onCloseTab: (Int) -> Unit,
-    val onNav: (String) -> Unit,                 // "browser" | "flows"
+    val onNav: (String) -> Unit,                 // "browser" | "flows" | "profiles"
     val onOpenSettings: () -> Unit,
     val onOpenAgent: () -> Unit,
     val onCloseAgent: () -> Unit,
@@ -229,10 +229,8 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
     /*
      * CHROME THAT GETS OUT OF THE WAY WHILE YOU READ.
      *
-     * The omnibox and the nav bar take about a fifth of a phone screen, permanently, on every page.
-     * Scrolling down the page slides both off and gives the space to the content; scrolling up
-     * brings them straight back. Only on the BROWSER: sliding the nav off Profiles or the chat
-     * would leave no way out of the screen, so leaving the browser shows the chrome again.
+     * Scrolling down a browser page hides the address bar; scrolling up brings it back.
+     * Other pages keep the header visible so their menu always provides navigation.
      */
     val collapsible = screen == "browser"
     if (!collapsible) shell.chrome.reset()
@@ -242,7 +240,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
         Column(Modifier.fillMaxSize()) {
             if (screen == "browser") {
                 engineer.myapp.gb.shared.CollapsingSlot(chromeF, fromTop = true) { TopBar(shell, act) }
-            } else if (screen == "flows") TopBar(shell, act)
+            } else TopBar(shell, act)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // The real browser is always mounted so tab state/JS is never torn down; other screens
                 // draw over it (opaque) rather than unmounting it.
@@ -254,7 +252,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                     "flows" -> {
                         var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
                         Column(Modifier.fillMaxSize().background(cs.background)) {
-                            Row(Modifier.fillMaxWidth().statusBarsPaddingSafe().padding(horizontal = 12.dp, vertical = 8.dp)
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                                 .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
                                 listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
                                     val on = sub == i
@@ -277,13 +275,13 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                             )
                         }
                     }
-                    "agent" -> engineer.myapp.gb.shared.AssistantScreen(shell.assistant, act.assistant, topInset = Modifier.statusBarsPaddingSafe())
+                    "agent" -> engineer.myapp.gb.shared.AssistantScreen(shell.assistant, act.assistant)
                     "approvals" -> engineer.myapp.gb.shared.ApprovalsScreen(
                         jobs = shell.jobs.value, loading = shell.jobsLoading.value,
                         onApprove = { j, p, t -> act.onApprove(j, p, t) }, onDeny = { j, p -> act.onDeny(j, p) },
                         onStop = { act.onStopJob(it) }, onSay = { j, t -> act.onSayJob(j, t) },
                         onOpenUrl = { act.onUrlGo(it) }, onRefresh = act.onRefreshApprovals,
-                        topInset = Modifier.statusBarsPaddingSafe(), leads = shell.leads.value,
+                        leads = shell.leads.value,
                     )
                     /*
                      * PROFILES. Pressing one still opens it in a NEW TAB in that profile's own
@@ -306,13 +304,11 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         onClearLogin = { p -> act.onClearProfileLogin(p) },
                         onDelete = { p -> act.onDeleteProfile(p) },
                         status = shell.profileStatus.value,
-                        topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     "settings" -> PhoneSettings(settingsUi, settingsAct, shell, act) { act.onNav("browser") }
-                    "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }, onDeleteRecording = act.onDeleteRecording), topInset = Modifier.statusBarsPaddingSafe())
+                    "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }, onDeleteRecording = act.onDeleteRecording))
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
                         shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
-                        topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     /* The same pipeline page the desktop shows. Ask anywhere, see it everywhere. */
                     "training" -> engineer.myapp.gb.shared.TrainingScreen(
@@ -352,7 +348,6 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         onOpenRun = act.onOpenRun,
                         onCloseRun = { shell.trainingRun.value = null },
                         onLabelStep = act.onLabelStep,
-                        topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     else -> if (shell.url.value.isBlank()) engineer.myapp.gb.shared.HomeScreen(   // new/blank tab → shared home
                         platforms = shell.platforms.value, feed = shell.homeFeed.value, loading = shell.homeFeedLoading.value,
@@ -369,9 +364,6 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
              * was asked on is the surface that has to answer it.
              */
             engineer.myapp.gb.shared.RingWorkStrip()
-            if (collapsible) {
-                engineer.myapp.gb.shared.CollapsingSlot(chromeF, fromTop = false) { BottomBar(shell, act) }
-            } else BottomBar(shell, act)
         }
 
         if (shell.switcherOpen.value) TabGrid(shell, act)
@@ -428,39 +420,6 @@ private fun TabCountButton(count: Int, onClick: () -> Unit) {
             .border(2.dp, cs.onSurface, RoundedCornerShape(8.dp)).clickable { onClick() },
         contentAlignment = Alignment.Center,
     ) { Text(if (count > 99) "99" else "$count", color = cs.onSurface, fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
-}
-
-@Composable
-private fun BottomBar(shell: ShellUi, act: ShellActions) {
-    val cs = MaterialTheme.colorScheme
-    val pending = shell.jobs.value.sumOf { it.proposals.size }
-    NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
-        NavItem(Icons.Default.Public, "Browser", shell.screen.value == "browser") { act.onNav("browser") }
-        NavItem(Icons.Default.Bolt, "Agent", shell.screen.value == "agent") { act.onOpenAgent() }
-        NavItem(Icons.Default.AccountTree, "Flows", shell.screen.value == "flows") { act.onNav("flows") }
-        /* A logged-in identity that automations act through belongs beside the browser, not three
-           taps inside a settings list. */
-        NavItem(Icons.Default.SwitchAccount, "Profiles", shell.screen.value == "profiles") { act.onNav("profiles") }
-        NavItem(Icons.Default.Verified, "Approvals", shell.screen.value == "approvals", badge = pending) { act.onOpenApprovals() }
-        NavItem(Icons.Default.Settings, "Settings", shell.screen.value == "settings") { act.onOpenSettings() }
-    }
-}
-
-@Composable
-private fun RowScope.NavItem(icon: ImageVector, label: String, selected: Boolean, badge: Int = 0, onClick: () -> Unit) {
-    NavigationBarItem(
-        selected = selected, onClick = onClick,
-        icon = {
-            if (badge > 0) BadgedBox(badge = { Badge(containerColor = Brand, contentColor = BrandOn) { Text("$badge") } }) { Icon(icon, label) }
-            else Icon(icon, label)
-        },
-        label = { Text(label, fontSize = 11.sp) },
-        colors = NavigationBarItemDefaults.colors(
-            selectedIconColor = BrandOn, indicatorColor = Brand,
-            selectedTextColor = Brand, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        ),
-    )
 }
 
 /* ── Omnibox (focused URL, Chrome-style) ─────────────────────────────────────────────────────── */
@@ -569,8 +528,11 @@ private fun OverflowMenu(shell: ShellUi, act: ShellActions) {
                 MenuRow(Icons.Default.Search, "Find in page") { act.onCloseMenu(); act.onFindInPage() }
                 MenuRowToggle(Icons.Default.DesktopWindows, "Desktop site", shell.desktopMode.value) { act.onCloseMenu(); act.onToggleDesktop() }
                 MenuDivider()
+                MenuRow(Icons.Default.Public, "Browser") { act.onCloseMenu(); act.onNav("browser") }
                 MenuRow(Icons.Default.Bolt, "Agent") { act.onCloseMenu(); act.onOpenAgent() }
                 MenuRow(Icons.Default.AccountTree, "Flows") { act.onCloseMenu(); act.onNav("flows") }
+                MenuRow(Icons.Default.SwitchAccount, "Profiles") { act.onCloseMenu(); act.onNav("profiles") }
+                MenuRow(Icons.Default.Verified, "Approvals", badge = shell.jobs.value.sumOf { it.proposals.size }) { act.onCloseMenu(); act.onOpenApprovals() }
                 MenuRow(Icons.Default.DevicesOther, "Device Hub") { act.onCloseMenu(); act.onOpenHub() }
                 MenuDivider()
                 MenuRow(Icons.Default.Settings, "Settings") { act.onCloseMenu(); act.onOpenSettings() }
@@ -588,12 +550,13 @@ private fun RoundIcon(icon: ImageVector, cd: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun MenuRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun MenuRow(icon: ImageVector, label: String, badge: Int = 0, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(20.dp))
-        Text(label, color = cs.onSurface, fontSize = 15.sp)
+        Text(label, color = cs.onSurface, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        if (badge > 0) Badge(containerColor = Brand, contentColor = BrandOn) { Text("$badge") }
     }
 }
 
@@ -806,5 +769,5 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
             onSetUseLocal = sa.onSetUseLocal, onSelectLocalModel = sa.onSelectModelIndex, onDownloadLocalModel = sa.onDownloadModel,
         )
     }
-    engineer.myapp.gb.shared.SettingsScreenShared(st, shell.aiModel, handlers, onClose = onClose, topInset = Modifier.statusBarsPaddingSafe())
+    engineer.myapp.gb.shared.SettingsScreenShared(st, shell.aiModel, handlers, onClose = onClose)
 }
