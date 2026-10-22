@@ -1,5 +1,7 @@
 # Ghost Browser
 
+Connect MCP clients such as Codex and Claude Code to the browser with the [MCP setup guide](docs/mcp.md).
+
 A real Chromium, driven by numbered annotations instead of CSS selectors, behind an HTTP API — with an autonomous, multi-layer AI security reconnaissance & vulnerability auditing engine.
 
 ## Why it looks like this

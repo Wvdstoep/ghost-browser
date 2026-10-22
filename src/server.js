@@ -175,6 +175,9 @@ app.get('/v1/config', (_req, res) => res.json({
 const bearer = auth(keys);
 const deviceTokens = require('./deviceTokens'); try { deviceTokens.load(keys, log); } catch (e) { log.warn(`[device-token] load: ${e.message}`); }
 
+// MCP uses program credentials only; never forward a browser console cookie into a tool call.
+require('./mcp').mount(app, { keys, requestApi: require('./mcp').localApi(PORT) });
+
 /*
  * SSO-ONLY mode. A platform-managed install (Ghost Browser connected from the Tools tab) belongs to
  * exactly ONE platform user and must ONLY be entered through their platform login. Local password
