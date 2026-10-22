@@ -2,6 +2,8 @@ package engineer.myapp.gbmobile
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.app.SearchManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -11,8 +13,10 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -65,6 +69,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val tabs = mutableListOf<TabHandle>()
     private var activeTab = -1
     private lateinit var web: WebView                     // always the active tab's WebView
+    private var fullscreenView: View? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
+    private var previousSystemUi = 0
+    private var previousOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    private var wasWindowFullscreen = false
 
     // PROFILE-TARGETED device commands (Device Ring, Phase 1): a command may name a profile; it then runs
     // in that profile's OWN hidden browser (where the login lives), never the visible tab, so a background
@@ -169,7 +178,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         webHolder.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, orr, ob -> if (r - l != orr - ol || b - t != ob - ot) web?.let { fitNarrowScreen(it) } }
 
         // S6: the whole app UI — one Compose host. Settings/Agent/Device Hub are screens INSIDE the
-        // shell (bottom nav stays visible); only the run sheet is a modal overlay of its own.
+        // shell; only the run sheet is a modal overlay of its own.
         appHost = ComposeView(this).also { host ->
             host.setContent {
                 GbTheme(dark = computeDark()) {
@@ -223,6 +232,34 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
 
         activateTab(activeTab.coerceIn(0, tabs.size - 1))
+        handleLaunchIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
+    }
+
+    private fun handleLaunchIntent(incoming: Intent?) {
+        when (incoming?.action) {
+            Intent.ACTION_VIEW -> {
+                val uri = incoming.data ?: return
+                if (uri.scheme != "http" && uri.scheme != "https") return
+                val url = uri.toString()
+                if (tabs.getOrNull(activeTab)?.url == HOME) load(url) else newTab(url)
+            }
+            SearchManager.INTENT_ACTION_GLOBAL_SEARCH, Intent.ACTION_SEARCH, ACTION_WIDGET_SEARCH -> {
+                shellUi.screen.value = "browser"
+                shellUi.searchFromWidget.value = true
+                shellUi.urlFocused.value = true
+            }
+            ACTION_WIDGET_WATCHERS -> {
+                shellUi.screen.value = "flows"
+                shellUi.openWatchersTab.value = true
+                loadWatchers()
+            }
+        }
     }
 
     // ---- tabs -------------------------------------------------------------------------------------
@@ -261,6 +298,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun activateTab(i: Int) {
         if (i < 0 || i >= tabs.size) return
+        if (fullscreenView != null) hideFullscreenView()
         /* Switching tabs shows the chrome: the new tab's scroll position has nothing to do with the
            direction the last one was being read in. */
         shellUi.chrome.reset()
@@ -275,6 +313,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         try { syncLoginForTab(h, h.url) } catch (e: Exception) { vm.log("! login sync: ${e.message}") }
         if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
         shellUi.url.value = if (h.url == HOME) "" else h.url
+        refreshHistory(h.profile)
         shellUi.screen.value = "browser"
         updateTabCount()
     }
@@ -321,6 +360,36 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         shellUi.tabs.value = tabs.mapIndexed { i, h ->
             engineer.myapp.gbmobile.ui.TabInfo(i, if (h.title.isBlank()) "New tab" else h.title, hostLabel(h.url), h.profile, i == activeTab, h.thumb?.asImageBitmap())
         }
+    }
+
+    private fun historyFor(profile: String): List<engineer.myapp.gbmobile.ui.VisitedPage> {
+        val raw = getSharedPreferences("gb_history", MODE_PRIVATE).getString(profile, "[]") ?: "[]"
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { engineer.myapp.gbmobile.ui.VisitedPage(it.optString("url"), it.optString("title")) }
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun refreshHistory(profile: String) { shellUi.visitedPages.value = historyFor(profile) }
+
+    private fun recordVisit(h: TabHandle) {
+        if (h !in tabs) return
+        val page = engineer.myapp.gbmobile.ui.VisitedPage(h.url, h.title.take(200))
+        val current = historyFor(h.profile)
+        val updated = engineer.myapp.gbmobile.ui.VisitedHistory.add(current, page)
+        if (updated == current) return
+        val json = JSONArray()
+        updated.forEach { json.put(JSONObject().put("url", it.url).put("title", it.title)) }
+        getSharedPreferences("gb_history", MODE_PRIVATE).edit().putString(h.profile, json.toString()).apply()
+        if (isActive(h)) shellUi.visitedPages.value = updated
+    }
+
+    private fun clearHistoryForCurrentProfile() {
+        val profile = tabs.getOrNull(activeTab)?.profile ?: return
+        getSharedPreferences("gb_history", MODE_PRIVATE).edit().remove(profile).apply()
+        shellUi.visitedPages.value = emptyList()
     }
 
     /** Chrome-style "Request desktop site" — swaps the UA and reloads this tab (some portals, e.g.
@@ -414,6 +483,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             override fun onPageFinished(view: WebView?, url: String?) {
                 h.url = url ?: h.url
                 if (isActive(h)) lastUrl = h.url
+                recordVisit(h)
                 if (gbJs.isNotEmpty()) view?.evaluateJavascript(gbJs, null)
                 loadLatch?.countDown()
                 syncTabs()
@@ -421,8 +491,25 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
         }
         w.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
+                if (message != null && isActive(h)) {
+                    val line = "${message.messageLevel()} ${message.sourceId().substringAfterLast('/')}" +
+                        ":${message.lineNumber()} ${message.message()}"
+                    shellUi.devToolsLines.value = (shellUi.devToolsLines.value + line).takeLast(250)
+                }
+                return true
+            }
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                if (view == null || callback == null || !::web.isInitialized || w !== web) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
+                showFullscreenView(view, callback)
+            }
+            override fun onHideCustomView() { hideFullscreenView() }
             override fun onReceivedTitle(view: WebView?, title: String?) {
                 if (!title.isNullOrBlank()) h.title = title
+                if (h.url.startsWith("http://") || h.url.startsWith("https://")) recordVisit(h)
                 syncTabs()
             }
         }
@@ -431,6 +518,58 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.addJavascriptInterface(PageBridge(), "GBHost")
         w.layoutParams = ViewGroup.LayoutParams(-1, -1)
         return w
+    }
+
+    private fun showFullscreenView(view: View, callback: WebChromeClient.CustomViewCallback) {
+        if (fullscreenView != null) hideFullscreenView()
+        fullscreenView = view
+        fullscreenCallback = callback
+        previousSystemUi = window.decorView.systemUiVisibility
+        previousOrientation = requestedOrientation
+        wasWindowFullscreen = window.attributes.flags and WindowManager.LayoutParams.FLAG_FULLSCREEN != 0
+        (view.parent as? ViewGroup)?.removeView(view)
+        (b.root as ViewGroup).addView(view, ViewGroup.LayoutParams(-1, -1))
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    private fun hideFullscreenView() {
+        val view = fullscreenView ?: return
+        fullscreenView = null
+        (view.parent as? ViewGroup)?.removeView(view)
+        window.decorView.systemUiVisibility = previousSystemUi
+        if (!wasWindowFullscreen) window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        requestedOrientation = previousOrientation
+        fullscreenCallback = null
+    }
+
+    private fun inspectDevTools(tab: String) {
+        if (!::web.isInitialized || tab == "Console") return
+        val script = when (tab) {
+            "Elements" -> """(function(){var out=[];function walk(n,d){if(out.length>=300||d>8)return;if(n.nodeType===1){out.push('  '.repeat(d)+'<'+n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(n.className&&typeof n.className==='string'?'.'+n.className.trim().split(/\s+/).slice(0,2).join('.'): '')+'>');for(var c=n.firstElementChild;c;c=c.nextElementSibling)walk(c,d+1)}}walk(document.documentElement,0);return out.join('\n')})()"""
+            "Sources" -> """(function(){return document.documentElement.outerHTML.slice(0,40000)})()"""
+            "Network" -> """(function(){return performance.getEntriesByType('resource').slice(-120).map(function(e){return e.initiatorType+'  '+Math.round(e.duration)+'ms  '+e.name}).join('\n')||'No page resource timings available'})()"""
+            "Performance" -> """(function(){var n=performance.getEntriesByType('navigation')[0];if(!n)return 'Navigation timing unavailable';return 'URL: '+location.href+'\nLoad: '+Math.round(n.loadEventEnd)+'ms\nDOM ready: '+Math.round(n.domContentLoadedEventEnd)+'ms\nResponse: '+Math.round(n.responseEnd)+'ms\nResources: '+performance.getEntriesByType('resource').length})()"""
+            "Memory" -> """(function(){var m=performance.memory;return m?'Used JS heap: '+Math.round(m.usedJSHeapSize/1048576)+' MB\nTotal JS heap: '+Math.round(m.totalJSHeapSize/1048576)+' MB':'Memory metrics are unavailable in this WebView'})()"""
+            else -> return
+        }
+        shellUi.devToolsOutput.value = "Loading…"
+        web.evaluateJavascript(script) { encoded ->
+            shellUi.devToolsOutput.value = try { JSONArray("[$encoded]").optString(0).ifBlank { "No data" } } catch (_: Exception) { encoded ?: "No data" }
+        }
+    }
+
+    private fun evaluateDevTools(code: String) {
+        if (!::web.isInitialized) return
+        shellUi.devToolsLines.value = (shellUi.devToolsLines.value + "> $code").takeLast(250)
+        val script = "(function(){try{var v=eval(${JSONObject.quote(code)});return typeof v==='undefined'?'undefined':String(v)}catch(e){return String(e)}})()"
+        web.evaluateJavascript(script) { encoded ->
+            val result = try { JSONArray("[$encoded]").optString(0) } catch (_: Exception) { encoded ?: "" }
+            shellUi.devToolsLines.value = (shellUi.devToolsLines.value + result).takeLast(250)
+        }
     }
 
     private fun loadInBar() = load(shellUi.url.value)
@@ -451,6 +590,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (fullscreenView != null) { fullscreenCallback?.onCustomViewHidden(); hideFullscreenView(); return true }
+            if (shellUi.clearHistoryConfirm.value) { shellUi.clearHistoryConfirm.value = false; return true }
+            if (shellUi.devToolsOpen.value) { shellUi.devToolsOpen.value = false; return true }
             if (shellUi.aiSettingsOpen.value) { shellUi.aiSettingsOpen.value = false; return true }
             if (artHost?.visibility == View.VISIBLE) { hideArtifact(); return true }
             if (runVisible.value && runPhase.value != "running") { runVisible.value = false; runHost?.visibility = View.GONE; return true }
@@ -2421,6 +2563,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onCloseSwitcher = { shellUi.switcherOpen.value = false },
         onSelectTab = { i -> activateTab(i); shellUi.switcherOpen.value = false; shellUi.urlFocused.value = false },
         onCloseTab = { i -> closeTab(i) },
+        onOpenDevTools = { shellUi.screen.value = "browser"; shellUi.devToolsOpen.value = true; shellUi.devToolsTab.value = "Console" },
+        onDevToolsSelect = { tab -> inspectDevTools(tab) },
+        onDevToolsEvaluate = { code -> evaluateDevTools(code) },
+        onClearHistory = { clearHistoryForCurrentProfile() },
         onNav = { s ->
             shellUi.screen.value = s
             if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows")
@@ -2749,6 +2895,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 ))
             }
             shellUi.watchers.value = out
+            WatchersWidgetProvider.refresh(this, out.filter { it.active }.map { it.name })
             if (fetchCfg) out.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}"); apiCall("GET", "/v1/watchers/${it.id}/health", null, "whealth_${it.id}") }
         } catch (e: Exception) { vm.log("! watchers parse: ${data.take(120)}") }
         shellUi.watchersLoading.value = false
@@ -3804,6 +3951,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     override fun onDestroy() {
+        if (fullscreenView != null) hideFullscreenView()
         agentStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}
         try { stopControlWeb() } catch (e: Exception) {}

@@ -4,7 +4,16 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.57** — A browser-first layout with navigation in the header menu, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
+> **v0.58** — Fullscreen site video, local address suggestions per profile, profile labels in the tab switcher, Android default-browser support, home-screen widgets, and mobile developer tools.
+
+Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
+Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
+to erase the current profile's suggestions.
+The home-screen widget picker offers a search shortcut and a watcher summary. The watcher widget shows
+the last data fetched by the app and its sync time; tap it to open and refresh Watchers. The header's
+**⋮ → Developer tools** opens page Console, Elements, Sources, Network, Performance, and Memory views.
+Android WebView only exposes page-visible resource timings and optional JavaScript heap data, so its
+Network and Memory views are more limited than desktop Chrome DevTools.
 
 Two ways to drive it, sharing one browser (tap the header's **⋮ → Settings** to open the panel):
 
@@ -30,9 +39,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.57 debug APK](dist/app-debug.apk). It was built from the source in this
-repository after the Android build, consent test, shared desktop tests, and desktop compilation passed.
-SHA-256: `6b977f85941118388772b040ccffa4c787ae437d15442cb4928221c4b08707bf`.
+Download the checked-in [v0.58 debug APK](dist/app-debug.apk). It was built from the source in this
+repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
+SHA-256: `bcecc3a6de3e1dfa89fec05ff3efaef47f9e750c3600af38e88c39d886ee7591`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
