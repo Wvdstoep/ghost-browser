@@ -33,7 +33,12 @@ if [ -d "$SRC/.git" ]; then sudo chown -R carla:carla "$SRC" 2>/dev/null; git -C
 else rm -rf "$SRC"; git clone --quiet --depth 50 "$REPO_URL" "$SRC" || { echo "clone failed"; exit 1; }; fi
 NEW=$(git -C "$SRC" rev-parse origin/main 2>/dev/null || git -C "$SRC" rev-parse HEAD)
 LAST=$(cat "$STATE" 2>/dev/null || echo "")
-if [ "$NEW" = "$LAST" ]; then echo "no new commit ($NEW)"; exit 0; fi
+if [ "$NEW" = "$LAST" ]; then
+  echo "no new commit ($NEW)"
+  current_image=$(sudo kubectl -n "$NS" get deploy "$DEPLOY" -o jsonpath='{.spec.template.spec.containers[0].image}')
+  bash "$SRC/scripts/gb-sync-ben.sh" "$current_image"
+  exit $?
+fi
 git -C "$SRC" checkout --quiet -B main origin/main 2>/dev/null || git -C "$SRC" reset --hard "$NEW"
 echo "canonical advanced: ${LAST:-none} -> $NEW"
 
@@ -154,6 +159,7 @@ sudo kubectl -n "$NS" set image deploy/"$DEPLOY" "${CONTAINER}=${IMG}:${TAG}"
 if sudo kubectl -n "$NS" rollout status deploy/"$DEPLOY" --timeout=180s; then
   echo "$NEW" > "$STATE"; rm -f "${STATE}.pending" "${STATE}.pending-since"
   echo "ROLLED $DEPLOY -> $TAG"
+  bash "$SRC/scripts/gb-sync-ben.sh" "$IMG:$TAG"
 else
   echo "rollout did not become ready in time — check the pod"; exit 1
 fi
