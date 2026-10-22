@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <base href="/console/">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Ghost Browser</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #16171A; }
+    #ComposeTarget { display: block; width: 100vw; height: 100vh; outline: none; }
+    .mcp-link { position: fixed; z-index: 20; right: 12px; bottom: 12px; padding: 9px 13px; border-radius: 10px; background: #2f80ed; color: white; font: 600 13px system-ui, sans-serif; text-decoration: none; box-shadow: 0 2px 12px #0008; }
+    .mcp-link:focus-visible { outline: 3px solid white; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <canvas id="ComposeTarget"></canvas>
+  <a class="mcp-link" href="/mcp-setup.html">MCP setup</a>
+  <script src="live-overlay.js"></script>
+  <script src="gbweb.js"></script>
+</body>
+</html>

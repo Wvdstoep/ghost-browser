@@ -46,10 +46,9 @@ echo "building $IMG:$TAG (current v$CUR)"
 # public/console/ is ~28MB of Kotlin/Wasm output and is gitignored on purpose, so a fresh clone of
 # main NEVER carries it. That is why every auto-deployed image silently shipped the OLD html console
 # while hand-builds from gb.new shipped the shared Compose UI: the dist only ever existed on disk.
-# Copy the dist (and the loader index.html that points at it) into the build context before the
-# image is built, so an auto-deploy stops reverting the console.
+# Copy the dist and use the versioned loader from this repo. The loader links the MCP setup UI.
 CONSOLE_SRC="/home/carla/gb.new/public/console"
-LOADER_SRC="/home/carla/gb.new/public/index.html"
+LOADER_SRC="$SRC/public/compose-index.html"
 if [ -d "$CONSOLE_SRC" ]; then
   rm -rf "$SRC/public/console"
   cp -a "$CONSOLE_SRC" "$SRC/public/console"

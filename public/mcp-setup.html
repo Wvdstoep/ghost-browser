@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCP setup · Ghost Browser</title>
+  <style>
+    :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; }
+    body { background: #16171a; color: #f2f4f8; margin: 0; padding: 24px; }
+    main { max-width: 760px; margin: 0 auto; }
+    a { color: #80b6ff; }
+    section { background: #22252b; border: 1px solid #3a3f48; border-radius: 14px; padding: 20px; margin: 16px 0; }
+    h1 { margin-bottom: 4px; } h2 { margin-top: 0; font-size: 19px; }
+    p { color: #c4c9d3; } code, pre, input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #14161a; padding: 12px; border-radius: 8px; }
+    input { box-sizing: border-box; width: 100%; background: #14161a; color: #fff; border: 1px solid #565d68; border-radius: 8px; padding: 10px; }
+    button { background: #2f80ed; color: white; border: 0; border-radius: 8px; padding: 9px 13px; cursor: pointer; margin: 8px 8px 0 0; }
+    button:focus-visible { outline: 3px solid white; outline-offset: 2px; }
+    .hide { display: none; } .skey { white-space: pre-wrap; overflow-wrap: anywhere; background: #14161a; padding: 12px; border-radius: 8px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+<main id="mcpSetup">
+  <a href="/">← Ghost Browser</a>
+  <h1>MCP setup</h1>
+  <p>Connect Codex or Claude Code to this Ghost Browser's internet tools. A browser API key grants full access to this instance, so keep it private.</p>
+  <section>
+    <h2>1. Server URL and key</h2>
+    <label for="mcpEndpoint">Server URL</label>
+    <input id="mcpEndpoint" readonly>
+    <button id="mcpCopyUrl" type="button">Copy URL</button>
+    <p>Sign in to this Ghost Browser before revealing its key. Keep the key out of project files and commits.</p>
+    <button id="mcpRevealKey" type="button">Reveal API key</button>
+    <pre id="mcpKeyBox" class="skey hide"></pre>
+  </section>
+  <section>
+    <h2>2. Codex</h2>
+    <p>Set <code>GHOST_BROWSER_KEY</code> in the environment that starts Codex. Add this to <code>~/.codex/config.toml</code>, then start a new session.</p>
+    <pre id="mcpCodexConfig"></pre>
+    <button id="mcpCopyCodex" type="button">Copy Codex config</button>
+  </section>
+  <section>
+    <h2>3. Claude Code</h2>
+    <p>Replace <code>YOUR_GHOST_BROWSER_KEY</code> with your key and run this command in a private terminal.</p>
+    <pre id="mcpClaudeCommand"></pre>
+    <button id="mcpCopyClaude" type="button">Copy Claude command</button>
+  </section>
+  <p id="mcpSetupMsg" role="status" aria-live="polite"></p>
+  <p>To save AliExpress products in Product A, connect its merchant MCP too. Use Ghost Browser's <code>browser_extract_product</code>, review the facts, then call Product A's <code>create_product_draft</code> with the source URL in <code>originalUrl</code>.</p>
+</main>
+<script src="/js/mcp-setup.js"></script>
+</body>
+</html>

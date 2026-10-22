@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const html = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+const setupPage = readFileSync(fileURLToPath(new URL('../public/mcp-setup.html', import.meta.url)), 'utf8');
+const composeLoader = readFileSync(fileURLToPath(new URL('../public/compose-index.html', import.meta.url)), 'utf8');
+const deployScript = readFileSync(fileURLToPath(new URL('../scripts/gb-auto-deploy.sh', import.meta.url)), 'utf8');
 const script = readFileSync(fileURLToPath(new URL('../public/js/mcp-setup.js', import.meta.url)), 'utf8');
 
 describe('MCP setup in Settings', () => {
@@ -45,6 +48,21 @@ describe('MCP setup in Settings', () => {
     dom.window.eval(script);
     dom.window.document.querySelector('#mcpCopyUrl').click();
     await vi.waitFor(() => expect(dom.window.document.querySelector('#mcpSetupMsg').textContent).toContain('Could not copy'));
+    dom.window.close();
+  });
+
+  it('offers setup in the deployed Compose console and reveals a key only on request', async () => {
+    expect(composeLoader).toContain('href="/mcp-setup.html"');
+    expect(composeLoader).toContain('src="gbweb.js"');
+    expect(deployScript).toContain('LOADER_SRC="$SRC/public/compose-index.html"');
+    const dom = new JSDOM(setupPage, { url: 'https://ghost-browser.example.test/mcp-setup.html', runScripts: 'outside-only' });
+    const fetchKey = vi.fn(async () => ({ ok: true, json: async () => ({ keys: [{ key: 'test-secret' }] }) }));
+    dom.window.fetch = fetchKey;
+    dom.window.eval(script);
+    expect(fetchKey).not.toHaveBeenCalled();
+    dom.window.document.querySelector('#mcpRevealKey').click();
+    await vi.waitFor(() => expect(dom.window.document.querySelector('#mcpKeyBox').textContent).toBe('test-secret'));
+    expect(fetchKey).toHaveBeenCalledWith('/api/auth/key', { credentials: 'same-origin' });
     dom.window.close();
   });
 });
