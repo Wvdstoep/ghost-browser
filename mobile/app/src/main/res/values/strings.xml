@@ -2,4 +2,6 @@
     <string name="app_name">GB Mobile</string>
     <string name="url_hint">Enter a URL…</string>
     <string name="go">Go</string>
+    <string name="widget_search_description">Open Ghost Browser and search the web</string>
+    <string name="widget_watchers_description">See your latest watcher summary and open Watchers</string>
 </resources>

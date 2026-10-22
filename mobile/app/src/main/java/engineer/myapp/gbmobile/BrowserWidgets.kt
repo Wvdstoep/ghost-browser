@@ -37,9 +37,11 @@ class WatchersWidgetProvider : AppWidgetProvider() {
         val syncedAt = prefs.getLong("watchers_synced_at", 0L)
         ids.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.widget_watchers)
-            views.setTextViewText(R.id.widget_watchers_count, if (count < 0) "Open to load watchers" else "$count active watcher${if (count == 1) "" else "s"}")
-            views.setTextViewText(R.id.widget_watchers_names, names.ifBlank { "Tap to view your watchers" })
-            views.setTextViewText(R.id.widget_watchers_updated, if (syncedAt == 0L) "" else "Last synced " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(syncedAt)))
+            views.setTextViewText(R.id.widget_watchers_count, if (count < 0) "—" else count.toString())
+            views.setTextViewText(R.id.widget_watchers_names,
+                if (count < 0) "Tap to load your watchers" else if (count == 0) "No active watchers" else names)
+            views.setTextViewText(R.id.widget_watchers_updated,
+                if (syncedAt == 0L) "Open to sync" else "Synced " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(syncedAt)))
             views.setOnClickPendingIntent(R.id.widget_watchers_button, widgetIntent(context, ACTION_WIDGET_WATCHERS, 2))
             manager.updateAppWidget(id, views)
         }
