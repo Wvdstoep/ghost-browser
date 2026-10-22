@@ -580,6 +580,13 @@ h1, h2, h3 { line-height: 1.25; font-weight: 700; color: var(--tx); }
   color: var(--tx); margin-top: 8px;
 }
 .sempty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.mcp-url { flex: 1; min-width: 230px; }
+.mcp-hint, .mcp-client p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.mcp-hint { margin: 10px 0 16px; }
+.mcp-client { border-top: 1px solid var(--line); padding-top: 15px; margin-top: 15px; }
+.mcp-client h4 { font-size: 14px; color: var(--tx); margin: 0 0 6px; }
+.mcp-client code { color: var(--tx); }
+.mcp-code { overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--tx); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 11px 12px; margin: 10px 0; }
 
 /* ── Admin view ─── */
 .admin-tabs { display: flex; gap: 6px; align-items: center; padding: 0 0 20px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }

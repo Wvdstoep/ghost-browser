@@ -298,6 +298,31 @@
             <div class="smsg" id="setAgentMsg"></div>
           </div>
 
+          <!-- External MCP clients -->
+          <div class="scard" id="mcpSetup">
+            <h3><span class="si" aria-hidden="true">🔌</span>MCP for Codex &amp; Claude Code</h3>
+            <p class="desc">Connect an external coding agent to this browser's internet tools. It uses this browser's API key, which grants full browser access. Only add it to a client you trust.</p>
+            <label class="slabel" for="mcpEndpoint">Server URL</label>
+            <div class="srow">
+              <input class="sin mcp-url" id="mcpEndpoint" readonly>
+              <button class="sbtn" id="mcpCopyUrl" type="button">Copy URL</button>
+            </div>
+            <p class="mcp-hint">Your key is under Account → Reveal API key below. Keep it out of project files and commits.</p>
+            <div class="mcp-client">
+              <h4>Codex</h4>
+              <p>Set <code>GHOST_BROWSER_KEY</code> in the environment that starts Codex. Add this to <code>~/.codex/config.toml</code>, then start a new session.</p>
+              <pre id="mcpCodexConfig" class="mcp-code"></pre>
+              <button class="sbtn" id="mcpCopyCodex" type="button">Copy Codex config</button>
+            </div>
+            <div class="mcp-client">
+              <h4>Claude Code</h4>
+              <p>Replace <code>YOUR_GHOST_BROWSER_KEY</code> with your key and run this command in a private terminal.</p>
+              <pre id="mcpClaudeCommand" class="mcp-code"></pre>
+              <button class="sbtn" id="mcpCopyClaude" type="button">Copy Claude command</button>
+            </div>
+            <div class="smsg" id="mcpSetupMsg" role="status" aria-live="polite"></div>
+          </div>
+
           <!-- Account -->
           <div class="scard">
             <h3><span class="si" aria-hidden="true">🔑</span>Account</h3>
@@ -1015,6 +1040,7 @@ done</pre>
 
 <script src="js/console.js"></script>
 <script src="js/dashboard.js"></script>
+<script src="js/mcp-setup.js"></script>
 <script src="js/marketplace.js"></script>
 <script src="js/automation.js"></script>
 <script src="js/files.js"></script>
