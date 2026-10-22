@@ -130,5 +130,7 @@ object AssistantD {
         onList = { host, key -> bg { st.aiModel.busy.value = true; st.aiModel.note.value = "asking your Ghost Browser…"; val (list, note) = AssistantJson.models(Cluster.authed("POST", "/v1/agent/models", body(host, key))); st.aiModel.busy.value = false; st.aiModel.models.value = list; st.aiModel.note.value = note } },
         onTest = { host, key, model -> bg { st.aiModel.busy.value = true; st.aiModel.note.value = "testing $model…"; val r = try { JSONObject(Cluster.authed("POST", "/v1/agent/test", body(host, key, model))) } catch (e: Exception) { JSONObject().put("error", "no answer") }; st.aiModel.busy.value = false; st.aiModel.note.value = if (r.has("error")) "✗ ${r.optString("error").take(120)}" else "✓ $model answers" } },
         onSave = { host, key, model -> bg { val r = try { JSONObject(Cluster.authed("PUT", "/v1/agent/settings", body(host, key, model))) } catch (e: Exception) { JSONObject().put("error", "no answer") }; st.aiModel.note.value = if (r.has("error")) "✗ ${r.optString("error").take(120)}" else "✓ saved — the agent now runs on ${r.optString("llmModel", model)}"; loadModel(st) } },
+        /* The backup ring. The sheet had the field for a while; on the desktop nothing ever sent it. */
+        onSaveBackups = { backups -> bg { try { Cluster.authed("PUT", "/v1/agent/settings", JSONObject().put("llmKeys", backups.trim()).toString()) } catch (e: Exception) { st.aiModel.note.value = "✗ could not save the backup key" }; loadModel(st) } },
     )
 }

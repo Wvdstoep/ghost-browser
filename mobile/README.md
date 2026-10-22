@@ -32,13 +32,19 @@ So control travels the tailnet; browsing travels the device.
 ## Try it (prebuilt debug APK)
 Download **[`dist/app-debug.apk`](dist/app-debug.apk)** on Android, allow "install from unknown sources",
 install, open. Type any URL in the bar, or open **⚙** to run the agent / connect to the cluster.
-Debug build, unsigned — fine for sideloading.
+This checked-in APK may be older than the source. Debug builds are signed with the build machine's
+debug key and are intended for development and sideloading, not production release.
 
 ## Build it yourself
 Needs the Android SDK + JDK 17+:
 ```
 ./gradlew assembleDebug   # -> app/build/outputs/apk/debug/app-debug.apk
 ```
+
+On Windows, run `gradlew.bat :app:assembleDebug` from this directory. GitHub Actions also builds the
+debug APK and runs shared desktop tests on pushes to `main`, pull requests, and manual dispatches.
+Download the `ghost-browser-debug-apk` artifact from the corresponding Actions run. A production
+release requires a separately configured release signing key and release process.
 
 ## What's next
 Embed Tailscale (`tsnet`/gomobile) so joining the tailnet is one tap inside the app; a live-view stream

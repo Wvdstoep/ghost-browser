@@ -305,10 +305,50 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         status = shell.profileStatus.value,
                         topInset = Modifier.statusBarsPaddingSafe(),
                     )
-                    "settings" -> SettingsScreen(true, settingsUi, settingsAct) { act.onNav("browser") }
+                    "settings" -> PhoneSettings(settingsUi, settingsAct, shell, act) { act.onNav("browser") }
                     "downloads" -> engineer.myapp.gb.shared.DownloadsScreen(shell.downloads, engineer.myapp.gb.shared.DownloadsActions(onRefresh = act.onLoadFiles, onDelete = act.onDeleteFile, onClose = { act.onNav("settings") }, onDeleteRecording = act.onDeleteRecording), topInset = Modifier.statusBarsPaddingSafe())
                     "devices" -> engineer.myapp.gb.shared.DeviceHubScreen(
                         shell.hubDevices.value, shell.hubSummary.value, act.onRefreshHub, System.currentTimeMillis(),
+                        topInset = Modifier.statusBarsPaddingSafe(),
+                    )
+                    /* The same pipeline page the desktop shows. Ask anywhere, see it everywhere. */
+                    "training" -> engineer.myapp.gb.shared.TrainingScreen(
+                        shell.training.value,
+                        onRefresh = act.onRefreshTraining,
+                        onPromote = act.onPromoteRound,
+                        onSetAuto = act.onSetTrainingAuto,
+                        onRunNow = act.onRunRoundNow,
+                        onAllowTrainer = act.onAllowTrainer,
+                        onSetUpTrainer = act.onSetUpTrainer,
+                        onSetHarvest = act.onSetHarvest,
+                        onSetResight = act.onSetResight,
+                        onSetServing = act.onSetServing,
+                        onSetGpu = act.onSetGpu,
+                        onDestroyGpu = act.onDestroyGpu,
+                        onSetJudge = act.onSetJudge,
+                        onSetPractice = act.onSetPractice,
+                        onSetAutopilot = act.onSetAutopilot,
+                        onStopRound = act.onStopRound,
+                        onNodeJoin = act.onNodeJoin,
+                        onNodeRevoke = act.onNodeRevoke,
+                        onSetModal = act.onSetModal,
+                        onModalStart = act.onModalStart,
+                        onTrialStudents = act.onTrialStudents,
+                        results = shell.trainingResults.value,
+                        onLoadResults = act.onLoadResults,
+                        compareOffer = shell.compareOffer.value,
+                        compareRun = shell.compareRun.value,
+                        onLoadCompare = act.onLoadCompare,
+                        onCompareRecorded = act.onCompareRecorded,
+                        onCompareLive = act.onCompareLive,
+                        onCompareStop = act.onCompareStop,
+                        onModalStop = act.onModalStop,
+                        runs = shell.trainingRuns.value,
+                        runDetail = shell.trainingRun.value,
+                        onLoadRuns = act.onLoadRuns,
+                        onOpenRun = act.onOpenRun,
+                        onCloseRun = { shell.trainingRun.value = null },
+                        onLabelStep = act.onLabelStep,
                         topInset = Modifier.statusBarsPaddingSafe(),
                     )
                     else -> if (shell.url.value.isBlank()) engineer.myapp.gb.shared.HomeScreen(   // new/blank tab → shared home
@@ -726,3 +766,52 @@ private fun AiDropdown(options: List<String>, selectedIndex: Int, onSelect: (Int
 /* ── insets helpers (safe if window insets APIs vary) ─────────────────────────────────────────── */
 @Composable private fun Modifier.statusBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.statusBars))
 @Composable private fun Modifier.navigationBarsPaddingSafe(): Modifier = this.then(Modifier.windowInsetsPadding(WindowInsets.ime))
+
+/**
+ * THE ONE SETTINGS PAGE, fed from the phone's own state. The phone keeps its SettingsUi (the
+ * activity, the on-device model, the connection) and the shared page reads it through a
+ * SettingsState it fills on every pass; the handlers are the phone's own actions, and the model
+ * section is the same AiModelUi/AiModelActions the model sheet uses - one key ring everywhere.
+ */
+@androidx.compose.runtime.Composable
+private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, act: ShellActions, onClose: () -> Unit) {
+    val st = androidx.compose.runtime.remember { engineer.myapp.gb.shared.SettingsState() }
+    val local = androidx.compose.runtime.remember { engineer.myapp.gb.shared.LocalModelUi() }
+    st.clusterUrl.value = ui.clusterUrl
+    st.clusterStatus.value = ui.clusterStatus.value
+    st.connected.value = ui.connected.value
+    st.deviceKind.value = "phone"
+    st.deviceLine.value = ui.phoneCaps.value.ifBlank { "android · native touch · real IP" }
+    st.platforms.value = ui.platforms.value
+    st.profiles.value = ui.profiles.value
+    st.currentProfile.value = ui.currentProfile.value
+    st.roleNames.value = ui.roleNames.value
+    st.roleForCurrent.value = ui.roleForCurrent.value
+    st.devices.value = ui.devices.value
+    st.hubSummary.value = shell.hubSummary.value
+    st.trainingLine.value = sa.trainingLine()
+    st.networkLine.value = "This phone operates on its own real mobile IP — the strongest fingerprint for Cloudflare-gated sites. The cluster's Ghost Browser keeps its own in-image exit node."
+    st.themeDark.value = ui.themeMode.value != 1
+    st.activity.value = ui.log.value
+    st.appLabel.value = "Ghost Browser Mobile"
+    local.useLocal.value = ui.useLocal.value
+    local.labels.value = ui.modelLabels.value
+    local.index.value = ui.modelIndex.value
+    local.status.value = ui.modelStatus.value
+    local.progress.value = ui.modelProgress.value
+    st.local.value = local
+    val handlers = androidx.compose.runtime.remember(sa, act) {
+        engineer.myapp.gb.shared.SettingsHandlers(
+            onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onConnectToggle = sa.onConnectToggle,
+            onSetPassword = sa.onSetPassword,
+            onResync = sa.onResync, onOpenHub = sa.onOpenHub, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
+            onLoadPlatforms = sa.onLoadPlatforms, onOpenPlatform = sa.onOpenPlatform,
+            onSwitchProfile = sa.onSwitchProfile, onAddProfile = sa.onAddProfile, onSetRole = sa.onSetRole, onLoadRoles = sa.onLoadRoles,
+            onRefreshDevices = sa.onRefreshDevices, onOpenTailscale = sa.onOpenTailscale,
+            onSetTheme = { dark -> sa.onSetTheme(if (dark) 0 else 1) }, onClearLog = sa.onClearLog,
+            aiModel = act.aiModel,
+            onSetUseLocal = sa.onSetUseLocal, onSelectLocalModel = sa.onSelectModelIndex, onDownloadLocalModel = sa.onDownloadModel,
+        )
+    }
+    engineer.myapp.gb.shared.SettingsScreenShared(st, shell.aiModel, handlers, onClose = onClose, topInset = Modifier.statusBarsPaddingSafe())
+}
