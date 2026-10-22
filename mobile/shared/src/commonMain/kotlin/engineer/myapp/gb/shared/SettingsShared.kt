@@ -88,6 +88,7 @@ class SettingsHandlers(
     val onOpenDownloads: () -> Unit = {},
     val onLoadPlatforms: () -> Unit = {},
     val onOpenPlatform: (profile: String, site: String) -> Unit = { _, _ -> },
+    val onSetCookieSync: ((profile: String, approved: Boolean) -> Unit)? = null,
     val onSwitchProfile: ((String) -> Unit)? = null,
     val onAddProfile: ((String) -> Unit)? = null,
     val onSetRole: ((String) -> Unit)? = null,
@@ -365,7 +366,15 @@ private fun ProfilesSection(s: SettingsState, h: SettingsHandlers) {
                     }
                     Box(Modifier.size(9.dp).clip(CircleShape).background(if (p.signedIn) Brand else cs.onSurfaceVariant))
                 }
+                if (s.deviceKind.value == "phone" && h.onSetCookieSync != null) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Share this login with cluster", Modifier.weight(1f), fontSize = 12.sp)
+                        Switch(checked = p.syncApproved, onCheckedChange = { h.onSetCookieSync.invoke(p.profile, it) })
+                    }
+                }
             }
+            if (s.deviceKind.value == "phone" && h.onSetCookieSync != null)
+                Text("Sharing copies session cookies to the cluster. Android does not expose their original scope or HttpOnly flags. Turning sharing off stops future copies; sign out in the cluster profile to clear an existing session.", color = cs.onSurfaceVariant, fontSize = 11.sp)
         }
         TextButton(onClick = h.onLoadPlatforms) { Text("Load platforms from cluster", color = Brand) }
         if (h.onSwitchProfile != null && s.profiles.value.isNotEmpty()) {

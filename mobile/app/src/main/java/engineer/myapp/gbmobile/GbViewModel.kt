@@ -40,6 +40,9 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     // --- cluster (my-app.engineer SSO) ---
     var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
         set(v) { sp.edit().putString("clusterUrl", v).apply() }
+    var approvedCookieSync: Set<String>
+        get() = sp.getStringSet("approvedCookieSync", emptySet())?.toSet() ?: emptySet()
+        set(v) { sp.edit().putStringSet("approvedCookieSync", v.toSet()).apply() }
 
     // --- cached cluster data (so fetched platforms/flows persist across launches) ---
     var platformsJson: String get() = sp.getString("platformsCache", "") ?: ""

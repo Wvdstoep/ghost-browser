@@ -7,7 +7,7 @@
 (function () {
   if (window.__gbctl) return;
   window.__gbctl = true;
-  var DEV = "__DEVICE_ID__", NAME = "__DEVICE_NAME__";
+  var DEV = "__DEVICE_ID__", NAME = "__DEVICE_NAME__", TOKEN = __BRIDGE_TOKEN__;
   // S4: capability record — what this phone can do, so the cluster router can pick it for the right runs.
   var CAPS = __CAPS__;
 
@@ -17,8 +17,8 @@
   window.__gbApi = function (m, p, b, t) {
     var o = { method: m, credentials: 'include', headers: { 'Content-Type': 'application/json' } };
     if (b) o.body = b;
-    fetch(p, o).then(function (r) { return r.text() }).then(function (x) { GBHost.result(t, x) })
-      .catch(function (e) { GBHost.result(t + '_err', String(e)) });
+    fetch(p, o).then(function (r) { return r.text() }).then(function (x) { GBHost.result(TOKEN, t, x) })
+      .catch(function (e) { GBHost.result(TOKEN, t + '_err', String(e)) });
   };
 
   window.__gbResult = function (id, status, bodyStr) {
@@ -43,13 +43,13 @@
         if (r.status === 204) { setTimeout(loop, 400); return; }
         // 404 = the backend forgot us (GB pod rolled / restarted) → re-register instead of spinning.
         if (r.status === 404) { setTimeout(reg, 800); return; }
-        if (!r.ok) { GBHost.ctl('pollerr', String(r.status)); setTimeout(loop, 3000); return; }
+        if (!r.ok) { GBHost.ctl(TOKEN, 'pollerr', String(r.status)); setTimeout(loop, 3000); return; }
         return r.json().then(function (cmd) {
-          GBHost.onCommand(cmd.id || '', cmd.path || '/v1/info', JSON.stringify(cmd.body || {}));
+          GBHost.onCommand(TOKEN, cmd.id || '', cmd.path || '/v1/info', JSON.stringify(cmd.body || {}));
           setTimeout(loop, 150);
         });
       })
-      .catch(function (e) { GBHost.ctl('pollerr', String(e)); setTimeout(loop, 3000); });
+      .catch(function (e) { GBHost.ctl(TOKEN, 'pollerr', String(e)); setTimeout(loop, 3000); });
   }
 
   function reg() {
@@ -57,9 +57,9 @@
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ deviceId: DEV, name: NAME, caps: CAPS })
     }).then(function (r) {
-      if (r.ok) { GBHost.ctl('registered', DEV); loop(); }
-      else { GBHost.ctl('regfail', String(r.status)); setTimeout(reg, 4000); }
-    }).catch(function (e) { GBHost.ctl('regfail', String(e)); setTimeout(reg, 4000); });
+      if (r.ok) { GBHost.ctl(TOKEN, 'registered', DEV); loop(); }
+      else { GBHost.ctl(TOKEN, 'regfail', String(r.status)); setTimeout(reg, 4000); }
+    }).catch(function (e) { GBHost.ctl(TOKEN, 'regfail', String(e)); setTimeout(reg, 4000); });
   }
 
   reg();

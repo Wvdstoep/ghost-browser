@@ -272,7 +272,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.post { fitNarrowScreen(w) }
         web = w; activeTab = i
         lastUrl = h.url
-        try { syncLoginForTab(h, h.url) } catch (e: Exception) { /* a tab already loaded before the update still syncs */ }
+        try { syncLoginForTab(h, h.url) } catch (e: Exception) { vm.log("! login sync: ${e.message}") }
         if (h.profile != (vm.currentProfile.value ?: "default")) { vm.selectProfile(h.profile); renderChips() }
         shellUi.url.value = if (h.url == HOME) "" else h.url
         shellUi.screen.value = "browser"
@@ -417,7 +417,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 if (gbJs.isNotEmpty()) view?.evaluateJavascript(gbJs, null)
                 loadLatch?.countDown()
                 syncTabs()
-                try { syncLoginForTab(h, h.url) } catch (e: Exception) { /* never in the way of the page */ }
+                try { syncLoginForTab(h, h.url) } catch (e: Exception) { vm.log("! login sync: ${e.message}") }
             }
         }
         w.webChromeClient = object : WebChromeClient() {
@@ -426,7 +426,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 syncTabs()
             }
         }
-        w.addJavascriptInterface(Bridge(), "GBHost")   // lets injected JS hand results back to the app
+        // Ordinary sites may call every method of an injected JavaScript interface, including from
+        // iframes. This bridge only accepts results for an outstanding in-page fetch.
+        w.addJavascriptInterface(PageBridge(), "GBHost")
         w.layoutParams = ViewGroup.LayoutParams(-1, -1)
         return w
     }
@@ -837,6 +839,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (url.isEmpty()) { vm.log("! set the cluster URL on the Cluster tab first"); return }
         apiReady = false
         val w = WebView(this)
+        val bridgeToken = java.util.UUID.randomUUID().toString()
         val prof = vm.currentProfile.value ?: "default"
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}
@@ -844,13 +847,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
-        w.addJavascriptInterface(Bridge(), "GBHost")
+        w.addJavascriptInterface(ApiBridge(bridgeToken), "GBHost")
         w.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, u: String?) {
-                if (apiReady) return
+                if (apiReady || !isClusterOrigin(u)) return
                 view?.evaluateJavascript(
-                    "window.__gbApi=function(m,p,b,t){var o={method:m,credentials:'include',headers:{'Content-Type':'application/json'}};if(b)o.body=b;" +
-                    "fetch(p,o).then(function(r){return r.text()}).then(function(x){GBHost.result(t,x)}).catch(function(e){GBHost.result(t+'_err',String(e))})};", null)
+                    "(function(){var proof=${JSONObject.quote(bridgeToken)};window.__gbApi=function(m,p,b,t){var o={method:m,credentials:'include',headers:{'Content-Type':'application/json'}};if(b)o.body=b;" +
+                    "fetch(p,o).then(function(r){return r.text()}).then(function(x){GBHost.result(proof,t,x)}).catch(function(e){GBHost.result(proof,t+'_err',String(e))})};})()", null)
                 apiReady = true
                 val q = ArrayList(apiQueue); apiQueue.clear(); for (fn in q) fn()
                 autoSyncSharedData()   // P0: shared data loads automatically on login — no manual fetch
@@ -952,32 +955,31 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
             // "signed in" ONLY if this phone's profile actually holds a session cookie for the site.
             val signedIn = known.contains(prof) && profileHasSession(prof, site)
-            out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, prof, signedIn))
+            out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, prof, signedIn, cookieSyncApproved(prof)))
         }
         settingsUi.platforms.value = out
         shellUi.platforms.value = out   // also feed the omnibox shortcuts
         vm.log("● signed in on this phone: " + (out.filter { it.signedIn }.map { it.label }.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "none"))
-        syncLoginsToCluster(out)        // a login on this phone is a login on the cluster — by itself
-        for (t in tabs) try { syncLoginForTab(t, t.url) } catch (e: Exception) { /* every open tab, once the platform list is here */ }
+        syncLoginsToCluster(out)
     }
 
-    /** LOGIN SYNC. Every platform signed in on this phone signs the cluster's matching profile in too:
-     *  the site's cookies go to POST /v1/profiles/<key>/cookies whenever they appear or change (hashed,
-     *  so nothing is sent twice). No button — the cluster agent simply has what the phone has. */
+    /** Only approved platform profiles export cookies to the matching cluster profile.
+     *  Hashing avoids sending the same cookie set twice. */
     private val loginSyncHashes = HashMap<String, Int>()
     private var platformsRequested = false
+    private fun cookieSyncApprovalKey(profile: String) = CookieSyncPolicy.key(vm.clusterUrl, profile)
+    private fun cookieSyncApproved(profile: String) = CookieSyncPolicy.allows(vm.approvedCookieSync, vm.clusterUrl, profile)
     private fun apexOf(host: String): String { val parts = host.split("."); return if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host }
     private fun syncLoginsToCluster(list: List<engineer.myapp.gbmobile.ui.PlatformOpt>) {
         if (vm.clusterUrl.trim().isEmpty()) return
         for (p in list) {
-            if (!p.signedIn) continue
+            if (!p.signedIn || !cookieSyncApproved(p.profile)) continue
             val cookieStr = try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.profile).cookieManager.getCookie(p.site) ?: "" else "" } catch (e: Exception) { "" }
             pushLoginCookies(p, cookieStr)
         }
     }
-    /** Every page that finishes loading, in ANY tab: when its host is one of the platforms, the tab's
-     *  cookies for it go to the cluster's matching profile — a LinkedIn signed into from the address bar
-     *  counts the same as one opened from the platform chip. Hashed per platform, so nothing goes twice. */
+    /** Sync only the approved platform profile. A matching site opened in a different identity must
+     *  never silently copy that identity's login into the approved cluster profile. */
     private fun syncLoginForTab(h: TabHandle, url: String) {
         if (vm.clusterUrl.trim().isEmpty() || !url.startsWith("http")) return
         val host = try { Uri.parse(url).host } catch (e: Exception) { null } ?: return
@@ -990,6 +992,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val p = plats.mapNotNull { pl -> val ph = (try { Uri.parse(pl.site).host } catch (e: Exception) { null })?.removePrefix("www.") ?: return@mapNotNull null
                 if (ph == clusterHost) null else if (tabHost == ph || tabHost.endsWith(".$ph")) pl to ph.length else null }
             .maxByOrNull { it.second }?.first ?: return
+        if (!CookieSyncPolicy.allows(vm.approvedCookieSync, vm.clusterUrl, p.profile, h.profile)) return
         val cookieStr = try {
             if (h.profile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(h.profile).cookieManager.getCookie(url) ?: ""
             else CookieManager.getInstance().getCookie(url) ?: ""
@@ -998,7 +1001,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         pushLoginCookies(p, cookieStr)
     }
     private fun pushLoginCookies(p: engineer.myapp.gbmobile.ui.PlatformOpt, cookieStr: String) {
-        if (cookieStr.isBlank()) return
+        if (cookieStr.isBlank() || !cookieSyncApproved(p.profile)) return
         val hsh = cookieStr.hashCode(); if (loginSyncHashes[p.profile] == hsh) return; loginSyncHashes[p.profile] = hsh
         val host = try { Uri.parse(p.site).host } catch (e: Exception) { null } ?: return
         val apex = apexOf(host)
@@ -3120,6 +3123,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onLoadRoles = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list") } },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> openPlatform(prof, site) },
+        onSetCookieSync = { profile, approved ->
+            val key = cookieSyncApprovalKey(profile)
+            vm.approvedCookieSync = if (approved) vm.approvedCookieSync + key else vm.approvedCookieSync - key
+            loginSyncHashes.remove(profile)
+            settingsUi.platforms.value = settingsUi.platforms.value.map { if (it.profile == profile) it.copy(syncApproved = approved) else it }
+            shellUi.platforms.value = settingsUi.platforms.value
+            if (approved) syncLoginsToCluster(settingsUi.platforms.value)
+            vm.log(if (approved) "● cookie sharing approved for $profile" else "● future cookie sharing stopped for $profile; sign out in the cluster profile to clear an existing login")
+        },
         onSetUseLocal = { vm.useLocal = it; settingsUi.useLocal.value = it },
         onSelectModelIndex = { i -> settingsUi.modelIndex.value = i; vm.selectedModel = ModelCatalog.models.getOrElse(i) { ModelCatalog.models[0] }.id; refreshSettingsModel() },
         onDownloadModel = { startModelDownload(settingsUi.modelIndex.value) },
@@ -3276,34 +3288,50 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     // JS -> app bridge: injected page code hands results back here.
-    inner class Bridge {
+    inner class PageBridge {
         @JavascriptInterface
-        fun result(tag: String, data: String) { runOnUiThread { onBridge(tag, data) } }
+        fun fetchResult(id: String, status: Int, bodyStr: String) {
+            if (!fetchWaiters.containsKey(id)) return
+            fetchResults[id] = JSONObject().put("status", status).put("body", bodyStr.take(2_000_000)).toString()
+            fetchWaiters.remove(id)?.countDown()
+        }
+    }
+
+    inner class ApiBridge(private val token: String) {
+        @JavascriptInterface
+        fun result(proof: String, tag: String, data: String) {
+            if (proof == token) runOnUiThread { onBridge(tag, data) }
+        }
+    }
+
+    inner class ControlBridge(private val token: String) {
+        @JavascriptInterface
+        fun result(proof: String, tag: String, data: String) {
+            if (proof == token) runOnUiThread { onBridge(tag, data) }
+        }
 
         @JavascriptInterface
-        fun ctl(tag: String, data: String) = runOnUiThread {
-            when (tag) {
-                "registered" -> {
-                    vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"
-                    vm.log("● registered with the cluster — waiting for commands")
-                    ctrlApiReady = true                 // the control session can now serve cluster reads
-                    startRingWatch()                    // and from here we can see what the ring is doing
-                    autoSyncSharedData()                // pull flows/platforms/roles over the connected session
-                    apiCall("GET", "/v1/device/list", null, "run_devices")
+        fun ctl(proof: String, tag: String, data: String) {
+            if (proof != token) return
+            runOnUiThread {
+                when (tag) {
+                    "registered" -> {
+                        vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: ON — registered as ${android.os.Build.MODEL}\nwaiting for commands"
+                        vm.log("● registered with the cluster — waiting for commands")
+                        ctrlApiReady = true                 // the control session can now serve cluster reads
+                        startRingWatch()                    // and from here we can see what the ring is doing
+                        autoSyncSharedData()                // pull flows/platforms/roles over the connected session
+                        apiCall("GET", "/v1/device/list", null, "run_devices")
+                    }
+                    "regfail" -> vm.log("! register failed (in-webview): $data — reopen GB from the platform Tools")
+                    "pollerr" -> vm.log("… poll: $data")
                 }
-                "regfail" -> vm.log("! register failed (in-webview): $data — reopen GB from the platform Tools")
-                "pollerr" -> vm.log("… poll: $data")
             }
         }
 
         @JavascriptInterface
-        fun fetchResult(id: String, status: Int, bodyStr: String) {
-            fetchResults[id] = JSONObject().put("status", status).put("body", bodyStr.take(2_000_000)).toString()
-            fetchWaiters.remove(id)?.countDown()
-        }
-
-        @JavascriptInterface
-        fun onCommand(id: String, path: String, bodyStr: String) {
+        fun onCommand(proof: String, id: String, path: String, bodyStr: String) {
+            if (proof != token) return
             cmdExec.execute {
                 val out = runDeviceCommand(path, bodyStr)
                 runOnUiThread {
@@ -3718,6 +3746,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun startControlWeb() {
         stopControlWeb()
         val w = WebView(this)
+        val bridgeToken = java.util.UUID.randomUUID().toString()
         val prof = vm.currentProfile.value ?: "default"
         ctrlProfile = prof
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
@@ -3726,13 +3755,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
-        w.addJavascriptInterface(Bridge(), "GBHost")
+        w.addJavascriptInterface(ControlBridge(bridgeToken), "GBHost")
         w.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                if (url != null && url.contains("ghost-browser") && gbControlJs.isNotEmpty()) {
+                if (isClusterOrigin(url) && gbControlJs.isNotEmpty()) {
                     val js = gbControlJs.replace("__DEVICE_ID__", vm.deviceToken)
                         .replace("__DEVICE_NAME__", android.os.Build.MODEL.replace("\"", "").replace("\\", ""))
                         .replace("__CAPS__", phoneCaps().toString())
+                        .replace("__BRIDGE_TOKEN__", JSONObject.quote(bridgeToken))
                     view?.evaluateJavascript(js, null)
                 }
             }
@@ -3741,6 +3771,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         ctrlWeb = w
         w.loadUrl(vm.clusterUrl)
         vm.logSink = { line -> pushLog(line) }
+    }
+
+    private fun isClusterOrigin(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val expected = Uri.parse(vm.clusterUrl.trim())
+        val actual = Uri.parse(url)
+        return expected.scheme in listOf("http", "https") && actual.scheme == expected.scheme &&
+            actual.host.equals(expected.host, ignoreCase = true) && actual.port == expected.port
     }
 
     /** Push one log line to the backend via the control WebView (same-origin SSO fetch = the proven path). */

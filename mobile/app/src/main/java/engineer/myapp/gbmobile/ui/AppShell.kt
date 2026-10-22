@@ -806,6 +806,7 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
             onSetPassword = sa.onSetPassword,
             onResync = sa.onResync, onOpenHub = sa.onOpenHub, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
             onLoadPlatforms = sa.onLoadPlatforms, onOpenPlatform = sa.onOpenPlatform,
+            onSetCookieSync = sa.onSetCookieSync,
             onSwitchProfile = sa.onSwitchProfile, onAddProfile = sa.onAddProfile, onSetRole = sa.onSetRole, onLoadRoles = sa.onLoadRoles,
             onRefreshDevices = sa.onRefreshDevices, onOpenTailscale = sa.onOpenTailscale,
             onSetTheme = { dark -> sa.onSetTheme(if (dark) 0 else 1) }, onClearLog = sa.onClearLog,
