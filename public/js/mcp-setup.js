@@ -32,4 +32,16 @@
       }
     });
   }
+
+  const reveal = document.getElementById('mcpRevealKey');
+  if (reveal) reveal.addEventListener('click', async () => {
+    const box = document.getElementById('mcpKeyBox');
+    try {
+      const response = await fetch('/api/auth/key', { credentials: 'same-origin' });
+      if (!response.ok) throw new Error(response.status === 401 ? 'Sign in to Ghost Browser first.' : 'Could not load API keys.');
+      const data = await response.json();
+      box.textContent = (data.keys || []).map(item => item.key).join('\n') || 'No API key configured.';
+    } catch (error) { box.textContent = error.message; }
+    box.classList.remove('hide');
+  });
 })();
