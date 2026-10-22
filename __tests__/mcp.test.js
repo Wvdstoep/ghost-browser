@@ -34,11 +34,14 @@ describe('Ghost Browser MCP', () => {
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: 'Bearer key-one' } } });
     await client.connect(transport);
     expect((await client.listTools()).tools.map(t => t.name)).toContain('browser_navigate');
+    expect((await client.listTools()).tools.map(t => t.name)).toContain('browser_extract_product');
     const opened = await client.callTool({ name: 'browser_open', arguments: {} });
     expect(JSON.parse(opened.content[0].text).sessionId).toBe('s-abc-123');
     const blocked = await client.callTool({ name: 'browser_navigate', arguments: { sessionId: 's-abc-123', url: 'http://127.0.0.1' } });
     expect(blocked.isError).toBe(true);
     expect(blocked.content[0].text).toContain('private address blocked');
+    await client.callTool({ name: 'browser_extract_product', arguments: { sessionId: 's-abc-123' } });
+    expect(calls.at(-1).path).toBe('/v1/sessions/s-abc-123/product');
     const image = await client.callTool({ name: 'browser_screenshot', arguments: { sessionId: 's-abc-123' } });
     expect(image.content[0]).toMatchObject({ type: 'image', mimeType: 'image/jpeg', data: 'aW1hZ2U=' });
     expect(calls.every(c => c.authorization === 'Bearer key-one')).toBe(true);

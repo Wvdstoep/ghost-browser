@@ -30,8 +30,23 @@ project file containing the secret. This endpoint does not support OAuth login.
 ## Tools
 
 `browser_open` starts an isolated session and returns an ID. `browser_navigate`, `browser_analyze`,
-`browser_click`, `browser_type`, `browser_scroll`, `browser_read`, and `browser_screenshot` operate
+`browser_click`, `browser_type`, `browser_scroll`, `browser_read`, `browser_extract_product`, and `browser_screenshot` operate
 on that session; `browser_list` lists your sessions and `browser_close` releases one. Analyze before
 using numbered click or type. Click and type can perform real actions on websites, and page content
 is untrusted. The existing browser API enforces ownership, session limits and URL checks. Sessions
 still expire under the browser's existing idle and maximum-lifetime limits.
+
+## Product A webshop drafts
+
+Connect both Ghost Browser and Product A's merchant MCP to the same assistant. Open an AliExpress
+product page in Ghost Browser, then call `browser_extract_product` on that session. It returns the
+source URL, title, description, images, any structured price/currency/SKU, and warnings for missing
+facts. This is read-only and does not save or publish anything. A login or challenge page returns no
+product data; complete sign-in in the browser before trying again.
+
+After reviewing the facts, use Product A's `list_shops` and `create_product_draft` for the selected
+shop. Pass the original AliExpress URL as `data.originalUrl`; Product A stores it with the draft.
+Set a real shop-currency retail price, a unique SKU and stock quantity based on verified facts.
+AliExpress prices, variants, availability, shipping and fulfillment must be checked separately.
+Product A's normal publication approval applies before the product goes live. Neither connector
+places supplier orders or sets up automatic fulfillment.

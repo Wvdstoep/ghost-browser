@@ -17,11 +17,12 @@ const tools = [
   ['browser_type', 'Type into a numbered element from the most recent analysis; optionally submit it.', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: { type: 'string' }, submit: { type: 'boolean' } }, ['sessionId', 'index', 'text']],
   ['browser_scroll', 'Scroll the page vertically.', { sessionId: id, dy: { type: 'number' } }, ['sessionId', 'dy']],
   ['browser_read', 'Read the text of the current page.', { sessionId: id }, ['sessionId']],
+  ['browser_extract_product', 'Extract factual product fields from the current page for review before importing to a shop. Does not verify variants, stock, shipping or fulfillment.', { sessionId: id }, ['sessionId']],
   ['browser_screenshot', 'Capture an image of the current page.', { sessionId: id }, ['sessionId']],
   ['browser_close', 'Close your browser session.', { sessionId: id }, ['sessionId']],
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-  annotations: { readOnlyHint: ['browser_list', 'browser_analyze', 'browser_screenshot'].includes(name),
+  annotations: { readOnlyHint: ['browser_list', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot'].includes(name),
     destructiveHint: ['browser_click', 'browser_type'].includes(name), openWorldHint: true },
 }));
 
@@ -61,6 +62,7 @@ function createHandler({ requestApi }) {
           browser_type: ['POST', `${base}/type`, { index: args.index, text: args.text, submit: args.submit === true }],
           browser_scroll: ['POST', `${base}/scroll`, { dy: args.dy }],
           browser_read: ['GET', `${base}/content`], browser_screenshot: ['GET', `${base}/screenshot`],
+          browser_extract_product: ['GET', `${base}/product`],
           browser_close: ['DELETE', base],
         };
         const [method, path, body] = routes[tool.name];

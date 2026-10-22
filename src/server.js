@@ -821,6 +821,13 @@ function mine(req) {
   return s;
 }
 
+app.get('/v1/sessions/:id/product', async (req, res) => {
+  try {
+    const s = mine(req);
+    res.json(await require('./productExtract').extractProduct(s.page));
+  } catch (e) { fail(res, e); }
+});
+
 // ── Navigation ──────────────────────────────────────────────────────────────────────────
 app.post('/v1/sessions/:id/navigate', async (req, res) => {
   try {
