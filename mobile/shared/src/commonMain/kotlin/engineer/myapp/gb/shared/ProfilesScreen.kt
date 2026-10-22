@@ -156,6 +156,9 @@ fun ProfilesScreen(
     onClearLogin: (ProfileCard) -> Unit = {},
     onDelete: (ProfileCard) -> Unit = {},
     status: String = "",
+    phonePlatforms: List<PlatformOpt> = emptyList(),
+    onOpenPhonePlatform: ((PlatformOpt) -> Unit)? = null,
+    onSetPhoneCookieSync: ((profile: String, approved: Boolean) -> Unit)? = null,
     /*
      * WHAT OPENING ACTUALLY DOES, IN EACH PLATFORM'S OWN WORDS.
      *
@@ -242,7 +245,7 @@ fun ProfilesScreen(
                 Text(status, color = cs.onSurfaceVariant, fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
             }
-            if (profiles.isEmpty()) {
+            if (profiles.isEmpty() && onSetPhoneCookieSync == null) {
                 Text("No profiles yet. A profile is born the first time you sign into a site in it.",
                     color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(16.dp))
             } else {
@@ -250,12 +253,50 @@ fun ProfilesScreen(
                     Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (onSetPhoneCookieSync != null) {
+                        Text("Phone platforms", style = MaterialTheme.typography.titleMedium)
+                        Text("Open a platform in its phone profile, then choose whether that login may be copied to the cluster.",
+                            color = cs.onSurfaceVariant, fontSize = 11.sp)
+                        if (phonePlatforms.isEmpty()) {
+                            Text("No platforms loaded yet. Tap Refresh to load them from the cluster.",
+                                color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        phonePlatforms.forEach { platform ->
+                            Surface(color = cs.surface, shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, cs.outline), modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(14.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(platform.label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(if (platform.signedIn) "login saved on this phone" else "no phone login yet",
+                                                color = cs.onSurfaceVariant, fontSize = 11.sp)
+                                        }
+                                        if (onOpenPhonePlatform != null)
+                                            TextButton(onClick = { onOpenPhonePlatform(platform) }) { Text("Open") }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("Share login with cluster", Modifier.weight(1f), fontSize = 12.sp)
+                                        Switch(checked = platform.syncApproved,
+                                            onCheckedChange = { onSetPhoneCookieSync(platform.profile, it) })
+                                    }
+                                }
+                            }
+                        }
+                        Text("Sharing copies session cookies to the cluster. Android does not expose their original scope or HttpOnly flags. Turning sharing off stops future copies; sign out in the cluster profile to clear an existing session.",
+                            color = cs.onSurfaceVariant, fontSize = 11.sp)
+                        HorizontalDivider(color = cs.outline)
+                        Text("Cluster profiles", style = MaterialTheme.typography.titleMedium)
+                    }
                     if (openHint.isNotBlank()) {
                         Text(openHint, color = cs.onSurfaceVariant, fontSize = 11.sp)
                     }
-                    sortProfiles(profiles).forEach { p ->
-                        ProfileRow(p, openLabel = openLabel, onOpen = { onOpen(p) },
-                            onRole = { picking = p; reading = "" }, onManage = { managing = p })
+                    if (profiles.isEmpty()) {
+                        Text("No cluster profiles yet.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                    } else {
+                        sortProfiles(profiles).forEach { p ->
+                            ProfileRow(p, openLabel = openLabel, onOpen = { onOpen(p) },
+                                onRole = { picking = p; reading = "" }, onManage = { managing = p })
+                        }
                     }
                     Spacer(Modifier.height(24.dp))
                 }

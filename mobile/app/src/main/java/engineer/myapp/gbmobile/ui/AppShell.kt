@@ -292,7 +292,10 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                     "profiles" -> engineer.myapp.gb.shared.ProfilesScreen(
                         profiles = shell.profileCards.value,
                         onOpen = { p -> act.onOpenProfile(p) },
-                        onRefresh = act.onLoadProfiles,
+                        onRefresh = { act.onLoadProfiles(); act.onLoadPlatforms() },
+                        phonePlatforms = settingsUi.platforms.value,
+                        onOpenPhonePlatform = { p -> act.onOpenPlatform(p.profile, p.site) },
+                        onSetPhoneCookieSync = settingsAct.onSetCookieSync,
                         roleNames = shell.profileRoleNames.value,
                         roleDetail = shell.profileRoleDetail.value,
                         onReadRole = { r -> act.onReadRole(r) },
@@ -781,14 +784,6 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
     st.clusterStatus.value = ui.clusterStatus.value
     st.connected.value = ui.connected.value
     st.deviceKind.value = "phone"
-    st.deviceLine.value = ui.phoneCaps.value.ifBlank { "android · native touch · real IP" }
-    st.platforms.value = ui.platforms.value
-    st.profiles.value = ui.profiles.value
-    st.currentProfile.value = ui.currentProfile.value
-    st.roleNames.value = ui.roleNames.value
-    st.roleForCurrent.value = ui.roleForCurrent.value
-    st.devices.value = ui.devices.value
-    st.hubSummary.value = shell.hubSummary.value
     st.trainingLine.value = sa.trainingLine()
     st.networkLine.value = "This phone operates on its own real mobile IP — the strongest fingerprint for Cloudflare-gated sites. The cluster's Ghost Browser keeps its own in-image exit node."
     st.themeDark.value = ui.themeMode.value != 1
@@ -804,11 +799,8 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
         engineer.myapp.gb.shared.SettingsHandlers(
             onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onConnectToggle = sa.onConnectToggle,
             onSetPassword = sa.onSetPassword,
-            onResync = sa.onResync, onOpenHub = sa.onOpenHub, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
-            onLoadPlatforms = sa.onLoadPlatforms, onOpenPlatform = sa.onOpenPlatform,
-            onSetCookieSync = sa.onSetCookieSync,
-            onSwitchProfile = sa.onSwitchProfile, onAddProfile = sa.onAddProfile, onSetRole = sa.onSetRole, onLoadRoles = sa.onLoadRoles,
-            onRefreshDevices = sa.onRefreshDevices, onOpenTailscale = sa.onOpenTailscale,
+            onResync = sa.onResync, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
+            onOpenTailscale = sa.onOpenTailscale,
             onSetTheme = { dark -> sa.onSetTheme(if (dark) 0 else 1) }, onClearLog = sa.onClearLog,
             aiModel = act.aiModel,
             onSetUseLocal = sa.onSetUseLocal, onSelectLocalModel = sa.onSelectModelIndex, onDownloadLocalModel = sa.onDownloadModel,
