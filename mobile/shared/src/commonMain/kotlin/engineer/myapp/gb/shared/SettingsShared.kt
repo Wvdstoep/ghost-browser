@@ -4,11 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -166,53 +169,117 @@ fun SettingsScreenShared(
 ) {
     val cs = MaterialTheme.colorScheme
     LaunchedEffect(Unit) { h.aiModel.onLoad() }
+    val sections = buildList {
+        add("Account")
+        add("AI & training")
+        add("Browser")
+        if (state.deviceKind.value == "web") add("Profiles & devices")
+        add("Activity")
+    }
+    var selected by remember { mutableStateOf("Account") }
+    if (selected !in sections) selected = "Account"
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize().then(topInset)) {
-            val twoColumns = maxWidth >= 1080.dp
+            val wide = maxWidth >= 760.dp
             Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Settings", style = MaterialTheme.typography.headlineSmall)
-                        Text("Everything for this device and your account", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text("Account, browser and automation setup", color = cs.onSurfaceVariant, fontSize = 12.sp)
                     }
                     if (onClose != null) IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
                 }
-                HorizontalDivider(color = cs.outline)
-
-                val left = listOf<@Composable () -> Unit>(
-                    { AccountSection(state, h) },
-                    { ModelSection(model, h.aiModel, state.local.value, h) },
-                    { TrainingSection(state, h) },
-                    { AppearanceSection(state, h) },
-                )
-                val right = buildList<@Composable () -> Unit> {
-                    // Native apps reach these pages from the browser menu; the web console
-                    // retains the settings sections until it has its own destination menu.
-                    if (state.deviceKind.value == "web") {
-                        add { ProfilesSection(state, h) }
-                        add { DevicesSection(state, h) }
+                Surface(color = if (state.connected.value) BrandSoft else cs.surfaceVariant,
+                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (state.connected.value) Icons.Default.CheckCircle else Icons.Default.CloudOff,
+                            null, tint = if (state.connected.value) cs.secondary else cs.onSurfaceVariant, modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(if (state.connected.value) "Connected to your cluster" else "Cluster connection needed",
+                                color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(state.clusterStatus.value.ifBlank { state.deviceLine.value.ifBlank { "Manage connection in Account" } },
+                                color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
-                    add { DownloadsSection(h) }
-                    add { if (h.onOpenApiTokens != null) SettingsCard("API tokens", "Bearer keys for a script or another machine to drive your Ghost Browser") { SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens) } }
-                    add { NetworkSection(state, h) }
-                    add { ActivitySection(state, h) }
                 }
-                val scroll = rememberScrollState()
-                if (twoColumns) {
-                    Row(Modifier.fillMaxSize().verticalScroll(scroll).padding(20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) { left.forEach { it() } }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) { right.forEach { it() }; Spacer(Modifier.height(24.dp)) }
+                Spacer(Modifier.height(12.dp))
+                if (wide) {
+                    Row(Modifier.fillMaxSize()) {
+                        Column(Modifier.width(208.dp).fillMaxHeight().padding(start = 16.dp, end = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            sections.forEach { section -> SettingsDestination(section, selected == section, rail = true) { selected = section } }
+                        }
+                        SettingsCategory(selected, state, model, h, wide = true, modifier = Modifier.weight(1f))
                     }
                 } else {
-                    Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        left[0](); left[1](); left[2](); right.forEach { it() }; left[3]()
-                        Spacer(Modifier.height(20.dp))
-                        Text(state.appLabel.value, color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
-                        Spacer(Modifier.height(20.dp))
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        sections.forEach { section -> SettingsDestination(section, selected == section) { selected = section } }
                     }
+                    Spacer(Modifier.height(10.dp))
+                    SettingsCategory(selected, state, model, h, wide = false, modifier = Modifier.weight(1f))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsDestination(label: String, active: Boolean, rail: Boolean = false, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = if (active) Brand else cs.surfaceVariant, shape = RoundedCornerShape(11.dp),
+        modifier = (if (rail) Modifier.fillMaxWidth() else Modifier).clip(RoundedCornerShape(11.dp)).clickable(onClick = onClick)) {
+        Text(label, color = if (active) BrandOn else cs.onSurface, fontSize = 13.sp,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp))
+    }
+}
+
+@Composable
+private fun SettingsCategory(section: String, state: SettingsState, model: AiModelUi, h: SettingsHandlers,
+    wide: Boolean, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(section, color = cs.onSurface, style = MaterialTheme.typography.titleLarge)
+        if (wide) when (section) {
+            "Account" -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(2f)) { AccountSection(state, h) }
+                if (h.onOpenApiTokens != null) Column(Modifier.weight(1f)) {
+                    SettingsCard("API tokens", "Keys for scripts and other devices") {
+                        SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
+                    }
+                }
+            }
+            "AI & training" -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(2f)) { ModelSection(model, h.aiModel, state.local.value, h) }
+                Column(Modifier.weight(1f)) { TrainingSection(state, h) }
+            }
+            "Browser" -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AppearanceSection(state, h); DownloadsSection(h)
+                }
+                Column(Modifier.weight(1f)) { NetworkSection(state, h) }
+            }
+            "Profiles & devices" -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f)) { ProfilesSection(state, h) }
+                Column(Modifier.weight(1f)) { DevicesSection(state, h) }
+            }
+            "Activity" -> ActivitySection(state, h)
+        } else when (section) {
+            "Account" -> {
+                AccountSection(state, h)
+                if (h.onOpenApiTokens != null) SettingsCard("API tokens", "Keys for scripts and other devices") {
+                    SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
+                }
+            }
+            "AI & training" -> { ModelSection(model, h.aiModel, state.local.value, h); TrainingSection(state, h) }
+            "Browser" -> { AppearanceSection(state, h); NetworkSection(state, h); DownloadsSection(h) }
+            "Profiles & devices" -> { ProfilesSection(state, h); DevicesSection(state, h) }
+            "Activity" -> ActivitySection(state, h)
+        }
+        Spacer(Modifier.height(18.dp))
     }
 }
 
@@ -463,11 +530,15 @@ private fun ActivitySection(s: SettingsState, h: SettingsHandlers) {
 @Composable
 private fun SettingsCard(title: String, sub: String, content: @Composable ColumnScope.() -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
-            if (sub.isNotBlank()) Text(sub, color = cs.onSurfaceVariant, fontSize = 12.sp)
-            Spacer(Modifier.height(12.dp))
+    Surface(color = cs.surface, shape = RoundedCornerShape(15.dp), border = androidx.compose.foundation.BorderStroke(1.dp, cs.outline),
+        modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(17.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = cs.onSurface, fontWeight = FontWeight.SemiBold)
+            if (sub.isNotBlank()) {
+                Spacer(Modifier.height(3.dp))
+                Text(sub, color = cs.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp)
+            }
+            Spacer(Modifier.height(14.dp))
             content()
         }
     }
