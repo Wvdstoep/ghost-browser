@@ -4,4 +4,5 @@ node_modules/
 /profiles/
 *.pyc
 __pycache__/
+mobile/dist/windows/
 # the browser's own state, not its source: logins, cookies, flows, roles, assets, run journals

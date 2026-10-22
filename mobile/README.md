@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.59** — Refined, high-contrast home-screen widgets and a redesigned mobile developer-tools panel with filtering, copy, refresh, clear, and expand controls.
+> **v0.60** — Ordinary new tabs open in the default profile; choosing a profile from the start page or Profiles page still opens that profile. The Windows Compose app now uses a persistent header and a three-dot destination menu instead of a bottom navigation bar.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -39,9 +39,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.59 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.60 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `ca4a8ad483d435e75f22a3b14bfe1f417607f497a0ddab7af4dc288c3b80fda8`.
+SHA-256: `10ee1708510c25671f8633c460e089967a55f01b317d7bdb7704d8d4a51808b9`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
@@ -58,6 +58,12 @@ On Windows, run `gradlew.bat :app:assembleDebug` from this directory. GitHub Act
 debug APK and runs shared desktop tests on pushes to `main`, pull requests, and manual dispatches.
 Download the `ghost-browser-debug-apk` artifact from the corresponding Actions run. A production
 release requires a separately configured release signing key and release process.
+
+The Windows Compose installer is built locally with `gradlew.bat :desktop:packageMsi :desktop:packageExe`.
+Version 1.0.27 keeps the desktop installer out of GitHub because of its size. The desktop uses the
+same header-menu navigation as Android, and **Developer tools** opens Chromium's native DevTools
+for the active tab. The Windows browser engine still uses one shared cookie store across its tabs;
+Android's isolated profile containers are not yet implemented on Windows.
 
 Phone platform logins stay on the phone unless you turn on **Share login with cluster** for that
 platform on the Profiles page. Sharing copies session cookies to the cluster. Android's WebView cookie API does
