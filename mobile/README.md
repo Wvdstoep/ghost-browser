@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.58** — Fullscreen site video, local address suggestions per profile, profile labels in the tab switcher, Android default-browser support, home-screen widgets, and mobile developer tools.
+> **v0.59** — Refined, high-contrast home-screen widgets and a redesigned mobile developer-tools panel with filtering, copy, refresh, clear, and expand controls.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -39,9 +39,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.58 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.59 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `bcecc3a6de3e1dfa89fec05ff3efaef47f9e750c3600af38e88c39d886ee7591`.
+SHA-256: `ca4a8ad483d435e75f22a3b14bfe1f417607f497a0ddab7af4dc288c3b80fda8`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
