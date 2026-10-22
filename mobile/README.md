@@ -4,14 +4,14 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.56** — Material 3 interface, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
+> **v0.57** — A browser-first layout with navigation in the header menu, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
 
-Two ways to drive it, sharing one browser (tap **⚙** to open the panel):
+Two ways to drive it, sharing one browser (tap the header's **⋮ → Settings** to open the panel):
 
 ## 1. Standalone — on-device agent (your Ollama key, no cluster)
 Give it your Ollama-compatible endpoint + key + model and a task; the app runs the full
 **perceive → think → act** loop on the device:
-1. Open **⚙ → On-device agent**.
+1. Open **⋮ → Settings → On-device agent**.
 2. **Endpoint** — e.g. `https://your-ollama-host/v1` (OpenAI-compatible `/v1/chat/completions`).
 3. **API key**, **model** (e.g. `glm-4`), then a **Task** ("go to bugcrowd and list the top bug bounty programs").
 4. **▶ Run** — watch each step in the Activity log; **■ Stop** any time.
@@ -21,7 +21,7 @@ action, performs it in the real WebView, and repeats — the same model as the s
 
 ## 2. Cluster — let the hosted backend drive this device
 Turn the phone into a Ghost Browser node your platform can drive for a hunt:
-1. Open **⚙ → Cluster → Connect to cluster**. The app exposes the **GB API** on `:8471` and shows a device token.
+1. Open **⋮ → Settings → Cluster → Connect to cluster**. The app exposes the **GB API** on `:8471` and shows a device token.
 2. Join the device to your **tailnet** (Tailscale) so the cluster can reach it; browsing still exits over the
    device's own connection (real IP).
 3. The backend calls the same GB API it uses for a server GB — `/v1/navigate`, `/v1/analyze`, `/v1/click`,
@@ -30,9 +30,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.56 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.57 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, consent test, shared desktop tests, and desktop compilation passed.
-SHA-256: `995f084deed2da27a7a6a5a08773ec867583696a1088a97658265f2d4850926a`.
+SHA-256: `6b977f85941118388772b040ccffa4c787ae437d15442cb4928221c4b08707bf`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
