@@ -2425,6 +2425,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             shellUi.screen.value = s
             if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows")
             if (s == "profiles" && shellUi.profileCards.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) profilesLoad()
+            if (s == "profiles" && settingsUi.platforms.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) loadPlatforms()
         },
         onOpenSettings = { openSettings() },
         onOpenAgent = { assistantOpen() },

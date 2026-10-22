@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.55** — Material 3 interface, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
+> **v0.56** — Material 3 interface, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
 
 Two ways to drive it, sharing one browser (tap **⚙** to open the panel):
 
@@ -30,9 +30,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.55 debug APK](dist/app-debug.apk). It was built from commit `8adcf28`
-after the Android build, consent test, shared desktop tests, and desktop compilation passed.
-SHA-256: `15b068579541cf55529b64197eee76b8a16324e36d79373358a78e27f7065e61`.
+Download the checked-in [v0.56 debug APK](dist/app-debug.apk). It was built from the source in this
+repository after the Android build, consent test, shared desktop tests, and desktop compilation passed.
+SHA-256: `995f084deed2da27a7a6a5a08773ec867583696a1088a97658265f2d4850926a`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
@@ -50,8 +50,8 @@ debug APK and runs shared desktop tests on pushes to `main`, pull requests, and 
 Download the `ghost-browser-debug-apk` artifact from the corresponding Actions run. A production
 release requires a separately configured release signing key and release process.
 
-Phone platform logins stay on the phone unless you turn on **Share this login with cluster** for that
-platform in Settings. Sharing copies session cookies to the cluster. Android's WebView cookie API does
+Phone platform logins stay on the phone unless you turn on **Share login with cluster** for that
+platform on the Profiles page. Sharing copies session cookies to the cluster. Android's WebView cookie API does
 not expose the original scope or HttpOnly flags, so only enable sharing for accounts you choose to
 share. You can also sign in separately in the hosted cluster profile.
 
