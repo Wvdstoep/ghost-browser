@@ -30,9 +30,14 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Use the `ghost-browser-debug-apk` artifact from the successful [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
-for the exact commit you want to test. It is a debuggable build signed with a build machine debug key.
-Use a test account only. There is no signed production release build yet.
+Download the checked-in [v0.55 debug APK](dist/app-debug.apk). It was built from commit `8adcf28`
+after the Android build, consent test, shared desktop tests, and desktop compilation passed.
+SHA-256: `15b068579541cf55529b64197eee76b8a16324e36d79373358a78e27f7065e61`.
+
+This is a debuggable build signed with an Android debug key. Use a test account only. There is no
+signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
+also produces a `ghost-browser-debug-apk` artifact for each successful commit; its build-machine
+debug signature can differ from the checked-in file.
 
 ## Build it yourself
 Needs the Android SDK + JDK 17+:
