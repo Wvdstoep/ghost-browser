@@ -76,6 +76,28 @@ private fun HubCard(d: HubDevice, nowMs: Long) {
                 HubStat("LAST SEEN", relTime(d.lastSeenMs, nowMs), cs.onSurface, Modifier.weight(1f))
                 HubStat("QUEUED", "${d.queued}", cs.onSurface, Modifier.weight(1f))
             }
+            /*
+             * TRAINING IS WORK, AND WORK BELONGS ON THE ROW OF THE MACHINE DOING IT.
+             *
+             * Without this the hub says "online, idle" beside a laptop that is four hours into a
+             * round, which is not merely unhelpful — it is the sentence that gets the lid closed.
+             * A round that has gone SILENT is coloured as a problem rather than as progress,
+             * because a confident wrong answer is the one thing a status row must never give.
+             */
+            if (d.training.isNotBlank()) {
+                Spacer(Modifier.height(12.dp)); HorizontalDivider(color = cs.outline); Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (d.trainingStale) cs.error else Brand))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        d.training,
+                        color = if (d.trainingStale) cs.error else cs.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }

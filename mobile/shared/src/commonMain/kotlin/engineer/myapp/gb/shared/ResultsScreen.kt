@@ -152,17 +152,21 @@ private fun ResultCard(item: ResultItem, flows: List<FlowInfo>, onRunFlow: (Stri
                 OutlinedButton(onClick = { acted = true; status = "Dismissed"; onDenyDraft(item) }, enabled = !acted, modifier = Modifier.height(46.dp), shape = RoundedCornerShape(10.dp)) { Text("Deny", color = cs.error) }
             }
         }
-        // Run any other flow on this item (react, DM, …).
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { FlowPicker(picked, flows) { picked = it } }
-            Spacer(Modifier.width(10.dp))
-            Button(onClick = {
-                val f = picked
-                if (f == null) status = "Pick a flow first." else { onRunFlow(f.id, item); status = "Started ✓ — watch Approvals."; picked = null }
-            }, shape = RoundedCornerShape(9.dp), colors = ButtonDefaults.buttonColors(containerColor = cs.surfaceVariant, contentColor = cs.onSurface)) { Text("Run") }
+        // Run any other flow on this item (react, DM, …) — unless this result is a READING. A Search
+        // Console row is something the browser saw and wrote down; there is nothing to act on, and a
+        // Run control there offers work that does not exist. See ResultItem.readOnly.
+        if (!item.readOnly) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { FlowPicker(picked, flows) { picked = it } }
+                Spacer(Modifier.width(10.dp))
+                Button(onClick = {
+                    val f = picked
+                    if (f == null) status = "Pick a flow first." else { onRunFlow(f.id, item); status = "Started ✓ — watch Approvals."; picked = null }
+                }, shape = RoundedCornerShape(9.dp), colors = ButtonDefaults.buttonColors(containerColor = cs.surfaceVariant, contentColor = cs.onSurface)) { Text("Run") }
+            }
+            if (status.isNotBlank()) { Spacer(Modifier.height(6.dp)); Text(status, fontSize = 11.sp, color = cs.onSurfaceVariant) }
         }
-        if (status.isNotBlank()) { Spacer(Modifier.height(6.dp)); Text(status, fontSize = 11.sp, color = cs.onSurfaceVariant) }
     }
 }
 

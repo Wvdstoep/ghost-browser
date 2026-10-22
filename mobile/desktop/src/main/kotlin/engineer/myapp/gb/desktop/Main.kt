@@ -195,7 +195,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         when (screen) {
             "browser" -> Column(Modifier.fillMaxSize()) {
                 TabStrip()
-                BrowserBar(Tabs.activeBrowser(), onHome = { activeTab?.home = true }, onNavigated = { activeTab?.home = false })
+                BrowserBar(state, Tabs.activeBrowser(), onHome = { activeTab?.home = true }, onNavigated = { activeTab?.home = false })
                 if (activeTab?.home == true) HomePageD(state, onOpenUrl = { u -> Tabs.go(u) }, onSearch = { /* focus handled by BrowserBar */ })
                 else androidx.compose.runtime.key(Tabs.active) { JcefBrowserView(Tabs.activeBrowser(), error, Modifier.weight(1f).fillMaxWidth()) }
             }

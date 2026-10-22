@@ -111,7 +111,45 @@ object Agent {
         thread(isDaemon = true) { try { Cluster.authed("POST", "/v1/operator/jobs/$jid/stop", "{}") } catch (e: Exception) { push(st, "assistant", "⚠ could not reach the job: ${e.message}") } }
     }
 
-    fun send(st: DesktopState, main: CefBrowser?, text: String) {
+    /*
+     * WHAT THIS RUN DID, KEPT SO IT CAN BE LEARNED FROM.
+     *
+     * The device ring exists for the work that can only happen on a machine holding a real login at
+     * a real address, and none of it taught the model anything: a device run was journalled as prose
+     * into a store nothing reads, while the training set is built only from cluster jobs. The
+     * information was never missing — pushToolCall and pushToolResult already carry the call and its
+     * observation separately. They were drawn on screen and dropped.
+     *
+     * One at a time is safe here because st.agentBusy already allows only one run on this machine.
+     */
+    @Volatile private var trace: engineer.myapp.gb.shared.DeviceTrace.Run? = null
+    @Volatile private var lastSaid: String = ""
+
+    /** This machine's name, for the record. Local rather than shared with Main, which keeps its own. */
+    private fun thisMachine(): String =
+        try { java.net.InetAddress.getLocalHost().hostName } catch (e: Exception) { "Desktop" }
+
+    /**
+     * File the run with the cluster as an ordinary job.
+     *
+     * Best-effort and never fatal: a run that worked must not be reported as failed because the
+     * history could not be filed. It is sent on its own thread for the same reason — the loop has
+     * already finished and the owner should not wait on a POST.
+     */
+    private fun fileTrace(deviceName: String, status: String) {
+        val r = trace ?: return
+        trace = null
+        val report = lastSaid
+        thread(isDaemon = true) {
+            try {
+                val body = r.body(status, report, deviceName)
+                val out = Cluster.authed("POST", "/v1/device-runs/trace", body)
+                if (out.contains("\"error\"")) println("device-run not filed: " + out.take(140))
+            } catch (e: Throwable) { println("device-run not filed: " + e.message) }
+        }
+    }
+
+    fun send(st: DesktopState, main: CefBrowser?, text: String, runId: String = "") {
         val t = text.trim()
         // The Operator switch sends every message as "/op": a new job, or — while one runs — spoken into it.
         if (t.startsWith("/op ") || t == "/op") { val g = t.removePrefix("/op").trim(); if (operatorJobId.isNotBlank()) sayToOperator(st, g) else runOperatorJob(st, g); return }
@@ -135,8 +173,17 @@ object Agent {
              * before anything is even on the timeline, and stopping at 12 was why a real edit ended in
              * a report about the editor.
              */
+            trace = engineer.myapp.gb.shared.DeviceTrace.Run(text.trim(), role = "general", runId = runId)
+            lastSaid = ""
+            var how = "idle"
             try { AgentCore.run(desktopHost(st, main)) }
-            finally { st.agentBusy.value = false }
+            catch (e: Throwable) { how = "failed"; lastSaid = lastSaid.ifBlank { e.message ?: "failed" }; throw e }
+            finally {
+                st.agentBusy.value = false
+                /* Filed whichever way it ended. A run that failed is evidence too — and one that was
+                   interrupted is set aside by the verifiers rather than counted against the agent. */
+                fileTrace(thisMachine(), how)
+            }
         }
     }
 
@@ -159,11 +206,31 @@ object Agent {
             return if (custom) this@Agent.chat(ep, st.apiKey.value, st.model.value, system, user)
                    else chatCluster(system, user)
         }
-        override fun push(role: String, text: String) = this@Agent.push(st, role, text)
+        override fun push(role: String, text: String) {
+            /* The agent's own last word becomes the report the verifiers read. */
+            if (role == "assistant" && text.isNotBlank()) lastSaid = text
+            this@Agent.push(st, role, text)
+        }
         // This app shows a call and its result the same way, as two tool chips.
-        override fun pushToolCall(name: String, argsJson: String) =
+        override fun pushToolCall(name: String, argsJson: String) {
             this@Agent.pushTool(st, name, "{\"tool\":\"$name\",\"args\":$argsJson}")
-        override fun pushToolResult(name: String, result: String) = this@Agent.pushTool(st, name, result)
+            /*
+             * AND UP TO THE CLUSTER, so a handed-over walk is not invisible for the minutes it runs.
+             *
+             * This is the only progress the assistant can see: a walk on a device has no cluster job,
+             * so without these lines its options were waiting blind or handing the same goal over
+             * again — and live, it did the second. The CALL and not the result: a result can be a
+             * whole page of text, and what matters here is what the agent is doing.
+             */
+            engineer.myapp.gb.shared.RingWork.say("· $name ${argsJson.take(120)}")
+            trace?.tool(name, argsJson)
+        }
+        override fun pushToolResult(name: String, result: String) {
+            /* The observation half of a turn. A look's result is the numbered list, which is the
+               only thing that makes a later click learnable — DeviceTrace keeps it as marks. */
+            trace?.observed(name, result)
+            this@Agent.pushTool(st, name, result)
+        }
         override fun transcript() = this@Agent.transcript(st)
     }
 

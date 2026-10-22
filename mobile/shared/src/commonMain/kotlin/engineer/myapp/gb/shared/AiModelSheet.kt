@@ -45,6 +45,9 @@ class AiModelActions(
     val onList: (host: String, key: String) -> Unit,
     val onTest: (host: String, key: String, model: String) -> Unit,
     val onSave: (host: String, key: String, model: String) -> Unit,
+    // Save the backup-key ring (llmKeys) — a key from a DIFFERENT account/provider, its own quota.
+    // Default no-op keeps existing callers (phone/desktop) compiling until they wire it.
+    val onSaveBackups: (backupKeys: String) -> Unit = {},
 )
 
 @Composable
@@ -54,6 +57,7 @@ fun AiModelSheet(ui: AiModelUi, act: AiModelActions, connected: Boolean, onConne
     var model by remember(info?.model) { mutableStateOf(info?.model ?: "") }
     var host by remember(info?.host) { mutableStateOf(info?.host ?: "") }
     var key by remember { mutableStateOf("") }
+    var backup by remember { mutableStateOf("") }
     var advanced by remember { mutableStateOf(false) }
     LaunchedEffect(connected) { if (connected) act.onLoad() }
     Box(Modifier.fillMaxSize().background(Color(0x99000000)).clickable { onClose() }, contentAlignment = Alignment.BottomCenter) {
@@ -82,7 +86,11 @@ fun AiModelSheet(ui: AiModelUi, act: AiModelActions, connected: Boolean, onConne
                         Column(Modifier.weight(1f)) {
                             Text("NOW", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
                             Text(info?.model?.ifBlank { "no model set" } ?: if (ui.loading.value) "loading…" else "no model set", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(hostLabel(info?.host ?: "") + (if (info?.keySet == true) " · key ${info.keyHint}" else " · no key") + (info?.keyState?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            /* Both keys by their last characters, so a person can match them to the accounts:
+                               the first is the one every call prefers, the backup is only tried after a limit. */
+                            Text(hostLabel(info?.host ?: "") + (if (info?.keySet == true) " · primary ${info.keyHint}" else " · no key") +
+                                (if (info?.keys2Set == true) " · backup ${info.keys2Hint.ifBlank { "set" }}" else " · no backup") +
+                                (info?.keyState?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""), color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                         if (ui.loading.value) CircularProgressIndicator(Modifier.size(16.dp), color = Brand, strokeWidth = 2.dp)
                     }
@@ -118,13 +126,15 @@ fun AiModelSheet(ui: AiModelUi, act: AiModelActions, connected: Boolean, onConne
                     OutlinedTextField(host, { host = it }, label = { Text("Host (e.g. https://ollama.com)") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(key, { key = it }, label = { Text(if (info?.keySet == true) "API key (leave empty to keep ${info.keyHint})" else "API key") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), visualTransformation = PasswordVisualTransformation())
-                    Text("Stored on your Ghost Browser only — never on this device.", color = cs.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(backup, { backup = it }, label = { Text(if (info?.keys2Set == true) "Backup key(s) — set (enter to replace)" else "Backup key(s) — a DIFFERENT account") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), visualTransformation = PasswordVisualTransformation())
+                    Text("A backup must be a DIFFERENT account or provider — same-account keys share one weekly quota, so they run out together. Comma-separate several. Stored on your Ghost Browser only.", color = cs.onSurfaceVariant, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 4.dp))
                 }
                 if (ui.note.value.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(ui.note.value, color = if (ui.note.value.startsWith("✓")) Brand else cs.onSurfaceVariant, fontSize = 12.sp) }
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { act.onTest(host, key, model) }, enabled = model.isNotBlank() && !ui.busy.value, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Test") }
-                    Button(onClick = { act.onSave(host, key, model); onClose() }, enabled = model.isNotBlank(), modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
+                    Button(onClick = { act.onSave(host, key, model); if (backup.isNotBlank()) act.onSaveBackups(backup); onClose() }, enabled = model.isNotBlank(), modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Save") }
                 }
                 Spacer(Modifier.height(8.dp))
             }

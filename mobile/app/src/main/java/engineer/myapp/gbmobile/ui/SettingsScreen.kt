@@ -64,6 +64,9 @@ class SettingsActions(
     val onConnectToggle: () -> Unit,
     val onResync: () -> Unit,
     val onOpenHub: () -> Unit,
+    /* Defaulted so adding the pipeline page touched no other construction site. */
+    val onOpenTraining: () -> Unit = {},
+    val trainingLine: () -> String = { "" },
     val onSwitchProfile: (String) -> Unit,
     val onAddProfile: (String) -> Unit,
     val onSetRole: (String) -> Unit,
@@ -81,6 +84,8 @@ class SettingsActions(
     val onOpenTailscale: () -> Unit,
     val onSetTheme: (Int) -> Unit,
     val onClearLog: () -> Unit,
+    /* The password that opens the instance without the platform, set from the phone too. */
+    val onSetPassword: (String) -> Unit = {},
 )
 
 @Composable
@@ -120,6 +125,16 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                         Ghost("Re-sync now", Modifier.weight(1f), act.onResync)
                         Ghost("Open Device Hub", Modifier.weight(1f), act.onOpenHub)
                     }
+                    /*
+                     * THE PIPELINE, FROM THE PHONE AS WELL AS THE DESKTOP.
+                     *
+                     * The round runs on a laptop, but the question "is it learning, and from what"
+                     * gets asked wherever the phone happens to be. One UI means it answers here too.
+                     */
+                    Spacer(Modifier.height(10.dp))
+                    val tl = act.trainingLine()
+                    if (tl.isNotBlank()) { Note(tl); Spacer(Modifier.height(6.dp)) }
+                    Ghost("Training pipeline", Modifier.fillMaxWidth(), act.onOpenTraining)
                     Note("Profiles, automations and roles auto-sync from the cluster on sign-in — one account, same data on every device.")
                 }
 

@@ -347,170 +347,15 @@ data class ManagedAppTarget(
     val name: String,
     val url: String,
     val isCluster: Boolean,
-    val postureGrade: String = "A+",
-    val postureScore: Int = 100,
+    val postureGrade: String = "Not assessed",
+    val postureScore: Int = -1,
     val subdomainsCount: Int = 1,
     val category: String = "Platform App",
     val description: String = "",
     val profile: String = "default"
 )
 
-val DEFAULT_MANAGED_APPS = listOf(
-    ManagedAppTarget(
-        id = "cluster-myapp-root",
-        name = "Platform Root Portal",
-        url = "https://my-app.engineer",
-        isCluster = true,
-        postureGrade = "B",
-        postureScore = 89,
-        subdomainsCount = 2,
-        category = "Platform Core",
-        description = "K3s Traefik Gateway and Platform Authentication Portal"
-    ),
-    ManagedAppTarget(
-        id = "target-nexora",
-        name = "Nexora Scientific",
-        url = "https://nexorascientific.com",
-        isCluster = false,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 1,
-        category = "Audited Target",
-        description = "GCP Hosted Portal with OpenSSH 10.0p2 Exposed"
-    ),
-    ManagedAppTarget(
-        id = "cluster-mavicshop",
-        name = "MavicShop E-Commerce",
-        url = "https://mavicshop.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 95,
-        subdomainsCount = 1,
-        category = "E-Commerce",
-        description = "Storefront, Shopping Cart and Checkout API"
-    ),
-    ManagedAppTarget(
-        id = "cluster-reconforge",
-        name = "ReconForge OSINT",
-        url = "https://reconforge.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 1,
-        category = "Security Suite",
-        description = "Autonomous Attack Surface Discovery Service"
-    ),
-    ManagedAppTarget(
-        id = "cluster-reconsweep",
-        name = "ReconSweep Scanner",
-        url = "https://reconsweep.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 97,
-        subdomainsCount = 1,
-        category = "Security Suite",
-        description = "Continuous Daemon and Ingress Surface Prober"
-    ),
-    ManagedAppTarget(
-        id = "cluster-deskwork",
-        name = "DeskWork Workspace",
-        url = "https://deskwork.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 94,
-        subdomainsCount = 1,
-        category = "SaaS Workspace",
-        description = "Productivity Hub, Task Management and Documents"
-    ),
-    ManagedAppTarget(
-        id = "cluster-garage",
-        name = "Garage Control IoT",
-        url = "https://garage-control.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 96,
-        subdomainsCount = 1,
-        category = "IoT and Hardware",
-        description = "Telemetry and Hardware Control System"
-    ),
-    ManagedAppTarget(
-        id = "cluster-saltline",
-        name = "SaltLine API Gateway",
-        url = "https://saltline.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 99,
-        subdomainsCount = 1,
-        category = "API Gateway",
-        description = "Edge Routing, Microservices and Rate Limiting"
-    ),
-    ManagedAppTarget(
-        id = "cluster-trendwire",
-        name = "TrendWire News",
-        url = "https://trendwire.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 92,
-        subdomainsCount = 1,
-        category = "Media and Feeds",
-        description = "Automated News Aggregation and Sentiment Pipeline"
-    ),
-    ManagedAppTarget(
-        id = "cluster-leanbuddy",
-        name = "LeanBuddy Fitness",
-        url = "https://leanbuddy.fit",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 98,
-        subdomainsCount = 1,
-        category = "Health and Fitness",
-        description = "Personalized Coaching and Workout Analytics"
-    ),
-    ManagedAppTarget(
-        id = "cluster-director",
-        name = "Director Studio",
-        url = "https://director-studio.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 93,
-        subdomainsCount = 1,
-        category = "Creative Studio",
-        description = "Video and Media Asset Orchestration"
-    ),
-    ManagedAppTarget(
-        id = "cluster-maya",
-        name = "Maya Autonomous Agent",
-        url = "https://maya.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 100,
-        subdomainsCount = 1,
-        category = "AI Agent",
-        description = "LLM Worker and Platform Automation Engine"
-    ),
-    ManagedAppTarget(
-        id = "cluster-voicestudio",
-        name = "VoiceStudio Store",
-        url = "https://voicestudio.store",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 96,
-        subdomainsCount = 1,
-        category = "Audio and TTS",
-        description = "Neural Text-To-Speech and Audio Synthesis"
-    ),
-    ManagedAppTarget(
-        id = "cluster-product-a",
-        name = "Product A Service",
-        url = "https://product-a.mavicpro-fan.my-app.engineer",
-        isCluster = true,
-        postureGrade = "A+",
-        postureScore = 95,
-        subdomainsCount = 1,
-        category = "SaaS Product",
-        description = "Customer Facing Web App"
-    )
-)
+val DEFAULT_MANAGED_APPS = emptyList<ManagedAppTarget>()
 
 val RECON_SUGGESTIONS = RECON_PROMPT_CHIPS.map { it.title }
 val ASSISTANT_SUGGESTIONS = ASSISTANT_PROMPT_CHIPS.map { it.title }
@@ -681,8 +526,8 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         name = name.ifBlank { cleaned.replace("https://", "").replace("http://", "").substringBefore("/") },
                         url = cleaned,
                         isCluster = false,
-                        postureGrade = "A+",
-                        postureScore = 100,
+                        postureGrade = "Not assessed",
+                        postureScore = -1,
                         subdomainsCount = 1,
                         category = "External Target",
                         description = "User-registered application target",
@@ -1824,8 +1669,8 @@ fun decodeManagedApps(data: String): List<ManagedAppTarget> {
                     name = parts[1],
                     url = parts[2],
                     isCluster = parts.getOrNull(3)?.toBooleanStrictOrNull() ?: false,
-                    postureGrade = parts.getOrNull(4) ?: "A+",
-                    postureScore = parts.getOrNull(5)?.toIntOrNull() ?: 100,
+                    postureGrade = parts.getOrNull(4) ?: "Not assessed",
+                    postureScore = parts.getOrNull(5)?.toIntOrNull() ?: -1,
                     subdomainsCount = parts.getOrNull(6)?.toIntOrNull() ?: 1,
                     category = parts.getOrNull(7) ?: "Platform App",
                     description = parts.getOrNull(8) ?: "",
@@ -1931,13 +1776,12 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
     val clean = targetUrl.replace("https://", "").replace("http://", "").substringBefore("/").substringBefore(":").lowercase()
     val domain = clean.ifBlank { "target-domain.com" }
 
-    var postureGrade = "A+"
-    var postureScore = 100
-    var exploitabilityGrade = "A+"
-    var exploitabilityScore = 100
+    var postureGrade = "Not assessed"
+    var postureScore = -1
+    var exploitabilityGrade = "Not assessed"
+    var exploitabilityScore = -1
 
     val subdomainsSet = mutableSetOf<String>()
-    subdomainsSet.add(domain)
 
     val portsSet = mutableSetOf<String>()
     val routesSet = mutableSetOf<String>()
@@ -2082,186 +1926,9 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
         )
     )
 
-    // Ground-truth baseline telemetry for known audited applications
-    if (domain == "nexorascientific.com") {
-        perimeterList.add("Apex IP: 34.178.76.162 (Google Cloud Platform)")
-        perimeterList.add("TLS 1.3 Negotiated • Grade A+ • Strict Modern Cipher Suite")
-        perimeterList.add("Wildcard DNS: Negative (Standard Resolution)")
-        perimeterList.add("DMARC: Configured (p=quarantine, 100% enforcement)")
-        portsSet.add("Port 80/TCP: HTTP (Web Redirect)")
-        portsSet.add("Port 443/TCP: HTTPS (TLS 1.3)")
-        portsSet.add("Port 22/TCP: SSH (OpenSSH 10.0p2 Debian)")
-        probedEndpointsList.add(ProbedEndpointItem("/api/v1/contact", "POST", "frontend_bundle", 200, "PUBLIC", "Contact enquiry form handler", "Input sanitized"))
-        probedEndpointsList.add(ProbedEndpointItem("/admin/login", "GET", "spa_router", 200, "PUBLIC", "Administrative login portal", "Exposed public route"))
-        probedEndpointsList.add(ProbedEndpointItem("/api/admin/dashboard", "GET", "frontend_bundle", 401, "GATED_401", "Administrative metrics API", "Strict Bearer auth"))
-        probedEndpointsList.add(ProbedEndpointItem("/api/users/profile", "GET", "frontend_bundle", 401, "GATED_401", "User identity endpoint", "401 Unauthorized without session"))
-        findingsList.add(Triple("CWE-284: Remote Administration Port Exposed (Port 22 SSH)", "LOW SEVERITY / SURFACE", Color(0xFF3B82F6)))
-        exploitabilityScore = 97
-        exploitabilityGrade = "A+"
 
-        vectorMap["recon_perimeter"] = vectorMap["recon_perimeter"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Apex IP: 34.178.76.162 (GCP) • DMARC p=quarantine • Wildcard Negative",
-            evidence = listOf("DNS A record resolves to Google Cloud Platform us-central", "DMARC configured with 100% quarantine policy", "No wildcard DNS subdomains detected")
-        )
-        vectorMap["ports_services"] = vectorMap["ports_services"]!!.copy(
-            status = AuditVectorStatus.UNSAFE,
-            summary = "Port 22/TCP SSH (OpenSSH 10.0p2) exposed directly to public internet",
-            cwe = "CWE-284: Remote Administration Port Exposed",
-            evidence = listOf("Port 22/TCP open with OpenSSH 10.0p2 banner", "Port 80/TCP open (HTTP redirect to 443)", "Port 443/TCP open (HTTPS TLS 1.3)")
-        )
-        vectorMap["tls_health"] = vectorMap["tls_health"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "TLS 1.3 negotiated • Grade A+ • Strict modern cipher suite",
-            evidence = listOf("Protocol: TLSv1.3", "Cipher: TLS_AES_256_GCM_SHA384", "HSTS header present with max-age=31536000")
-        )
-        if (vectorMap.containsKey("deep_spider")) {
-            vectorMap["deep_spider"] = vectorMap["deep_spider"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Static landing page topology spidered · No hidden routes or leaked parameters",
-                evidence = listOf("Spidered client pages. Zero sensitive files or admin routes exposed.")
-            )
-        }
-        vectorMap["spa_routes"] = vectorMap["spa_routes"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Static landing page architecture · No sensitive API or admin routes exposed",
-            evidence = listOf("Spidered root surface. No hidden SPA routes or admin consoles.")
-        )
-        vectorMap["polyglot_ssti"] = vectorMap["polyglot_ssti"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Polyglot template expressions isolated and sanitized",
-            evidence = listOf("Probed /contact endpoint with Jinja2/Twig/Mako polyglot payload", "0 template expressions evaluated; all input safely escaped")
-        )
-        historyList.add("Perimeter & Port Reconnaissance" to "Scanned ports 80, 443, 22. Identified OpenSSH 10.0p2 on port 22.")
-        historyList.add("Polyglot SSTI Vulnerability Assessment" to "Injected non-destructive test probes on /contact. Verified sanitized.")
-    } else if (domain == "my-app.engineer") {
-        perimeterList.add("Apex IP: 65.108.13.228 (Hetzner K3s Cluster Gateway)")
-        perimeterList.add("TLS 1.3 Negotiated • Grade A+ • Strict Modern Cipher Suite")
-        perimeterList.add("Wildcard DNS: Active (*.my-app.engineer Traefik Route)")
-        perimeterList.add("DMARC: Configured (p=none, monitoring)")
-        subdomainsSet.add("mail.my-app.engineer")
-        portsSet.add("Port 443/TCP: HTTPS (TLS 1.3 Valid Cert)")
-        portsSet.add("Port 80/TCP: HTTP (301 Redirect)")
-        portsSet.add("Port 25/TCP: SMTP (Postfix smtpd)")
-        routesSet.add("/dashboard")
-        routesSet.add("/login")
-        routesSet.add("/auth/callback")
-        routesSet.add("/robots.txt")
-        routesSet.add("/api/config")
-        probedEndpointsList.add(ProbedEndpointItem("/api/config", "GET", "frontend_bundle", 200, "PUBLIC", "Platform client config", "Public configuration"))
-        probedEndpointsList.add(ProbedEndpointItem("/api/auth/session", "GET", "api_fetch", 200, "PUBLIC", "Session status endpoint", "Active session check"))
-        probedEndpointsList.add(ProbedEndpointItem("/api/admin/cluster/nodes", "GET", "frontend_bundle", 403, "GATED_403", "K3s cluster control plane", "Strict admin authorization"))
-        probedEndpointsList.add(ProbedEndpointItem("/api/v1/billing/invoices", "GET", "frontend_bundle", 401, "GATED_401", "Tenant billing & invoice API", "Auth token required"))
-        probedEndpointsList.add(ProbedEndpointItem("/graphql", "POST", "api_fetch", 200, "PUBLIC", "GraphQL gateway", "Introspection queries disabled"))
-        routesSet.add("/api/showcase")
-        postureScore = 98
-        postureGrade = "A+"
-        exploitabilityScore = 98
-        exploitabilityGrade = "A+"
 
-        // All 14 verified and hardened vectors on K3s cluster:
-        vectorMap["recon_perimeter"] = vectorMap["recon_perimeter"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Apex IP: 65.108.13.228 (K3s Hetzner Gateway) • Wildcard Active",
-            evidence = listOf("Cluster Traefik gateway active on 65.108.13.228", "Wildcard DNS enabled for *.my-app.engineer", "DMARC configured in monitoring mode")
-        )
-        vectorMap["ports_services"] = vectorMap["ports_services"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Ports 80, 443, 25 SMTP (Postfix smtpd) open and hardened",
-            evidence = listOf("Port 443/TCP: HTTPS (Traefik Ingress)", "Port 80/TCP: HTTP redirect to HTTPS", "Port 25/TCP: Mail service protected with rate limiting")
-        )
-        vectorMap["tls_health"] = vectorMap["tls_health"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "TLS 1.3 Valid Let's Encrypt Certificate • Modern Strict Cipher Suite",
-            evidence = listOf("Automated ACME certificate valid", "TLSv1.3 negotiated with forward secrecy")
-        )
-        if (vectorMap.containsKey("deep_spider")) {
-            vectorMap["deep_spider"] = vectorMap["deep_spider"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Deep Spidering mapped 6 application routes, 4 API endpoints & input parameters",
-                evidence = listOf("Playwright headless crawler mapped /dashboard, /login, /auth/callback", "Intercepted runtime API endpoints: /api/config, /api/showcase", "Cataloged authentication parameters and form targets")
-            )
-        }
-        vectorMap["spa_routes"] = vectorMap["spa_routes"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "6 SPA Client Routes mapped (/dashboard, /login, /auth/callback, /api/config...)",
-            evidence = listOf("/dashboard, /login, /auth/callback mapped from client bundle", "Robots.txt audited and sanitized", "API config endpoint secured behind token")
-        )
-        vectorMap["business_logic"] = vectorMap["business_logic"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Server-side validation rejects price, quantity, and step tampering",
-            evidence = listOf("Tested negative quantities, high-quantity integer wrap, and price overrides", "Backend strictly enforces authorative catalog prices and state validation")
-        )
-        vectorMap["http_smuggling"] = vectorMap["http_smuggling"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Gateway normalizes dual Transfer-Encoding and Content-Length",
-            evidence = listOf("Probed RFC 7230 dual header configurations", "Reverse proxy strictly rejects ambiguous chunked request bodies")
-        )
-        vectorMap["polyglot_ssti"] = vectorMap["polyglot_ssti"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Polyglot template expressions isolated and sanitized",
-            evidence = listOf("Probed Jinja2, Twig, Mako, and ERB syntax across input endpoints", "0 template expressions evaluated; all input escaped safely")
-        )
-        vectorMap["prototype_pollution"] = vectorMap["prototype_pollution"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: AST prototype pollution sinks scanned and protected",
-            evidence = listOf("Probed __proto__ and constructor.prototype JSON payload mutations", "No global prototype property leakage detected")
-        )
-        vectorMap["auth_matrix"] = vectorMap["auth_matrix"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: All candidate sensitive routes require tenant authorization (401/403)",
-            evidence = listOf("Probed 10 candidate sensitive endpoints and authorization boundaries", "Object-level access checks verified; unauthenticated mutations blocked")
-        )
-        vectorMap["canary_ssrf"] = vectorMap["canary_ssrf"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Ephemeral canaries injected; 0 OOB network leaks or DOM sinks",
-            evidence = listOf("13 canary tokens probed across callback headers and input parameters", "No out-of-band DNS/HTTP requests received on listener")
-        )
-        vectorMap["sqli_timing"] = vectorMap["sqli_timing"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Statistical timing differentials normal across input parameters",
-            evidence = listOf("Analyzed response latency against baseline timing distributions (<50ms)", "No database sleep() or benchmark delays observed")
-        )
-        vectorMap["cloud_metadata"] = vectorMap["cloud_metadata"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Cloud IMDS (169.254.169.254) and K8s internal metadata protected",
-            evidence = listOf("Probed AWS IMDSv1/v2, GCP metadata flavors, and Azure headers", "Metadata requests unreachable from external attack surface")
-        )
-        vectorMap["storage_jwt"] = vectorMap["storage_jwt"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: Client token storage inspected and JWT verification validated",
-            evidence = listOf("LocalStorage and SessionStorage audited for plain-text secrets", "JWT algorithm downgrading and public key confusion tested")
-        )
-        vectorMap["subdomain_takeover"] = vectorMap["subdomain_takeover"]!!.copy(
-            status = AuditVectorStatus.SAFE,
-            summary = "Verified Clean: All discovered CNAME records point to live verified services",
-            evidence = listOf("Resolved DNS CNAME pointers for apex and subdomains", "0 dangling pointers to unclaimed S3 buckets, GitHub Pages, or Azure")
-        )
-
-        // All 14 historical run entries
-        historyList.add("Full-Spectrum 6-Point Autonomous Recon" to "Perimeter, DNS topology, and TLS 1.3 posture verified.")
-        historyList.add("Open Ports & Daemon Banner Probing" to "Ports 80, 443, 25 SMTP (Postfix) identified and hardened.")
-        historyList.add("Autonomous Business Logic & Pricing Audit" to "Tested negative quantity wrap, cart mutations, and checkout steps. Clean.")
-        historyList.add("HTTP Request Smuggling Desync Probe" to "RFC 7230 dual Content-Length and Transfer-Encoding normalized by Ingress.")
-        historyList.add("Polyglot Server-Side Template Injection" to "Multi-engine Jinja2/Twig/Mako polyglots probed. All inputs sanitized.")
-        historyList.add("AST Prototype Pollution Gadget Scan" to "Object.prototype AST sinks audited. Zero recursive merge vulnerabilities.")
-        historyList.add("BOLA / IDOR Authorization Matrix" to "10 candidate sensitive endpoints audited. Object-level auth verified.")
-        historyList.add("Blind SSRF & Ephemeral Canary Reflection" to "13 ephemeral canary tokens injected. 0 out-of-band leaks.")
-        historyList.add("Blind SQLi Timing Differential Analysis" to "Statistical latency distributions normal (<50ms). Zero blind SQLi.")
-        historyList.add("Cloud IMDS & Infrastructure Metadata" to "Probed 169.254.169.254 and K8s API. Internal services unreachable.")
-        historyList.add("Client Storage & JWT Security Audit" to "Client tokens inspected. No token leaks; signature verified.")
-        historyList.add("Subdomain Takeover & CNAME Dangling Check" to "All CNAMEs resolve to active cluster nodes. No dangling takeovers.")
-        historyList.add("SPA Route & Sensitive Endpoint Crawl" to "Mapped 6 client routes (/dashboard, /login, /auth/callback...).")
-        historyList.add("Compliance Mapping (SOC 2, ISO 27001)" to "Security posture maps to standard enterprise compliance controls.")
-    }
-
-    // Load persistent state from SharedPreferences (if previously audited on this device)
-    try {
-        val cached = AssistantHooks.getAppMapJson?.invoke(domain)
-        if (!cached.isNullOrBlank()) {
-            decodeVectorsInto(cached, vectorMap, subdomainsSet, portsSet, routesSet, probedEndpointsList)
-        }
-    } catch (e: Exception) {}
+    // Older cached vectors can contain inferred or fabricated evidence; do not reuse them.
 
     // Process chat turns and steps STRICTLY SCOPED to this domain
     for (turn in turns) {
@@ -2283,7 +1950,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
             val isStepForDomain = sArgs.contains(domain) || sText.contains(domain) || sLabel.contains(domain)
             if (!isStepForDomain && !combinedTurn.contains(domain, ignoreCase = true)) continue
 
-            val txt = s.text + " " + s.label + " " + s.args
+            val txt = s.text
 
             // 1. Subdomains
             val subRegex = Regex("\\b([a-zA-Z0-9_-]+\\.)+" + Regex.escape(domain) + "\\b", RegexOption.IGNORE_CASE)
@@ -2301,18 +1968,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
                     m.groupValues[1].split(",").forEach { p ->
                         val num = p.trim().toIntOrNull()
                         if (num != null && num in 1..65535) {
-                            val bannerDesc = when (num) {
-                                22 -> if (txt.contains("openssh", ignoreCase = true)) "Port 22/TCP: SSH (OpenSSH 10.0p2)" else "Port 22/TCP: SSH"
-                                25 -> if (txt.contains("postfix", ignoreCase = true)) "Port 25/TCP: SMTP (Postfix smtpd)" else "Port 25/TCP: SMTP"
-                                80 -> "Port 80/TCP: HTTP (Web Redirect)"
-                                443 -> "Port 443/TCP: HTTPS (TLS 1.3)"
-                                2222 -> "Port 2222/TCP: DirectAdmin Management"
-                                3306 -> "Port 3306/TCP: MySQL / MariaDB Database"
-                                5432 -> "Port 5432/TCP: PostgreSQL Database"
-                                6379 -> "Port 6379/TCP: Redis Cache"
-                                8080 -> "Port 8080/TCP: HTTP-ALT Proxy"
-                                else -> "Port " + num + "/TCP"
-                            }
+                            val bannerDesc = "Port " + num + "/TCP"
                             portsSet.removeAll { it.startsWith("Port " + num + "/") }
                             portsSet.add(bannerDesc)
                         }
@@ -2325,8 +1981,8 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
                 val epRegex = Regex("(?:GET|POST|PUT|DELETE|OPTIONS)\\s+([/][a-zA-Z0-9_./-]+)\\s*(?:->|:)?\\s*(\\d{3})?\\s*(?:\\[([A-Z0-9_]+)\\])?", RegexOption.IGNORE_CASE)
                 epRegex.findAll(txt).forEach { m ->
                     val p = m.groupValues[1]
-                    val st = m.groupValues[2].toIntOrNull() ?: 200
-                    val sec = m.groupValues[3].ifBlank { if (st == 401 || st == 403) "GATED_$st" else if (st == 200 && (p.contains("admin") || p.contains("user"))) "CRITICAL_LEAK" else "PUBLIC" }
+                    val st = m.groupValues[2].toIntOrNull() ?: return@forEach
+                    val sec = m.groupValues[3].ifBlank { "UNKNOWN" }
                     if (p.length > 2 && probedEndpointsList.none { it.path == p }) {
                         probedEndpointsList.add(ProbedEndpointItem(path = p, status = st, securityStatus = sec, source = "deep_spider_probe", finding = "Probed response HTTP $st ($sec)"))
                     }
@@ -2343,291 +1999,7 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
             }
         }
 
-        // Evaluate Vector Discoveries from Turn Content & Steps
-        val allTurnContent = combinedTurn + " " + turn.steps.joinToString(" ") { it.name + " " + it.text + " " + it.label }
-
-        // 1. Perimeter, DNS Topology & ASN Mapping Vector
-        if (turn.steps.any { it.name == "gb_recon" || it.name == "gb_audit_perimeter" || it.name == "gb_audit_subdomains" } ||
-            allTurnContent.contains("6-point", ignoreCase = true) ||
-            allTurnContent.contains("perimeter", ignoreCase = true) ||
-            allTurnContent.contains("dns topology", ignoreCase = true) ||
-            allTurnContent.contains("defensive reconnaissance", ignoreCase = true)) {
-            val ev = mutableListOf<String>()
-            if (subdomainsSet.isNotEmpty()) {
-                ev.add("Resolved hosts: " + subdomainsSet.take(4).joinToString(", "))
-            } else {
-                ev.add("Resolved apex domain and DNS authoritative nameservers")
-            }
-            ev.add("DNS topology & record configurations verified for $domain")
-            ev.add("Autonomous edge network reconnaissance completed")
-            vectorMap["recon_perimeter"] = vectorMap["recon_perimeter"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Autonomous perimeter & DNS topology verified · ${subdomainsSet.size.coerceAtLeast(1)} host(s) mapped",
-                evidence = ev
-            )
-            findingsList.add(Triple("Perimeter & DNS Topology Assessment", "VERIFIED HARDENED", Color(0xFF10B981)))
-        }
-
-        // 2. Open Ports & Daemon Version Banners Vector
-        if (turn.steps.any { it.name == "gb_audit_service_banners" } ||
-            allTurnContent.contains("service daemon", ignoreCase = true) ||
-            allTurnContent.contains("open ports", ignoreCase = true) ||
-            allTurnContent.contains("daemon version", ignoreCase = true) ||
-            (portsSet.isNotEmpty() && turn.steps.any { it.name == "gb_recon" })) {
-            val ev = if (portsSet.isNotEmpty()) portsSet.toList() else listOf("Port 443/TCP: HTTPS (TLS Ingress)", "Port 80/TCP: HTTP redirect verified")
-            val pSummary = if (portsSet.isNotEmpty()) "${portsSet.size} active port(s) audited (${portsSet.take(3).map { it.substringBefore(":") }.joinToString(", ")}) · Daemons verified" else "Port mapping complete · Public HTTP/HTTPS ingress active and hardened"
-            vectorMap["ports_services"] = vectorMap["ports_services"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = pSummary,
-                evidence = ev
-            )
-            findingsList.add(Triple("Open Ports & Daemon Banner Probing", "VERIFIED HARDENED", Color(0xFF10B981)))
-        }
-
-        // 3. TLS 1.3 & Cryptographic Posture Vector
-        if (turn.steps.any { it.name == "gb_audit_tls_health" || it.name == "gb_audit_http_headers" } ||
-            allTurnContent.contains("tls 1.3", ignoreCase = true) ||
-            allTurnContent.contains("tls health", ignoreCase = true) ||
-            allTurnContent.contains("cipher suite", ignoreCase = true) ||
-            allTurnContent.contains("certificate chain", ignoreCase = true) ||
-            allTurnContent.contains("transport security", ignoreCase = true)) {
-            val ev = mutableListOf<String>()
-            if (allTurnContent.contains("tls_aes_256_gcm", ignoreCase = true) || allTurnContent.contains("tlsv1.3", ignoreCase = true) || allTurnContent.contains("tls 1.3", ignoreCase = true)) {
-                ev.add("Protocol: TLSv1.3 negotiated with forward secrecy")
-                ev.add("Cipher Suite: Modern AEAD cipher active")
-            } else {
-                ev.add("Modern TLS handshake verified")
-            }
-            if (allTurnContent.contains("sectigo", ignoreCase = true) || allTurnContent.contains("let's encrypt", ignoreCase = true) || allTurnContent.contains("certificate", ignoreCase = true)) {
-                ev.add("Certificate chain verified valid across SAN endpoints")
-            } else {
-                ev.add("Valid public CA certificate trusted by root stores")
-            }
-            vectorMap["tls_health"] = vectorMap["tls_health"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "TLS 1.3 negotiated · Strict AEAD cipher suite · Certificate chain valid",
-                evidence = ev
-            )
-            findingsList.add(Triple("TLS 1.3 & Cryptographic Posture", "VERIFIED HARDENED", Color(0xFF10B981)))
-        }
-
-        // SSTI Vector
-        if (turn.steps.any { it.name == "gb_audit_polyglot_ssti" } || allTurnContent.contains("ssti", ignoreCase = true) || allTurnContent.contains("template injection", ignoreCase = true)) {
-            val isVuln = (allTurnContent.contains("evaluated to 1147", ignoreCase = true) ||
-                          allTurnContent.contains("evaluated to 49", ignoreCase = true) ||
-                          allTurnContent.contains("ssti confirmed", ignoreCase = true) ||
-                          allTurnContent.contains("ssti expression evaluated", ignoreCase = true)) &&
-                         !allTurnContent.contains("immunity to ssti", ignoreCase = true) &&
-                         !allTurnContent.contains("zero vulnerabilities", ignoreCase = true)
-            if (isVuln) {
-                vectorMap["polyglot_ssti"] = vectorMap["polyglot_ssti"]!!.copy(
-                    status = AuditVectorStatus.UNSAFE,
-                    summary = "CWE-1336: Server-Side Template Injection expression evaluated",
-                    evidence = listOf("Polyglot probe {{7*7}} executed on target template engine", "Critical Remote Code Execution exposure detected")
-                )
-                findingsList.add(Triple("CWE-1336: Server-Side Template Injection (SSTI)", "CRITICAL RCE", Color(0xFFE5484D)))
-                exploitabilityScore = 15
-                exploitabilityGrade = "F"
-            } else {
-                vectorMap["polyglot_ssti"] = vectorMap["polyglot_ssti"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = "Verified Clean: Polyglot template expressions isolated and sanitized",
-                    evidence = listOf("Probed Jinja2, Twig, Mako, and ERB syntax across input endpoints", "0 template expressions evaluated; all input escaped safely")
-                )
-                findingsList.add(Triple("CWE-1336: Polyglot Template Expression Isolation", "VERIFIED HARDENED", Color(0xFF10B981)))
-            }
-        }
-
-        // Business Logic & Pricing Vector
-        if (turn.steps.any { it.name == "gb_audit_business_logic" } || allTurnContent.contains("business logic", ignoreCase = true) || allTurnContent.contains("price tampering", ignoreCase = true)) {
-            val isVuln = (allTurnContent.contains("tampering detected", ignoreCase = true) ||
-                          allTurnContent.contains("price tampering confirmed", ignoreCase = true)) &&
-                         !allTurnContent.contains("zero vulnerabilities", ignoreCase = true) &&
-                         !allTurnContent.contains("no vulnerabilities", ignoreCase = true)
-            if (isVuln) {
-                vectorMap["business_logic"] = vectorMap["business_logic"]!!.copy(
-                    status = AuditVectorStatus.UNSAFE,
-                    summary = "CWE-840: Autonomous business logic & price tampering vulnerability detected",
-                    evidence = listOf("Negative amount mutation accepted by backend endpoint", "Cart total manipulation permitted order completion without validation")
-                )
-                findingsList.add(Triple("CWE-840 / CWE-602: Business Logic & Price Tampering Detected", "CRITICAL SEVERITY", Color(0xFFE5484D)))
-                exploitabilityGrade = "F"
-                exploitabilityScore = 20
-            } else {
-                vectorMap["business_logic"] = vectorMap["business_logic"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = "Verified Clean: Server-side validation rejects price, quantity, and step tampering",
-                    evidence = listOf("Tested negative quantities, high-quantity integer wrap, and price overrides", "Backend strictly enforces authorative catalog prices and state validation")
-                )
-                findingsList.add(Triple("CWE-840: Business Logic, Pricing & State Validation", "VERIFIED HARDENED", Color(0xFF10B981)))
-            }
-        }
-
-        // HTTP Request Smuggling
-        if (turn.steps.any { it.name == "gb_audit_http_smuggling" } || allTurnContent.contains("request smuggling", ignoreCase = true)) {
-            val isVuln = allTurnContent.contains("smuggling desync detected", ignoreCase = true) || allTurnContent.contains("vulnerable to smuggling", ignoreCase = true)
-            if (isVuln) {
-                vectorMap["http_smuggling"] = vectorMap["http_smuggling"]!!.copy(
-                    status = AuditVectorStatus.UNSAFE,
-                    summary = "CWE-444: HTTP Request Smuggling front-end/back-end desynchronization",
-                    evidence = listOf("CL.TE or TE.CL dual length desync confirmed via socket probe", "Risk of request hijacking and cache poisoning")
-                )
-                findingsList.add(Triple("CWE-444: HTTP Request Smuggling Desync", "HIGH SEVERITY", Color(0xFFE5484D)))
-            } else {
-                vectorMap["http_smuggling"] = vectorMap["http_smuggling"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = "Verified Clean: Gateway normalizes dual Transfer-Encoding and Content-Length",
-                    evidence = listOf("Probed RFC 7230 dual header configurations", "Reverse proxy strictly rejects ambiguous chunked request bodies")
-                )
-                findingsList.add(Triple("CWE-444: RFC 7230 Dual Content-Length Normalization", "VERIFIED HARDENED", Color(0xFF10B981)))
-            }
-        }
-
-        // BOLA / IDOR Auth Matrix
-        if (turn.steps.any { it.name == "gb_audit_auth_matrix" } || allTurnContent.contains("auth matrix", ignoreCase = true) || allTurnContent.contains("bola", ignoreCase = true)) {
-            val isVuln = allTurnContent.contains("unauthenticated access", ignoreCase = true) || allTurnContent.contains("idor confirmed", ignoreCase = true)
-            if (isVuln) {
-                vectorMap["auth_matrix"] = vectorMap["auth_matrix"]!!.copy(
-                    status = AuditVectorStatus.UNSAFE,
-                    summary = "CWE-639: Broken Object Level Authorization allows cross-tenant access",
-                    evidence = listOf("Candidate sensitive paths accessible without valid tenant authentication")
-                )
-                findingsList.add(Triple("CWE-639: Broken Object Level Authorization (BOLA)", "HIGH SEVERITY", Color(0xFFE5484D)))
-            } else {
-                vectorMap["auth_matrix"] = vectorMap["auth_matrix"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = "Verified Clean: All candidate sensitive routes require tenant authorization (401/403)",
-                    evidence = listOf("Probed 10 candidate sensitive endpoints and authorization boundaries", "Object-level access checks verified; unauthenticated mutations blocked")
-                )
-                findingsList.add(Triple("CWE-639: Multi-Tenant Authorization Boundaries", "VERIFIED HARDENED", Color(0xFF10B981)))
-            }
-        }
-
-        // SQLi Timing
-        if (turn.steps.any { it.name == "gb_audit_sqli_timing" } || allTurnContent.contains("sqli", ignoreCase = true)) {
-            vectorMap["sqli_timing"] = vectorMap["sqli_timing"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: Statistical timing differentials normal across input parameters",
-                evidence = listOf("Analyzed response latency against baseline timing distributions", "No database sleep() or benchmark delays observed")
-            )
-        }
-
-        // Blind SSRF & Canary Reflection
-        if (turn.steps.any { it.name == "gb_audit_canary_reflection" || it.name == "gb_audit_oast_callbacks" } || allTurnContent.contains("canary", ignoreCase = true)) {
-            vectorMap["canary_ssrf"] = vectorMap["canary_ssrf"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: Ephemeral canaries injected; 0 OOB network leaks or DOM sinks",
-                evidence = listOf("13 canary tokens probed across callback headers and input parameters", "No out-of-band DNS/HTTP requests received on listener")
-            )
-        }
-
-        // Cloud Metadata
-        if (turn.steps.any { it.name == "gb_audit_cloud_metadata" } || allTurnContent.contains("metadata", ignoreCase = true)) {
-            vectorMap["cloud_metadata"] = vectorMap["cloud_metadata"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: Cloud IMDS (169.254.169.254) and K8s internal metadata protected",
-                evidence = listOf("Probed AWS IMDSv1/v2, GCP metadata flavors, and Azure headers", "Metadata requests unreachable from external attack surface")
-            )
-        }
-
-        // Prototype Pollution
-        if (turn.steps.any { it.name == "gb_audit_prototype_gadgets" } || allTurnContent.contains("prototype", ignoreCase = true)) {
-            vectorMap["prototype_pollution"] = vectorMap["prototype_pollution"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: AST prototype pollution sinks scanned and protected",
-                evidence = listOf("Probed __proto__ and constructor.prototype JSON payload mutations", "No global prototype property leakage detected")
-            )
-        }
-
-        // Storage & JWT
-        if (turn.steps.any { it.name == "gb_audit_storage" || it.name == "gb_audit_jwt_key_confusion" }) {
-            vectorMap["storage_jwt"] = vectorMap["storage_jwt"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: Client token storage inspected and JWT verification validated",
-                evidence = listOf("LocalStorage and SessionStorage audited for plain-text secrets", "JWT algorithm downgrading and public key confusion tested")
-            )
-        }
-
-        // Subdomain Takeover
-        if (turn.steps.any { it.name == "gb_audit_subdomain_takeover" }) {
-            vectorMap["subdomain_takeover"] = vectorMap["subdomain_takeover"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = "Verified Clean: All discovered CNAME records point to live verified services",
-                evidence = listOf("Resolved DNS CNAME pointers for apex and subdomains", "0 dangling pointers to unclaimed S3 buckets, GitHub Pages, or Azure")
-            )
-        }
-
-        // 0. Enterprise Deep Headless Spidering Pipeline
-        if (turn.steps.any { it.name == "gb_pipeline_deep_spider" } ||
-            allTurnContent.contains("deep spider", ignoreCase = true) ||
-            allTurnContent.contains("deep headless spider", ignoreCase = true) ||
-            allTurnContent.contains("attack surface mapping", ignoreCase = true)) {
-            
-            val routeRegex = Regex("""(?:- `?|>\s*)(/[a-zA-Z0-9_\-/.]{2,})`?""")
-            routeRegex.findAll(allTurnContent).forEach { match ->
-                val r = match.groupValues[1]
-                if (!r.endsWith(".png") && !r.endsWith(".jpg") && !r.endsWith(".svg") && !r.endsWith(".css") && !r.endsWith(".js")) {
-                    routesSet.add(r)
-                }
-            }
-
-            val ev = mutableListOf<String>()
-            if (routesSet.isNotEmpty()) {
-                ev.add("Mapped ${routesSet.size} client-side SPA routes (${routesSet.take(5).joinToString(", ")})")
-            } else {
-                ev.add("Crawled DOM and runtime bundles for dynamic SPA routing topology")
-            }
-            ev.add("Intercepted runtime XHR/Fetch network API calls and dynamic parameters")
-            ev.add("Audited sensitive files & schema contracts (OpenAPI, security.txt, robots.txt)")
-
-            val dSummary = if (routesSet.isNotEmpty()) {
-                "${routesSet.size} application routes spidered · Forms, API endpoints & input parameters cataloged"
-            } else {
-                "Verified Clean: Deep headless crawl completed · Zero sensitive schema or route exposures"
-            }
-
-            if (vectorMap.containsKey("deep_spider")) {
-                vectorMap["deep_spider"] = vectorMap["deep_spider"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = dSummary,
-                    evidence = ev
-                )
-            }
-            if (vectorMap.containsKey("spa_routes")) {
-                vectorMap["spa_routes"] = vectorMap["spa_routes"]!!.copy(
-                    status = AuditVectorStatus.SAFE,
-                    summary = dSummary,
-                    evidence = ev
-                )
-            }
-            findingsList.add(Triple("Enterprise Deep Spidering & Topology Mapped", "VERIFIED HARDENED", Color(0xFF10B981)))
-        }
-
-        // 14. SPA Route Spidering & Sensitive Paths Vector
-        if (turn.steps.any { it.name == "gb_audit_semantic_surface" || it.name == "gb_audit_sensitive_paths" } ||
-            allTurnContent.contains("semantic surface", ignoreCase = true) ||
-            allTurnContent.contains("spa route", ignoreCase = true) ||
-            allTurnContent.contains("sensitive paths", ignoreCase = true) ||
-            allTurnContent.contains("client-side spa", ignoreCase = true)) {
-            val ev = mutableListOf<String>()
-            if (routesSet.isNotEmpty()) {
-                ev.add("Mapped client routes: " + routesSet.take(5).joinToString(", "))
-            } else {
-                ev.add("Analyzed client runtime routing manifest (SSR / obfuscated architecture)")
-            }
-            ev.add("Probed candidate sensitive endpoints (/admin, /api, /settings) — all protected (401/403)")
-            val rSummary = if (routesSet.isNotEmpty()) {
-                "${routesSet.size} client routes mapped (${routesSet.take(3).joinToString(", ")}) · Sensitive paths audited"
-            } else {
-                "Verified Clean: Routing architecture analyzed · Zero leaked client routes or exposed admin panels"
-            }
-            vectorMap["spa_routes"] = vectorMap["spa_routes"]!!.copy(
-                status = AuditVectorStatus.SAFE,
-                summary = rSummary,
-                evidence = ev
-            )
-            findingsList.add(Triple("SPA Route Spidering & Authorization Boundaries", "VERIFIED HARDENED", Color(0xFF10B981)))
-        }
+        // Free-form chat and tool names alone do not establish an audit result.
 
         // Record history runs
         if (turn.role == "assistant") {
@@ -2648,22 +2020,6 @@ fun parseAppMapFromChat(targetUrl: String, turns: List<AssistantTurn>): ParsedAp
     val safeCount = vectorsList.count { it.status == AuditVectorStatus.SAFE }
     val unsafeCount = vectorsList.count { it.status == AuditVectorStatus.UNSAFE }
     val pendingCount = vectorsList.count { it.status == AuditVectorStatus.PENDING }
-
-    // Save updated vector state to SharedPreferences so it persists across restarts
-    if (completedCount > 0) {
-        try {
-            AssistantHooks.saveAppMapJson?.invoke(domain, encodeVectors(vectorsList, subdomainsSet.toList(), portsSet.toList(), routesSet.toList(), probedEndpointsList))
-        } catch (e: Exception) {}
-    }
-
-    // Dynamic dual-scorecard calculation
-    if (unsafeCount > 0) {
-        exploitabilityScore = (100 - (unsafeCount * 30)).coerceAtLeast(10)
-        exploitabilityGrade = if (exploitabilityScore < 40) "F" else if (exploitabilityScore < 70) "D" else "C"
-    } else if (completedCount >= 4) {
-        exploitabilityScore = 98
-        exploitabilityGrade = "A+"
-    }
 
     return ParsedAppMap(
         domain = domain,
@@ -2856,8 +2212,8 @@ private fun AppMapSheet(
                                     Spacer(Modifier.height(2.dp))
                                     Text("Verified Vectors & Attack Surface", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
                                 }
-                                Surface(shape = RoundedCornerShape(6.dp), color = if (map.exploitabilityScore >= 80) Color(0xFF10B981).copy(alpha = 0.15f) else Color(0xFFE5484D).copy(alpha = 0.15f)) {
-                                    Text("Grade ${map.exploitabilityGrade}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (map.exploitabilityScore >= 80) Color(0xFF10B981) else Color(0xFFE5484D), modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                                Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF94A3B8).copy(alpha = 0.15f)) {
+                                    Text(map.exploitabilityGrade, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8), modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                                 }
                             }
                             Spacer(Modifier.height(12.dp))
@@ -2871,7 +2227,7 @@ private fun AppMapSheet(
                                     Column(Modifier.padding(10.dp)) {
                                         Text("Perimeter Posture", fontSize = 10.sp, color = cs.onSurfaceVariant)
                                         Spacer(Modifier.height(2.dp))
-                                        Text("${map.postureScore} / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Text(if (map.postureScore < 0) "Not assessed" else "${map.postureScore} / 100", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
                                         Text("DNS • TLS • WAF", fontSize = 9.sp, color = cs.onSurfaceVariant.copy(alpha = 0.7f))
                                     }
                                 }
@@ -3249,9 +2605,9 @@ private fun AppMapSheet(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Column(Modifier.padding(14.dp)) {
-                                        Text("Verified Clean & Hardened", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        Text("No verified findings available", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
                                         Spacer(Modifier.height(4.dp))
-                                        Text("No vulnerabilities detected on tested attack vectors. All inputs and routes verified.", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                                        Text("An empty list does not establish that the target is secure.", fontSize = 11.sp, color = cs.onSurfaceVariant)
                                     }
                                 }
                             } else {
@@ -3743,7 +3099,7 @@ private fun AppManagerSheet(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Surface(shape = RoundedCornerShape(6.dp), color = cs.surfaceVariant.copy(alpha = 0.5f)) {
-                                        Text("Grade ${app.postureGrade} (${app.postureScore}/100)", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                        Text("Not assessed", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                     }
                                     Surface(shape = RoundedCornerShape(6.dp), color = cs.surfaceVariant.copy(alpha = 0.5f)) {
                                         Text("${app.subdomainsCount} Subdomains", fontSize = 9.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))

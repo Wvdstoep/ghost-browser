@@ -29,11 +29,27 @@ import kotlin.concurrent.thread
 
 /** Reactive desktop state the screens read; the node + loaders write to it. */
 class DesktopState {
+    val reconUi = engineer.myapp.gb.shared.ReconUi()
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("Load your automations from the cluster.")
     val devices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
+    /* The nightly training loop, read from the cluster. One object, read by the Training screen and
+       by each device's row in the hub, so the two cannot disagree about the same machine. */
+    val training = mutableStateOf(engineer.myapp.gb.shared.TrainingWatch.View())
+    /* The runs browser: the rows, and the one run open over the page. */
+    val trainingRuns = mutableStateOf<List<engineer.myapp.gb.shared.TrainingWatch.RunRow>>(emptyList())
+    /* The scoreboard: every measured round, whatever model trained it. Null until the tab asks. */
+    val trainingResults = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.Results?>(null)
+    /* Side by side: what may be compared, and the run being watched. */
+    val compareOffer = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.CompareOffer?>(null)
+    val compareRun = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.CompareRun?>(null)
+    val trainingRun = mutableStateOf<engineer.myapp.gb.shared.TrainingWatch.RunDetail?>(null)
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
+    /* Profiles as its own surface: the logged-in identities and the role each one uses. */
+    val profiles = ProfilesUi()
+    /* The nav bar slides off while a page is scrolled down; fed by the page's own scroll. */
+    val chrome = engineer.myapp.gb.shared.ChromeScroll()
     val activity = mutableStateOf("")
     val nodeStatus = mutableStateOf("node: connecting…")
     val dark = mutableStateOf(true)
@@ -122,10 +138,119 @@ fun loadDevices(st: DesktopState) = bg {
             val on = d.optBoolean("online"); if (on) online++
             val caps = d.optJSONObject("caps"); val plat = caps?.optString("platform") ?: ""
             val type = when { plat == "android" -> "PHONE"; plat == "desktop" -> "LAPTOP"; plat == "cluster" -> "CLUSTER"; else -> "NODE" }
-            out.add(HubDevice(d.optString("name").ifBlank { d.optString("deviceId") }, d.optString("owner"), type, on, d.optLong("lastSeen", 0), d.optInt("queued", 0)))
+            val nm = d.optString("name").ifBlank { d.optString("deviceId") }
+            /* Already phrased by the shared code rather than worked out here, so this row and the
+               Training screen cannot reach different conclusions about the same machine. */
+            val tr = st.training.value.byDevice[nm]
+            out.add(HubDevice(nm, d.optString("owner"), type, on, d.optLong("lastSeen", 0), d.optInt("queued", 0),
+                engineer.myapp.gb.shared.TrainingWatch.deviceLine(tr), tr?.stale == true))
         }
         st.devices.value = out; st.hubSummary.value = "$online online · ${arr.length()} registered"
     } catch (e: Exception) {}
+}
+
+/**
+ * The pipeline, read in one call.
+ *
+ * It also re-phrases the device rows, because the two surfaces are fed from this single answer: a
+ * hub row that said "idle" beside a laptop four hours into a round is exactly the failure this is
+ * here to prevent, and it would come back the moment either screen derived its own version.
+ */
+fun loadTraining(st: DesktopState) = bg {
+    try {
+        val v = engineer.myapp.gb.shared.TrainingWatch.parse(Cluster.authed("GET", "/v1/training/state", null))
+        /*
+         * The collection loop keeps its own state at its own endpoint, and it is read separately on
+         * purpose: a build talking to an older cluster gets a 404 for it and must still show the
+         * training page. Folding it into the one reply would turn a missing block into "off", which
+         * is a confident wrong answer about something that spends money.
+         */
+        val h = try { engineer.myapp.gb.shared.TrainingWatch.parseHarvest(Cluster.authed("GET", "/v1/harvest/state", null)) } catch (e: Exception) { null }
+        st.training.value = v.copy(harvest = h)
+        st.devices.value = st.devices.value.map { d ->
+            val tr = v.byDevice[d.name]
+            d.copy(training = engineer.myapp.gb.shared.TrainingWatch.deviceLine(tr), trainingStale = tr?.stale == true)
+        }
+    } catch (e: Exception) { /* a status page is never worth an error over the work it describes */ }
+}
+
+/** Let the browser collect its own training data, or stop it. Off is always one tap away. */
+fun setHarvest(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/harvest/on", "{\"on\":" + on + "}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/** How the trained model is served: a mode, or the model tag to serve. */
+fun setServing(st: DesktopState, mode: String?, model: String?) = bg {
+    val body = buildString {
+        append("{")
+        if (mode != null) append("\"mode\":\"").append(mode).append("\"")
+        if (mode != null && model != null) append(",")
+        if (model != null) append("\"model\":\"").append(model.replace("\"", "")).append("\"")
+        append("}")
+    }
+    try { Cluster.authed("POST", "/v1/training/serving", body) } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/** Where rounds run, the provider key, the card, the hard stop - any subset of fields. */
+fun setGpu(st: DesktopState, fields: Map<String, String>) = bg {
+    val o = JSONObject(); fields.forEach { (k, v) -> o.put(k, v) }
+    try { Cluster.authed("POST", "/v1/training/gpu", o.toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun destroyGpu(st: DesktopState) = bg {
+    try { Cluster.authed("POST", "/v1/training/gpu/destroy", "{}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/** Give the old runs their pages back, or stop. Browser time only; no model credit. */
+fun setResight(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/resight", "{\"on\":" + on + "}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/** Put a round's adapter into service. The cluster refuses one that did not beat its own baseline. */
+fun promoteRound(st: DesktopState, id: String) = bg {
+    try { Cluster.authed("POST", "/v1/training/rounds/$id/promote", "{}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/* ── the three controls ───────────────────────────────────────────────────────────────────────── */
+
+/** Whether rounds may start on their own. Absolute: no rule on the cluster overrides it. */
+fun setTrainingAuto(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/auto", JSONObject().put("on", on).toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/**
+ * Force a round now.
+ *
+ * Skips the reasons to WAIT — not enough new data, the set already covered — and never the reasons
+ * it cannot run: no machine, no set, a round already going. Those are not preferences.
+ */
+fun runRoundNow(st: DesktopState) = bg {
+    try { Cluster.authed("POST", "/v1/training/dispatch", JSONObject().put("force", true).toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/** Allow, or forbid, one machine to take rounds. Default is forbidden — a laptop must not enlist itself. */
+fun allowTrainer(st: DesktopState, deviceId: String, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/trainers/$deviceId", JSONObject().put("on", on).toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+
+/**
+ * Build the training environment on a machine that could train but is not set up.
+ *
+ * It takes several minutes and reports as it goes, so the screen keeps reading while it works — a
+ * setup that looks frozen for ten minutes gets cancelled halfway, which leaves exactly the broken
+ * half-installed environment it was trying to avoid.
+ */
+fun setUpTrainer(st: DesktopState, deviceId: String) = bg {
+    try { Cluster.authed("POST", "/v1/training/trainers/$deviceId/setup", "{}") } catch (e: Exception) { }
+    loadTraining(st)
 }
 
 fun loadPlatforms(st: DesktopState) = bg {
@@ -346,7 +471,7 @@ fun openWatcherResultsD(st: DesktopState, id: String) = bg {
                 draft = it.optString("draft"), jobId = it.optString("draftJobId"), pid = it.optString("draftPid"), feedKey = it.optString("key"), handled = false,
                 draftState = it.optString("draftState"),
                 postId = f?.optString("postId") ?: "", postTitle = f?.optString("postTitle") ?: "", why = f?.optString("why") ?: "", thread = f?.optString("thread") ?: "",
-                lead = f?.optBoolean("lead") == true))
+                lead = f?.optBoolean("lead") == true, readOnly = it.optBoolean("readOnly")))
         }
         st.artifactItems.value = items
     } catch (e: Exception) { st.log("! results: ${e.message}") }
@@ -499,14 +624,184 @@ fun createFlowD(name: String, steps: String, st: DesktopState) = bg {
 /* ── Device Hub ────────────────────────────────────────────────────────────────────────────── */
 @Composable
 fun DeviceHubScreenD(st: DesktopState) {
-    LaunchedEffect(Unit) { loadDevices(st) }
+    /* Devices first, then the training lines that go on their rows — a machine deep in a round must
+       never read as idle here. */
+    LaunchedEffect(Unit) { loadDevices(st); loadTraining(st) }
     // S9: the SAME shared Device Hub the phone uses.
-    DeviceHubScreen(st.devices.value, st.hubSummary.value, { loadDevices(st) }, System.currentTimeMillis())
+    DeviceHubScreen(st.devices.value, st.hubSummary.value, { loadDevices(st); loadTraining(st) }, System.currentTimeMillis())
+}
+
+/* ── Training ──────────────────────────────────────────────────────────────────────────────── */
+@Composable
+fun TrainingScreenD(st: DesktopState) {
+    LaunchedEffect(Unit) { loadTraining(st) }
+    /*
+     * A round is hours long, so the page keeps reading while it is open — but slowly. This is a
+     * status page, not a heartbeat, and the cluster answers it for every app that has it open.
+     */
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(if (st.training.value.active != null) 20000 else 60000)
+            loadTraining(st)
+        }
+    }
+    engineer.myapp.gb.shared.TrainingScreen(
+        st.training.value,
+        onRefresh = { loadTraining(st) },
+        onPromote = { promoteRound(st, it) },
+        onSetAuto = { on -> setTrainingAuto(st, on) },
+        onRunNow = { runRoundNow(st) },
+        onAllowTrainer = { id, on -> allowTrainer(st, id, on) },
+        onSetUpTrainer = { id -> setUpTrainer(st, id) },
+        onSetHarvest = { on -> setHarvest(st, on) },
+        onSetResight = { on -> setResight(st, on) },
+        onSetServing = { mode, model -> setServing(st, mode, model) },
+        onSetGpu = { fields -> setGpu(st, fields) },
+        onDestroyGpu = { destroyGpu(st) },
+        onSetJudge = { on -> setJudge(st, on) },
+        onSetPractice = { on -> setPractice(st, on) },
+        onSetAutopilot = { on -> setAutopilot(st, on) },
+        onStopRound = { id -> stopRound(st, id) },
+        onNodeJoin = { kind -> nodeJoin(st, kind) },
+        onNodeRevoke = { code -> nodeRevoke(st, code) },
+        onSetModal = { fields -> setModal(st, fields) },
+        onModalStart = { modalStart(st) },
+        onTrialStudents = { models -> trialStudents(st, models) },
+        results = st.trainingResults.value,
+        onLoadResults = { loadTrainingResults(st) },
+        compareOffer = st.compareOffer.value,
+        compareRun = st.compareRun.value,
+        onLoadCompare = { loadCompareOffer(st) },
+        onCompareRecorded = { jobId, model -> startCompare(st, jobId, model) },
+        onCompareLive = { prompt, model -> startCompareLive(st, prompt, model) },
+        onCompareStop = { stopCompare(st) },
+        onModalStop = { modalStop(st) },
+        runs = st.trainingRuns.value,
+        runDetail = st.trainingRun.value,
+        onLoadRuns = { loadTrainingRuns(st) },
+        onOpenRun = { id -> loadTrainingRun(st, id) },
+        onCloseRun = { st.trainingRun.value = null },
+        onLabelStep = { id, n, verdict -> labelStep(st, id, n, verdict) },
+    )
+}
+
+/** The practice collector: a thin role doing its own job, signed in. */
+fun setPractice(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/practice", "{\"on\":" + on + "}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+/** GPU nodes: a join for a kind (the hub mints the token and the line), a revoke, Modal's settings, start and stop. */
+fun nodeJoin(st: DesktopState, kind: String) = bg {
+    try { Cluster.authed("POST", "/v1/training/nodes/join", "{\"kind\":\"" + kind + "\"}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun nodeRevoke(st: DesktopState, code: String) = bg {
+    try { Cluster.authed("DELETE", "/v1/training/nodes/" + java.net.URLEncoder.encode(code, "UTF-8"), null) } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun setModal(st: DesktopState, fields: Map<String, String>) = bg {
+    val o = org.json.JSONObject()
+    fields.forEach { (k, v) -> if (k == "auto") o.put(k, v == "true") else o.put(k, v) }
+    try { Cluster.authed("POST", "/v1/training/nodes/modal", o.toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun modalStart(st: DesktopState) = bg {
+    try { Cluster.authed("POST", "/v1/training/nodes/modal/start", "{}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+/** What may be compared: the recorded jobs, and the models the server actually holds. */
+fun loadCompareOffer(st: DesktopState) = bg {
+    try { st.compareOffer.value = TrainingWatch.parseCompareOffer(Cluster.authed("GET", "/v1/training/compare/jobs", null)) }
+    catch (e: Exception) { st.compareOffer.value = TrainingWatch.CompareOffer(error = e.message ?: "could not read the jobs") }
+}
+
+/*
+ * A comparison fills in over minutes - a forty-step job on a processor-only sidecar is not quick -
+ * so it is started, then polled until it says it is done.
+ */
+private fun watchCompare(st: DesktopState, id: String) = bg {
+    var left = 600
+    while (left-- > 0) {
+        val run = try { TrainingWatch.parseCompareRun(Cluster.authed("GET", "/v1/training/compare/" + id, null)) }
+        catch (e: Exception) { TrainingWatch.CompareRun(error = e.message ?: "lost the comparison") }
+        st.compareRun.value = run
+        if (run.done || run.error.isNotBlank()) break
+        Thread.sleep(3000)
+    }
+}
+
+/** Replay a recorded job against a model: no teacher calls, works whatever the allowance says. */
+fun startCompare(st: DesktopState, jobId: String, model: String) = bg {
+    val o = org.json.JSONObject().put("jobId", jobId).put("model", model)
+    try {
+        val run = TrainingWatch.parseCompareRun(Cluster.authed("POST", "/v1/training/compare", o.toString()))
+        st.compareRun.value = run
+        if (run.id.isNotBlank()) watchCompare(st, run.id)
+    } catch (e: Exception) { st.compareRun.value = TrainingWatch.CompareRun(error = e.message ?: "could not start it") }
+}
+
+/** The teacher works a typed prompt for real, with the model answering beside it. */
+fun startCompareLive(st: DesktopState, prompt: String, model: String) = bg {
+    val o = org.json.JSONObject().put("prompt", prompt).put("model", model)
+    try {
+        val run = TrainingWatch.parseCompareRun(Cluster.authed("POST", "/v1/training/compare/live", o.toString()))
+        st.compareRun.value = run
+        if (run.id.isNotBlank()) watchCompare(st, run.id)
+    } catch (e: Exception) { st.compareRun.value = TrainingWatch.CompareRun(error = e.message ?: "could not start it") }
+}
+
+fun stopCompare(st: DesktopState) = bg {
+    val id = st.compareRun.value?.id ?: return@bg
+    try { Cluster.authed("POST", "/v1/training/compare/" + id + "/stop", "{}") } catch (e: Exception) { }
+}
+
+/** The scoreboard: every measured round, whatever model trained it. */
+fun loadTrainingResults(st: DesktopState) = bg {
+    try { st.trainingResults.value = TrainingWatch.parseResults(Cluster.authed("GET", "/v1/training/results?limit=24", null)) }
+    catch (e: Exception) { st.trainingResults.value = TrainingWatch.Results(error = e.message ?: "could not read the results") }
+}
+
+/** Score the candidate students on the same paper. An empty list means the whole field. */
+fun trialStudents(st: DesktopState, models: List<String>) = bg {
+    val o = org.json.JSONObject()
+    if (models.isNotEmpty()) o.put("models", org.json.JSONArray(models))
+    try { Cluster.authed("POST", "/v1/training/students/trial", o.toString()) } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun modalStop(st: DesktopState) = bg {
+    try { Cluster.authed("POST", "/v1/training/nodes/modal/stop", "{}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+/** End a round on whichever machine runs it: the hub marks it and tells the machine to kill its trainer. */
+fun stopRound(st: DesktopState, id: String) = bg {
+    try { Cluster.authed("POST", "/v1/training/rounds/$id/stop", "{}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+/** Autopilot serving: the most specific model that earned its stage answers. */
+fun setAutopilot(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/serving", "{\"autopilot\":" + on + "}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+/** The teacher judging the old runs, or not. One model call per run. */
+fun setJudge(st: DesktopState, on: Boolean) = bg {
+    try { Cluster.authed("POST", "/v1/training/judge", "{\"on\":" + on + "}") } catch (e: Exception) { }
+    loadTraining(st)
+}
+fun loadTrainingRuns(st: DesktopState) = bg {
+    try { st.trainingRuns.value = engineer.myapp.gb.shared.TrainingWatch.parseRuns(Cluster.authed("GET", "/v1/training/runs?limit=60", null)) } catch (e: Exception) { }
+}
+fun loadTrainingRun(st: DesktopState, id: String) = bg {
+    try { st.trainingRun.value = engineer.myapp.gb.shared.TrainingWatch.parseRun(Cluster.authed("GET", "/v1/training/runs/$id", null)) } catch (e: Exception) { }
+}
+/** A person's label on a step - outranks the record and the teacher in the next set. */
+fun labelStep(st: DesktopState, id: String, n: Int, verdict: String) = bg {
+    try { Cluster.authed("POST", "/v1/training/runs/$id/steps/$n/label", "{\"verdict\":\"" + verdict + "\"}") } catch (e: Exception) { }
+    loadTrainingRun(st, id)
 }
 
 /* ── Settings ──────────────────────────────────────────────────────────────────────────────── */
 @Composable
-fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit, onOpenDownloads: () -> Unit = {}) {
+fun SettingsScreenDLegacy(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit, onOpenDownloads: () -> Unit = {}, onOpenTraining: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     LaunchedEffect(Unit) { if (st.platforms.value.isEmpty()) loadPlatforms(st); if (st.devices.value.isEmpty()) loadDevices(st) }
     Column(Modifier.fillMaxSize().background(cs.background).verticalScroll(rememberScrollState()).padding(20.dp)) {
@@ -566,6 +861,16 @@ fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices
                 }
             }
             TextButton(onClick = onOpenDevices) { Text("Open full Device Hub") }
+        }
+
+        SectionD("🧠  Training") {
+            val tv = st.training.value
+            Text(engineer.myapp.gb.shared.TrainingWatch.readiness(tv.corpus), color = cs.onSurfaceVariant, fontSize = 12.sp)
+            tv.active?.let {
+                Spacer(Modifier.height(6.dp))
+                Text("training now on ${it.device}${it.lines.lastOrNull()?.let { l -> " — $l" } ?: ""}", fontSize = 12.sp)
+            }
+            TextButton(onClick = onOpenTraining) { Text("Open the pipeline") }
         }
 
         SectionD("🛡  Network & exit") {
@@ -755,4 +1060,69 @@ private fun SegDropdown(options: List<String>, sel: Int, onSelect: (Int) -> Unit
             options.forEachIndexed { i, o -> DropdownMenuItem(text = { Text(o) }, onClick = { expanded = false; onSelect(i) }) }
         }
     }
+}
+
+/**
+ * THE ONE SETTINGS PAGE, on the desktop. The legacy page above is kept for reference and no longer
+ * shown; this feeds the shared page from DesktopState. The model section is the same
+ * AiModelUi/AiModelActions the model sheet uses, so the backup key is finally saved from here too.
+ */
+@Composable
+fun SettingsScreenD(st: DesktopState, onOpenUrl: (String) -> Unit, onOpenDevices: () -> Unit, onOpenDownloads: () -> Unit = {}, onOpenTraining: () -> Unit = {}) {
+    LaunchedEffect(Unit) { if (st.platforms.value.isEmpty()) loadPlatforms(st); if (st.devices.value.isEmpty()) loadDevices(st) }
+    val s = remember { engineer.myapp.gb.shared.SettingsState() }
+    s.clusterUrl.value = Cluster.clusterUrl
+    s.connected.value = Cluster.connected
+    s.clusterStatus.value = if (Cluster.connected) "Cluster: connected ✓" else "Cluster: connecting…"
+    s.deviceKind.value = "desktop"
+    s.deviceLine.value = "desktop · real Chromium (JCEF) · CDP"
+    s.platforms.value = st.platforms.value
+    s.devices.value = st.devices.value.map { d -> engineer.myapp.gb.shared.DeviceOpt(id = d.name, name = d.name, sub = d.type, emoji = "", online = d.online) }
+    s.hubSummary.value = st.hubSummary.value
+    val tv = st.training.value
+    s.trainingLine.value = engineer.myapp.gb.shared.TrainingWatch.headline(tv)
+    s.trainingNow.value = tv.active?.let { "training now on ${it.device}${it.lines.lastOrNull()?.let { l -> " — $l" } ?: ""}" } ?: ""
+    s.networkLine.value = "This desktop operates on its own machine network. The cluster's Ghost Browser keeps its own in-image exit node."
+    s.themeDark.value = st.dark.value
+    s.activity.value = st.activity.value
+    s.appLabel.value = "Ghost Browser Desktop"
+    val handlers = remember(st) {
+        engineer.myapp.gb.shared.SettingsHandlers(
+            onResync = { loadPlatforms(st); loadDevices(st); loadFlows(st); loadTraining(st) },
+            onOpenHub = onOpenDevices, onOpenTraining = onOpenTraining, onOpenDownloads = onOpenDownloads,
+            onLoadPlatforms = { loadPlatforms(st) }, onOpenPlatform = { _, site -> onOpenUrl(site) },
+            onRefreshDevices = { loadDevices(st) },
+            onSetTheme = { dark -> st.dark.value = dark },
+            aiModel = AssistantD.modelActions(st),
+            /*
+             * THE PASSWORD FALLBACK. Signs the hidden control browser in with the owner's email and
+             * the password set on the instance - the same session cookie the platform hand-off
+             * would have set - so the node registers on it; and sets that password while signed in.
+             */
+            onPasswordSignIn = { email, pw -> bg {
+                val r = try { Cluster.authed("POST", "/api/auth/login", JSONObject().put("username", email).put("password", pw).toString()) } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "failed") + "}" }
+                val j = try { JSONObject(r) } catch (e: Exception) { JSONObject() }
+                s.authMessage.value = if (j.has("username")) "signed in as ${j.optString("username")} — the node connects in a moment" else "sign-in failed: " + j.optString("error", r.take(120))
+                if (j.has("username")) { s.hasPassword.value = true; s.accountEmail.value = j.optString("username") }
+                loadPlatforms(st); loadDevices(st)
+            } },
+            onSetPassword = { pw -> bg {
+                val r = try { Cluster.authed("POST", "/api/auth/password", JSONObject().put("password", pw).toString()) } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "failed") + "}" }
+                val j = try { JSONObject(r) } catch (e: Exception) { JSONObject() }
+                s.authMessage.value = if (j.optBoolean("ok")) "password set — your email and this password open this Ghost Browser on any device" else "not set: " + j.optString("error", r.take(120))
+                if (j.optBoolean("ok")) s.hasPassword.value = true
+            } },
+        )
+    }
+    /* Whether a password exists on the instance, and whose it is - asked once, off the UI thread. */
+    LaunchedEffect(Cluster.connected) {
+        bg {
+            try {
+                val j = JSONObject(Cluster.authed("GET", "/api/auth/state", null))
+                if (j.has("hasPassword")) s.hasPassword.value = j.optBoolean("hasPassword")
+                val who = j.optString("username", ""); if (who.isNotBlank()) s.accountEmail.value = who
+            } catch (e: Exception) { /* an older cluster */ }
+        }
+    }
+    engineer.myapp.gb.shared.SettingsScreenShared(s, st.aiModel, handlers, onClose = null)
 }
