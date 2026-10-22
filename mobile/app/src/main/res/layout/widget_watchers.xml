@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_watchers_button"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/widget_background" android:gravity="center_vertical"
+    android:orientation="vertical" android:padding="16dp">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="Ghost Browser · Watchers" android:textColor="#FFFFFF"
+        android:textSize="15sp" android:textStyle="bold" />
+    <TextView android:id="@+id/widget_watchers_count" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:layout_marginTop="8dp"
+        android:textColor="#C8E6FF" android:textSize="14sp" />
+    <TextView android:id="@+id/widget_watchers_names" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:layout_marginTop="4dp"
+        android:maxLines="2" android:ellipsize="end" android:textColor="#FFFFFF" android:textSize="12sp" />
+    <TextView android:id="@+id/widget_watchers_updated" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:layout_marginTop="4dp"
+        android:textColor="#B3B3B3" android:textSize="10sp" />
+</LinearLayout>

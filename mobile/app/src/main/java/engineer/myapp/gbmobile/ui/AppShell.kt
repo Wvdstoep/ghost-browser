@@ -56,12 +56,20 @@ class ShellUi {
     val tabCount = mutableStateOf(1)
     val switcherOpen = mutableStateOf(false)
     val menuOpen = mutableStateOf(false)
+    val devToolsOpen = mutableStateOf(false)
+    val devToolsTab = mutableStateOf("Console")
+    val devToolsOutput = mutableStateOf("")
+    val devToolsLines = mutableStateOf<List<String>>(emptyList())
     val urlFocused = mutableStateOf(false)
+    val searchFromWidget = mutableStateOf(false)
     val aiSettingsOpen = mutableStateOf(false)
     val desktopMode = mutableStateOf(false)
     val tabs = mutableStateOf<List<TabInfo>>(emptyList())
+    val visitedPages = mutableStateOf<List<VisitedPage>>(emptyList())
+    val clearHistoryConfirm = mutableStateOf(false)
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
+    val openWatchersTab = mutableStateOf(false)
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
     val reconUi = engineer.myapp.gb.shared.ReconUi()
     // the assistant — one chat, one agent on the cluster (state shapes live in :shared)
@@ -212,6 +220,10 @@ class ShellActions(
     val onDuplicateProfile: (profile: String, to: String) -> Unit = { _, _ -> },
     val onClearProfileLogin: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
     val onDeleteProfile: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
+    val onOpenDevTools: () -> Unit = {},
+    val onDevToolsSelect: (String) -> Unit = {},
+    val onDevToolsEvaluate: (String) -> Unit = {},
+    val onClearHistory: () -> Unit = {},
 )
 
 private fun hostOf(url: String): String {
@@ -251,6 +263,12 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                 when (screen) {
                     "flows" -> {
                         var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
+                        LaunchedEffect(shell.openWatchersTab.value) {
+                            if (shell.openWatchersTab.value) {
+                                sub = 1
+                                shell.openWatchersTab.value = false
+                            }
+                        }
                         Column(Modifier.fillMaxSize().background(cs.background)) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                                 .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
@@ -368,6 +386,14 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
 
         if (shell.switcherOpen.value) TabGrid(shell, act)
         if (shell.menuOpen.value) OverflowMenu(shell, act)
+        if (shell.devToolsOpen.value) MobileDevTools(shell, act)
+        if (shell.clearHistoryConfirm.value) AlertDialog(
+            onDismissRequest = { shell.clearHistoryConfirm.value = false },
+            title = { Text("Clear visited links?") },
+            text = { Text("This removes saved address suggestions for the current profile only.") },
+            confirmButton = { TextButton(onClick = { shell.clearHistoryConfirm.value = false; act.onClearHistory() }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { shell.clearHistoryConfirm.value = false }) { Text("Cancel") } },
+        )
         if (shell.urlFocused.value) Omnibox(shell, act)
         if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
         if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onRunSessionProbe = { target -> act.onRunReconScan(target, true) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
@@ -427,9 +453,9 @@ private fun TabCountButton(count: Int, onClick: () -> Unit) {
 @Composable
 private fun Omnibox(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
-    var q by remember { mutableStateOf(shell.url.value) }
+    var q by remember { mutableStateOf(if (shell.searchFromWidget.value) "" else shell.url.value) }
     val fr = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
+    LaunchedEffect(Unit) { shell.searchFromWidget.value = false; runCatching { fr.requestFocus() } }
     val looksUrl = q.contains(".") && !q.trimStart().contains(" ")
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPaddingSafe()) {
@@ -457,6 +483,12 @@ private fun Omnibox(shell: ShellUi, act: ShellActions) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 if (q.isNotBlank()) {
                     SuggestRow(Icons.Default.Search, if (looksUrl) "Go to $q" else "Search Google for “$q”", null) { act.onUrlGo(q.trim()) }
+                    HorizontalDivider(color = cs.outline)
+                }
+                val visited = VisitedHistory.match(shell.visitedPages.value, q)
+                if (visited.isNotEmpty()) {
+                    Text("Visited", color = cs.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp))
+                    visited.forEach { page -> SuggestRow(Icons.Default.History, page.title.ifBlank { page.url }, page.url) { act.onUrlGo(page.url) } }
                     HorizontalDivider(color = cs.outline)
                 }
                 // shortcuts (platforms)
@@ -535,6 +567,8 @@ private fun OverflowMenu(shell: ShellUi, act: ShellActions) {
                 MenuRow(Icons.Default.Verified, "Approvals", badge = shell.jobs.value.sumOf { it.proposals.size }) { act.onCloseMenu(); act.onOpenApprovals() }
                 MenuRow(Icons.Default.DevicesOther, "Device Hub") { act.onCloseMenu(); act.onOpenHub() }
                 MenuDivider()
+                MenuRow(Icons.Default.Code, "Developer tools") { act.onCloseMenu(); act.onOpenDevTools() }
+                MenuRow(Icons.Default.DeleteSweep, "Clear visited links") { act.onCloseMenu(); shell.clearHistoryConfirm.value = true }
                 MenuRow(Icons.Default.Settings, "Settings") { act.onCloseMenu(); act.onOpenSettings() }
             }
         }
@@ -645,6 +679,8 @@ private fun TabCard(t: TabInfo, onOpen: () -> Unit, onClose: () -> Unit) {
                 if (t.thumb != null) androidx.compose.foundation.Image(bitmap = t.thumb, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.TopCenter)
                 else Text(t.host.ifBlank { "New tab" }, color = cs.onSurfaceVariant, fontSize = 13.sp)
             }
+            Text("Profile: ${t.profile}", color = cs.onSurfaceVariant, fontSize = 11.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
         }
     }
 }
