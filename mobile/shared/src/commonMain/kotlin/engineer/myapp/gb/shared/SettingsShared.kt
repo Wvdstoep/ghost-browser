@@ -186,9 +186,9 @@ fun SettingsScreenShared(
                     { AppearanceSection(state, h) },
                 )
                 val right = buildList<@Composable () -> Unit> {
-                    // The phone has dedicated Profiles and Device Hub pages in its navigation.
-                    // Desktop and web still use these settings sections.
-                    if (state.deviceKind.value != "phone") {
+                    // Native apps reach these pages from the browser menu; the web console
+                    // retains the settings sections until it has its own destination menu.
+                    if (state.deviceKind.value == "web") {
                         add { ProfilesSection(state, h) }
                         add { DevicesSection(state, h) }
                     }

@@ -275,7 +275,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             }
         } catch (e: Exception) {}
-        if (tabs.isEmpty()) tabs.add(TabHandle(HOME, "New tab", vm.currentProfile.value ?: "default"))
+        if (tabs.isEmpty()) tabs.add(TabHandle(HOME, "New tab", "default"))
         activeTab = vm.activeTabIndex.coerceIn(0, tabs.size - 1)
     }
 
@@ -334,8 +334,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (w.layoutParams?.width != lp.width || w.layoutParams?.height != lp.height) w.layoutParams = lp
     }
 
-    private fun newTab(url: String = HOME, activate: Boolean = true) {
-        val prof = vm.currentProfile.value ?: "default"
+    private fun newTab(url: String = HOME, activate: Boolean = true, profile: String? = null) {
+        val prof = TabProfilePolicy.forNewTab(profile)
         tabs.add(TabHandle(url, if (url == HOME) "New tab" else url, prof))
         if (activate) activateTab(tabs.size - 1) else updateTabCount()
         shellUi.switcherOpen.value = false; shellUi.screen.value = "browser"
@@ -1173,7 +1173,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             activateTab(existing)
             vm.log("↺ switched to the \"$prof\" tab for $host")
         } else {
-            newTab(site)                 // open a new tab in this platform's isolated profile
+            newTab(site, profile = prof) // explicit profile opens keep their isolated session
             vm.log("→ opened \"$prof\" — sign in once here; the session stays in this profile")
         }
         shellUi.screen.value = "browser"   // jump to the browser
@@ -1828,7 +1828,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "switch_profile" -> {
                 val name = a.optString("name").trim()
                 if (name.isBlank()) "{\"error\":\"name required\"}"
-                else { runOnUiThread { vm.selectProfile(name); renderChips(); newTab(); shellUi.screen.value = "agent" }; Thread.sleep(600); "{\"ok\":true,\"active\":${JSONObject.quote(name)}}" }
+                else { runOnUiThread { vm.selectProfile(name); renderChips(); newTab(profile = name); shellUi.screen.value = "agent" }; Thread.sleep(600); "{\"ok\":true,\"active\":${JSONObject.quote(name)}}" }
             }
             "list_platforms" -> apiAwait("GET", "/v1/profiles/presets", null)
             "list_roles" -> apiAwait("GET", "/v1/agent/roles", null)
@@ -3265,8 +3265,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             v.active?.let { r -> "training now on ${r.device}" + (r.lines.lastOrNull()?.let { " — $it" } ?: "") }
                 ?: engineer.myapp.gb.shared.TrainingWatch.readiness(v.corpus)
         },
-        onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(); syncSettingsUi() },
-        onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(); syncSettingsUi() },
+        onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(profile = p); syncSettingsUi() },
+        onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(profile = name); syncSettingsUi() },
         onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
         onLoadRoles = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list") } },
         onLoadPlatforms = { loadPlatforms() },

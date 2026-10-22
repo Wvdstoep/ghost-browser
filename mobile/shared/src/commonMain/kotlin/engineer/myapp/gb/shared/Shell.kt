@@ -23,8 +23,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * The shared app chrome — one Chrome-tight scaffold (top bar + bottom nav) rendered identically on
- * phone and desktop. The browser surface and the per-screen bodies are injected by each platform
+ * The shared app chrome. Desktop and phone keep destinations in the browser header menu; the web
+ * console can still opt into bottom navigation until it has its own menu. Screen bodies are injected
+ * by each platform
  * (Android hosts a WebView, Desktop will host JCEF in S8), so this file has no platform code.
  */
 @Composable
@@ -37,10 +38,11 @@ fun GbScaffold(
     onOpenMenu: () -> Unit,
     onNav: (String) -> Unit,
     showTopBar: Boolean = true,     // desktop supplies its own address bar, so it hides this one
+    showBottomNav: Boolean = true,   // desktop places destinations in its header menu
     approvalsBadge: Int = 0,        // pending approvals — shown as a badge on the Approvals nav item
     /*
      * 0 = the chrome is slid off the screen, 1 = fully shown. Driven by the page's own scroll so the
-     * content gets the space while it is being read. Only a page may collapse it: sliding the nav
+     * content gets the space while it is being read. Only a page may collapse it: sliding navigation
      * off Profiles or the chat would leave no way out of the screen, so every other surface passes
      * 1 and the bars stay put.
      */
@@ -85,7 +87,7 @@ fun GbScaffold(
          * space at all when nothing is or was running.
          */
         RingWorkStrip()
-        CollapsingSlot(chromeFraction, fromTop = false) {
+        if (showBottomNav) CollapsingSlot(chromeFraction, fromTop = false) {
         NavigationBar(containerColor = cs.surface, tonalElevation = 0.dp) {
             navItem(GbIcons.browser, "Browser", selected == "browser") { onNav("browser") }
             navItem(GbIcons.agent, "Agent", selected == "agent") { onNav("agent") }

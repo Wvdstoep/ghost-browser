@@ -12,6 +12,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -117,6 +120,7 @@ private fun runApp() = application {
 private fun DesktopShell(error: String?, state: DesktopState) {
     val cs = MaterialTheme.colorScheme
     var screen by remember { mutableStateOf("browser") }
+    var devToolsOpen by remember { mutableStateOf(false) }
     val activeTab = Tabs.activeTab()
     val openUrl: (String) -> Unit = { u -> Tabs.go(u); screen = "browser" }
     // RECORDINGS on the desktop: the app's own Chromium tabs hold the cluster session, so a recording plays in a
@@ -189,13 +193,22 @@ private fun DesktopShell(error: String?, state: DesktopState) {
         host = "", tabCount = Tabs.list.size, selected = if (screen == "devices" || screen == "downloads" || screen == "training") "settings" else screen,
         onFocusUrl = {}, onOpenSwitcher = {}, onOpenMenu = {}, onNav = { screen = it },
         showTopBar = false,     // desktop uses its own BrowserBar + tab strip
+        showBottomNav = false,
         approvalsBadge = state.jobs.value.sumOf { it.proposals.size },
         chromeFraction = chromeF,
     ) {
-        when (screen) {
+        Column(Modifier.fillMaxSize()) {
+        TabStrip(onOpenBrowser = { devToolsOpen = false; screen = "browser" })
+        BrowserBar(state, Tabs.activeBrowser(), onHome = { activeTab?.home = true; devToolsOpen = false; screen = "browser" }, onNavigated = { activeTab?.home = false; devToolsOpen = false; screen = "browser" },
+            onNav = { devToolsOpen = false; screen = it }, onNewTab = { Tabs.open(null); devToolsOpen = false; screen = "browser" }, onDevTools = { devToolsOpen = true })
+        if (devToolsOpen) {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Developer tools · active tab", color = cs.onSurface, modifier = Modifier.weight(1f))
+                IconButton(onClick = { devToolsOpen = false }) { Icon(Icons.Default.Close, "Close developer tools") }
+            }
+            androidx.compose.runtime.key(Tabs.active) { JcefBrowserView(Tabs.activeBrowser()?.devTools, null, Modifier.weight(1f).fillMaxWidth()) }
+        } else when (screen) {
             "browser" -> Column(Modifier.fillMaxSize()) {
-                TabStrip()
-                BrowserBar(state, Tabs.activeBrowser(), onHome = { activeTab?.home = true }, onNavigated = { activeTab?.home = false })
                 if (activeTab?.home == true) HomePageD(state, onOpenUrl = { u -> Tabs.go(u) }, onSearch = { /* focus handled by BrowserBar */ })
                 else androidx.compose.runtime.key(Tabs.active) { JcefBrowserView(Tabs.activeBrowser(), error, Modifier.weight(1f).fillMaxWidth()) }
             }
@@ -229,6 +242,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
             }
             else -> JcefBrowserView(Tabs.activeBrowser(), error, Modifier.fillMaxSize())
         }
+        }
     }
     // Overlays (same UX as the phone): the Run sheet and the AI-model modal.
     if (state.runVisible.value) engineer.myapp.gb.shared.RunSheet(
@@ -258,7 +272,7 @@ private fun DesktopShell(error: String?, state: DesktopState) {
 
 /** Chrome-style tab strip: a chip per tab (host + close) and a new-tab button. */
 @Composable
-private fun TabStrip() {
+private fun TabStrip(onOpenBrowser: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     @Suppress("UNUSED_VARIABLE") val tick = Cef.addressTick.value   // labels follow navigation
     Surface(color = cs.surface, contentColor = cs.onSurface) {
@@ -270,7 +284,7 @@ private fun TabStrip() {
                         color = if (on) cs.surfaceVariant else cs.surface,
                         border = androidx.compose.foundation.BorderStroke(1.dp, if (on) Brand else cs.outline),
                         shape = RoundedCornerShape(9.dp),
-                        modifier = Modifier.padding(end = 6.dp).height(30.dp).widthIn(max = 180.dp).clickable { Tabs.select(i) },
+                        modifier = Modifier.padding(end = 6.dp).height(30.dp).widthIn(max = 180.dp).clickable { Tabs.select(i); onOpenBrowser() },
                     ) {
                         Row(Modifier.padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(Tabs.hostLabel(i), color = if (on) cs.onSurface else cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 130.dp))
@@ -279,7 +293,7 @@ private fun TabStrip() {
                     }
                 }
             }
-            IconButton(onClick = { Tabs.open(null) }) { Icon(androidx.compose.material.icons.Icons.Default.Add, "New tab", tint = cs.onSurface) }
+            IconButton(onClick = { Tabs.open(null); onOpenBrowser() }) { Icon(androidx.compose.material.icons.Icons.Default.Add, "New tab", tint = cs.onSurface) }
         }
     }
 }
@@ -288,8 +302,10 @@ private fun hostOf(url: String): String = try { java.net.URI(url).host?.removePr
 
 /** Desktop browser navigation: home / back / forward / reload + an editable address bar (Enter to go). */
 @Composable
-private fun BrowserBar(state: DesktopState, browser: CefBrowser?, onHome: () -> Unit, onNavigated: () -> Unit) {
+private fun BrowserBar(state: DesktopState, browser: CefBrowser?, onHome: () -> Unit, onNavigated: () -> Unit,
+    onNav: (String) -> Unit, onNewTab: () -> Unit, onDevTools: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    var menuOpen by remember { mutableStateOf(false) }
     val tick = Cef.addressTick.value                  // a navigation re-keys the bar to the real address
     var text by remember(browser, tick) { mutableStateOf(browser?.url ?: "") }
     fun go() {
@@ -322,6 +338,22 @@ private fun BrowserBar(state: DesktopState, browser: CefBrowser?, onHome: () -> 
                             runDesktopRecon(state, host, true)
                         }
                     })
+                }
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Menu", tint = cs.onSurface) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    val entries = listOf(
+                        "New tab" to "new", "Browser" to "browser", "Agent" to "agent", "Flows" to "flows",
+                        "Profiles" to "profiles", "Approvals" to "approvals", "Device Hub" to "devices",
+                        "Developer tools" to "devtools", "Settings" to "settings",
+                    )
+                    entries.forEach { (label, route) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = {
+                            menuOpen = false
+                            when (route) { "new" -> onNewTab(); "devtools" -> onDevTools(); else -> onNav(route) }
+                        })
+                    }
                 }
             }
         }
