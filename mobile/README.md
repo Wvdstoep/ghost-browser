@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.3** — Material 3 redesign, MVVM (ViewModel), and **profiles with isolated cookie jars** (each identity keeps its own logins). Tap **⚙** → tabs for **Agent / Profiles / Cluster**.
+> **v0.55** — Material 3 interface, isolated browser profiles, and per-platform approval before sharing a phone login with the cluster.
 
 Two ways to drive it, sharing one browser (tap **⚙** to open the panel):
 
@@ -29,11 +29,10 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 
 So control travels the tailnet; browsing travels the device.
 
-## Try it (prebuilt debug APK)
-Download **[`dist/app-debug.apk`](dist/app-debug.apk)** on Android, allow "install from unknown sources",
-install, open. Type any URL in the bar, or open **⚙** to run the agent / connect to the cluster.
-This checked-in APK may be older than the source. Debug builds are signed with the build machine's
-debug key and are intended for development and sideloading, not production release.
+## Try it (development APK)
+Use the `ghost-browser-debug-apk` artifact from the successful [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
+for the exact commit you want to test. It is a debuggable build signed with a build machine debug key.
+Use a test account only. There is no signed production release build yet.
 
 ## Build it yourself
 Needs the Android SDK + JDK 17+:
@@ -45,6 +44,11 @@ On Windows, run `gradlew.bat :app:assembleDebug` from this directory. GitHub Act
 debug APK and runs shared desktop tests on pushes to `main`, pull requests, and manual dispatches.
 Download the `ghost-browser-debug-apk` artifact from the corresponding Actions run. A production
 release requires a separately configured release signing key and release process.
+
+Phone platform logins stay on the phone unless you turn on **Share this login with cluster** for that
+platform in Settings. Sharing copies session cookies to the cluster. Android's WebView cookie API does
+not expose the original scope or HttpOnly flags, so only enable sharing for accounts you choose to
+share. You can also sign in separately in the hosted cluster profile.
 
 ## What's next
 Embed Tailscale (`tsnet`/gomobile) so joining the tailnet is one tap inside the app; a live-view stream

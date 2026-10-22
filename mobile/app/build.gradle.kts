@@ -11,8 +11,8 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 74
-        versionName = "0.54"
+        versionCode = 75
+        versionName = "0.55"
     }
 
     buildTypes {
@@ -56,4 +56,5 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.runtime:runtime-livedata")   // observeAsState for LiveData in Compose
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

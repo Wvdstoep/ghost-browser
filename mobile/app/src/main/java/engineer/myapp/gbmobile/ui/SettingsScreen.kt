@@ -73,6 +73,7 @@ class SettingsActions(
     val onLoadRoles: () -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
+    val onSetCookieSync: (String, Boolean) -> Unit = { _, _ -> },
     val onSetUseLocal: (Boolean) -> Unit,
     val onSelectModelIndex: (Int) -> Unit,
     val onDownloadModel: () -> Unit,

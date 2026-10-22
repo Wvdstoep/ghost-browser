@@ -65,7 +65,7 @@ data class AiModelInfo(val model: String, val host: String, val keySet: Boolean,
                        val keys2Hint: String = "")      // the backups' last characters, to tell accounts apart
 
 data class ChatMsg(val role: String, val content: String, val tool: String? = null)   // user | assistant | tool
-data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean)
+data class PlatformOpt(val label: String, val site: String, val profile: String, val signedIn: Boolean, val syncApproved: Boolean = false)
 /**
  * One node on the account.
  *
