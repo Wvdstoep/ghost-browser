@@ -328,7 +328,14 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
       return ctx.recon.auditOAuthPkceAndState(resolvedTarget, { endpoints });
     }, { repeatable: true });
 
-  // ── 4 MULTI-LAYER APPSEC PIPELINES ──
+  // ── STAGED RECON AND MULTI-LAYER APPSEC PIPELINES ──
+  R('gb_pipeline_exposure_funnel', 'STAGED EXPOSURE RECON: fixed TCP port discovery, protocol handshakes and fingerprints, known-route checks with random missing-path baseline, read-only proof of unauthenticated exposure, and explicit RCE-not-tested conclusion. Does not send exploit payloads.',
+    obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' } }),
+    async ({ targetUrl, url, target }) => {
+      if (!ctx.recon || !ctx.recon.auditExposureFunnel) return { error: 'auditExposureFunnel not wired in context' };
+      return ctx.recon.auditExposureFunnel(targetUrl || url || target);
+    }, { repeatable: true });
+
   R('gb_pipeline_bola_lifecycle', '3-LAYER AUTHORIZATION & BOLA/IDOR LIFECYCLE PIPELINE (CWE-639 / OWASP API1:2023): executes Layer 1 (Public surface & route extraction, CORS credentials), Layer 2 (Single-tenant session baseline, token entropy & object ID mapping), and Layer 3 (Cross-tenant replay, parameter substitution & WebSocket invalidation check).',
     obj({ targetUrl: { type: 'string', description: 'target domain or base URL to audit' }, url: { type: 'string', description: 'alias for targetUrl' }, sessionToken: { type: 'string', description: 'optional session JWT or bearer token' }, endpoints: { type: 'array', items: { type: 'string' }, description: 'optional specific endpoints' } }),
     async ({ targetUrl, url, target, sessionToken, endpoints }) => {
