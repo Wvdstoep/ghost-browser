@@ -32,13 +32,17 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, onResearch: (RangeEvidence) -> Unit,
+fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, clusterForResearch: Boolean,
+                      onResearch: (RangeEvidence) -> Unit,
                       onOpenApp: (RangeEvidence) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var selectedId by remember { mutableLongStateOf(scanner.focusEvidenceId.value) }
+    LaunchedEffect(scanner.focusEvidenceId.value) {
+        if (scanner.focusEvidenceId.value > 0) selectedId = scanner.focusEvidenceId.value
+    }
     val listState = rememberLazyListState()
     val filtered = scanner.evidence.filter { item ->
         (filter == "All" || filter == "Web" && item.web.isNotEmpty() ||
@@ -88,6 +92,7 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, onResea
         }
         items(filtered, key = { it.id }) { item ->
             EvidenceCard(item, selectedId == item.id, onOpen = { selectedId = if (selectedId == item.id) -1 else item.id },
+                clusterForResearch = clusterForResearch,
                 onResearch = { onResearch(item) }, onOpenApp = { onOpenApp(item) },
                 onReview = { scanner.review(item.id, it) }, onDraft = { recipient, notes ->
                     val current = scanner.evidence.firstOrNull { it.id == item.id } ?: return@EvidenceCard
@@ -120,7 +125,7 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, onResea
 
 @Composable private fun EvidenceCard(item: RangeEvidence, expanded: Boolean, onOpen: () -> Unit,
                                       onReview: (String) -> Unit, onDraft: (String, String) -> Unit,
-                                      onResearch: () -> Unit, onOpenApp: () -> Unit) {
+                                      clusterForResearch: Boolean, onResearch: () -> Unit, onOpenApp: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     var recipient by remember(item.id) { mutableStateOf(item.publishedContact) }
     var notes by remember(item.id) { mutableStateOf("") }
@@ -170,9 +175,13 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, onResea
                         modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(7.dp))
-                        Text(if (item.researchAppId.isBlank()) "Research in Security Apps" else "Open Security App")
+                        Text(if (item.researchAppId.isNotBlank()) "Open Security App"
+                            else if (clusterForResearch) "Run cluster recon in Security Apps" else "Run local baseline in Security Apps")
                     }
-                    Text(if (item.researchAppId.isBlank()) "Save this host as an app target, run an on-device baseline recon, and open the Security agent. A redirect is used only when its hostname resolves to this IP; choose prompts there for deeper research."
+                    Text(if (item.researchAppId.isBlank()) (if (clusterForResearch)
+                        "Save this host and dispatch the six-point recon suite to the cluster."
+                        else "Save this host and run an on-device baseline. Connect the cluster for the full recon suite.") +
+                        " A redirect is used only when its hostname resolves to this IP."
                         else "Linked to a saved Security App. Open it to run another recon prompt.",
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                 }

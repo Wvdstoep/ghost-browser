@@ -6,19 +6,28 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.view.View
 import android.widget.RemoteViews
 import androidx.core.content.ContextCompat
 
 const val ACTION_WIDGET_RANGE_OPEN = "engineer.myapp.gbmobile.WIDGET_RANGE_OPEN"
 const val ACTION_WIDGET_RANGE_RESULTS = "engineer.myapp.gbmobile.WIDGET_RANGE_RESULTS"
+const val ACTION_WIDGET_RANGE_EVIDENCE = "engineer.myapp.gbmobile.WIDGET_RANGE_EVIDENCE"
+const val EXTRA_WIDGET_RANGE_EVIDENCE_ID = "range_evidence_id"
+
+data class RangeWidgetResult(val id: Long, val label: String)
 
 /** The widget mirrors the one durable on-device scan job. All widget instances show the same run. */
 data class RangeScanWidgetState(
     val title: String, val status: String, val progress: Int, val total: Int,
     val matches: Int, val recent: String, val startLabel: String, val canPause: Boolean, val canStop: Boolean,
+    val results: List<RangeWidgetResult> = emptyList(),
 ) {
     companion object {
-        fun from(job: RangeScanJob?, latest: RangeEvidence?, start: RangeScanWidgetCommand.StartDecision): RangeScanWidgetState {
+        fun from(job: RangeScanJob?, latest: RangeEvidence?, start: RangeScanWidgetCommand.StartDecision): RangeScanWidgetState =
+            from(job, listOfNotNull(latest), start)
+
+        fun from(job: RangeScanJob?, recentResults: List<RangeEvidence>, start: RangeScanWidgetCommand.StartDecision): RangeScanWidgetState {
             if (job == null) return RangeScanWidgetState("No scan configured", "READY", 0, 1, 0,
                 "Choose a range in Ghost Browser", "Set up", false, false)
             val state = when (job.status) {
@@ -26,7 +35,8 @@ data class RangeScanWidgetState(
                 "paused" -> "PAUSED"; "completed" -> "COMPLETE"; "stopped" -> "STOPPED"
                 "stopping" -> "STOPPING"; else -> "NEEDS ATTENTION"
             }
-            val recent = latest?.let { "Latest · ${it.host} · ${it.ports.joinToString(", ") { port -> ":$port" }}" }
+            val latest = recentResults.firstOrNull()
+            val recent = latest?.let { "${job.hits} hosts found · tap a result for evidence" }
                 ?: if (job.hits == 0) "Waiting for an open service" else "${job.hits} hosts with open ports"
             return RangeScanWidgetState(job.cidr, state, job.nextIndex.coerceIn(0, job.total), job.total.coerceAtLeast(1),
                 job.hits, recent, when {
@@ -35,7 +45,10 @@ data class RangeScanWidgetState(
                     start == RangeScanWidgetCommand.StartDecision.RESTART -> "Start"
                     else -> "Set up"
                 },
-                job.status == "running", job.status in setOf("running", "starting", "paused", "pausing"))
+                job.status == "running", job.status in setOf("running", "starting", "paused", "pausing"),
+                recentResults.take(3).map { item ->
+                    RangeWidgetResult(item.id, "${item.host}  ·  ${item.ports.joinToString(" ") { ":$it" }}${if (item.web.isNotEmpty()) "  ·  ${item.web.size} web" else ""}")
+                })
         }
     }
 }
@@ -65,7 +78,7 @@ class RangeScanWidgetProvider : AppWidgetProvider() {
             }
             val decision = job?.let { RangeScanWidgetCommand.decideStart(it,
                 PublicRangePresets.load(context).map { preset -> preset.cidr }.toSet()) } ?: RangeScanWidgetCommand.StartDecision.NONE
-            RangeScanWidgetState.from(job, job?.let { db.reviewItems(it.runId, 1).firstOrNull() }, decision)
+            RangeScanWidgetState.from(job, job?.let { db.reviewItems(it.runId, 3) }.orEmpty(), decision)
         } finally { db.close() }
         ids.forEach { id ->
             val views = RemoteViews(context.packageName, R.layout.widget_range_scan)
@@ -78,6 +91,14 @@ class RangeScanWidgetProvider : AppWidgetProvider() {
             views.setProgressBar(R.id.scan_widget_bar, state.total, state.progress, false)
             views.setOnClickPendingIntent(R.id.scan_widget_header, open(context, ACTION_WIDGET_RANGE_OPEN, 31))
             views.setOnClickPendingIntent(R.id.scan_widget_recent, open(context, ACTION_WIDGET_RANGE_RESULTS, 32))
+            listOf(R.id.scan_widget_result_1, R.id.scan_widget_result_2, R.id.scan_widget_result_3).forEachIndexed { index, viewId ->
+                val result = state.results.getOrNull(index)
+                views.setViewVisibility(viewId, if (result == null) View.GONE else View.VISIBLE)
+                if (result != null) {
+                    views.setTextViewText(viewId, result.label)
+                    views.setOnClickPendingIntent(viewId, open(context, ACTION_WIDGET_RANGE_EVIDENCE, 40 + index, result.id))
+                }
+            }
             views.setOnClickPendingIntent(R.id.scan_widget_setup, open(context, ACTION_WIDGET_RANGE_OPEN, 33))
             views.setOnClickPendingIntent(R.id.scan_widget_start,
                 if (state.startLabel == "Set up") open(context, ACTION_WIDGET_RANGE_OPEN, 34)
@@ -107,8 +128,8 @@ class RangeScanWidgetProvider : AppWidgetProvider() {
             }
         }
 
-        private fun open(context: Context, action: String, code: Int) = PendingIntent.getActivity(context, code,
-            Intent(context, MainActivity::class.java).setAction(action)
+        private fun open(context: Context, action: String, code: Int, evidenceId: Long = -1L) = PendingIntent.getActivity(context, code,
+            Intent(context, MainActivity::class.java).setAction(action).putExtra(EXTRA_WIDGET_RANGE_EVIDENCE_ID, evidenceId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
