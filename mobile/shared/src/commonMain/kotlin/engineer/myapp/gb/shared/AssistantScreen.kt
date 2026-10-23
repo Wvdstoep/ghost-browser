@@ -313,7 +313,14 @@ val RECON_PROMPT_CHIPS = listOf(
         subtitle = "Map findings to SOC 2 Type II, ISO 27001 & PCI-DSS v4.0",
         prompt = "Perform a compliance and security hardening assessment on https://target-domain.com. Run gb_recon, gb_audit_http_headers, and gb_audit_compliance to evaluate SOC 2 Trust Services Criteria, ISO 27001 controls, and PCI-DSS v4.0 requirements, and generate drop-in Nginx and application configuration patches."
     )
-)
+).map { chip ->
+    if (chip.title.contains("6-Point")) chip.copy(prompt = chip.prompt +
+        " Report observed evidence separately from suspected and confirmed vulnerabilities. A banner or open port " +
+        "alone does not confirm RCE. Check affected versions against an official advisory and account for vendor " +
+        "backports. Treat failed and untested probes as unknown, and only assess DNS, TLS and compliance controls " +
+        "for an identified domain and verified applicable scope. Include evidence and source links for every finding.")
+    else chip
+}
 
 val ASSISTANT_PROMPT_CHIPS = listOf(
     StarterPrompt(

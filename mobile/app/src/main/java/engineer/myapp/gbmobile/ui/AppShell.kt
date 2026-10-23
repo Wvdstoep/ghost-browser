@@ -149,7 +149,7 @@ class ShellActions(
     val onOpenRangeResults: () -> Unit,
     val rangeScanner: engineer.myapp.gbmobile.LocalRangeScanner,
     val clusterForResearch: Boolean = false,
-    val onResearchRangeEvidence: (engineer.myapp.gbmobile.RangeEvidence) -> Unit = {},
+    val onResearchRangeEvidence: (engineer.myapp.gbmobile.RangeEvidence, String?) -> Unit = { _, _ -> },
     val onOpenRangeApp: (engineer.myapp.gbmobile.RangeEvidence) -> Unit = {},
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
