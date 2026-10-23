@@ -4,7 +4,9 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.75** — Research from range evidence now offers DNS-matched domain candidates from redirects, TLS certificates and reverse DNS, plus manual domain verification. The selected URL is saved with the linked Security App and shown in the evidence card. The cluster six-point suite starts only for a selected domain; an IP-only choice runs the on-device baseline. Recon instructions now require separate observed, suspected and confirmed findings, official CVE version checks and clear handling of failed or untested checks. A domain candidate is a clue, not proof of ownership or a vulnerability.
+> **v0.76** — The domain picker also reads a page's canonical and Open Graph URL hints, including when reviewing an older saved scan. Suggested domains must resolve to the observed IP and still require your selection. Evidence labels the page title separately from the URL. If no matching domain is found, the observed IP remains the address and the IP-only local baseline is available.
+
+After installing v0.76, the evidence action reads **Find domain & research**. If it still reads **Run cluster recon in Security Apps**, Android is running an earlier APK. Installing an APK signed with a different debug key may require replacing the app; back up local app data before uninstalling.
 
 The range-scan home-screen widget shows the saved CIDR, progress, match count and recent hosts; Start, Resume, Pause, Stop and Setup control the existing foreground scan service.
 
@@ -53,9 +55,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.75 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.76 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `887669d61075d173309924c0d2936f8391fa14f2fe00e8f833535a2c7338d405`.
+SHA-256: `6ee872f48f75599dcf9c6c2582bac60089d648869b2e71cc5996a5023cff7577`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)

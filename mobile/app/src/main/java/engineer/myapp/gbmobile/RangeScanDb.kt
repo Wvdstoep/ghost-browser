@@ -83,7 +83,8 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
                 put("web_services", JSONArray().also { arr -> webServices.forEach { item ->
                     arr.put(JSONObject().put("port", item.port).put("scheme", item.scheme).put("status", item.status)
                         .put("title", item.title).put("server", item.server).put("poweredBy", item.poweredBy)
-                        .put("contact", item.contact).put("redirectUrl", item.redirectUrl))
+                        .put("contact", item.contact).put("redirectUrl", item.redirectUrl)
+                        .put("canonicalUrl", item.canonicalUrl).put("openGraphUrl", item.openGraphUrl))
                 } }.toString())
             })
             db.setTransactionSuccessful()
@@ -104,7 +105,8 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
                     cursor.getString(4).split(',').mapNotNull { it.toIntOrNull() }, cursor.getLong(5),
                     (0 until web.length()).mapNotNull { web.optJSONObject(it) }.map { item ->
                         WebServiceProbe.Finding(item.optInt("port"), item.optString("scheme"), item.optInt("status"),
-                            item.optString("title"), item.optString("server"), item.optString("poweredBy"), item.optString("contact"), item.optString("redirectUrl"))
+                            item.optString("title"), item.optString("server"), item.optString("poweredBy"), item.optString("contact"),
+                            item.optString("redirectUrl"), item.optString("canonicalUrl"), item.optString("openGraphUrl"))
                     }, cursor.getString(7), cursor.getString(8), cursor.getString(9))
             }
         }

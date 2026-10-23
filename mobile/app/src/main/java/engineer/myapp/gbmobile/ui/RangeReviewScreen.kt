@@ -55,7 +55,9 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, cluster
         (filter == "All" || filter == "Web" && item.web.isNotEmpty() ||
             filter == "Review" && item.reviewState == "new" || filter == "Reviewed" && item.reviewState == "reviewed") &&
             (query.isBlank() || item.host.contains(query, true) || item.web.any {
-                it.title.contains(query, true) || it.redirectUrl.contains(query, true) || it.url(item.host).contains(query, true)
+                it.title.contains(query, true) || it.redirectUrl.contains(query, true) ||
+                    it.canonicalUrl.contains(query, true) || it.openGraphUrl.contains(query, true) ||
+                    it.url(item.host).contains(query, true)
             })
     }
     LaunchedEffect(selectedId, filtered.size) {
@@ -236,7 +238,11 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, cluster
                             Text(web.url(item.host), style = MaterialTheme.typography.bodySmall, color = cs.primary)
                             if (web.redirectUrl.isNotBlank()) Text("Redirect offered: ${web.redirectUrl} · verify ownership before using",
                                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
-                            if (web.title.isNotBlank()) Text(web.title, style = MaterialTheme.typography.bodyMedium)
+                            if (web.canonicalUrl.isNotBlank()) Text("Canonical hint: ${web.canonicalUrl} · check DNS before using",
+                                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                            if (web.openGraphUrl.isNotBlank()) Text("Page URL hint: ${web.openGraphUrl} · check DNS before using",
+                                style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                            if (web.title.isNotBlank()) Text("Page title: ${web.title}", style = MaterialTheme.typography.bodyMedium)
                             if (web.server.isNotBlank()) Text("Server: ${web.server}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                             if (web.poweredBy.isNotBlank()) Text("X-Powered-By: ${web.poweredBy}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                         }
