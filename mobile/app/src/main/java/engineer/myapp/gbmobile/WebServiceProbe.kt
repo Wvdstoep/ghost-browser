@@ -2,13 +2,19 @@ package engineer.myapp.gbmobile
 
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
+import java.io.InputStream
+import java.net.URL
+import java.time.Instant
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 /** Bounded, read-only root-page identification for a host already found in the selected range. */
 object WebServiceProbe {
     private val webPorts = setOf(80, 443, 8000, 8080, 8081, 8443, 8888)
-    data class Finding(val port: Int, val scheme: String, val status: Int, val title: String, val server: String, val poweredBy: String) {
+    data class Finding(val port: Int, val scheme: String, val status: Int, val title: String, val server: String, val poweredBy: String,
+                       val contact: String = "") {
         fun label(): String = listOf("${scheme.uppercase()} $status", server, poweredBy, title.takeIf { it.isNotBlank() }?.let { "\"$it\"" })
             .filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
     }
@@ -28,18 +34,64 @@ object WebServiceProbe {
                 socket.soTimeout = 1500
                 socket.getOutputStream().write("GET / HTTP/1.1\r\nHost: $host\r\nUser-Agent: GhostBrowser-Recon/1.0\r\nAccept: text/html,*/*\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
                 socket.getOutputStream().flush()
-                val bytes = ByteArray(8192)
-                var count = 0
-                while (count < bytes.size) {
-                    val read = socket.getInputStream().read(bytes, count, bytes.size - count)
-                    if (read <= 0) break
-                    count += read
-                    if (String(bytes, 0, count, Charsets.ISO_8859_1).contains("</title>", ignoreCase = true)) break
+                parse(port, scheme, readBounded(socket.getInputStream()))?.let { finding ->
+                    if (tls) finding.copy(contact = securityContact(host, port)) else finding
                 }
-                parse(port, scheme, String(bytes, 0, count, Charsets.ISO_8859_1))
             }
         } catch (_: Exception) { null }
     }
+
+    internal fun readBounded(stream: InputStream): String {
+        val bytes = ByteArray(8192)
+        var count = 0
+        while (count < bytes.size) {
+            val read = try { stream.read(bytes, count, bytes.size - count) }
+                catch (_: SocketTimeoutException) { break }
+            if (read <= 0) break
+            count += read
+            if (String(bytes, 0, count, Charsets.ISO_8859_1).contains("</title>", ignoreCase = true)) break
+        }
+        return String(bytes, 0, count, Charsets.ISO_8859_1)
+    }
+
+    /** HTTPS and its normal certificate/hostname checks are required for a trusted contact. */
+    private fun securityContact(host: String, port: Int): String {
+        val url = URL("https://$host:$port/.well-known/security.txt")
+        val connection = (url.openConnection() as HttpsURLConnection).apply {
+            connectTimeout = 1500; readTimeout = 1500; instanceFollowRedirects = false
+            setRequestProperty("Accept", "text/plain")
+            setRequestProperty("User-Agent", "GhostBrowser-Recon/1.0")
+        }
+        return try {
+            if (connection.responseCode != 200 || !connection.contentType.orEmpty().startsWith("text/plain", true)) return ""
+            val bytes = ByteArray(4096)
+            var count = 0
+            connection.inputStream.use { stream ->
+                while (count < bytes.size) {
+                    val read = stream.read(bytes, count, bytes.size - count)
+                    if (read <= 0) break
+                    count += read
+                }
+            }
+            parseSecurityContact(String(bytes, 0, count, Charsets.UTF_8), url.toString())
+        } catch (_: Exception) { "" } finally { connection.disconnect() }
+    }
+
+    internal fun parseSecurityContact(text: String, sourceUrl: String, now: Instant = Instant.now()): String {
+        val lines = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith('#') }.toList()
+        fun fields(key: String) = lines.filter { it.substringBefore(':').equals(key, true) }
+            .map { it.substringAfter(':').trim() }
+        val expires = fields("Expires").firstOrNull()?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return ""
+        if (!expires.isAfter(now)) return ""
+        val canonical = fields("Canonical")
+        if (canonical.isNotEmpty() && canonical.none { it == sourceUrl }) return ""
+        return fields("Contact").firstNotNullOfOrNull { value ->
+            if (!value.startsWith("mailto:", true)) null else value.substringAfter(':').substringBefore('?')
+                .takeIf { it.length <= 254 && EMAIL.matches(it) }
+        }.orEmpty()
+    }
+
+    private val EMAIL = Regex("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}")
 
     internal fun parse(port: Int, scheme: String, response: String): Finding? {
         val boundary = response.indexOf("\r\n\r\n")

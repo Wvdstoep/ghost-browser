@@ -22,6 +22,7 @@ class LocalRangeScanner(private val context: Context) {
     val customPorts = mutableStateOf("")
     val webFollowUp = mutableStateOf(false)
     val savedPublic = mutableStateListOf<PublicRangePreset>().also { it.addAll(PublicRangePresets.load(context)) }
+    val evidence = mutableStateListOf<RangeEvidence>()
     private val db = RangeScanDb(context)
 
     init {
@@ -110,6 +111,18 @@ class LocalRangeScanner(private val context: Context) {
             "stopped" -> "Stopped · ${current.cidr}"
             else -> "Scan failed"
         }
+    }
+
+    fun refreshEvidence() {
+        val latest = db.reviewItems()
+        if (evidence != latest) {
+            evidence.clear()
+            evidence.addAll(latest)
+        }
+    }
+
+    fun review(id: Long, state: String) {
+        if (db.setReviewState(id, state)) refreshEvidence()
     }
 
     fun isRunning() = db.read()?.status in listOf("starting", "running", "pausing", "stopping")

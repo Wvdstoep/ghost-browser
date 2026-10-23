@@ -4,9 +4,11 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.69** — Range discovery can optionally identify a web service after an open web port is found. The phone requests only `/` on that same IP and port, does not follow redirects, and saves the HTTP status, `Server`, `X-Powered-By`, and page title beside the TCP evidence. Failed identification leaves the result as an open TCP port, not a claim that no web app exists. The foreground scan and its SQLite checkpoints continue to support Pause, Resume, and Stop.
+> **v0.70** — Range discovery now has a two-screen protection workflow: configure the scan, then review a searchable evidence inbox. Each observed host can be marked reviewed or dismissed; review state persists across scan runs. A reviewed record can open an editable responsible-disclosure email draft in the phone's email app. Ghost Browser never sends the email itself.
 
-The web-identification switch is off by default and applies only to the selected /24–/32 range. It does not run every recon starter prompt or assert a vulnerability. Results stay on the phone unless cluster sharing is separately enabled. There is no automatic contact harvesting or email sending; findings and recipients require human review.
+When web identification is enabled, the phone requests `/` on an open web port and saves HTTP status, server headers, and page title. For HTTPS hosts it also checks that host's `/.well-known/security.txt` for a vulnerability-reporting email. A suggested contact appears only when HTTPS certificate and hostname validation succeeds, the file is current, and any Canonical field matches the fetched URL. No redirects are followed. Most IP-hosted sites have domain-only certificates, so manual contact entry remains available.
+
+The web-identification switch is off by default and applies only to the selected /24–/32 range. It does not run every recon starter prompt or assert a vulnerability. Results stay on the phone unless cluster sharing is separately enabled. The draft requires an explicit review action and a valid recipient; no bulk contact harvesting or automatic email sending occurs.
 
 The scan service does not generate an Internet-wide address sequence or bundle third-party networks as presets. If Android ends the service, reopening Range discovery marks the stale run paused; tap Resume to continue. Connection-rate settings count TCP attempts, so a host checked on several ports consumes several attempts.
 
@@ -43,9 +45,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.69 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.70 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `a531551569e7514749258f418941d31f962afbb769969767a164a06841f357a3`.
+SHA-256: `893e3d6c5808d73c2f07b6b907d842e72afa2b913efc918ccb7d6e06a545f587`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
