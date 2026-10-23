@@ -50,6 +50,7 @@ fun FlowsTab(st: WebState, repo: WebRepo, openExternal: (String) -> Unit) {
             if (sub == 0) FlowsScreen(
                 flows = st.flows.value, onLoad = { repo.loadFlows() },
                 onRun = { id, _ -> repo.runFlow(id, "") }, onCreate = { n, s -> repo.createFlow(n, s) },
+                onCreateSecurity = { n, t, s, p -> repo.createSecurityFlow(n, t, s, p) },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             ) else WatchersScreen(
                 watchers = st.watchers.value, roles = st.watcherRoles.value, profiles = st.watcherProfiles.value,

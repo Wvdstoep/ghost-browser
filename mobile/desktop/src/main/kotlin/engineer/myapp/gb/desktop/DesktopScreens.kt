@@ -116,12 +116,14 @@ fun loadFlows(st: DesktopState) = bg {
                     if (profile.isBlank()) profile = nn.optString("profile")
                     if (role.isBlank()) role = nn.optString("role")
                     val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(g)
+                } else if (nn.optString("type") == "recon") {
+                    goals.add("${nn.optString("scan", "exposure")}: ${nn.optString("target")}")
                 }
             }
             val runs = w.optInt("runs", 0)
             val verified = w.optBoolean("lastVerified")
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
-            out.add(FlowInfo(id, w.optString("name", id), nodes.length(), last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified))
+            out.add(FlowInfo(id, w.optString("name", id), nodes.length(), last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified, w.optString("kind", "browser")))
         }
         st.flows.value = out
         st.flowsHint.value = if (out.isEmpty()) "No automations yet." else "${out.size} automations — click Run to fire one."
@@ -370,11 +372,11 @@ fun loadWatchers(st: DesktopState) = bg {
         for (i in 0 until arr.length()) {
             val w = arr.optJSONObject(i) ?: continue
             val nodes = w.optJSONArray("nodes") ?: org.json.JSONArray()
-            var trig: JSONObject? = null; var agent: JSONObject? = null; var steps = 0
+            var trig: JSONObject? = null; var agent: JSONObject? = null; var reconNode: JSONObject? = null; var steps = 0
             for (j in 0 until nodes.length()) {
                 val n = nodes.optJSONObject(j) ?: continue
                 if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
-                else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n }
+                else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n; if (n.optString("type") == "recon" && reconNode == null) reconNode = n }
             }
             val cfg = trig ?: w.optJSONObject("trigger")
             if (cfg == null || cfg.optString("type") != "schedule") continue
@@ -385,8 +387,8 @@ fun loadWatchers(st: DesktopState) = bg {
             val fcfg = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/config", null)) } catch (e: Exception) { JSONObject() }
             val fuFlow = fcfg.optString("followUpFlowId"); val fuReplies = (fcfg.optJSONArray("followUpKinds")?.length() ?: 0) > 0
             val h = try { JSONObject(Cluster.authed("GET", "/v1/watchers/$id/health", null)) } catch (e: Exception) { JSONObject() }
-            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, agent?.optString("goal") ?: "", if (steps > 1) "automation" else "role", steps, fuFlow, fuReplies,
-                followUps = routesOfD(fcfg.optJSONArray("followUps")), health = healthLineD(h), stale = h.optBoolean("stale"), running = h.optBoolean("running")))
+            out.add(engineer.myapp.gb.shared.Watcher(id, w.optString("name", id), reconNode?.optString("scan") ?: agent?.optString("role") ?: "general", agent?.optString("profile") ?: "", nmin, w.optBoolean("active"), last, 0, reconNode?.optString("target") ?: agent?.optString("goal") ?: "", if (steps > 1) "automation" else if (reconNode != null) "security" else "role", steps, fuFlow, fuReplies,
+                followUps = routesOfD(fcfg.optJSONArray("followUps")), health = healthLineD(h), stale = h.optBoolean("stale"), running = h.optBoolean("running"), kind = w.optString("kind", if (reconNode != null) "security" else "browser")))
         }
         st.watchers.value = out
     } catch (e: Exception) {}
@@ -436,6 +438,9 @@ fun saveWatcherD(st: DesktopState, id: String?, name: String, mode: String, role
             nodes.put(JSONObject(n.toString()).put("id", nid)); edges.put(JSONObject().put("from", prev).put("to", nid)); prev = nid
         }
         if (k == 0) { st.log("! that automation has no steps"); return@bg }
+    } else if (mode == "security") {
+        nodes.put(JSONObject().put("id", "n0").put("type", "recon").put("label", "Security recon").put("scan", role).put("target", goal))
+        edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
     } else {
         val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch").put("role", role).put("profile", profile).put("goal", goal.ifBlank { DEFAULT_WATCH_GOAL_D })
         nodes.put(agent); edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
@@ -600,6 +605,7 @@ fun FlowsScreenD(st: DesktopState) {
             flows = st.flows.value, onLoad = { loadFlows(st) },
             onRun = { id, name -> showRunSheetD(id, name, st) },
             onCreate = { name, steps -> createFlowD(name, steps, st) },
+            onCreateSecurity = { name, target, scan, prompt -> createSecurityFlowD(name, target, scan, prompt, st) },
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) else engineer.myapp.gb.shared.WatchersScreen(
             watchers = st.watchers.value, roles = st.watcherRoles.value, profiles = st.watcherProfiles.value,
@@ -619,6 +625,14 @@ fun createFlowD(name: String, steps: String, st: DesktopState) = bg {
     goals.forEachIndexed { i, g -> val nid = "n$i"; nodes.put(org.json.JSONObject().put("id", nid).put("type", "agent").put("label", "Step ${i + 1}").put("goal", g)); edges.put(org.json.JSONObject().put("from", prev).put("to", nid)); prev = nid }
     val body = org.json.JSONObject().put("name", name).put("nodes", nodes).put("edges", edges).toString()
     Cluster.authed("POST", "/v1/workflows", body); st.log("+ created automation: $name"); loadFlows(st)
+}
+
+fun createSecurityFlowD(name: String, target: String, scan: String, prompt: String, st: DesktopState) = bg {
+    val nodes = org.json.JSONArray().put(JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
+        .put(JSONObject().put("id", "recon").put("type", "recon").put("label", "Security recon").put("target", target).put("scan", scan).put("prompt", prompt))
+    val edges = org.json.JSONArray().put(JSONObject().put("from", "trigger").put("to", "recon"))
+    Cluster.authed("POST", "/v1/workflows", JSONObject().put("name", name).put("nodes", nodes).put("edges", edges).toString())
+    st.log("+ created security automation: $name"); loadFlows(st)
 }
 
 /* ── Device Hub ────────────────────────────────────────────────────────────────────────────── */

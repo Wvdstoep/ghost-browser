@@ -8,7 +8,8 @@ package engineer.myapp.gb.shared
 data class TabInfo(val index: Int, val title: String, val host: String, val profile: String, val active: Boolean)
 data class FlowInfo(val id: String, val name: String, val steps: Int, val sub: String,
                     val profile: String = "", val role: String = "", val goals: List<String> = emptyList(),
-                    val runs: Int = 0, val lastStatus: String = "", val verified: Boolean = false)
+                    val runs: Int = 0, val lastStatus: String = "", val verified: Boolean = false,
+                    val kind: String = "browser")
 /**
  * THE ASSISTANT — one chat, one agent, living inside Ghost Browser on the cluster. The app is a thin
  * client: it sends the owner's words, polls the chat while a turn runs, and renders what comes back.
@@ -124,6 +125,7 @@ data class Watcher(
     val health: String = "",       // last pass, in one line ("12 min ago · 34 messages · 2 waiting · 3 verified, 1 corrected")
     val stale: Boolean = false,    // active but no pass for too long — the watcher has gone quiet
     val running: Boolean = false,  // a pass is in progress right now
+    val kind: String = "browser",
 )
 
 /** One routing rule of a watcher: items of these kinds run this flow. Empty kinds = any kind. */

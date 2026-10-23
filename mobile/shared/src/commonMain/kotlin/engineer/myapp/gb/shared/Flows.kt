@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 /** Catalog rules stay independent of Compose so search and status cannot drift between devices. */
 internal object FlowCatalog {
     fun platform(f: FlowInfo): String {
+        if (f.kind == "security") return "Security Recon"
         val p = f.profile.lowercase()
         val n = (f.name + " " + f.role).lowercase()
         return listOf("Facebook", "LinkedIn", "Google", "CapCut", "Reddit", "Useme", "Herald", "Probe")
@@ -60,6 +61,7 @@ fun FlowsScreen(
     onLoad: () -> Unit,
     onRun: (String, String) -> Unit,
     onCreate: (String, String) -> Unit,
+    onCreateSecurity: (String, String, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -67,11 +69,13 @@ fun FlowsScreen(
     var platform by remember { mutableStateOf("All") }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var building by remember { mutableStateOf(false) }
+    var kind by remember { mutableStateOf("browser") }
     val listScroll = rememberScrollState()
     LaunchedEffect(query, platform) { listScroll.scrollTo(0) }
-    val platforms = listOf("All") + flows.map(FlowCatalog::platform).distinct().sorted()
+    val scoped = flows.filter { it.kind == kind }
+    val platforms = listOf("All") + scoped.map(FlowCatalog::platform).distinct().sorted()
     if (platform !in platforms) platform = "All"
-    val visible = FlowCatalog.filter(flows, query, platform)
+    val visible = FlowCatalog.filter(scoped, query, platform)
     val selected = visible.firstOrNull { it.id == selectedId } ?: visible.firstOrNull()
 
     BoxWithConstraints(modifier.background(cs.background)) {
@@ -90,16 +94,21 @@ fun FlowsScreen(
                     Text(if (building) "Catalog" else "Create")
                 }
             }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("browser" to "Browser", "security" to "Security Recon").forEach { (value, label) ->
+                    FilterChip(selected = kind == value, onClick = { kind = value; building = false; selectedId = null; platform = "All" }, label = { Text(label) })
+                }
+            }
             if (building) {
-                FlowBuilder(onCreate = { name, steps -> onCreate(name, steps); building = false },
-                    modifier = Modifier.weight(1f).fillMaxWidth())
+                if (kind == "security") SecurityFlowBuilder(onCreate = { name, target, scan, prompt -> onCreateSecurity(name, target, scan, prompt); building = false }, modifier = Modifier.weight(1f).fillMaxWidth())
+                else FlowBuilder(onCreate = { name, steps -> onCreate(name, steps); building = false }, modifier = Modifier.weight(1f).fillMaxWidth())
                 return@Column
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlowMetric("Workflows", "${flows.size}")
-                FlowMetric("Verified", "${flows.count { it.verified }}")
-                FlowMetric("Need attention", "${flows.count { FlowCatalog.status(it) == "Needs attention" }}")
+                FlowMetric("Workflows", "${scoped.size}")
+                FlowMetric("Verified", "${scoped.count { it.verified }}")
+                FlowMetric("Need attention", "${scoped.count { FlowCatalog.status(it) == "Needs attention" }}")
             }
             Spacer(Modifier.height(12.dp))
             Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(12.dp),
@@ -215,8 +224,13 @@ private fun FlowDetails(f: FlowInfo?, onRun: (String, String) -> Unit, onBack: (
             if (f.sub.isNotBlank()) { Spacer(Modifier.height(10.dp)); Text(f.sub, color = cs.onSurfaceVariant, fontSize = 13.sp) }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                FlowFact("Profile", f.profile.ifBlank { "Default" }, Modifier.weight(1f))
-                FlowFact("Role", f.role.ifBlank { "Not set" }, Modifier.weight(1f))
+                if (f.kind == "security") {
+                    FlowFact("Type", "Read-only recon", Modifier.weight(1f))
+                    FlowFact("Scan", f.goals.firstOrNull()?.substringBefore(":") ?: "Recon", Modifier.weight(1f))
+                } else {
+                    FlowFact("Profile", f.profile.ifBlank { "Default" }, Modifier.weight(1f))
+                    FlowFact("Role", f.role.ifBlank { "Not set" }, Modifier.weight(1f))
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -226,7 +240,7 @@ private fun FlowDetails(f: FlowInfo?, onRun: (String, String) -> Unit, onBack: (
             Spacer(Modifier.height(18.dp))
             Button(onClick = { onRun(f.id, f.name) }, modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
-                Text("Run automation")
+                Text(if (f.kind == "security") "Run recon scan" else "Run automation")
             }
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = cs.outline)
@@ -295,6 +309,51 @@ private fun FlowBuilder(onCreate: (String, String) -> Unit, modifier: Modifier) 
                     enabled = name.isNotBlank() && steps.lines().any { it.isNotBlank() },
                     shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
                     Text("Create automation")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecurityFlowBuilder(onCreate: (String, String, String, String) -> Unit, modifier: Modifier) {
+    val cs = MaterialTheme.colorScheme
+    var name by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf("") }
+    var scan by remember { mutableStateOf("exposure") }
+    var query by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf<StarterPrompt?>(null) }
+    Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Surface(color = cs.surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, cs.outline), modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+            Column(Modifier.padding(18.dp)) {
+                Text("New security automation", style = MaterialTheme.typography.titleLarge)
+                Text("Select a target and recon check. On Android, choose This phone to run the local auditor without the cluster.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(name, { name = it }, label = { Text("Automation name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                Text("SCAN", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("exposure" to "Port to Proof", "perimeter" to "Perimeter", "prompt" to "Recon starters").forEach { (value, label) ->
+                        FilterChip(selected = scan == value, onClick = { scan = value }, label = { Text(label) })
+                    }
+                }
+                if (scan == "prompt") {
+                    Text("Starter prompts run on demand through the Recon agent when an AI model is configured. Local phone runs use the on-device auditor.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                    OutlinedTextField(query, { query = it }, label = { Text("Find a recon starter") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    RECON_PROMPT_CHIPS.filter { query.isBlank() || it.title.contains(query, true) || it.subtitle.contains(query, true) }.forEach { option ->
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).clickable { chosen = option }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = chosen == option, onClick = { chosen = option })
+                            Column { Text(option.title, color = cs.onSurface, fontSize = 13.sp); Text(option.subtitle, color = cs.onSurfaceVariant, fontSize = 11.sp) }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(target, { target = it }, label = { Text("HTTP(S) target") }, placeholder = { Text("https://example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(14.dp))
+                Button(onClick = { onCreate(name.trim(), target.trim(), scan, chosen?.prompt ?: "") }, enabled = name.trim().length >= 3 &&
+                    (target.startsWith("https://") || target.startsWith("http://")) && (scan != "prompt" || chosen != null),
+                    shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
+                    Text("Create security automation")
                 }
             }
         }

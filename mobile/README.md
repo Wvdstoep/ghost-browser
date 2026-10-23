@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.62** — Recon has a dedicated “Exposure Recon: Port to Proof” start-page prompt. It separates port discovery, protocol fingerprints, route evidence, read-only exposure checks, and untested RCE status. Settings and Automations retain their focused layouts on Android and Windows.
+> **v0.63** — Watchers and Automations have separate Browser and Security Recon views. Security automations offer target scans and the Recon starter catalog. On Android, selecting “This phone” runs a saved security flow through the on-device single-target auditor without a model or live cluster connection. Saving flows and scheduled watchers still uses the cluster.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -39,9 +39,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.62 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.63 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `87445b5a2c1d0fabd0209c5a694be3151ffec54913bf9a6c8c858d15e22f383e`.
+SHA-256: `8a3fbdfaacc801c5dcb99edb5110e9957bb1bee2e352c6b062d23096e17ba678`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
@@ -60,7 +60,7 @@ Download the `ghost-browser-debug-apk` artifact from the corresponding Actions r
 release requires a separately configured release signing key and release process.
 
 The Windows Compose installer is built locally with `gradlew.bat :desktop:packageMsi :desktop:packageExe`.
-Version 1.0.29 keeps the desktop installer out of GitHub because of its size. The desktop uses the
+Version 1.0.30 keeps the desktop installer out of GitHub because of its size. The desktop uses the
 same header-menu navigation as Android, and **Developer tools** opens Chromium's native DevTools
 for the active tab. The Windows browser engine still uses one shared cookie store across its tabs;
 Android's isolated profile containers are not yet implemented on Windows.

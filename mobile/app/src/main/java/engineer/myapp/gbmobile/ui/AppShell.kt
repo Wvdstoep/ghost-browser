@@ -142,6 +142,7 @@ class ShellActions(
     val onLoadFlows: () -> Unit,
     val onRunFlow: (String, String) -> Unit,
     val onCreateFlow: (String, String) -> Unit,
+    val onCreateSecurityFlow: (String, String, String, String) -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
     val onOpenLearn: (String) -> Unit,
@@ -283,6 +284,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                             if (sub == 0) engineer.myapp.gb.shared.FlowsScreen(
                                 flows = shell.flows.value, onLoad = act.onLoadFlows,
                                 onRun = { id, name -> act.onRunFlow(id, name) }, onCreate = { n, s -> act.onCreateFlow(n, s) },
+                                onCreateSecurity = { n, t, s, p -> act.onCreateSecurityFlow(n, t, s, p) },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) else engineer.myapp.gb.shared.WatchersScreen(
                                 watchers = shell.watchers.value, roles = shell.watcherRoles.value, profiles = shell.watcherProfiles.value,
