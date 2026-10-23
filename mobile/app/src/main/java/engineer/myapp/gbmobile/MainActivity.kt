@@ -63,7 +63,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private lateinit var b: ActivityMainBinding
     private val vm: GbViewModel by viewModels()
     private var securitySync by mutableStateOf(false)
-    private val rangeScanner by lazy { LocalRangeScanner(applicationContext) { block -> runOnUiThread(block) } }
+    private val rangeScanner by lazy { LocalRangeScanner(applicationContext) }
 
     // --- tabs ---
     private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
@@ -2698,11 +2698,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         },
         onOpenAllReconResults = {
             pendingResults = "local-recon-all" to "All on-device scans"
-            showArtifact(LocalReconResultPage.render("All on-device scans", localReconResultRuns(LocalReconStore.allResults(this))))
+            showArtifact(LocalReconResultPage.render("All on-device scans", localReconResultRuns(deviceResults(true))))
         },
         onOpenRangeResults = {
             pendingResults = "local-recon-range" to "Range discoveries"
-            showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(LocalReconStore.results(this, "local-recon-range"))))
+            showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(deviceResults(false))))
         },
         rangeScanner = rangeScanner,
         onLoadPlatforms = { loadPlatforms() },
@@ -2988,6 +2988,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         vm.log("↑ opening results for \"$name\"…")
         apiCall("GET", "/v1/watchers/$id/feed", null, "wfeed")   // step 1: the deduped feed
+    }
+
+    private fun deviceResults(all: Boolean): JSONArray {
+        val old = if (all) LocalReconStore.allResults(this) else LocalReconStore.results(this, "local-recon-range")
+        val database = RangeScanDb(this)
+        val recent = try { database.results() } finally { database.close() }
+        val items = (0 until old.length()).mapNotNull { old.optJSONObject(it) } +
+            (0 until recent.length()).mapNotNull { recent.optJSONObject(it) }
+        return JSONArray().also { output ->
+            items.sortedByDescending { it.optJSONObject("fields")?.optLong("recordedAt", 0) ?: 0 }
+                .take(1000).forEach { output.put(it) }
+        }
     }
 
     private fun localReconResultRuns(items: JSONArray): List<LocalReconResultPage.Run> =
