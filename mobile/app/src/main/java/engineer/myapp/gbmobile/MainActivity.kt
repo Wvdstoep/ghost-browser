@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private lateinit var b: ActivityMainBinding
     private val vm: GbViewModel by viewModels()
     private var securitySync by mutableStateOf(false)
+    private val rangeScanner by lazy { LocalRangeScanner(applicationContext) { block -> runOnUiThread(block) } }
 
     // --- tabs ---
     private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
@@ -2699,6 +2700,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             pendingResults = "local-recon-all" to "All on-device scans"
             showArtifact(LocalReconResultPage.render("All on-device scans", localReconResultRuns(LocalReconStore.allResults(this))))
         },
+        rangeScanner = rangeScanner,
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
@@ -4101,6 +4103,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     override fun onDestroy() {
+        rangeScanner.close()
         if (fullscreenView != null) hideFullscreenView()
         agentStop = true
         try { CookieManager.getInstance().flush() } catch (e: Exception) {}

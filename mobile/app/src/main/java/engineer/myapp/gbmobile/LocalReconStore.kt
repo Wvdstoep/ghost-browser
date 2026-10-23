@@ -75,7 +75,7 @@ object LocalReconStore {
             else next.put(entry)
         }
         val recent = JSONArray().put(item)
-        for (i in 0 until minOf(items.length(), 99)) recent.put(items.get(i))
+        for (i in 0 until minOf(items.length(), if (id == "local-recon-range") 999 else 99)) recent.put(items.get(i))
         next.put(JSONObject().put("id", id).put("items", recent))
         prefs(context).edit().putString(RESULTS, next.toString()).apply()
         get(context, id)?.let { flow ->
