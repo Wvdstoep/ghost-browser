@@ -91,7 +91,7 @@ fun WatchersScreen(
         }
 
         if (kind == "security" && onOpenRangeScan != null) {
-            Button(onClick = onOpenRangeScan, modifier = Modifier.fillMaxWidth()) { Text("Scan a local network range") }
+            Button(onClick = onOpenRangeScan, modifier = Modifier.fillMaxWidth()) { Text("Open range discovery") }
             Spacer(Modifier.height(12.dp))
         }
 

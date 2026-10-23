@@ -2700,6 +2700,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             pendingResults = "local-recon-all" to "All on-device scans"
             showArtifact(LocalReconResultPage.render("All on-device scans", localReconResultRuns(LocalReconStore.allResults(this))))
         },
+        onOpenRangeResults = {
+            pendingResults = "local-recon-range" to "Range discoveries"
+            showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(LocalReconStore.results(this, "local-recon-range"))))
+        },
         rangeScanner = rangeScanner,
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
@@ -3004,7 +3008,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 findingCount = fields.optInt("findings"), videoCandidate = fields.optBoolean("videoCandidate"),
                 ports = parsedPorts,
                 findings = (0 until findings.length()).mapNotNull { i -> findings.optJSONObject(i)?.let { LocalReconResultPage.Finding(it.optString("severity"), it.optString("title"), it.optString("impact")) } },
-                error = fields.optString("error"),
+                error = fields.optString("error"), scope = fields.optString("scope"),
             )
         }
 

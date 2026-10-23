@@ -146,6 +146,7 @@ class ShellActions(
     val securitySync: Boolean,
     val onSecuritySync: (Boolean) -> Unit,
     val onOpenAllReconResults: () -> Unit,
+    val onOpenRangeResults: () -> Unit,
     val rangeScanner: engineer.myapp.gbmobile.LocalRangeScanner,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
@@ -408,7 +409,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
         if (shell.urlFocused.value) Omnibox(shell, act)
         if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
         if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onRunSessionProbe = { target -> act.onRunReconScan(target, true) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
-        RangeScanDialog(act.rangeScanner, act.onOpenAllReconResults)
+        RangeScanDialog(act.rangeScanner, act.onOpenRangeResults)
     }
 }
 
@@ -578,7 +579,7 @@ private fun OverflowMenu(shell: ShellUi, act: ShellActions) {
                 MenuRow(Icons.Default.SwitchAccount, "Profiles") { act.onCloseMenu(); act.onNav("profiles") }
                 MenuRow(Icons.Default.Verified, "Approvals", badge = shell.jobs.value.sumOf { it.proposals.size }) { act.onCloseMenu(); act.onOpenApprovals() }
                 MenuRow(Icons.Default.DevicesOther, "Device Hub") { act.onCloseMenu(); act.onOpenHub() }
-                MenuRow(Icons.Default.Radar, "Local range scan") { act.onCloseMenu(); act.rangeScanner.open.value = true }
+                MenuRow(Icons.Default.Radar, "Range discovery") { act.onCloseMenu(); act.rangeScanner.open.value = true }
                 MenuDivider()
                 MenuRow(Icons.Default.Code, "Developer tools") { act.onCloseMenu(); act.onOpenDevTools() }
                 MenuRow(Icons.Default.DeleteSweep, "Clear visited links") { act.onCloseMenu(); shell.clearHistoryConfirm.value = true }
