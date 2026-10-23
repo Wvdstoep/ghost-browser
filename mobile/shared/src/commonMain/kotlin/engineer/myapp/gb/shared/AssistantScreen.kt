@@ -45,6 +45,7 @@ import kotlinx.coroutines.delay
  */
 class AssistantUi {
     val selectedAgent = mutableStateOf("browser") // "browser" | "recon"
+    val pendingImport = mutableStateOf<ManagedAppTarget?>(null)
     val chat = mutableStateOf<AssistantChatView?>(null)
     val chats = mutableStateOf<List<ChatSummary>>(emptyList())
     val error = mutableStateOf("")            // last transport error, shown once under the timeline
@@ -98,6 +99,7 @@ class AssistantActions(
     val onOpenUrl: (String) -> Unit,
     val onConnect: () -> Unit,
     val onNewWithAgent: ((String) -> Unit)? = null,
+    val onViewRangeEvidence: ((Long) -> Unit)? = null,
 )
 
 data class StarterPrompt(val title: String, val subtitle: String, val prompt: String)
@@ -357,7 +359,9 @@ data class ManagedAppTarget(
     val subdomainsCount: Int = 1,
     val category: String = "Platform App",
     val description: String = "",
-    val profile: String = "default"
+    val profile: String = "default",
+    val sourceEvidenceId: Long = -1L,
+    val sourceCidr: String = ""
 )
 
 val DEFAULT_MANAGED_APPS = emptyList<ManagedAppTarget>()
@@ -414,6 +418,17 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
         } catch (e: Exception) {}
     }
 
+    LaunchedEffect(ui.pendingImport.value) {
+        ui.pendingImport.value?.let { imported ->
+            val existing = managedApps.firstOrNull { it.id == imported.id }
+            updateManagedAppsList(if (existing == null) listOf(imported) + managedApps else
+                managedApps.map { if (it.id == imported.id) imported.copy(profile = it.profile) else it })
+            updateTargetUrl(imported.url)
+            ui.selectedAgent.value = "recon"
+            ui.pendingImport.value = null
+        }
+    }
+
     var showUrlInput by remember { mutableStateOf(false) }
     var showAppMap by remember { mutableStateOf(false) }
     var showAppManager by remember { mutableStateOf(false) }
@@ -450,7 +465,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 // selectedAgent is user-controlled via AgentToggleBar and HistorySheet
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
-                        if (!ui.connected.value) ConnectCard(act.onConnect)
+                        if (!ui.connected.value && ui.selectedAgent.value != "recon") ConnectCard(act.onConnect)
                         else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl, onSelectChip = { composerText = it }, onOpenAppMap = { showAppMap = true }, onOpenAppManager = { showAppManager = true })
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
@@ -460,7 +475,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                     if (ui.error.value.isNotBlank()) item(key = "err") { ErrorRow(ui.error.value) }
                     item { Spacer(Modifier.height(6.dp)) }
                 }
-                Composer(live != null, ui.connected.value, text = composerText, onTextChange = { composerText = it }, onSend = { prompt -> act.onSend(prompt); composerText = "" })
+                Composer(live != null, ui.connected.value || ui.selectedAgent.value == "recon", text = composerText, onTextChange = { composerText = it }, onSend = { prompt -> act.onSend(prompt); composerText = "" })
             }
         }
         if (history) HistorySheet(ui.chats.value, chat?.id, initialAgent = ui.selectedAgent.value, onOpen = { id -> val c = ui.chats.value.firstOrNull { it.id == id }; if (c != null && c.agentType.isNotBlank()) ui.selectedAgent.value = c.agentType; act.onOpen(id); history = false }, onDelete = act.onDelete, onNewWithAgent = { agent -> ui.selectedAgent.value = agent; act.onNewWithAgent?.invoke(agent) ?: act.onNew(); history = false }, onClose = { history = false })
@@ -549,6 +564,7 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                         updateTargetUrl(updated.first().url)
                     }
                 },
+                onViewRangeEvidence = { id -> act.onViewRangeEvidence?.invoke(id) },
                 onClose = { showAppManager = false }
             )
         }
@@ -1657,7 +1673,7 @@ data class ParsedAppMap(
 
 fun encodeManagedApps(apps: List<ManagedAppTarget>): String {
     return apps.joinToString(";;;") { app ->
-        "${app.id}|||${app.name}|||${app.url}|||${app.isCluster}|||${app.postureGrade}|||${app.postureScore}|||${app.subdomainsCount}|||${app.category}|||${app.description}|||${app.profile}"
+        "${app.id}|||${app.name}|||${app.url}|||${app.isCluster}|||${app.postureGrade}|||${app.postureScore}|||${app.subdomainsCount}|||${app.category}|||${app.description}|||${app.profile}|||${app.sourceEvidenceId}|||${app.sourceCidr}"
     }
 }
 
@@ -1679,7 +1695,9 @@ fun decodeManagedApps(data: String): List<ManagedAppTarget> {
                     subdomainsCount = parts.getOrNull(6)?.toIntOrNull() ?: 1,
                     category = parts.getOrNull(7) ?: "Platform App",
                     description = parts.getOrNull(8) ?: "",
-                    profile = parts.getOrNull(9) ?: "default"
+                    profile = parts.getOrNull(9) ?: "default",
+                    sourceEvidenceId = parts.getOrNull(10)?.toLongOrNull() ?: -1L,
+                    sourceCidr = parts.getOrNull(11) ?: ""
                 ))
             }
         }
@@ -2752,10 +2770,12 @@ private fun AppManagerSheet(
     onUpdateProfile: (ManagedAppTarget, String) -> Unit,
     onAddApp: (name: String, url: String, profile: String) -> Unit,
     onDeleteApp: (ManagedAppTarget) -> Unit,
+    onViewRangeEvidence: (Long) -> Unit,
     onClose: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    var selectedFilter by remember { mutableStateOf(0) } // 0: All, 1: Cluster, 2: External
+    var selectedFilter by remember { mutableStateOf(0) } // 0: All, 1: Cluster, 2: External, 3: Scans
+    var appSearch by remember { mutableStateOf("") }
     var showAddForm by remember(apps.isEmpty()) { mutableStateOf(apps.isEmpty()) }
     var newAppName by remember { mutableStateOf("") }
     var newAppUrl by remember { mutableStateOf("") }
@@ -2789,9 +2809,10 @@ private fun AppManagerSheet(
 
     val filteredApps = when (selectedFilter) {
         1 -> apps.filter { it.isCluster }
-        2 -> apps.filter { !it.isCluster }
+        2 -> apps.filter { !it.isCluster && it.sourceEvidenceId < 0 }
+        3 -> apps.filter { it.sourceEvidenceId > 0 }
         else -> apps
-    }
+    }.filter { appSearch.isBlank() || it.name.contains(appSearch, true) || it.url.contains(appSearch, true) || it.sourceCidr.contains(appSearch, true) }
 
     Box(
         Modifier
@@ -2833,7 +2854,7 @@ private fun AppManagerSheet(
                             Text("Application Workspaces", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(6.dp))
                             Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF10B981).copy(alpha = 0.15f)) {
-                                Text("K3S CONNECTED", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
+                                Text(if (apps.any { it.isCluster }) "LOCAL + CLUSTER" else "LOCAL", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp))
                             }
                         }
                         Text("${apps.size} Managed Apps • Ingress & Target Maps", fontSize = 11.sp, color = cs.onSurfaceVariant)
@@ -2871,34 +2892,43 @@ private fun AppManagerSheet(
                             }
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
-                                Text("Platform Workspace Synced", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
-                                Text("Ingress routes auto-discovered from K3s cluster & custom URLs tracked in dossiers", fontSize = 10.sp, color = cs.onSurfaceVariant)
+                                Text("Application workspaces", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                                Text("Saved targets, discovered hosts, and their research history", fontSize = 10.sp, color = cs.onSurfaceVariant)
                             }
                         }
                     }
 
                     Spacer(Modifier.height(12.dp))
 
+                    OutlinedTextField(
+                        value = appSearch, onValueChange = { appSearch = it },
+                        label = { Text("Search apps, hosts or ranges") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
                     // Filter tabs
                     Row(
-                        Modifier.fillMaxWidth(),
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         val filterLabels = listOf(
                             "All Apps (${apps.size})",
                             "Cluster (${apps.count { it.isCluster }})",
-                            "External (${apps.count { !it.isCluster }})"
+                            "External (${apps.count { !it.isCluster && it.sourceEvidenceId < 0 }})",
+                            "Scans (${apps.count { it.sourceEvidenceId > 0 }})"
                         )
                         filterLabels.forEachIndexed { idx, label ->
                             val active = selectedFilter == idx
                             Surface(
-                                modifier = Modifier.weight(1f).height(32.dp).clickable { selectedFilter = idx },
+                                modifier = Modifier.height(34.dp).clickable { selectedFilter = idx },
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (active) Color(0xFFE5484D) else cs.surfaceVariant.copy(alpha = 0.5f),
                                 contentColor = if (active) Color.White else cs.onSurfaceVariant
                             ) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(label, fontSize = 11.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium)
+                                    Text(label, fontSize = 11.sp, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 10.dp))
                                 }
                             }
                         }
@@ -3037,10 +3067,11 @@ private fun AppManagerSheet(
                                     Icon(Icons.Default.Security, null, tint = Color(0xFFE5484D), modifier = Modifier.size(20.dp))
                                 }
                                 Spacer(Modifier.height(10.dp))
-                                Text("No Application Workspaces Yet", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                                Text(if (apps.isEmpty()) "No application workspaces yet" else "No matching apps", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Add a target domain above, or connect to your Ghost Browser cluster to auto-discover deployed apps.",
+                                    if (apps.isEmpty()) "Add a target domain above or research a discovered web host."
+                                    else "Try another search or filter.",
                                     fontSize = 11.sp,
                                     color = cs.onSurfaceVariant,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -3074,7 +3105,7 @@ private fun AppManagerSheet(
                                             }
                                         } else {
                                             Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF3B82F6).copy(alpha = 0.15f)) {
-                                                Text("EXTERNAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF3B82F6), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                                Text(if (app.sourceEvidenceId > 0) "SCAN" else "EXTERNAL", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF3B82F6), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
                                             }
                                         }
                                     }
@@ -3091,6 +3122,15 @@ private fun AppManagerSheet(
 
                                 Spacer(Modifier.height(4.dp))
                                 Text(app.url, fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = cs.onSurfaceVariant)
+
+                                if (app.sourceEvidenceId > 0) {
+                                    Spacer(Modifier.height(6.dp))
+                                    TextButton(onClick = { onViewRangeEvidence(app.sourceEvidenceId) }) {
+                                        Icon(Icons.Default.Radar, null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("View scan evidence · ${app.sourceCidr}")
+                                    }
+                                }
 
                                 if (app.description.isNotBlank()) {
                                     Spacer(Modifier.height(4.dp))

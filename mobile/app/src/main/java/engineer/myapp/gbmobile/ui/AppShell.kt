@@ -148,6 +148,8 @@ class ShellActions(
     val onOpenAllReconResults: () -> Unit,
     val onOpenRangeResults: () -> Unit,
     val rangeScanner: engineer.myapp.gbmobile.LocalRangeScanner,
+    val onResearchRangeEvidence: (engineer.myapp.gbmobile.RangeEvidence) -> Unit = {},
+    val onOpenRangeApp: (engineer.myapp.gbmobile.RangeEvidence) -> Unit = {},
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
     val onOpenLearn: (String) -> Unit,
@@ -409,7 +411,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
         if (shell.urlFocused.value) Omnibox(shell, act)
         if (shell.aiSettingsOpen.value) engineer.myapp.gb.shared.AiModelSheet(shell.aiModel, act.aiModel, connected = shell.assistant.connected.value, onConnect = { act.onCloseAiSettings(); act.assistant.onConnect() }, onClose = act.onCloseAiSettings)
         if (shell.reconUi.isOpen.value) engineer.myapp.gb.shared.ReconSheet(shell.reconUi, engineer.myapp.gb.shared.ReconActions(onScan = { target, comp -> act.onRunReconScan(target, comp) }, onRunSessionProbe = { target -> act.onRunReconScan(target, true) }, onClose = { shell.reconUi.isOpen.value = false }, onCopySnippet = { act.onCopyReconSnippet(it) }))
-        RangeScanDialog(act.rangeScanner, act.onOpenRangeResults)
+        RangeScanDialog(act.rangeScanner, act.onOpenRangeResults, act.onResearchRangeEvidence, act.onOpenRangeApp)
     }
 }
 
