@@ -476,8 +476,8 @@ object OnDeviceAuditor {
         val portsToScan = listOf(
             Triple(80, "HTTP", false),
             Triple(443, "HTTPS (TLS 1.3)", false),
-            Triple(554, "RTSP service", false),
-            Triple(8554, "RTSP alternate", false),
+            Triple(554, "RTSP default port (protocol unverified)", false),
+            Triple(8554, "RTSP alternate port (protocol unverified)", false),
             Triple(8080, "HTTP-Alt", false),
             Triple(8443, "HTTPS-Alt", false),
             Triple(3000, "Node.js / React Dev", false),

@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.65** — Security Recon results now have a dedicated on-phone history with search, run filters, open-port evidence, findings, failures, and an RTSP service-candidate filter. The Security Watchers view can open one watcher's history or all on-device recon results. The single-target auditor checks RTSP ports 554 and 8554. An open RTSP port is only a service observation, not proof of a camera or accessible stream. Phone-owned security flows and scheduled watchers remain local by default; the optional cluster-sharing switch still uploads only new copies when signed in.
+> **v0.65** — Security Recon results now have a dedicated on-phone history with search, run filters, open-port evidence, findings, failures, and a video-service candidate filter. The Security Watchers view can open one watcher's history or all on-device recon results. The single-target auditor checks TCP ports 554 and 8554; a successful connection does not identify the protocol, prove a camera is present, or show a stream. Phone-owned security flows and scheduled watchers remain local by default; the optional cluster-sharing switch still uploads only new copies when signed in.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -41,7 +41,7 @@ So control travels the tailnet; browsing travels the device.
 ## Try it (development APK)
 Download the checked-in [v0.65 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `b32e8eea46581d1aa5544c2f703e243231074e547eac215204debf3c1a5ca9bf`.
+SHA-256: `bcfa41dcc1ef4957d1ffa21d8e395f2e907d9f217e85db9e8ecfc32ae89ace58`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
