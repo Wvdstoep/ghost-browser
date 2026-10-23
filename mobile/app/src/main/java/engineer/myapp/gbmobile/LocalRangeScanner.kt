@@ -20,11 +20,12 @@ class LocalRangeScanner(private val context: Context) {
     val rate = mutableStateOf(10)
     val portPreset = mutableStateOf("Common services")
     val customPorts = mutableStateOf("")
+    val webFollowUp = mutableStateOf(false)
     val savedPublic = mutableStateListOf<PublicRangePreset>().also { it.addAll(PublicRangePresets.load(context)) }
     private val db = RangeScanDb(context)
 
     init {
-        db.read()?.let { selected.value = it.cidr; rate.value = it.attemptsPerSecond }
+        db.read()?.let { selected.value = it.cidr; rate.value = it.attemptsPerSecond; webFollowUp.value = it.webFollowUp }
         refresh()
     }
 
@@ -63,7 +64,7 @@ class LocalRangeScanner(private val context: Context) {
         val ports = if (portPreset.value == "Custom") ScanPorts.parseCustom(customPorts.value)
             else ScanPorts.presets[portPreset.value]
         if (ports.isNullOrEmpty()) return false
-        db.begin(plan, ports, rate.value.coerceIn(2, 50))
+        db.begin(plan, ports, rate.value.coerceIn(2, 50), webFollowUp.value)
         refresh()
         return try {
             ContextCompat.startForegroundService(context, Intent(context, RangeScanService::class.java).setAction(RangeScanService.ACTION_START))

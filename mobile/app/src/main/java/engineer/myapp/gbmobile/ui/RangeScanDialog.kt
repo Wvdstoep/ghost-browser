@@ -159,6 +159,18 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                         Text(ports?.joinToString(" · ") ?: "", color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                SectionSurface {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Identify web services", style = MaterialTheme.typography.titleMedium)
+                            Text("After an open web port is found, request its home page once and save the HTTP status, server header, and page title. No redirects or login attempts.",
+                                color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = scanner.webFollowUp.value, onCheckedChange = { scanner.webFollowUp.value = it },
+                            enabled = !scanner.isRunning())
+                    }
+                }
                 Spacer(Modifier.height(22.dp))
 
                 SectionHeading("CONNECTION RATE")
