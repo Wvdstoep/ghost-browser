@@ -27,4 +27,16 @@ class LocalReconResultPageTest {
         assertTrue(html.contains("No local scan results yet"))
         assertTrue(html.contains("<strong>0</strong><span>Runs"))
     }
+
+    @Test fun rangeHistoryUsesServiceLabelsAndShowsScope() {
+        val html = LocalReconResultPage.render("Range discoveries", listOf(
+            LocalReconResultPage.Run("http://8.8.8.9", "2026-10-23", "completed on this phone", "", -1, 0,
+                false, listOf(LocalReconResultPage.Port(443, "TCP connection accepted")), emptyList(), scope = "8.8.8.8/30")
+        ))
+        assertTrue(html.contains("Open TCP services"))
+        assertTrue(html.contains("Open ports"))
+        assertTrue(html.contains("Scanned scopes"))
+        assertTrue(html.contains("8.8.8.8/30"))
+        assertFalse(html.contains("Video-service candidates"))
+    }
 }

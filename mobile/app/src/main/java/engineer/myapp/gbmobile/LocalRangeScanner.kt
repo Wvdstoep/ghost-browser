@@ -2,6 +2,7 @@ package engineer.myapp.gbmobile
 
 import android.content.Context
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.Inet4Address
@@ -11,7 +12,7 @@ import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.Callable
 
-/** Foreground, phone-owned discovery of a single bounded private subnet. */
+/** Foreground, phone-owned discovery of one bounded IPv4 subnet. */
 class LocalRangeScanner(private val context: Context, private val onUi: ((() -> Unit) -> Unit)) {
     val open = mutableStateOf(false)
     val status = mutableStateOf("Ready")
@@ -22,6 +23,7 @@ class LocalRangeScanner(private val context: Context, private val onUi: ((() -> 
     val rate = mutableStateOf(10)
     val portPreset = mutableStateOf("Common services")
     val customPorts = mutableStateOf("")
+    val savedPublic = mutableStateListOf<PublicRangePreset>().also { it.addAll(PublicRangePresets.load(context)) }
     private val worker = Executors.newSingleThreadExecutor()
     private val probes = Executors.newFixedThreadPool(18)
     @Volatile private var paused = false
@@ -33,16 +35,32 @@ class LocalRangeScanner(private val context: Context, private val onUi: ((() -> 
             NetworkInterface.getNetworkInterfaces().toList().asSequence()
                 .filter { it.isUp && !it.isLoopback && (it.name.startsWith("wlan") || it.name.startsWith("eth")) }
                 .flatMap { it.inetAddresses.toList().asSequence() }.filterIsInstance<Inet4Address>()
-                .mapNotNull { PrivateRangePlan.parse("${it.hostAddress}/24")?.cidr }.firstOrNull()
+                .mapNotNull { RangePlan.parse("${it.hostAddress}/24")?.takeIf { plan -> plan.scope == RangePlan.Scope.PRIVATE }?.cidr }.firstOrNull()
         } catch (_: Exception) { null }
         return listOfNotNull(local?.let { "Current Wi-Fi/LAN" to it }) + listOf(
             "Home 192.168.1" to "192.168.1.0/24", "Home 192.168.0" to "192.168.0.0/24",
             "Private 10" to "10.0.0.0/24", "Private 172" to "172.16.0.0/24")
     }
 
+    fun addPublicPreset(name: String, cidr: String): Boolean {
+        val preset = PublicRangePreset.create(name, cidr) ?: return false
+        if (savedPublic.size >= 32 && savedPublic.none { it.cidr == preset.cidr }) return false
+        savedPublic.removeAll { it.cidr == preset.cidr }
+        savedPublic.add(0, preset)
+        PublicRangePresets.save(context, savedPublic)
+        selected.value = preset.cidr
+        return true
+    }
+
+    fun removePublicPreset(cidr: String) {
+        savedPublic.removeAll { it.cidr == cidr }
+        PublicRangePresets.save(context, savedPublic)
+    }
+
     fun start(): Boolean {
         if (running) return false
-        val plan = PrivateRangePlan.parse(selected.value) ?: return false
+        val plan = RangePlan.parse(selected.value) ?: return false
+        if (plan.scope == RangePlan.Scope.PUBLIC && savedPublic.none { it.cidr == plan.cidr }) return false
         val scanPorts = if (portPreset.value == "Custom") ScanPorts.parseCustom(customPorts.value)
             else ScanPorts.presets[portPreset.value]
         if (scanPorts.isNullOrEmpty()) return false
@@ -63,7 +81,7 @@ class LocalRangeScanner(private val context: Context, private val onUi: ((() -> 
                     val fields = JSONObject().put("recordedAt", System.currentTimeMillis())
                         .put("status", "completed on this phone").put("videoCandidate", ports.any { it == 554 || it == 8554 })
                         .put("openPorts", ports.joinToString(", ")).put("scope", plan.cidr)
-                        .put("source", "On-device private range scan")
+                        .put("source", "On-device ${plan.scope.name.lowercase()} range scan")
                     val evidence = JSONArray().also { arr -> ports.forEach { arr.put(JSONObject().put("port", it).put("service", "TCP connection accepted")) } }
                     LocalReconStore.addResult(context, "local-recon-range", JSONObject()
                         .put("title", "Open TCP ports: $host").put("url", "http://$host")
