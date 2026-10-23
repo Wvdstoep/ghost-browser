@@ -46,13 +46,31 @@
 
     <TextView android:id="@+id/scan_widget_recent"
         android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="12dp" android:background="@drawable/widget_range_result"
-        android:contentDescription="Open range scan results" android:ellipsize="end" android:maxLines="1"
-        android:paddingHorizontal="11dp" android:paddingVertical="9dp"
-        android:text="Choose a range in Ghost Browser" android:textColor="#DAE8F8" android:textSize="12sp" />
+        android:layout_marginTop="10dp" android:contentDescription="Open all range scan results"
+        android:ellipsize="end" android:maxLines="1" android:text="Waiting for an open service"
+        android:textColor="#AFCFFF" android:textSize="11sp" android:textStyle="bold" />
+
+    <TextView android:id="@+id/scan_widget_result_1"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="5dp" android:background="@drawable/widget_range_result"
+        android:contentDescription="Open first scan result" android:ellipsize="end" android:maxLines="1"
+        android:paddingHorizontal="11dp" android:paddingVertical="7dp"
+        android:textColor="#F5F9FF" android:textSize="12sp" android:visibility="gone" />
+    <TextView android:id="@+id/scan_widget_result_2"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:background="@drawable/widget_range_result"
+        android:contentDescription="Open second scan result" android:ellipsize="end" android:maxLines="1"
+        android:paddingHorizontal="11dp" android:paddingVertical="7dp"
+        android:textColor="#E1EEFF" android:textSize="12sp" android:visibility="gone" />
+    <TextView android:id="@+id/scan_widget_result_3"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="4dp" android:background="@drawable/widget_range_result"
+        android:contentDescription="Open third scan result" android:ellipsize="end" android:maxLines="1"
+        android:paddingHorizontal="11dp" android:paddingVertical="7dp"
+        android:textColor="#D4E6FA" android:textSize="12sp" android:visibility="gone" />
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
+        android:layout_marginTop="10dp" android:orientation="horizontal" android:gravity="center_vertical">
         <TextView android:id="@+id/scan_widget_start" android:layout_width="0dp"
             android:layout_height="40dp" android:layout_weight="1" android:background="@drawable/widget_range_primary"
             android:contentDescription="Start or resume scan" android:gravity="center" android:text="Set up"

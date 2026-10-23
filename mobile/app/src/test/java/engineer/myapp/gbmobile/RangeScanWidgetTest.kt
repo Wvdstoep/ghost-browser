@@ -15,9 +15,21 @@ class RangeScanWidgetTest {
         assertEquals(51, state.progress)
         assertEquals(254, state.total)
         assertEquals(3, state.matches)
-        assertTrue(state.recent.contains("192.168.1.19"))
+        assertTrue(state.results.single().label.contains("192.168.1.19"))
+        assertEquals(1L, state.results.single().id)
         assertTrue(state.canPause)
         assertEquals("Running", state.startLabel)
+    }
+
+    @Test fun widgetOffersThreeIndividuallyIdentifiedRecentHosts() {
+        val job = job("running")
+        val evidence = (1L..4L).map { id ->
+            RangeEvidence(id, job.runId, job.cidr, "192.168.1.$id", listOf(80), id,
+                listOf(WebServiceProbe.Finding(80, "http", 200, "Page", "nginx", "")), "new")
+        }
+        val state = RangeScanWidgetState.from(job, evidence, RangeScanWidgetCommand.StartDecision.NONE)
+        assertEquals(listOf(1L, 2L, 3L), state.results.map { it.id })
+        assertTrue(state.results.all { it.label.contains("web") })
     }
 
     @Test fun widgetActionsRequireAValidSavedScopeAndPlan() {

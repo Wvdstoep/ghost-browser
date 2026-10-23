@@ -26,7 +26,7 @@ import engineer.myapp.gbmobile.ScanPorts
 import kotlinx.coroutines.delay
 
 @Composable
-fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit,
+fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit, clusterForResearch: Boolean,
                     onResearch: (RangeEvidence) -> Unit, onOpenApp: (RangeEvidence) -> Unit) {
     if (!scanner.open.value) return
     LaunchedEffect(scanner) {
@@ -37,6 +37,9 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit,
     var input by remember { mutableStateOf(scanner.selected.value) }
     var adding by remember { mutableStateOf(false) }
     var page by remember { mutableIntStateOf(if (scanner.focusEvidenceId.value > 0) 1 else 0) }
+    LaunchedEffect(scanner.focusEvidenceId.value) {
+        page = if (scanner.focusEvidenceId.value > 0) 1 else 0
+    }
     var name by remember { mutableStateOf("") }
     var cidr by remember { mutableStateOf("") }
     val plan = RangePlan.parse(input)?.takeIf { it.scope == scope }
@@ -230,7 +233,7 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit,
             }
             } else Box(Modifier.weight(1f)) {
                 RangeReviewScreen(scanner, onHistory = { scanner.open.value = false; onResults() },
-                    onResearch = onResearch, onOpenApp = onOpenApp)
+                    clusterForResearch = clusterForResearch, onResearch = onResearch, onOpenApp = onOpenApp)
             }
         }
     }

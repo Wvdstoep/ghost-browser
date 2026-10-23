@@ -466,7 +466,9 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     item {
                         if (!ui.connected.value && ui.selectedAgent.value != "recon") ConnectCard(act.onConnect)
-                        else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl, onSelectChip = { composerText = it }, onOpenAppMap = { showAppMap = true }, onOpenAppManager = { showAppManager = true })
+                        else if (chat == null || chat.turns.isEmpty()) EmptyState(agentType = ui.selectedAgent.value, targetUrl = targetAppUrl,
+                            clusterConnected = ui.connected.value, onSelectChip = { composerText = it },
+                            onOpenAppMap = { showAppMap = true }, onOpenAppManager = { showAppManager = true })
                     }
                     if (chat != null) items(chat.turns, key = { it.t.toString() + it.role }) { t ->
                         if (t.role == "user") UserTurn(t) else AssistantTurnCard(t, expanded = stepsOpen == t.t, onToggle = { stepsOpen = if (stepsOpen == t.t) null else t.t }, onCard = act.onCard, onOpenUrl = act.onOpenUrl, decode = ui.decodeImage)
@@ -508,7 +510,8 @@ fun AssistantScreen(ui: AssistantUi, act: AssistantActions, modifier: Modifier =
                 },
                 onClose = { showAppMap = false },
                 onLaunchAudit = { prompt ->
-                    act.onSend(prompt)
+                    if (ui.connected.value) act.onSend(prompt)
+                    else ui.error.value = "Named recon tools require a cluster connection. The on-device baseline is available in Security Recon."
                     showAppMap = false
                 },
                 onOpenAppManager = {
@@ -1091,6 +1094,7 @@ expect fun currentTimeMillisCompat(): Long
 private fun EmptyState(
     agentType: String,
     targetUrl: String,
+    clusterConnected: Boolean,
     onSelectChip: (String) -> Unit,
     onOpenAppMap: () -> Unit,
     onOpenAppManager: () -> Unit = {}
@@ -1149,9 +1153,12 @@ private fun EmptyState(
             }
         }
         Spacer(Modifier.height(18.dp))
-        Text(if (isRecon) "SUGGESTED RECON SCANS (PREFILLED FOR ACTIVE APP)" else "TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
+        Text(if (isRecon && !clusterConnected) "ON-DEVICE RECON · LOCAL BASELINE" else if (isRecon) "SUGGESTED RECON SCANS (PREFILLED FOR ACTIVE APP)" else "TRY", color = cs.onSurfaceVariant, fontSize = 10.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        val promptChips = if (isRecon) RECON_PROMPT_CHIPS else ASSISTANT_PROMPT_CHIPS
+        val promptChips = if (isRecon && !clusterConnected) listOf(StarterPrompt(
+            "On-device baseline recon", "Local ports, HTTP response, headers and observed findings. Named recon tools need a cluster.",
+            "Run a focused on-device baseline security recon for https://target-domain.com"
+        )) else if (isRecon) RECON_PROMPT_CHIPS else ASSISTANT_PROMPT_CHIPS
         promptChips.forEach { chip ->
             val prefilledPrompt = if (isRecon) {
                 chip.prompt.replace("https://target-domain.com", targetUrl.ifBlank { "https://target-domain.com" })

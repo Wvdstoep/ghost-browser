@@ -268,12 +268,22 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
             ACTION_WIDGET_RANGE_OPEN -> {
                 shellUi.screen.value = "browser"
+                rangeScanner.focusEvidenceId.value = -1L
                 rangeScanner.open.value = true
             }
             ACTION_WIDGET_RANGE_RESULTS -> {
                 shellUi.screen.value = "browser"
                 rangeScanner.open.value = false
                 showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(deviceResults(false))))
+            }
+            ACTION_WIDGET_RANGE_EVIDENCE -> {
+                val id = incoming.getLongExtra(EXTRA_WIDGET_RANGE_EVIDENCE_ID, -1L)
+                if (id > 0) {
+                    shellUi.screen.value = "browser"
+                    rangeScanner.focusEvidenceId.value = id
+                    rangeScanner.refreshEvidence()
+                    rangeScanner.open.value = true
+                }
             }
         }
     }
@@ -1991,7 +2001,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun assistantOpen() {
         shellUi.switcherOpen.value = false; shellUi.screen.value = "agent"
-        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank()
         assistantHooksInstall()
         if (!ASSIST.connected.value) return
         assistantOpenLoad()
@@ -2017,7 +2027,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         rangeScanner.open.value = false
         shellUi.switcherOpen.value = false
         shellUi.screen.value = "agent"
-        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank()
         ASSIST.selectedAgent.value = "recon"
         ASSIST.chat.value = null
         assistantChatId = ""
@@ -2756,6 +2766,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(deviceResults(false))))
         },
         rangeScanner = rangeScanner,
+        clusterForResearch = vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank(),
         onResearchRangeEvidence = { item ->
             agentExec.execute {
                 val best = item.web.firstOrNull { it.redirectUrl.isNotBlank() }
@@ -2765,7 +2776,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 runOnUiThread {
                     openRangeSecurityApp(item, url)
                     shellUi.agentBusy.value = true
-                    agentExec.execute { runOnDeviceReconTurn("Run a focused on-device baseline security recon for $url") }
+                    if (vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank()) {
+                        val suite = engineer.myapp.gb.shared.RECON_PROMPT_CHIPS.firstOrNull { it.title.contains("6-Point") }
+                        val prompt = suite?.prompt?.replace("https://target-domain.com", url)
+                            ?: "Perform the six-point defensive reconnaissance suite on $url and report tested and untested stages separately."
+                        assistantSend(prompt)
+                    } else agentExec.execute { runOnDeviceReconTurn("Run a focused on-device baseline security recon for $url") }
                 }
             }
         },
