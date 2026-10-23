@@ -48,6 +48,7 @@ class RangeScanService : Service() {
                     db.status(job.runId, if (worker?.isAlive == true) {
                         if (stopAs == "paused") "pausing" else "stopping"
                     } else stopAs!!)
+                    RangeScanWidgetProvider.refresh(this, force = true)
                     if (worker?.isAlive != true) {
                         db.read()?.let { notifyProgress(it, finished = true) }
                         stopSelf()
@@ -128,15 +129,18 @@ class RangeScanService : Service() {
 
     private fun notifyProgress(job: RangeScanJob, finished: Boolean = false) {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(job, finished))
+        RangeScanWidgetProvider.refresh(this, force = finished)
     }
 
     private fun notification(job: RangeScanJob, finished: Boolean = false): Notification {
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).setAction(ACTION_WIDGET_RANGE_OPEN),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val recent = db.reviewItems(job.runId, 1).firstOrNull()
         val builder = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_search)
             .setContentTitle("Range discovery · ${job.cidr}")
             .setContentText("${job.status.replaceFirstChar { it.uppercase() }} · ${job.nextIndex}/${job.total} hosts · ${job.hits} matches")
+            .setSubText(recent?.let { "Latest: ${it.host} :${it.ports.joinToString(", :")}" } ?: "Tap to manage scan")
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(!finished)
             .setProgress(job.total, job.nextIndex, false)
         if (!finished) {
@@ -172,6 +176,7 @@ class RangeScanService : Service() {
         webProbes.shutdownNow()
         releaseCpu()
         if (worker?.isAlive != true || finishing) db.close()
+        RangeScanWidgetProvider.refresh(this, force = true)
         super.onDestroy()
     }
 

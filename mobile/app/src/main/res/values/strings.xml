@@ -4,4 +4,5 @@
     <string name="go">Go</string>
     <string name="widget_search_description">Open Ghost Browser and search the web</string>
     <string name="widget_watchers_description">See your latest watcher summary and open Watchers</string>
+    <string name="widget_range_scan_description">See live range scan progress and matches; start, pause, stop, or configure the scan</string>
 </resources>

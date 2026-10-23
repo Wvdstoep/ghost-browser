@@ -67,12 +67,14 @@ class LocalRangeScanner(private val context: Context) {
         if (ports.isNullOrEmpty()) return false
         db.begin(plan, ports, rate.value.coerceIn(2, 50), webFollowUp.value)
         refresh()
+        RangeScanWidgetProvider.refresh(context, force = true)
         return try {
             ContextCompat.startForegroundService(context, Intent(context, RangeScanService::class.java).setAction(RangeScanService.ACTION_START))
             true
         } catch (_: Exception) {
             db.read()?.let { db.status(it.runId, "failed") }
             refresh()
+            RangeScanWidgetProvider.refresh(context, force = true)
             false
         }
     }

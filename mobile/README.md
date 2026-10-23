@@ -4,7 +4,11 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.71** — Scan history now opens as a compact results navigator. The overview shows result counts, open ports, web responses or findings, and scopes. Search by host, port, title, or finding; narrow by scope and result type; move through 20 results per page; tap one row to inspect its evidence in a focused sheet. The same layout serves range discoveries, on-device scans, and local watcher results.
+> **v0.72** — Android now offers a third home-screen widget, **Ghost Browser range scan** (4 × 3 cells). It shows the current saved CIDR, scan status, live host progress, match count, and latest matched host/ports. Start or resume the saved job, pause it, stop it, tap the latest result to open scan history, or tap Setup to change the target and ports in the app. Widget taps control the existing on-device foreground scan service; progress updates are pushed while it runs and throttled to about once per second. The foreground notification now opens scan management and shows the latest match.
+
+Widgets cannot take normal CIDR or port text input. Setup opens the existing range-discovery screen for that input. Start reuses the last saved plan only when its scope and ports remain valid; a removed public preset must be configured again.
+
+Scan history opens as a compact results navigator. The overview shows result counts, open ports, web responses or findings, and scopes. Search by host, port, title, or finding; narrow by scope and result type; move through 20 results per page; tap one row to inspect its evidence in a focused sheet. The same layout serves range discoveries, on-device scans, and local watcher results.
 
 Range discovery also has a two-screen protection workflow: configure the scan, then review a searchable evidence inbox. Each observed host can be marked reviewed or dismissed; review state persists across scan runs. A reviewed record can open an editable responsible-disclosure email draft in the phone's email app. Ghost Browser never sends the email itself.
 
@@ -47,9 +51,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.71 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.72 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `a2823710eec9cc4681ce1adca3934b9a2a104fd4520522dc06f42f9993d0070b`.
+SHA-256: `2df909a4745bda53060d02a84f929fd891a7c8f45a2615a183486c65ead1118a`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
