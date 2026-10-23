@@ -181,7 +181,12 @@ val RECON_PROMPT_CHIPS = listOf(
         prompt = "Audit supply chain and infrastructure boundaries on https://target-domain.com. Run gb_audit_dependency_confusion to verify that private packages in package.json are claimed on npmjs.org or mapped in .npmrc, gb_audit_cloud_metadata to test IMDSv1/v2 isolation, and gb_audit_subdomain_takeover for unclaimed CNAME pointers."
     ),
 
-    // ── 4 MULTI-LAYER APPSEC PIPELINES ──
+    // ── STAGED RECON AND MULTI-LAYER APPSEC PIPELINES ──
+    StarterPrompt(
+        title = "Exposure Recon: Port to Proof",
+        subtitle = "Open ports → service fingerprints → routes → read-only proof → RCE status",
+        prompt = "Run the dedicated staged exposure recon on https://target-domain.com using gb_pipeline_exposure_funnel. Report five stages separately: open TCP ports, protocol handshakes and fingerprints, discovered routes with missing-path baseline, read-only proof of unauthenticated exposure, and remote code execution status. Do not infer RCE from an open port or banner; state clearly when RCE was not tested."
+    ),
     StarterPrompt(
         title = "🔐 3-Layer Auth & BOLA Lifecycle Pipeline",
         subtitle = "Layer 1: Public Surface & CORS -> Layer 2: Session Baseline -> Layer 3: Cross-Tenant Replay & CSWSH",

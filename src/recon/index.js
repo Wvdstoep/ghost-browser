@@ -52,6 +52,7 @@ const bolaLifecyclePipeline = require('./bolaLifecyclePipeline');
 const reachabilityProofPipeline = require('./reachabilityProofPipeline');
 const blindDetectionPipeline = require('./blindDetectionPipeline');
 const secondOrderPipeline = require('./secondOrderPipeline');
+const exposureFunnel = require('./exposureFunnel');
 
 // 6 State-of-the-Art Recon Modules
 const subdomainDiscovery = require('./subdomainDiscovery');
@@ -106,6 +107,7 @@ module.exports = {
   ...reachabilityProofPipeline,
   ...blindDetectionPipeline,
   ...secondOrderPipeline,
+  ...exposureFunnel,
   ...subdomainDiscovery,
   ...techFingerprint,
   ...sensitiveFiles,
