@@ -4959,6 +4959,39 @@ function makeRunAgent(client) {
   };
 }
 
+/** Security workflow steps run a fixed recon engine without borrowing a browser session or model. */
+function makeRunRecon() {
+  return async ({ scan, target, prompt }) => {
+    const value = String(target || '').trim();
+    if (!/^https?:\/\//i.test(value)) throw new Error('Security recon needs an HTTP(S) target');
+    const parsed = new URL(value);
+    if (parsed.username || parsed.password) throw new Error('Security recon target cannot contain credentials');
+    if (scan === 'prompt') {
+      if (!settingsStore.read().llmModel) throw new Error('Configure an AI model before running a recon starter prompt');
+      const goal = String(prompt || '').replaceAll('https://target-domain.com', parsed.origin).trim();
+      if (!goal) throw new Error('Recon starter prompt is empty');
+      const chat = assistant.create(`Recon: ${parsed.hostname}`, 'recon');
+      const sent = assistant.send(chat.id, goal);
+      if (sent.error) throw new Error(sent.error);
+      const deadline = Date.now() + 42 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const view = assistant.view(chat.id);
+        const last = view?.turns?.at(-1);
+        if (!view?.live && last?.role === 'assistant') {
+          if (last.status === 'error' || last.status === 'blocked') throw new Error(String(last.text || 'Recon agent could not finish').slice(0, 500));
+          return { target: parsed.origin, chatId: chat.id, status: last.status, report: String(last.text || '').slice(0, 8000) };
+        }
+      }
+      assistant.stop(chat.id);
+      throw new Error('Recon starter prompt timed out');
+    }
+    if (scan === 'exposure') return recon.auditExposureFunnel(parsed.origin);
+    if (scan === 'perimeter') return recon.auditTarget(parsed.origin);
+    throw new Error(`Unsupported security scan: ${scan}`);
+  };
+}
+
 /*
  * THE FLOW LIST CARRIES ITS OUTCOMES. Without them a caller — the Workshop builder above all — sees
  * only shapes and cannot tell a proven automation from an abandoned probe, so it writes another one.
@@ -5043,8 +5076,8 @@ app.post('/v1/workflows/:id/run', authed, (req, res) => {
   }
 
   const startedAtM = Date.now();
-  workflows.drive(wf, { runAgent: makeRunAgent(req.client), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
-    .then((run) => { recordRolePass(wf, startedAtM, run); return triggerFollowUps(wf, req.client.owner); })
+  workflows.drive(wf, { runAgent: makeRunAgent(req.client), runRecon: makeRunRecon(), runVerify: makeRunVerify(req.client), runFetch: makeRunFetch(req.client), runScript: makeRunScript(req.client), input, persist: workflows.persistRun, runId })
+    .then((run) => { if (wf.kind === 'security') recordSecurityPass(wf, startedAtM, run); else { recordRolePass(wf, startedAtM, run); return triggerFollowUps(wf, req.client.owner); } })
     .catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`))
     .finally(() => runningWatchers.delete(wf.id));
   res.json({ runId, status: 'running' });
@@ -5418,7 +5451,7 @@ async function gscWatchTick(wf, owner, opts) {
   if (!due.due) { log.info(`[gsc-watch] ${wf.id}: skipped — ${due.why}`); return 0; }
   const startedAt = Date.now();
   const c = { owner, maxConcurrent: 2, watch: true };
-  const run = await workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId: (opts && opts.runId) || `${wf.id}-${Date.now()}` });
+  const run = await workflows.drive(wf, { runAgent: makeRunAgent(c), runRecon: makeRunRecon(), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId: (opts && opts.runId) || `${wf.id}-${Date.now()}` });
 
   /* What the walk wrote down as it read, off the job itself — so a walk stopped halfway still counts. */
   const findings = gscWatch.findingsOf(run, (id) => { const j = jobs.get(id); return j ? jobs.view(j) : null; });
@@ -5947,7 +5980,7 @@ function operatorContext() {
       if (String((feed.getConfig(wf.id) || {}).mode) === 'gigs') { gigWatchTick(wf, owner, { force: true }).catch((e) => log.error('[gig-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'gsc') { gscWatchTick(wf, owner, { force: true, runId }).catch((e) => log.error('[gsc-watch] ' + wf.id + ': ' + e.message)).finally(() => runningWatchers.delete(wf.id)); return { runId, status: 'running' }; }
       if (String((feed.getConfig(wf.id) || {}).mode) === 'posts') postWatchTick(wf, owner, { force: true }).catch((e) => log.error(`[post-watch] ${wf.id}: ${e.message}`)).finally(() => runningWatchers.delete(wf.id));
-      else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
+      else { const t0 = Date.now(); workflows.drive(wf, { runAgent: makeRunAgent({ ...c, watch: true }), runRecon: makeRunRecon(), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), persist: workflows.persistRun, runId }).then((run) => { if (wf.kind === 'security') recordSecurityPass(wf, t0, run); else { recordRolePass(wf, t0, run); return triggerFollowUps(wf, owner); } }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)).finally(() => runningWatchers.delete(wf.id)); }
       return { runId, status: 'running' };
     },
     setActive: (id, active) => { const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' }; wf.active = !!active; const r = workflows.save(wf, wfRoleNames()); return { id, active: !!((r && r.workflow) || r || wf).active }; },
@@ -5957,7 +5990,7 @@ function operatorContext() {
     saveRole: (name, role) => userRoles.save({ ...(role || {}), id: name || null }, paletteNames()),
     // the validator wants ROLE names (it used to get the TOOL palette here — every agent step "named a role that does not exist")
     saveFlow: (flow) => { const r = workflows.save(flow, wfRoleNames()); return (r && r.workflow) || r; },
-    runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
+    runFlow: (id, input) => { const wf = workflows.read(id); if (!wf) return { error: 'no such flow' }; const runId = `${wf.id}-${Date.now()}`; workflows.drive(wf, { runAgent: makeRunAgent(c), runRecon: makeRunRecon(), runVerify: makeRunVerify(c), runFetch: makeRunFetch(c), runScript: makeRunScript(c), input: input || null, persist: workflows.persistRun, runId }).catch((e) => log.error(`[workflow] ${wf.id} run died: ${e.message}`)); return { runId, status: 'running' }; },
     platforms: () => platforms.withLogins(pool.listProfilesDetailed()),
     people: (platform, name, leadsOnly) => { const people = require('./people'); if (name) { const r = people.load(platform || 'facebook', name); return r ? { ...r, profile: people.profileOf(platform || 'facebook', name) } : { error: 'no memory of that person yet' }; } return { people: people.list(platform || 'facebook', { leadsOnly: !!leadsOnly }).slice(0, 40), outcomes: people.outcomes() }; },
     /* FILES the browser captured (a page's Download button lands in the file store): list them, and put
@@ -6583,6 +6616,25 @@ function recordRolePass(wf, startedAt, run) {
   } catch (e) { /* best effort */ }
 }
 
+function recordSecurityPass(wf, startedAt, run) {
+  try {
+    const feed = require('./watcherFeed');
+    const errors = (run.steps || []).filter(s => s.type === 'recon' && s.status === 'error').map(s => String(s.error || 'scan failed'));
+    let count = 0;
+    for (const step of (run.steps || []).filter(s => s.type === 'recon' && s.status === 'done' && s.output)) {
+      const result = step.output;
+      const target = result.target || wf.name;
+      const details = result.chatId ? { status: String(result.status || 'done'), chatId: String(result.chatId), report: String(result.report || '').slice(0, 1000) }
+        : result.stages ? { openPorts: String(result.stages[0]?.evidence?.length || 0), identifiedServices: String(result.stages[1]?.evidence?.length || 0), routes: String(result.stages[2]?.evidence?.length || 0), verifiedExposures: String(result.stages[3]?.evidence?.length || 0), rce: 'not tested' }
+          : { findings: String(result.findingsCount || (result.findings || []).length || 0), grade: String(result.postureGrade || result.overallGrade || 'unknown') };
+      const item = feed.upsert(wf.id, { title: `Recon: ${target}`, url: String(target), kind: 'security', fields: details });
+      feed.mark(wf.id, item.item.key, { fields: details, readOnly: true, draft: '' });
+      count++;
+    }
+    feed.setConfig(wf.id, { lastPass: { startedAt, endedAt: Date.now(), posts: 0, messages: count, waiting: 0, drafts: 0, verified: 0, corrected: 0, errors } });
+  } catch (e) { log.warn(`[security-watch] could not store results: ${e.message}`); }
+}
+
 async function triggerFollowUps(wf, owner) {
   try {
     if (!wf || !wf.id || !owner) return;
@@ -6609,7 +6661,7 @@ async function triggerFollowUps(wf, owner) {
       const input = { url: it.url, title: it.title, said: (it.fields && (it.fields.detail || it.fields.said)) || '', feedKey: it.key, feedWorkflowId: wf.id };
       let rres = null;
       try {
-        rres = await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
+        rres = await workflows.drive(flow, { runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runRecon: makeRunRecon(), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), input, persist: workflows.persistRun, runId: rid });
       } catch (e) { log.error(`[follow-up] ${flow.id} on ${it.key}: ${e.message}`); }
       /* The draft, if one was made, was written onto the item at propose-time (agent.js draft-only).
          Decide the item's fate from what actually happened. */
@@ -6882,8 +6934,8 @@ async function scheduleTick() {
       continue;
     }
     const startedAtS = Date.now();
-    workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2, watch: true }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
-      .then((run) => { recordRolePass(wf, startedAtS, run); return triggerFollowUps(wf, owner); })
+    workflows.drive(wf, { runAgent: makeRunAgent({ owner, maxConcurrent: 2, watch: true }), runRecon: makeRunRecon(), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), runScript: makeRunScript({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, runId: `${wf.id}-${Date.now()}` })
+      .then((run) => { if (wf.kind === 'security') recordSecurityPass(wf, startedAtS, run); else { recordRolePass(wf, startedAtS, run); return triggerFollowUps(wf, owner); } })
       .catch((e) => log.error(`[workflow-sched] ${wf.id}: ${e.message}`))
       .finally(() => runningWatchers.delete(wf.id));
   }
@@ -7529,7 +7581,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   setTimeout(() => {
     try {
       const owner = consoleOwner(); if (!owner) return;
-      const n = workflows.recoverRuns({ runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, log });
+      const n = workflows.recoverRuns({ runAgent: makeRunAgent({ owner, maxConcurrent: 2 }), runRecon: makeRunRecon(), runVerify: makeRunVerify({ owner, maxConcurrent: 2 }), runFetch: makeRunFetch({ owner, maxConcurrent: 2 }), persist: workflows.persistRun, log });
       if (n) log.info(`[workflow] found ${n} interrupted run(s) to resume`);
     } catch (e) { log.error(`[workflow] recovery failed: ${(e && e.message) || e}`); }
     try { const n = recorder.adopt(); if (n) log.info(`[recorder] closed ${n} recording(s) a restart left open (playable partials)`); } catch (e) { log.warn(`[recorder] adopt: ${e.message}`); }

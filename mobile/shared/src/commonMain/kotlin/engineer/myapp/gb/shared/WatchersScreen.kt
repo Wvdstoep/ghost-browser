@@ -44,6 +44,9 @@ fun WatchersScreen(
     val cs = MaterialTheme.colorScheme
     var formOpen by remember { mutableStateOf(false) }
     var editTarget by remember { mutableStateOf<Watcher?>(null) }
+    var kind by remember { mutableStateOf("browser") }
+    val scopedWatchers = watchers.filter { it.kind == kind }
+    val scopedAutomations = automations.filter { it.kind == kind }
 
     Column(modifier.fillMaxSize().background(cs.background).then(topInset).verticalScroll(rememberScrollState())
         .padding(start = 16.dp, end = 16.dp, bottom = 24.dp, top = 14.dp)) {
@@ -57,8 +60,15 @@ fun WatchersScreen(
         }
         Spacer(Modifier.height(14.dp))
 
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("browser" to "Browser", "security" to "Security Recon").forEach { (value, label) ->
+                FilterChip(selected = kind == value, onClick = { kind = value; formOpen = false; editTarget = null }, label = { Text(label) })
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
         if (formOpen) {
-            WatcherForm(editTarget, roles, profiles, automations,
+            WatcherForm(editTarget, kind, roles, profiles, scopedAutomations,
                 onCancel = { formOpen = false; editTarget = null },
                 onSave = { id, name, mode, role, goal, profile, autoId, iv, fuFlow, fuReplies -> onSave(id, name, mode, role, goal, profile, autoId, iv, fuFlow, fuReplies); formOpen = false; editTarget = null })
         } else {
@@ -67,7 +77,7 @@ fun WatchersScreen(
         }
         Spacer(Modifier.height(18.dp))
 
-        if (watchers.isEmpty()) {
+        if (scopedWatchers.isEmpty()) {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(cs.surface)
                 .border(1.dp, cs.outline, RoundedCornerShape(14.dp)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No watchers yet", style = MaterialTheme.typography.titleMedium, color = cs.onSurface)
@@ -75,25 +85,26 @@ fun WatchersScreen(
                 Text("Create one to watch your notifications, a site, or leads — or run a saved automation — on a schedule, in the background.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
             }
         } else {
-            watchers.forEach { w -> WatcherCard(w, onToggle, onOpenResults, onEdit = { editTarget = w; formOpen = true }); Spacer(Modifier.height(10.dp)) }
+            scopedWatchers.forEach { w -> WatcherCard(w, onToggle, onOpenResults, onEdit = { editTarget = w; formOpen = true }); Spacer(Modifier.height(10.dp)) }
         }
     }
 }
 
 @Composable
 private fun WatcherForm(
-    edit: Watcher?, roles: List<String>, profiles: List<String>, automations: List<FlowInfo>,
+    edit: Watcher?, kind: String, roles: List<String>, profiles: List<String>, automations: List<FlowInfo>,
     onCancel: () -> Unit,
     onSave: (id: String?, name: String, mode: String, role: String, goal: String, profile: String, automationId: String, intervalMin: Int, followUpFlowId: String, followUpRepliesOnly: Boolean) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var name by remember { mutableStateOf(edit?.name ?: "") }
-    var mode by remember { mutableStateOf(edit?.mode ?: "role") }        // role | automation
+    var mode by remember(edit?.id, kind) { mutableStateOf(edit?.mode ?: if (kind == "security") "security" else "role") }
     var role by remember { mutableStateOf(edit?.role?.takeIf { it.isNotBlank() && it != "general" } ?: roles.firstOrNull { it != "(none)" } ?: "") }
     var goal by remember { mutableStateOf(edit?.goal ?: "") }
+    var securityScan by remember { mutableStateOf(edit?.role?.takeIf { it in listOf("exposure", "perimeter") } ?: "exposure") }
     var profile by remember { mutableStateOf(edit?.profile?.ifBlank { null } ?: profiles.firstOrNull() ?: "facebook") }
     var automationId by remember { mutableStateOf("") }
-    var interval by remember { mutableStateOf(edit?.intervalMin ?: 5) }
+    var interval by remember { mutableStateOf(edit?.intervalMin ?: if (kind == "security") 60 else 5) }
     // Routing: each notification kind → its own flow. Older single-flow configs arrive as one route.
     var routes by remember {
         mutableStateOf(
@@ -112,7 +123,7 @@ private fun WatcherForm(
         Text("WHAT SHOULD IT DO?", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-            listOf("role" to "Watch with a role", "automation" to "Run an automation").forEach { (m, lbl) ->
+            (if (kind == "security") listOf("security" to "Run a recon scan", "automation" to "Run an automation") else listOf("role" to "Watch with a role", "automation" to "Run an automation")).forEach { (m, lbl) ->
                 val on = mode == m
                 Box(Modifier.weight(1f).background(if (on) Brand else Color.Transparent).clickable { mode = m }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                     Text(lbl, color = if (on) BrandOn else cs.onSurface, fontSize = 12.sp)
@@ -121,7 +132,17 @@ private fun WatcherForm(
         }
         Spacer(Modifier.height(12.dp))
 
-        if (mode == "role") {
+        if (mode == "security") {
+            Text("TARGET", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("exposure" to "Port to Proof", "perimeter" to "Perimeter").forEach { (value, label) ->
+                    FilterChip(selected = securityScan == value, onClick = { securityScan = value }, label = { Text(label) })
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(goal, { goal = it }, label = { Text("HTTP(S) target") }, placeholder = { Text("https://example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        } else if (mode == "role") {
             Text("ROLE", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
             Spacer(Modifier.height(6.dp))
             PickerField(role.ifBlank { "Pick a role" }, roles.filter { it != "(none)" }) { role = it }
@@ -146,13 +167,14 @@ private fun WatcherForm(
         Text("CHECK EVERY", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-            listOf(1, 5, 10, 15).forEach { m ->
+            (if (kind == "security") listOf(15, 60, 360, 1440) else listOf(1, 5, 10, 15)).forEach { m ->
                 val on = interval == m
                 Box(Modifier.weight(1f).background(if (on) Brand else Color.Transparent).clickable { interval = m }.padding(vertical = 11.dp), contentAlignment = Alignment.Center) {
-                    Text("$m min", color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
+                    Text(if (m >= 1440) "${m / 1440} d" else if (m >= 60) "${m / 60} h" else "$m min", color = if (on) BrandOn else cs.onSurface, fontSize = 13.sp)
                 }
             }
         }
+        if (kind == "browser") {
         // Routing — the engine: each kind of notification this watcher collects goes to its own flow.
         Spacer(Modifier.height(14.dp))
         Text("ROUTING — what happens to each kind of item", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
@@ -196,10 +218,11 @@ private fun WatcherForm(
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { routes = routes + FollowUpRoute(emptyList(), "") }, shape = RoundedCornerShape(9.dp)) { Text(if (routes.isEmpty()) "+ Add a route (e.g. replies → draft a reply)" else "+ Add another route", color = cs.onSurface) }
         Spacer(Modifier.height(14.dp))
-        val valid = name.isNotBlank() && (if (mode == "role") role.isNotBlank() else automationId.isNotBlank())
+        }
+        val valid = name.isNotBlank() && when (mode) { "role" -> role.isNotBlank(); "security" -> goal.startsWith("http://") || goal.startsWith("https://"); else -> automationId.isNotBlank() }
         Row {
             // Routes travel in the legacy followUpFlowId slot as JSON (starts with "[") — the platforms send them as `followUps`.
-            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, role, goal.trim(), profile, automationId, interval, routesToJson(routes).takeIf { it != "[]" } ?: "", false) }, enabled = valid,
+            Button(onClick = { if (valid) onSave(edit?.id, name.trim(), mode, if (mode == "security") securityScan else role, goal.trim(), profile, automationId, interval, if (kind == "security") "" else routesToJson(routes).takeIf { it != "[]" } ?: "", false) }, enabled = valid,
                 modifier = Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text(if (edit == null) "Create watcher" else "Save changes", style = MaterialTheme.typography.labelLarge) }
             Spacer(Modifier.width(10.dp))
@@ -231,7 +254,7 @@ private fun WatcherCard(w: Watcher, onToggle: (String, Boolean) -> Unit, onOpenR
             Column(Modifier.weight(1f)) {
                 Text(w.name, style = MaterialTheme.typography.titleMedium, color = cs.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val what = if (w.mode == "automation") "automation · ${w.stepCount} steps" else w.role
-                Text("$what · every ${w.intervalMin} min · ${w.profile}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (w.kind == "security") "$what · every ${w.intervalMin} min · ${w.goal}" else "$what · every ${w.intervalMin} min · ${w.profile}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Switch(checked = w.active, onCheckedChange = { onToggle(w.id, it) },
                 colors = SwitchDefaults.colors(checkedThumbColor = BrandOn, checkedTrackColor = Brand))

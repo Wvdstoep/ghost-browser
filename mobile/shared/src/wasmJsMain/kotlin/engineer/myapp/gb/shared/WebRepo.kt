@@ -166,14 +166,14 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
             val id = w.str("id"); if (id.isBlank()) return@mapNotNull null
             val nodes = w.arr("nodes")?.objs() ?: emptyList()
             var profile = ""; var role = ""; val goals = ArrayList<String>()
-            nodes.forEach { n -> if (n.str("type") == "agent") {
+            nodes.forEach { n -> if (n.str("type") == "recon") goals.add("${n.str("scan", "exposure")}: ${n.str("target")}") else if (n.str("type") == "agent") {
                 if (profile.isBlank()) profile = n.str("profile")
                 if (role.isBlank()) role = n.str("role")
                 n.str("goal").takeIf { it.isNotBlank() }?.let { goals.add(it) }
             } }
             val runs = w.int("runs")
             val last = if (runs > 0) "$runs runs, last ${w.str("lastRunStatus", "?")}" else "never run"
-            FlowInfo(id, w.str("name", id).ifBlank { id }, nodes.size, last, profile, role, goals, runs, w.str("lastRunStatus"), w.bool("lastVerified"))
+            FlowInfo(id, w.str("name", id).ifBlank { id }, nodes.size, last, profile, role, goals, runs, w.str("lastRunStatus"), w.bool("lastVerified"), w.str("kind", "browser"))
         }
         st.flowsLoading.value = false
     }
@@ -199,6 +199,16 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
         }
         api("POST", "/v1/workflows", "{\"name\":${jsonStr(name)},\"nodes\":$nodes,\"edges\":$edges}")
         st.log("+ created automation: $name"); loadFlows()
+    }
+
+    fun createSecurityFlow(name: String, target: String, scan: String, prompt: String) = scope.launch {
+        val nodes = buildJsonArray {
+            add(buildJsonObject { put("id", "trigger"); put("type", "trigger"); put("label", "Manual") })
+            add(buildJsonObject { put("id", "recon"); put("type", "recon"); put("label", "Security recon"); put("target", target); put("scan", scan); put("prompt", prompt) })
+        }
+        val edges = buildJsonArray { add(buildJsonObject { put("from", "trigger"); put("to", "recon") }) }
+        api("POST", "/v1/workflows", buildJsonObject { put("name", name); put("nodes", nodes); put("edges", edges) }.toString())
+        st.log("+ created security automation: $name"); loadFlows()
     }
 
     // ── Live browser session ──────────────────────────────────────────────────────────────────────
@@ -247,10 +257,10 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
             val out = ArrayList<Watcher>()
             for (w in o.arr("workflows")?.objs() ?: emptyList()) {
                 val nodes = w.arr("nodes")?.objs() ?: emptyList()
-                var trig: JsonObject? = null; var agent: JsonObject? = null; var steps = 0
+                var trig: JsonObject? = null; var agent: JsonObject? = null; var reconNode: JsonObject? = null; var steps = 0
                 for (n in nodes) {
                     if (n.str("type") == "trigger") trig = n.obj("trigger")
-                    else { steps++; if (n.str("type") == "agent" && agent == null) agent = n }
+                    else { steps++; if (n.str("type") == "agent" && agent == null) agent = n; if (n.str("type") == "recon" && reconNode == null) reconNode = n }
                 }
                 val cfg = trig ?: w.obj("trigger")
                 if (cfg == null || cfg.str("type") != "schedule") continue
@@ -261,12 +271,12 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
                 val fcfg = jparse(api("GET", "/v1/watchers/$id/config")) ?: JsonObject(emptyMap())
                 val h = jparse(api("GET", "/v1/watchers/$id/health")) ?: JsonObject(emptyMap())
                 out.add(Watcher(
-                    id, w.str("name", id).ifBlank { id }, agent.str("role").ifBlank { "general" }, agent.str("profile"),
-                    nmin, w.bool("active"), last, 0, agent.str("goal"),
-                    if (steps > 1) "automation" else "role", steps,
+                    id, w.str("name", id).ifBlank { id }, reconNode.str("scan").ifBlank { agent.str("role").ifBlank { "general" } }, agent.str("profile"),
+                    nmin, w.bool("active"), last, 0, reconNode.str("target").ifBlank { agent.str("goal") },
+                    if (steps > 1) "automation" else if (reconNode != null) "security" else "role", steps,
                     fcfg.str("followUpFlowId"), (fcfg.arr("followUpKinds")?.size ?: 0) > 0,
                     followUps = routesOf(fcfg.arr("followUps")), health = healthLine(h),
-                    stale = h.bool("stale"), running = h.bool("running"),
+                    stale = h.bool("stale"), running = h.bool("running"), kind = w.str("kind", if (reconNode != null) "security" else "browser"),
                 ))
             }
             st.watchers.value = out
@@ -301,6 +311,8 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
                 stepNodes.add(buildJsonObject { n.forEach { (kk, vv) -> if (kk != "id") put(kk, vv) }; put("id", nid) })
             }
             if (k == 0) { st.log("that automation has no steps"); return@launch }
+        } else if (mode == "security") {
+            stepNodes.add(buildJsonObject { put("id", "n0"); put("type", "recon"); put("label", "Security recon"); put("scan", role); put("target", goal) })
         } else {
             stepNodes.add(buildJsonObject { put("id", "n0"); put("type", "agent"); put("label", "Watch"); put("role", role); put("profile", profile); put("goal", goal.ifBlank { DEFAULT_WATCH_GOAL }) })
         }

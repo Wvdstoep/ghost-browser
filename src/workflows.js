@@ -40,7 +40,8 @@ const RUNDIR = path.join(BASE, 'workflow-runs');
  * exhausted a weekly allowance, and the master cannot think at all without one. A listing is not a
  * judgement — it is a request and a pattern — so reading it should cost nothing, every day, forever.
  */
-const NODE_TYPES = ['trigger', 'agent', 'store', 'filter', 'branch', 'collect', 'verify', 'check-login', 'fetch', 'extract', 'script'];
+const NODE_TYPES = ['trigger', 'agent', 'recon', 'store', 'filter', 'branch', 'collect', 'verify', 'check-login', 'fetch', 'extract', 'script'];
+const RECON_SCANS = ['exposure', 'perimeter', 'prompt'];
 const FILTER_OPS = ['exists', 'contains', 'eq', 'gt', 'lt'];
 
 function ensure(dir) { try { fs.mkdirSync(dir, { recursive: true }); } catch { /* first write surfaces it */ } }
@@ -89,6 +90,12 @@ function validate(wf, roleNames) {
            resolution in runNode. Everything else is still checked against the real list. */
         if (Array.isArray(roleNames) && n.role && !/\{\{/.test(n.role) && roleNames.indexOf(n.role) < 0) errs.push(`the step "${n.label || n.id}" names a role that does not exist`);
       }
+      if (n.type === 'recon') {
+        if (!RECON_SCANS.includes(n.scan)) errs.push(`the recon step "${n.label || n.id}" needs a supported scan`);
+        if (n.scan === 'prompt' && !String(n.prompt || '').trim()) errs.push(`the recon step "${n.label || n.id}" needs a starter prompt`);
+        if (n.scan === 'prompt' && (wf.trigger?.type === 'schedule' || nodes.some((step) => step.type === 'trigger' && step.trigger?.type === 'schedule'))) errs.push('recon starter prompts are on-demand only; schedule read-only scans');
+        if (!/^https?:\/\//i.test(String(n.target || ''))) errs.push(`the recon step "${n.label || n.id}" needs an HTTP(S) target`);
+      }
       if (n.type === 'store' && !String(n.key || '').trim()) errs.push(`a store step needs a key`);
       if (n.type === 'filter' && !String(n.inKey || '').trim()) errs.push(`the filter "${n.label || n.id}" needs a list to filter`);
       if (n.type === 'branch' && !String(n.inKey || '').trim()) errs.push(`the branch "${n.label || n.id}" needs something to test`);
@@ -126,6 +133,7 @@ function save(wf, roleNames) {
     id,
     name: String(wf.name).trim().slice(0, 120),
     trigger: wf.trigger && typeof wf.trigger === 'object' ? wf.trigger : { type: 'manual' },
+    kind: (wf.nodes || []).some((n) => n && n.type === 'recon') ? 'security' : 'browser',
     nodes: (Array.isArray(wf.nodes) ? wf.nodes : []).slice(0, 100).map(cleanNode),
     edges: (Array.isArray(wf.edges) ? wf.edges : []).slice(0, 200).map((e) => (e.fromPort ? { from: e.from, to: e.to, fromPort: String(e.fromPort).slice(0, 10) } : { from: e.from, to: e.to })),
     /*
@@ -181,6 +189,12 @@ function cleanNode(n) {
       }
       if (Object.keys(v).length) out.values = v;
     }
+  }
+  if (n.type === 'recon') {
+    out.scan = RECON_SCANS.includes(n.scan) ? n.scan : 'exposure';
+    out.target = String(n.target || '').slice(0, 2000);
+    if (n.scan === 'prompt') out.prompt = String(n.prompt || '').slice(0, 8000);
+    out.outKey = slug(n.outKey || n.label || n.id) || n.id;
   }
   if (n.type === 'check-login') {
     out.profile = n.profile ? String(n.profile) : null;
@@ -343,7 +357,7 @@ function seedFromStep(node, st, context, branchOf) {
      — which is free and correct: the data may have moved on since the run was interrupted. */
   if (node.type === 'extract') { if (o && typeof o === 'object' && 'rows' in o) { context[node.id] = o; if (node.outKey && node.outKey !== node.id) context[node.outKey] = o; return true; } return false; }
   if (node.type === 'branch') { if (o && typeof o === 'object' && 'result' in o) { branchOf[node.id] = o.result; return true; } return false; }
-  if (node.type === 'agent') { context[node.id] = o; if (node.outKey && node.outKey !== node.id) context[node.outKey] = o; return true; }
+  if (node.type === 'agent' || node.type === 'recon') { context[node.id] = o; if (node.outKey && node.outKey !== node.id) context[node.outKey] = o; return true; }
   if (node.type === 'verify') { if (o && typeof o === 'object' && 'found' in o) { context[node.id] = o; if (node.outKey && node.outKey !== node.id) context[node.outKey] = o; return true; } return false; }
   if (node.type === 'check-login') { if (o && typeof o === 'object' && 'signedIn' in o) { context[node.id] = o; if (node.outKey && node.outKey !== node.id) context[node.outKey] = o; return true; } return false; }
   return false;   // filter (kept list not persisted) and anything unknown → re-run
@@ -363,7 +377,7 @@ function seedFromStep(node, st, context, branchOf) {
 const PACE_MIN_MS = 60 * 1000, PACE_MAX_MS = 240 * 1000;
 const paceMs = () => PACE_MIN_MS + Math.floor(Math.random() * (PACE_MAX_MS - PACE_MIN_MS));
 
-async function drive(wf, { runAgent, runVerify = null, runFetch = null, runScript = null, input = null, persist = () => {}, now = () => new Date().toISOString(), runId, resume = null,
+async function drive(wf, { runAgent, runRecon = null, runVerify = null, runFetch = null, runScript = null, input = null, persist = () => {}, now = () => new Date().toISOString(), runId, resume = null,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   /*
    * THE RUN'S INPUT. A reply needs its thread and its text; a read needs its room. Seeded under
@@ -492,6 +506,13 @@ async function drive(wf, { runAgent, runVerify = null, runFetch = null, runScrip
       const arr = Array.isArray(list) ? list : [];
       const out = arr.map((it) => (node.field ? getPath(it, node.field) : it)).filter((v) => v != null && v !== '');
       context[node.outKey] = out; step.output = { [node.outKey]: out }; step.status = 'done';
+    } else if (node.type === 'recon') {
+      if (typeof runRecon !== 'function') throw new Error('security recon is unavailable on this server');
+      const target = template(node.target, context);
+      const out = await runRecon({ scan: node.scan, target, prompt: node.prompt, workflowId: wf.id, runId: run.id });
+      context[node.id] = out;
+      if (node.outKey && node.outKey !== node.id) context[node.outKey] = out;
+      step.output = out; step.status = 'done';
     } else if (node.type === 'agent') {
       if (node.forEach) {
         // Run the step once per item in an earlier step's list, {{item}} being that item; the outputs
@@ -666,7 +687,7 @@ function interruptedRuns() {
  * that crash-loops), is marked 'interrupted' instead of retried forever. Fire-and-forget, exactly as
  * a normal run is — recovery never blocks startup.
  */
-function recoverRuns({ runAgent, runVerify = null, runFetch = null, persist = persistRun, now = () => new Date().toISOString(), log } = {}) {
+function recoverRuns({ runAgent, runRecon = null, runVerify = null, runFetch = null, persist = persistRun, now = () => new Date().toISOString(), log } = {}) {
   const runs = interruptedRuns();
   // Only the NEWEST interrupted run of each automation is worth resuming — an older one is a stale
   // duplicate the newer attempt superseded, and resuming both would double the work and (since they
@@ -690,7 +711,7 @@ function recoverRuns({ runAgent, runVerify = null, runFetch = null, persist = pe
   (async () => {
     for (const { run, wf } of resumable) {
       if (log && log.info) log.info(`[workflow] resuming interrupted run ${run.id} (attempt ${run.resumes})`);
-      try { await drive(wf, { runAgent, runVerify, runFetch, persist, runId: run.id, resume: run }); }
+      try { await drive(wf, { runAgent, runRecon, runVerify, runFetch, persist, runId: run.id, resume: run }); }
       catch (e) { try { const r = readRun(run.id) || run; r.status = 'error'; r.error = `resume failed: ${(e && e.message) || e}`; r.ended_at = now(); persist(r); } catch { /* */ } }
     }
   })();

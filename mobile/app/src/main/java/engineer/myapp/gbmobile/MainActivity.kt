@@ -1197,13 +1197,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     if (profile.isBlank()) profile = nn.optString("profile")
                     if (role.isBlank()) role = nn.optString("role")
                     val g = nn.optString("goal"); if (g.isNotBlank()) goals.add(g)
+                } else if (nn.optString("type") == "recon") {
+                    goals.add("${nn.optString("scan", "exposure")}: ${nn.optString("target")}")
                 }
             }
             val runs = w.optInt("runs", 0)
             val verified = w.optBoolean("lastVerified")
             val proof = if (w.optBoolean("verifiedEver")) (if (verified) " · ✓ verified" else " · was verified") else ""
             val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}$proof" else "never run"
-            out.add(engineer.myapp.gbmobile.ui.FlowInfo(id, name, steps, last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified))
+            out.add(engineer.myapp.gbmobile.ui.FlowInfo(id, name, steps, last, profile, role, goals, runs, w.optString("lastRunStatus", ""), verified, w.optString("kind", "browser")))
         }
         shellUi.flows.value = out
         shellUi.flowsHint.value = if (out.isEmpty()) "No automations yet — build one below." else "${out.size} automations — tap Run to fire one."
@@ -1303,6 +1305,44 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  on-device Agent that powers the chat (real WebView, real IP), instead of triggering the cluster.
      *  Goals come from the typed goal, or from the flow definition in the shared cache. */
     private fun runFlowLocally(flowId: String?, goal: String) {
+        // Security flows use the deterministic on-device auditor and need no model or cluster.
+        val reconNode = try {
+            val flows = JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()
+            var found: JSONObject? = null
+            for (i in 0 until flows.length()) {
+                val wf = flows.optJSONObject(i) ?: continue
+                if (wf.optString("id") != flowId) continue
+                val nodes = wf.optJSONArray("nodes") ?: JSONArray()
+                for (j in 0 until nodes.length()) {
+                    val node = nodes.optJSONObject(j)
+                    if (node?.optString("type") == "recon") { found = node; break }
+                }
+                break
+            }
+            found
+        } catch (_: Exception) { null }
+        if (reconNode != null) {
+            val target = goal.trim().takeIf { it.startsWith("https://") || it.startsWith("http://") }
+                ?: reconNode.optString("target")
+            if (!target.startsWith("https://") && !target.startsWith("http://")) {
+                runPhase.value = "done"; runStatus.value = "Enter an HTTP(S) target for local recon."; return
+            }
+            runStatus.value = "Scanning $target on this phone..."
+            agentExec.execute {
+                try {
+                    val report = OnDeviceAuditor.audit(target)
+                    runOnUiThread {
+                        shellUi.reconUi.currentTarget.value = target
+                        shellUi.reconUi.report.value = report
+                        runStatus.value = "Local recon finished: ${report.findingsCount} findings, grade ${report.grade}. Open Security Recon for the report."
+                        runPhase.value = "done"
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread { runStatus.value = "Local recon failed: ${e.message ?: "unknown error"}"; runPhase.value = "done" }
+                }
+            }
+            return
+        }
         val brain = buildBrain()
         if (brain == null) {
             // S3 reroute: no on-device model is a capability miss → hand the run to the cluster instead of
@@ -1445,6 +1485,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val body = JSONObject().put("name", name).put("trigger", JSONObject().put("type", "manual"))
             .put("nodes", nodes).put("edges", edges).toString()
         vm.log("↑ creating automation \"$name\" (${stepLines.size} steps)…")
+        apiCall("POST", "/v1/workflows", body, "flowcreate")
+    }
+
+    private fun createSecurityFlow(name: String, target: String, scan: String, prompt: String) {
+        val nodes = JSONArray().put(JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
+            .put(JSONObject().put("id", "recon").put("type", "recon").put("label", "Security recon").put("target", target).put("scan", scan).put("prompt", prompt))
+        val edges = JSONArray().put(JSONObject().put("from", "trigger").put("to", "recon"))
+        val body = JSONObject().put("name", name).put("nodes", nodes).put("edges", edges).toString()
         apiCall("POST", "/v1/workflows", body, "flowcreate")
     }
 
@@ -2600,6 +2648,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
         onRunFlow = { id, name -> runFlow(id, name) },
         onCreateFlow = { name, steps -> createFlow(name, steps) },
+        onCreateSecurityFlow = { name, target, scan, prompt -> createSecurityFlow(name, target, scan, prompt) },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
@@ -2830,6 +2879,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 nodes.put(copy); edges.put(JSONObject().put("from", prev).put("to", nid)); prev = nid
             }
             if (k == 0) { vm.log("! that automation has no steps to run"); return }
+        } else if (mode == "security") {
+            nodes.put(JSONObject().put("id", "n0").put("type", "recon").put("label", "Security recon").put("scan", role).put("target", goal))
+            edges.put(JSONObject().put("from", "trigger").put("to", "n0"))
         } else {
             val agent = JSONObject().put("id", "n0").put("type", "agent").put("label", "Watch")
                 .put("role", role).put("profile", profile).put("goal", goal.ifBlank { DEFAULT_WATCH_GOAL })
@@ -2871,11 +2923,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             for (i in 0 until arr.length()) {
                 val w = arr.optJSONObject(i) ?: continue
                 val nodes = w.optJSONArray("nodes") ?: JSONArray()
-                var trig: JSONObject? = null; var agent: JSONObject? = null; var steps = 0
+                var trig: JSONObject? = null; var agent: JSONObject? = null; var reconNode: JSONObject? = null; var steps = 0
                 for (j in 0 until nodes.length()) {
                     val n = nodes.optJSONObject(j) ?: continue
                     if (n.optString("type") == "trigger") trig = n.optJSONObject("trigger")
-                    else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n }
+                    else { steps++; if (n.optString("type") == "agent" && agent == null) agent = n; if (n.optString("type") == "recon" && reconNode == null) reconNode = n }
                 }
                 val cfg = trig ?: w.optJSONObject("trigger")
                 if (cfg == null || cfg.optString("type") != "schedule") continue   // only scheduled = a watcher
@@ -2885,13 +2937,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val runs = w.optInt("runs", 0)
                 val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
                 out.add(engineer.myapp.gb.shared.Watcher(
-                    id = id, name = w.optString("name", id), role = agent?.optString("role") ?: "general",
+                    id = id, name = w.optString("name", id), role = reconNode?.optString("scan") ?: agent?.optString("role") ?: "general",
                     profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
-                    lastRun = last, resultCount = 0, goal = agent?.optString("goal") ?: "",
-                    mode = if (steps > 1) "automation" else "role", stepCount = steps,
+                    lastRun = last, resultCount = 0, goal = reconNode?.optString("target") ?: agent?.optString("goal") ?: "",
+                    mode = if (steps > 1) "automation" else if (reconNode != null) "security" else "role", stepCount = steps,
                     followUpFlowId = watcherCfg[id]?.first?.takeIf { !it.startsWith("[") } ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
                     followUps = watcherCfg[id]?.first?.takeIf { it.startsWith("[") }?.let { routesOf(it) } ?: emptyList(),
                     health = watcherHealth[id]?.line ?: "", stale = watcherHealth[id]?.stale ?: false, running = watcherHealth[id]?.running ?: false,
+                    kind = w.optString("kind", if (reconNode != null) "security" else "browser"),
                 ))
             }
             shellUi.watchers.value = out
