@@ -14,7 +14,7 @@ const https = require('https');
 const KNOWN_CVE_DATABASE = [
   {
     product: 'OpenSSH',
-    match: /OpenSSH_([0-8]\.[0-9]|9\.[0-7])/i,
+    match: /OpenSSH_(?:8\.[5-9]|9\.[0-7])p\d+\b/i,
     cve: 'CVE-2024-6387 (regreSSHion)',
     cvss: 8.1,
     severity: 'HIGH',
@@ -213,7 +213,10 @@ function correlateCves(banners) {
           cvss: entry.cvss,
           severity: entry.severity,
           summary: entry.summary,
-          reference: entry.mitre
+          reference: entry.mitre,
+          status: 'version_range_candidate',
+          evidence: b.banner || b.version || null,
+          verification: 'A banner is not proof of an unpatched build or exploitability; check vendor backports and affected platform conditions.'
         });
       }
     }
@@ -250,13 +253,13 @@ async function auditServiceBanners(targetHost, openPorts = []) {
   const dbBanner = activeBanners.find((b) => b.port === 3306);
   if (dbBanner) {
     findings.push({
-      key: 'unprotected_database_port_3306',
-      title: 'Publicly Accessible MariaDB / MySQL Database Service (Port 3306)',
-      severity: 'HIGH',
+      key: 'reachable_database_port_3306',
+      title: 'Reachable MariaDB / MySQL Service (Port 3306)',
+      severity: 'LOW',
       category: 'POSTURE_HARDENING',
-      cwe: 'CWE-306: Missing Authentication for Critical Function',
-      evidence: `Port 3306 TCP is open to the public internet. Daemon banner: ${dbBanner.banner}`,
-      impact: 'Exposing relational database services to the public internet exposes authentication handshakes to automated credential brute force, denial-of-service, and zero-day protocol exploits.',
+      cwe: null,
+      evidence: `A MySQL protocol handshake was observed on ${host}:3306. Banner: ${dbBanner.banner}. Authentication was not tested.`,
+      impact: 'A reachable database service increases attack surface; access controls and whether exposure is intended need owner verification.',
       poc: `curl.exe -v --max-time 3 telnet://${host}:3306`,
       remediation: 'Bind MySQL/MariaDB to 127.0.0.1 or configure UFW/firewall rules to restrict access to trusted application servers.'
     });

@@ -55,6 +55,20 @@ describe('Ghost Browser Recon Engine — perimeter normalization and analysis', 
     expect(target.protocol).toBe('https:');
   });
 
+  it('does not invent domain posture, CVEs or crawl results for an unreachable IP', async () => {
+    const { auditTarget } = require('../src/recon/perimeter');
+    const result = await auditTarget('http://127.0.0.254/');
+    expect(result.cves).toEqual([]);
+    expect(result.crawlEndpoints).toEqual([]);
+    expect(result.score).toBeNull();
+    expect(result.exploitabilityScore).toBeNull();
+    expect(result.assessmentCoverage.dns).toBe(false);
+    expect(result.findings.map((finding) => finding.key)).not.toContain('spf');
+    expect(result.findings.map((finding) => finding.key)).not.toContain('dmarc');
+    expect(result.findings.map((finding) => finding.key)).not.toContain('csp');
+    expect(result.findings.map((finding) => finding.key)).not.toContain('hsts');
+  }, 15000);
+
   it('audits cookie security flags', () => {
     const rawCookies = [
       'session=abc1234; Path=/',
@@ -131,6 +145,13 @@ describe('Ghost Browser Tool and Role Registration', () => {
 });
 
 describe('Ghost Browser 6 State-of-the-Art Recon Modules', () => {
+  it('requires evidence-backed scoring and does not call banners confirmed RCE', () => {
+    const { reconPrompt } = require('../src/operator/reconPrompt');
+    const prompt = reconPrompt();
+    expect(prompt).toContain('A banner is only a claimed version');
+    expect(prompt).toContain('Show Unassessed');
+    expect(prompt).not.toContain('OpenSSH is < 9.8p1');
+  });
   const { extractApexDomain } = require('../src/recon/subdomainDiscovery');
   const { analyzeHomeSignatures, toBaseUrl } = require('../src/recon/techFingerprint');
   const { SENSITIVE_PROBES } = require('../src/recon/sensitiveFiles');
@@ -183,6 +204,15 @@ describe('Ghost Browser 6 State-of-the-Art Recon Modules', () => {
     expect(cves.some((c) => c.cve.includes('CVE-2024-6387'))).toBe(true);
     expect(cves.some((c) => c.cve.includes('CVE-2019-12815'))).toBe(true);
     expect(cves.some((c) => c.cve.includes('CVE-2022-32082'))).toBe(true);
+    expect(cves.find((c) => c.cve.includes('CVE-2024-6387')).status).toBe('version_range_candidate');
+  });
+
+  it('does not label OpenSSH 6.6.1p1 or patched versions as regreSSHion', () => {
+    const banners = ['6.6.1p1', '8.4p1', '9.8p1', '10.0p2'].map((version) =>
+      ({ port: 22, service: 'SSH', banner: `SSH-2.0-OpenSSH_${version}` }));
+    expect(correlateCves(banners).filter((candidate) => candidate.cve.includes('CVE-2024-6387'))).toEqual([]);
+    expect(correlateCves([{ port: 22, service: 'SSH', banner: 'SSH-2.0-OpenSSH_9.7p1' }])
+      .some((candidate) => candidate.cve.includes('CVE-2024-6387'))).toBe(true);
   });
 
   it('Point 5: captures visual proof or safely falls back without crashing', async () => {

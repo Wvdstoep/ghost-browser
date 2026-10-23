@@ -346,7 +346,7 @@ function buildAdvisory(findingKey, customDetails = {}) {
     title: customDetails.title || template.title,
     severity: customDetails.severity || template.severity,
     category,
-    cwe: template.cwe,
+    cwe: customDetails.cwe !== undefined ? customDetails.cwe : template.cwe,
     owasp: template.owasp,
     impact: customDetails.impact || template.impact,
     rootCause: customDetails.rootCause || template.rootCause,
