@@ -39,6 +39,7 @@ fun WatchersScreen(
     onOpenResults: (id: String) -> Unit,
     onRefresh: () -> Unit,
     onOpenAllResults: (() -> Unit)? = null,
+    onOpenRangeScan: (() -> Unit)? = null,
     securitySync: Boolean = false,
     onSecuritySync: (Boolean) -> Unit = {},
     showSecuritySync: Boolean = false,
@@ -86,6 +87,11 @@ fun WatchersScreen(
             OutlinedButton(onClick = onOpenAllResults, modifier = Modifier.fillMaxWidth()) {
                 Text("View all on-device recon results")
             }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (kind == "security" && onOpenRangeScan != null) {
+            Button(onClick = onOpenRangeScan, modifier = Modifier.fillMaxWidth()) { Text("Scan a local network range") }
             Spacer(Modifier.height(12.dp))
         }
 
