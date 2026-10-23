@@ -136,7 +136,7 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                     val tl = act.trainingLine()
                     if (tl.isNotBlank()) { Note(tl); Spacer(Modifier.height(6.dp)) }
                     Ghost("Training pipeline", Modifier.fillMaxWidth(), act.onOpenTraining)
-                    Note("Profiles, automations and roles auto-sync from the cluster on sign-in — one account, same data on every device.")
+                    Note("Browser automations and roles load from the cluster on sign-in. Security Recon flows and watchers stay on this phone unless sharing is enabled in Security Recon.")
                 }
 
                 // 1b ─ Downloads: every file the cluster browser captured, like any browser's list ------

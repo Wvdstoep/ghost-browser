@@ -62,6 +62,9 @@ fun FlowsScreen(
     onRun: (String, String) -> Unit,
     onCreate: (String, String) -> Unit,
     onCreateSecurity: (String, String, String, String) -> Unit,
+    securitySync: Boolean = false,
+    onSecuritySync: (Boolean) -> Unit = {},
+    showSecuritySync: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -97,6 +100,15 @@ fun FlowsScreen(
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("browser" to "Browser", "security" to "Security Recon").forEach { (value, label) ->
                     FilterChip(selected = kind == value, onClick = { kind = value; building = false; selectedId = null; platform = "All" }, label = { Text(label) })
+                }
+            }
+            if (kind == "security" && showSecuritySync) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Share new recon flows with cluster", color = cs.onSurface, fontSize = 13.sp)
+                        Text(if (securitySync) "New flows save on this phone and upload a copy" else "Private to this phone by default", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    }
+                    Switch(checked = securitySync, onCheckedChange = onSecuritySync)
                 }
             }
             if (building) {
