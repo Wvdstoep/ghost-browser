@@ -154,7 +154,8 @@ async function probePorts(host) {
   const probes = COMMON_PORTS.map((p) =>
     probePort(host, p.port).then((res) => ({
       port: p.port,
-      service: p.service,
+      service: res.banner && /^SSH-/.test(res.banner) ? 'SSH' : 'Unidentified TCP service',
+      expectedService: p.service,
       sensitive: !!p.sensitive,
       status: res.status,
       banner: res.banner || null
@@ -282,228 +283,18 @@ function auditCookies(cookies = []) {
  * Executes full reconnaissance on a target and builds structured 4-pillar findings.
  */
 
-/**
- * Correlates real NVD CVEs from detected perimeter headers and network ports.
- */
-function correlatePerimeterCves(host, headers = {}, openPorts = []) {
-  const cves = [];
-  const server = String(headers['server'] || '').toLowerCase();
-  const poweredBy = String(headers['x-powered-by'] || '').toLowerCase();
-  const combined = server + ' ' + poweredBy;
-
-  if (combined.includes('apache')) {
-    cves.push({
-      cveId: 'CVE-2021-41773',
-      component: 'Apache HTTP Server',
-      version: '2.4.49 / 2.4.50',
-      severity: 'CRITICAL',
-      cvss: 9.8,
-      title: 'Apache HTTP Server Path Traversal & Remote Code Execution',
-      description: 'A flaw in path normalization in Apache HTTP Server allows attackers to map URLs to files outside the document root and execute arbitrary binaries when mod_cgi is enabled.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Apache 2.4.51+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2021-41773'
-    });
-    cves.push({
-      cveId: 'CVE-2022-22720',
-      component: 'Apache HTTP Server mod_proxy',
-      version: '2.4.52 and earlier',
-      severity: 'HIGH',
-      cvss: 7.5,
-      title: 'Apache HTTP Request Smuggling via Chunked Header Processing',
-      description: 'Apache HTTP Server allows HTTP request smuggling when handling unclosed chunked headers over keep-alive proxy connections.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Apache 2.4.53+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2022-22720'
-    });
-  }
-
-  if (combined.includes('nginx')) {
-    cves.push({
-      cveId: 'CVE-2021-23017',
-      component: 'Nginx Core DNS Resolver',
-      version: '0.6.18 - 1.20.0',
-      severity: 'HIGH',
-      cvss: 8.8,
-      title: 'Nginx 1-Byte Memory Overwrite in DNS Resolver (RCE Risk)',
-      description: 'A 1-byte memory overwrite vulnerability in the resolver component when processing crafted UDP DNS responses, potentially leading to worker process takeover.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Nginx 1.20.1 / 1.21.0+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2021-23017'
-    });
-    cves.push({
-      cveId: 'CVE-2019-9511',
-      component: 'Nginx HTTP/2 Engine',
-      version: '1.9.5 - 1.16.0',
-      severity: 'HIGH',
-      cvss: 7.5,
-      title: 'HTTP/2 Data Dribble Resource Exhaustion Denial of Service',
-      description: 'An attacker requests a large amount of data over multiple streams and manipulates TCP window sizes to induce unbounded CPU and memory consumption.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Nginx 1.17.3+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2019-9511'
-    });
-  }
-
-  if (combined.includes('php')) {
-    cves.push({
-      cveId: 'CVE-2024-4577',
-      component: 'PHP CGI Engine',
-      version: 'PHP 8.1 / 8.2 / 8.3',
-      severity: 'CRITICAL',
-      cvss: 9.8,
-      title: 'PHP CGI Windows / FastCGI Argument Injection Remote Code Execution',
-      description: 'Best-fit encoding conversion in PHP CGI enables bypass of CVE-2012-1823, allowing arbitrary command execution via query string parameter injection.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to PHP 8.1.29 / 8.2.20 / 8.3.8+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2024-4577'
-    });
-  }
-
-  if (combined.includes('traefik') || combined.includes('envoy')) {
-    cves.push({
-      cveId: 'CVE-2024-45496',
-      component: 'Traefik Ingress Controller',
-      version: '< v3.1.6',
-      severity: 'HIGH',
-      cvss: 7.5,
-      title: 'HTTP Request Smuggling via Content-Length Normalization Flaw',
-      description: 'Incomplete normalization of conflicting Transfer-Encoding and Content-Length headers over HTTP/2 and HTTP/1.1 cleartext connections.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Traefik v3.1.6+',
-      advisoryUrl: 'https://github.com/traefik/traefik/security/advisories'
-    });
-  }
-
-  if (combined.includes('express') || combined.includes('node')) {
-    cves.push({
-      cveId: 'CVE-2022-24999',
-      component: 'Express.js / qs Parser',
-      version: '< 4.18.2',
-      severity: 'HIGH',
-      cvss: 7.5,
-      title: 'Express qs Query String Prototype Pollution Vulnerability',
-      description: 'Unsanitized bracket parameter parsing in the qs query parser allows attackers to inject Object.prototype attributes, triggering DoS or authorization bypass.',
-      source: 'NVD National Vulnerability Database',
-      fixAvailable: 'Upgrade to Express 4.18.2+',
-      advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2022-24999'
-    });
-  }
-
-  // Open Network Ports & Daemon Service CVE Correlation
-  for (const p of (openPorts || [])) {
-    if (p.port === 22 && p.banner) {
-      const m = p.banner.match(/OpenSSH_([0-9.]+)/i);
-      const v = m ? parseFloat(m[1]) : 0;
-      if (v > 0 && v < 9.8) {
-        cves.push({
-          cveId: 'CVE-2024-6387',
-          component: `OpenSSH Daemon (${p.banner})`,
-          version: `OpenSSH ${v} (< 9.8p1)`,
-          severity: 'CRITICAL',
-          cvss: 8.1,
-          title: 'OpenSSH regreSSHion Remote Code Execution Vulnerability',
-          description: 'A signal handler race condition in OpenSSH daemon (sshd) allows unauthenticated remote code execution as root on glibc-based Linux systems.',
-          source: 'NVD / Qualys Security Advisory',
-          poc: `curl.exe -v --max-time 3 telnet://${host}:22`,
-          fixAvailable: 'Upgrade to OpenSSH 9.8p1 or newer, or set LoginGraceTime 0 in sshd_config.',
-          advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2024-6387'
-        });
-      } else {
-        cves.push({
-          cveId: 'CVE-2024-6387',
-          component: `OpenSSH Daemon (${p.banner})`,
-          version: `OpenSSH ${v || '10.0+'} (Patched)`,
-          severity: 'SECURE',
-          cvss: 0.0,
-          title: 'OpenSSH regreSSHion Defense Verified Active',
-          description: `Daemon is running ${p.banner}. This build is patched against the regreSSHion unauthenticated RCE flaw (resolved in >= 9.8p1).`,
-          source: 'NVD / Debian Security Tracker',
-          poc: `curl.exe -v --max-time 3 telnet://${host}:22`,
-          fixAvailable: 'No action required — daemon is up to date.'
-        });
-      }
-    } else if (p.port === 6379) {
-      cves.push({
-        cveId: 'CWE-306',
-        component: 'Redis In-Memory Datastore (Port 6379)',
-        version: 'Redis',
-        severity: 'CRITICAL',
-        cvss: 9.8,
-        title: 'Unauthenticated Redis Cache/Database Exposure',
-        description: 'Redis is publicly reachable without network isolation. An attacker can flush cache, read session keys, or execute Lua sandbox escapes.',
-        source: 'NVD / Redis Security Guidance',
-        poc: `curl.exe --max-time 3 telnet://${host}:6379`,
-        fixAvailable: 'Bind Redis strictly to 127.0.0.1 or configure requirepass in redis.conf.',
-        advisoryUrl: 'https://cwe.mitre.org/data/definitions/306.html'
-      });
-    } else if (p.port === 3306) {
-      cves.push({
-        cveId: 'CWE-284',
-        component: 'MySQL Relational Database (Port 3306)',
-        version: 'MySQL',
-        severity: 'HIGH',
-        cvss: 7.5,
-        title: 'Exposed Database Management Port',
-        description: 'MySQL database listener is directly exposed to public internet ingress, inviting automated brute-force attacks.',
-        source: 'NVD / Oracle MySQL Security Alerts',
-        poc: `curl.exe -v --max-time 3 telnet://${host}:3306`,
-        fixAvailable: 'Bind MySQL strictly to private VPC / internal interfaces or enforce firewall IP allowlists.',
-        advisoryUrl: 'https://cwe.mitre.org/data/definitions/284.html'
-      });
-    } else if (p.port === 6443) {
-      cves.push({
-        cveId: 'CVE-2018-1002105',
-        component: 'Kubernetes API Server (Port 6443)',
-        version: 'Kubernetes',
-        severity: 'CRITICAL',
-        cvss: 9.8,
-        title: 'Kubernetes Control Plane Public Exposure',
-        description: 'Kubernetes master API server is exposed on the public internet. If anonymous authentication is enabled, cluster takeover is possible.',
-        source: 'NVD / Kubernetes Security Announcements',
-        poc: `curl.exe -k -i https://${host}:6443/version`,
-        fixAvailable: 'Restrict access to port 6443 via VPN or authorized IP networks.',
-        advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2018-1002105'
-      });
-    }
-  }
-
-  // Standard TLS & Cryptography Posture
-  cves.push({
-    cveId: 'CVE-2022-3602',
-    component: 'OpenSSL TLS Handshake Engine',
-    version: '3.0.0 - 3.0.6',
-    severity: 'HIGH',
-    cvss: 7.5,
-    title: 'OpenSSL X.509 Email Address 4-Byte Buffer Overflow',
-    description: 'A buffer overrun can be triggered during X.509 certificate verification, specifically in name constraint checking on punycode email addresses.',
-    source: 'NVD National Vulnerability Database',
-    fixAvailable: 'Upgrade to OpenSSL 3.0.7+',
-    advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2022-3602'
-  });
-  cves.push({
-    cveId: 'CVE-2014-3566',
-    component: 'SSLv3 / TLS Transport Protocol',
-    version: 'CBC Block Ciphers',
-    severity: 'MEDIUM',
-    cvss: 4.3,
-    title: 'POODLE Vulnerability in SSLv3 Protocol CBC Mode',
-    description: 'The SSL 3.0 protocol uses nondeterministic CBC padding, allowing an active man-in-the-middle to decrypt plaintext HTTP cookies byte by byte.',
-    source: 'NVD National Vulnerability Database',
-    fixAvailable: 'Enforce TLS 1.2 / TLS 1.3 only; disable SSLv3 and TLS 1.0/1.1',
-    advisoryUrl: 'https://nvd.nist.gov/vuln/detail/CVE-2014-3566'
-  });
-
-  return cves;
-}
-
 async function auditTarget(rawTarget) {
   const target = normalizeTarget(rawTarget);
   const findings = [];
 
   // 1. DNS Reconnaissance
-  const dnsRecords = await inspectDns(target.hostname);
+  const ipTarget = net.isIP(target.hostname) !== 0;
+  const dnsRecords = ipTarget ? { a: [], aaaa: [], mx: [], txt: [], dmarc: [], dkim: [], caa: [], cname: null }
+    : await inspectDns(target.hostname);
+  const dnsAssessed = !ipTarget && Boolean(dnsRecords.a.length || dnsRecords.aaaa.length ||
+    dnsRecords.mx.length || dnsRecords.txt.length || dnsRecords.caa.length || dnsRecords.cname);
 
+  if (dnsAssessed) {
   // Check SPF
   const spf = dnsRecords.txt.find((t) => t.startsWith('v=spf1'));
   if (!spf) {
@@ -546,12 +337,14 @@ async function auditTarget(rawTarget) {
       }
     }
   }
+  }
 
   // 2. HTTP Perimeter & Headers
   const httpProbe = await probeHttp(target.url);
   const headers = httpProbe.headers || {};
   const wafInfo = identifyWaf(headers);
 
+  if (!httpProbe.error && httpProbe.statusCode) {
   // Check CSP
   if (!headers['content-security-policy']) {
     findings.push(buildAdvisory('csp', {
@@ -560,11 +353,11 @@ async function auditTarget(rawTarget) {
   }
 
   // Check HSTS
-  if (!headers['strict-transport-security']) {
+  if (target.protocol === 'https:' && !headers['strict-transport-security']) {
     findings.push(buildAdvisory('hsts', {
       evidence: 'No Strict-Transport-Security header returned.'
     }));
-  } else {
+  } else if (target.protocol === 'https:') {
     const hstsVal = String(headers['strict-transport-security']);
     const maxAgeMatch = hstsVal.match(/max-age=(\d+)/i);
     const maxAge = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 0;
@@ -603,40 +396,40 @@ async function auditTarget(rawTarget) {
       evidence: `${cookieIssues.length} cookie(s) lack HttpOnly, Secure, or SameSite controls: ${cookieIssues.map((c) => c.cookie).join(', ')}`
     }));
   }
+  }
 
   // 3. Port Scan
   const openPorts = await probePorts(target.hostname);
   const sensitivePorts = openPorts.filter((p) => p.sensitive);
   if (sensitivePorts.length > 0) {
-    const hasRawDatabaseOrK8s = sensitivePorts.some((p) => [3306, 5432, 6379, 27017, 6443, 9000, 9100].includes(p.port));
     const portDetails = sensitivePorts.map((p) => `Port ${p.port}/TCP (${p.service})${p.banner ? ` [Banner: ${p.banner}]` : ''} - PoC: nc -zv -w 3 ${target.hostname} ${p.port}`).join('; ');
-    
-    if (hasRawDatabaseOrK8s) {
-      findings.push(buildAdvisory('open_ports', {
-        severity: 'HIGH',
-        evidence: `High-risk internal database/management ports exposed on ${target.hostname}: ${portDetails}`,
-        ports: sensitivePorts
-      }));
-    } else {
-      // Standard administration interface (e.g. SSH 22) - Attack surface exposure, not automatic exploit
-      findings.push(buildAdvisory('open_ports', {
-        title: 'Remote Administration Port Exposed (Attack Surface)',
-        severity: 'LOW',
-        evidence: `Administrative ports reachable on ${target.hostname}: ${portDetails}`,
-        impact: 'An open administration port increases the attack surface for automated brute-force attempts. It is an exposure, not an immediate exploit unless weak credentials or an unpatched CVE exists.',
-        poc: `nc -zv -w 3 ${target.hostname} 22`,
-        ports: sensitivePorts
-      }));
-    }
+    findings.push(buildAdvisory('open_ports', {
+      title: 'Sensitive TCP Ports Reachable (Attack Surface)',
+      severity: 'LOW',
+      category: 'POSTURE_HARDENING',
+      cwe: null,
+      evidence: `Reachable TCP ports on ${target.hostname}: ${portDetails}. Port number alone does not verify the service, authentication, or exploitability.`,
+      impact: 'Reachable administration or database ports may increase attack surface. Verify service identity, access controls, and whether exposure is intended.',
+      ports: sensitivePorts
+    }));
   }
 
   // Calculate Consolidated Grade and Dual Scores
-  const { score, grade, postureScore, postureGrade, exploitabilityScore, exploitabilityGrade } = calculateGrade(findings);
+  const calculated = calculateGrade(findings);
+  const postureAssessed = !ipTarget && dnsAssessed && Boolean(httpProbe.statusCode);
+  const score = postureAssessed ? calculated.score : null;
+  const grade = postureAssessed ? calculated.grade : 'Unassessed';
+  const postureScore = postureAssessed ? calculated.postureScore : null;
+  const postureGrade = postureAssessed ? calculated.postureGrade : 'Unassessed';
+  // This perimeter check does not run exploit verification engines.
+  const exploitabilityScore = null;
+  const exploitabilityGrade = 'Unassessed';
 
   // Normalized Open Ports with state
   const normalizedOpenPorts = openPorts.map((p) => ({
     port: p.port,
     service: p.service,
+    expectedService: p.expectedService,
     banner: p.banner || null,
     sensitive: !!p.sensitive,
     state: 'OPEN',
@@ -652,18 +445,8 @@ async function auditTarget(rawTarget) {
   if (dnsRecords.caa && dnsRecords.caa.length) dnsRecordsList.push({ type: 'CAA', host: target.hostname, value: dnsRecords.caa.map((c) => `${c.flags} ${c.tag} ${c.value}`).join('; '), status: 'OK', note: 'Certificate Authority Authorization' });
   if (dnsRecords.cname) dnsRecordsList.push({ type: 'CNAME', host: target.hostname, value: dnsRecords.cname, status: 'OK', note: 'Canonical name alias' });
 
-  // Correlate real CVEs
-  const cves = correlatePerimeterCves(target.hostname, headers, openPorts);
-
-  // Standard Burp Suite Crawl & Site Map endpoints
-  const crawlEndpoints = [
-    { url: '/', method: 'GET', status: 200, isAuthRequired: false, contentType: 'text/html' },
-    { url: '/login', method: 'GET', status: 200, isAuthRequired: false, contentType: 'text/html' },
-    { url: '/api/v1/auth', method: 'POST', status: 401, isAuthRequired: true, contentType: 'application/json' },
-    { url: '/api/health', method: 'GET', status: 200, isAuthRequired: false, contentType: 'application/json' },
-    { url: '/dashboard', method: 'GET', status: 401, isAuthRequired: true, contentType: 'text/html' },
-    { url: '/admin', method: 'GET', status: 403, isAuthRequired: true, contentType: 'text/html' }
-  ];
+  // Banner and HTTP observations alone do not confirm a CVE.
+  const cves = [];
 
   return {
     target: target.hostname,
@@ -675,6 +458,7 @@ async function auditTarget(rawTarget) {
     postureGrade,
     exploitabilityScore,
     exploitabilityGrade,
+    assessmentCoverage: { dns: dnsAssessed, http: Boolean(httpProbe.statusCode), ports: true, exploitability: false },
     openPorts: normalizedOpenPorts,
     network: {
       openPorts: normalizedOpenPorts
@@ -693,7 +477,7 @@ async function auditTarget(rawTarget) {
     dnsRecords: dnsRecordsList,
     findingsCount: findings.length,
     findings,
-    crawlEndpoints
+    crawlEndpoints: []
   };
 }
 
