@@ -4,7 +4,9 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.67** — Range discovery now has a redesigned full-screen setup and a dedicated open-port results view, reachable from the three-dot menu and Security Watchers. It includes common private-subnet presets and named public-range presets that users add themselves on the phone. Every run is limited to one /24–/32 subnet. Select common, web, remote-access, infrastructure, database, video-service, or custom TCP ports. Runs show progress, pause/resume, pace controls, and phone-stored results. An open TCP port does not identify the application behind it. Known special-use blocks and larger scopes are rejected.
+> **v0.68** — Range discovery runs in its own Android foreground service with a progress notification and Pause, Resume, and Stop actions. Each scanned host and open-port result is checkpointed in on-device SQLite, so an interrupted job can be resumed without starting from the first address. The connection rate is bounded at 2–50 attempts per second with 16 sockets at most; the selected range remains one /24–/32 subnet. Named public ranges are added by the user and stored on the phone. An open TCP port does not identify the application behind it.
+
+The scan service does not generate an Internet-wide address sequence or bundle third-party networks as presets. If Android ends the service, reopening Range discovery marks the stale run paused; tap Resume to continue. Connection-rate settings count TCP attempts, so a host checked on several ports consumes several attempts.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -39,9 +41,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.67 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.68 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `8652b1e33158209eedb9eab85fcdab46a67531ac49685a2d5ae33bae847f95ab`.
+SHA-256: `df9c238cde2d8eda5b7c8e1115674d4db0e96f014b301d91f61627bf7348be18`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)

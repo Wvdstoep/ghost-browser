@@ -55,5 +55,9 @@
             android:name=".GbService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".RangeScanService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

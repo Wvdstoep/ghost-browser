@@ -22,10 +22,14 @@ import engineer.myapp.gbmobile.LocalRangeScanner
 import engineer.myapp.gbmobile.PublicRangePreset
 import engineer.myapp.gbmobile.RangePlan
 import engineer.myapp.gbmobile.ScanPorts
+import kotlinx.coroutines.delay
 
 @Composable
 fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
     if (!scanner.open.value) return
+    LaunchedEffect(scanner) {
+        while (true) { scanner.refresh(); delay(1000) }
+    }
     val cs = MaterialTheme.colorScheme
     var scope by remember { mutableStateOf(RangePlan.parse(scanner.selected.value)?.scope ?: RangePlan.Scope.PRIVATE) }
     var input by remember { mutableStateOf(scanner.selected.value) }
@@ -157,12 +161,12 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                 }
                 Spacer(Modifier.height(22.dp))
 
-                SectionHeading("SCAN PACE")
+                SectionHeading("CONNECTION RATE")
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(2, 10, 25).forEach { value ->
+                    listOf(2, 10, 25, 50).forEach { value ->
                         FilterChip(selected = scanner.rate.value == value, onClick = { scanner.rate.value = value },
-                            enabled = !scanner.isRunning(), label = { Text("Up to $value hosts/s") })
+                            enabled = !scanner.isRunning(), label = { Text("$value attempts/s") })
                     }
                 }
                 Spacer(Modifier.height(16.dp))
@@ -175,7 +179,7 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                     LinearProgressIndicator(progress = { if (scanner.total.value == 0) 0f else scanner.progress.value.toFloat() / scanner.total.value },
                         modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(9.dp))
-                    Text("${scanner.matches.value} hosts with open ports · Results stay on this phone", color = cs.onSurfaceVariant,
+                    Text("${scanner.matches.value} hosts with open ports · Background notification; progress is saved if Android interrupts the job", color = cs.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(Modifier.height(20.dp))
@@ -187,7 +191,10 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                     OutlinedButton(onClick = { scanner.open.value = false; onResults() }) { Text("Results") }
                     Spacer(Modifier.weight(1f))
-                    if (scanner.isRunning()) {
+                    if (scanner.isPaused()) {
+                        OutlinedButton(onClick = scanner::stop) { Text("Stop") }
+                        Button(onClick = scanner::pauseOrResume) { Text("Resume") }
+                    } else if (scanner.isRunning()) {
                         OutlinedButton(onClick = scanner::stop) { Text("Stop") }
                         Button(onClick = scanner::pauseOrResume) { Text(if (scanner.isPaused()) "Resume" else "Pause") }
                     } else Button(onClick = { scanner.selected.value = input; scanner.start() }, enabled = canStart) {

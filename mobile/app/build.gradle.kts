@@ -11,8 +11,8 @@ android {
         applicationId = "engineer.myapp.gbmobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 87
-        versionName = "0.67"
+        versionCode = 88
+        versionName = "0.68"
     }
 
     buildTypes {
@@ -27,6 +27,7 @@ android {
     // rewrite): new screens are Compose, old ones keep working until they are ported.
     buildFeatures { viewBinding = true; compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }   // matches Kotlin 1.9.24
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -57,4 +58,5 @@ dependencies {
     implementation("androidx.compose.runtime:runtime-livedata")   // observeAsState for LiveData in Compose
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
 }
