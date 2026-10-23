@@ -55,7 +55,7 @@ object LocalReconResultPage {
         </style></head><body><header><b>Ghost Browser · Recon</b><button class="close" onclick="GbArtifact.close()">Close</button></header>
         <main><span class="eyebrow">On-device scan history</span><h1>${esc(name)}</h1>
         <p class="intro">Evidence from selected targets. Results remain on this phone unless you separately enable cluster sharing.</p>
-        <div class="notice">A video-service candidate means an RTSP port responded. It does not identify a camera, confirm access, or show a stream.</div>
+        <div class="notice">A video-service candidate means a TCP connection succeeded on a port commonly used for RTSP. The protocol, device type, access, and stream were not verified.</div>
         <section class="stats"><div class="stat"><strong>${runs.size}</strong><span>Runs</span></div><div class="stat"><strong>$candidates</strong><span>Video-service candidates</span></div><div class="stat"><strong>$findings</strong><span>Findings</span></div><div class="stat"><strong>$failures</strong><span>Failed runs</span></div></section>
         <div class="toolbar"><input id="search" type="search" aria-label="Search results" placeholder="Search target or finding">
         <div class="filters"><button class="filter active" data-filter="all">All</button><button class="filter" data-filter="video">Video candidates</button><button class="filter" data-filter="issue">Findings</button><button class="filter" data-filter="fail">Failed</button></div></div>
