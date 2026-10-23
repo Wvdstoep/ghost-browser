@@ -4,7 +4,9 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.72** — Android now offers a third home-screen widget, **Ghost Browser range scan** (4 × 3 cells). It shows the current saved CIDR, scan status, live host progress, match count, and latest matched host/ports. Start or resume the saved job, pause it, stop it, tap the latest result to open scan history, or tap Setup to change the target and ports in the app. Widget taps control the existing on-device foreground scan service; progress updates are pushed while it runs and throttled to about once per second. The foreground notification now opens scan management and shows the latest match.
+> **v0.73** — Each web response in the range evidence inbox now shows its observed IP URL and any HTTP redirect. “Research in Security Apps” saves that one host as a Security App, starts a focused on-device baseline recon, and opens the Security agent with the target selected. An absolute redirect is used as the app address only if its hostname resolves to the scanned IP; otherwise the observed IP URL remains the target. The app has a “View scan evidence” link back to the source card. Further recon prompts can run through the cluster, or through the existing on-device auditor when no cluster is configured.
+
+The v0.72 range-scan home-screen widget remains available (4 × 3 cells). It shows the saved CIDR, progress, match count and latest host; Start, Resume, Pause, Stop and Setup control the existing foreground scan service.
 
 Widgets cannot take normal CIDR or port text input. Setup opens the existing range-discovery screen for that input. Start reuses the last saved plan only when its scope and ports remain valid; a removed public preset must be configured again.
 
@@ -51,9 +53,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.72 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.73 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `2df909a4745bda53060d02a84f929fd891a7c8f45a2615a183486c65ead1118a`.
+SHA-256: `8919e1a34dd5f255cf20f538c0ef7305165ee8df93162d3522ec70f67b6943ee`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.core.content.ContextCompat
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -23,6 +24,7 @@ class LocalRangeScanner(private val context: Context) {
     val webFollowUp = mutableStateOf(false)
     val savedPublic = mutableStateListOf<PublicRangePreset>().also { it.addAll(PublicRangePresets.load(context)) }
     val evidence = mutableStateListOf<RangeEvidence>()
+    val focusEvidenceId = mutableLongStateOf(-1L)
     private val db = RangeScanDb(context)
 
     init {
@@ -116,7 +118,9 @@ class LocalRangeScanner(private val context: Context) {
     }
 
     fun refreshEvidence() {
-        val latest = db.reviewItems()
+        val latest = db.reviewItems().toMutableList()
+        val focusId = focusEvidenceId.value
+        if (focusId > 0 && latest.none { it.id == focusId }) db.reviewItem(focusId)?.let { latest.add(0, it) }
         if (evidence != latest) {
             evidence.clear()
             evidence.addAll(latest)
@@ -125,6 +129,10 @@ class LocalRangeScanner(private val context: Context) {
 
     fun review(id: Long, state: String) {
         if (db.setReviewState(id, state)) refreshEvidence()
+    }
+
+    fun linkResearchApp(id: Long, appId: String) {
+        if (db.linkResearchApp(id, appId)) refreshEvidence()
     }
 
     fun isRunning() = db.read()?.status in listOf("starting", "running", "pausing", "stopping")

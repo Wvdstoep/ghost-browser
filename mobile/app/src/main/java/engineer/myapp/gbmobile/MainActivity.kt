@@ -1997,6 +1997,35 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         assistantOpenLoad()
     }
 
+    private fun openRangeSecurityApp(item: RangeEvidence, discoveredUrl: String = item.researchUrl) {
+        val url = discoveredUrl
+        if (url.isBlank()) return
+        val app = engineer.myapp.gb.shared.ManagedAppTarget(
+            id = "range-${item.id}", name = item.host,
+            url = url, isCluster = false, category = "Range discovery",
+            description = "Observed on ${item.cidr}: ${item.ports.size} open TCP ports · ${item.web.size} web responses",
+            sourceEvidenceId = item.id, sourceCidr = item.cidr
+        )
+        val prefs = getSharedPreferences("gb_app_maps", MODE_PRIVATE)
+        val old = engineer.myapp.gb.shared.decodeManagedApps(prefs.getString("managed_apps_list", "").orEmpty())
+        val existing = old.firstOrNull { it.id == app.id }
+        val saved = app.copy(profile = existing?.profile ?: "default", url = existing?.url ?: url)
+        prefs.edit().putString("managed_apps_list", engineer.myapp.gb.shared.encodeManagedApps(
+            listOf(saved) + old.filterNot { it.id == saved.id }
+        )).putString("active_target_url", saved.url).apply()
+        rangeScanner.linkResearchApp(item.id, saved.id)
+        rangeScanner.open.value = false
+        shellUi.switcherOpen.value = false
+        shellUi.screen.value = "agent"
+        ASSIST.connected.value = vm.clusterUrl.trim().isNotEmpty()
+        ASSIST.selectedAgent.value = "recon"
+        ASSIST.chat.value = null
+        assistantChatId = ""
+        assistantHooksInstall()
+        ASSIST.pendingImport.value = saved
+        shellUi.reconUi.currentTarget.value = saved.url
+    }
+
     /** The platform hooks the shared screens call (save, play, ask, decode) — installed once, from wherever they are first needed. */
     private fun assistantHooksInstall() {
         // a picture in the chat (a generated image, a frame) saves to the phone's Downloads with one tap
@@ -2183,6 +2212,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun assistantSend(text: String) {
         if (text.isBlank()) return
         val currentAgent = shellUi.assistant.selectedAgent.value
+        if (currentAgent == "recon" && vm.clusterUrl.trim().isEmpty()) {
+            ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns +
+                engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis())) }
+            shellUi.agentBusy.value = true
+            agentExec.execute { runOnDeviceReconTurn(text) }
+            return
+        }
         // the owner's words appear at once; the cluster's copy replaces it on the next load
         ASSIST.chat.value?.let { c -> ASSIST.chat.value = c.copy(turns = c.turns + engineer.myapp.gb.shared.AssistantTurn("user", text, System.currentTimeMillis(), spoken = c.live != null)) }
         shellUi.agentBusy.value = true
@@ -2227,7 +2263,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun runOnDeviceReconTurn(prompt: String) {
         val targetMatch = Regex("""(?:https?://)?([a-zA-Z0-9][-a-zA-Z0-9]*(?:\.[a-zA-Z0-9][-a-zA-Z0-9]*)+(?::\d+)?)""").find(prompt)
         val extractedTarget = targetMatch?.groupValues?.get(1)?.trim() ?: ""
-        val target = if (extractedTarget.isNotBlank()) extractedTarget else {
+        val selectedUrl = getSharedPreferences("gb_app_maps", MODE_PRIVATE).getString("active_target_url", "").orEmpty()
+        val target = if (selectedUrl.isNotBlank() && prompt.contains(selectedUrl)) selectedUrl else if (extractedTarget.isNotBlank()) extractedTarget else {
             shellUi.reconUi.currentTarget.value.trim().ifBlank {
                 currentUrl().takeIf { it != HOME && it.startsWith("http") }?.let { try { java.net.URI(it).host } catch (e: Exception) { null } } ?: "my-app.engineer"
             }
@@ -2688,6 +2725,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             onClose = { shellUi.screen.value = "browser" },
             onOpenUrl = { u -> shellUi.screen.value = "browser"; load(u) },
             onConnect = { openSettings() },
+            onViewRangeEvidence = { id ->
+                rangeScanner.focusEvidenceId.value = id
+                rangeScanner.refreshEvidence()
+                rangeScanner.open.value = true
+            },
         ),
         aiModel = engineer.myapp.gb.shared.AiModelActions(
             onLoad = { agentExec.execute { aiModelLoad() } },
@@ -2714,6 +2756,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(deviceResults(false))))
         },
         rangeScanner = rangeScanner,
+        onResearchRangeEvidence = { item ->
+            agentExec.execute {
+                val best = item.web.firstOrNull { it.redirectUrl.isNotBlank() }
+                    ?: item.web.firstOrNull { it.scheme == "https" }
+                    ?: item.web.firstOrNull()
+                val url = if (best == null) item.researchUrl else WebServiceProbe.confirmedUrl(item.host, best)
+                runOnUiThread {
+                    openRangeSecurityApp(item, url)
+                    shellUi.agentBusy.value = true
+                    agentExec.execute { runOnDeviceReconTurn("Run a focused on-device baseline security recon for $url") }
+                }
+            }
+        },
+        onOpenRangeApp = { item -> openRangeSecurityApp(item) },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },

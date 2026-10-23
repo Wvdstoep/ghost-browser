@@ -39,4 +39,13 @@ class AppMapRegressionTest {
         val map = parseAppMapFromChat("https://example.org", listOf(turn))
         assertTrue(map.probedEndpoints.isEmpty())
     }
+
+    @Test
+    fun rangeDiscoveryAppRetainsItsEvidenceLink() {
+        val source = ManagedAppTarget("range-42", "192.0.2.8", "http://192.0.2.8/", false,
+            category = "Range discovery", sourceEvidenceId = 42, sourceCidr = "192.0.2.0/24")
+        val decoded = decodeManagedApps(encodeManagedApps(listOf(source))).single()
+        assertEquals(source, decoded)
+        assertEquals(-1, decodeManagedApps("old|||Legacy|||https://legacy.example").single().sourceEvidenceId)
+    }
 }

@@ -19,13 +19,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import engineer.myapp.gbmobile.LocalRangeScanner
+import engineer.myapp.gbmobile.RangeEvidence
 import engineer.myapp.gbmobile.PublicRangePreset
 import engineer.myapp.gbmobile.RangePlan
 import engineer.myapp.gbmobile.ScanPorts
 import kotlinx.coroutines.delay
 
 @Composable
-fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
+fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit,
+                    onResearch: (RangeEvidence) -> Unit, onOpenApp: (RangeEvidence) -> Unit) {
     if (!scanner.open.value) return
     LaunchedEffect(scanner) {
         while (true) { scanner.refresh(); delay(1000) }
@@ -34,7 +36,7 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
     var scope by remember { mutableStateOf(RangePlan.parse(scanner.selected.value)?.scope ?: RangePlan.Scope.PRIVATE) }
     var input by remember { mutableStateOf(scanner.selected.value) }
     var adding by remember { mutableStateOf(false) }
-    var page by remember { mutableIntStateOf(0) }
+    var page by remember { mutableIntStateOf(if (scanner.focusEvidenceId.value > 0) 1 else 0) }
     var name by remember { mutableStateOf("") }
     var cidr by remember { mutableStateOf("") }
     val plan = RangePlan.parse(input)?.takeIf { it.scope == scope }
@@ -227,7 +229,8 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                 }
             }
             } else Box(Modifier.weight(1f)) {
-                RangeReviewScreen(scanner, onHistory = { scanner.open.value = false; onResults() })
+                RangeReviewScreen(scanner, onHistory = { scanner.open.value = false; onResults() },
+                    onResearch = onResearch, onOpenApp = onOpenApp)
             }
         }
     }

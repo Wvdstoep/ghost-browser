@@ -42,4 +42,15 @@ class WebServiceProbeTest {
         }
         assertEquals(200, WebServiceProbe.parse(80, "http", WebServiceProbe.readBounded(stream))?.status)
     }
+
+    @Test fun storesOnlyAbsoluteHttpRedirectAsAnUnverifiedAddress() {
+        val response = "HTTP/1.1 301 Moved\r\nLocation: https://site.example/path\r\n\r\n"
+        val finding = WebServiceProbe.parse(443, "https", response)!!
+        assertEquals("https://192.0.2.3/", finding.url("192.0.2.3"))
+        assertEquals("https://site.example/path", finding.redirectUrl)
+        assertEquals("https://site.example/path", WebServiceProbe.confirmedUrl("192.0.2.3", finding) { listOf("192.0.2.3") })
+        assertEquals("https://192.0.2.3/", WebServiceProbe.confirmedUrl("192.0.2.3", finding) { listOf("203.0.113.9") })
+        assertEquals("", WebServiceProbe.parse(80, "http", response.replace("https://site.example/path", "javascript:bad()"))!!.redirectUrl)
+        assertEquals("", WebServiceProbe.parse(80, "http", response.replace("https://site.example/path", "https://user:pass@site.example/"))!!.redirectUrl)
+    }
 }

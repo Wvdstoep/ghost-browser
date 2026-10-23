@@ -5,6 +5,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.io.InputStream
 import java.net.URL
+import java.net.InetAddress
 import java.time.Instant
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLSocket
@@ -14,12 +15,24 @@ import javax.net.ssl.SSLSocketFactory
 object WebServiceProbe {
     private val webPorts = setOf(80, 443, 8000, 8080, 8081, 8443, 8888)
     data class Finding(val port: Int, val scheme: String, val status: Int, val title: String, val server: String, val poweredBy: String,
-                       val contact: String = "") {
+                       val contact: String = "", val redirectUrl: String = "") {
+        fun url(host: String): String = "$scheme://$host${if (port == 80 && scheme == "http" || port == 443 && scheme == "https") "" else ":$port"}/"
         fun label(): String = listOf("${scheme.uppercase()} $status", server, poweredBy, title.takeIf { it.isNotBlank() }?.let { "\"$it\"" })
             .filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
     }
 
     fun supports(port: Int) = port in webPorts
+
+    /** A redirect becomes a research target only if its hostname currently resolves to the scanned IP. */
+    internal fun confirmedUrl(host: String, finding: Finding,
+                              resolve: (String) -> List<String> = { name -> InetAddress.getAllByName(name).mapNotNull { it.hostAddress } }): String {
+        val candidate = finding.redirectUrl.takeIf { it.isNotBlank() } ?: return finding.url(host)
+        return try {
+            val uri = java.net.URI(candidate)
+            if (uri.scheme?.lowercase() in setOf("http", "https") && uri.userInfo == null &&
+                !uri.host.isNullOrBlank() && resolve(uri.host).contains(host)) candidate else finding.url(host)
+        } catch (_: Exception) { finding.url(host) }
+    }
 
     fun inspect(host: String, port: Int): Finding? {
         if (!supports(port)) return null
@@ -99,11 +112,20 @@ object WebServiceProbe {
         val headers = response.substring(0, boundary).split("\r\n")
         val status = Regex("^HTTP/\\d(?:\\.\\d)?\\s+(\\d{3})").find(headers.firstOrNull().orEmpty())
             ?.groupValues?.get(1)?.toIntOrNull() ?: return null
-        fun header(name: String) = headers.drop(1).firstOrNull { it.startsWith("$name:", ignoreCase = true) }
-            ?.substringAfter(':')?.trim()?.take(100).orEmpty()
+        fun rawHeader(name: String) = headers.drop(1).firstOrNull { it.startsWith("$name:", ignoreCase = true) }
+            ?.substringAfter(':')?.trim().orEmpty()
+        fun header(name: String) = rawHeader(name).take(100)
         val body = response.substring(boundary + 4)
         val title = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .find(body)?.groupValues?.get(1)?.replace(Regex("\\s+"), " ")?.trim()?.take(120).orEmpty()
-        return Finding(port, scheme, status, title, header("Server"), header("X-Powered-By"))
+        val location = rawHeader("Location")
+        val redirect = if (status in 300..399 && location.length in 1..2048) {
+            runCatching {
+                val uri = java.net.URI(location)
+                if (uri.isAbsolute && uri.scheme.lowercase() in setOf("http", "https") &&
+                    !uri.host.isNullOrBlank() && uri.userInfo == null) uri.toASCIIString() else ""
+            }.getOrDefault("")
+        } else ""
+        return Finding(port, scheme, status, title, header("Server"), header("X-Powered-By"), redirectUrl = redirect)
     }
 }
