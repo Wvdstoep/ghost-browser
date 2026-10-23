@@ -266,6 +266,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 shellUi.openWatchersTab.value = true
                 loadWatchers()
             }
+            ACTION_WIDGET_RANGE_OPEN -> {
+                shellUi.screen.value = "browser"
+                rangeScanner.open.value = true
+            }
+            ACTION_WIDGET_RANGE_RESULTS -> {
+                shellUi.screen.value = "browser"
+                rangeScanner.open.value = false
+                showArtifact(LocalReconResultPage.render("Range discoveries", localReconResultRuns(deviceResults(false))))
+            }
         }
     }
 
