@@ -1344,11 +1344,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     val report = OnDeviceAuditor.audit(target)
                     runOnUiThread {
                         if (flowId?.startsWith("local-recon-") == true) {
-                            LocalReconStore.addResult(this, flowId, JSONObject().put("title", "Recon: $target")
-                                .put("url", target).put("kind", "security")
-                                .put("fields", JSONObject().put("time", report.timestamp).put("status", "completed on this phone")
-                                    .put("grade", report.grade).put("findings", report.findingsCount)
-                                    .put("openPorts", report.openPorts.filter { it.state.equals("OPEN", true) }.joinToString(", ") { it.port.toString() })))
+                            LocalReconStore.addResult(this, flowId, LocalReconResultRecord.completed(target, report))
                             refreshLocalWorkflows()
                         }
                         shellUi.reconUi.currentTarget.value = target
@@ -2699,6 +2695,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             if (value && vm.clusterKey.isBlank()) vm.log("! Sign in to the cluster before enabling recon sharing")
             else { securitySync = value; vm.syncSecurityRecon = value }
         },
+        onOpenAllReconResults = {
+            pendingResults = "local-recon-all" to "All on-device scans"
+            showArtifact(LocalReconResultPage.render("All on-device scans", localReconResultRuns(LocalReconStore.allResults(this))))
+        },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
@@ -2977,12 +2977,34 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val name = shellUi.watchers.value.firstOrNull { it.id == id }?.name ?: "Watcher"
         pendingResults = id to name
         if (id.startsWith("local-recon-")) {
-            showArtifact(buildArtifactHtml(name, LocalReconStore.results(this, id), emptyList()))
+            showArtifact(LocalReconResultPage.render(name, localReconResultRuns(LocalReconStore.results(this, id))))
             return
         }
         vm.log("↑ opening results for \"$name\"…")
         apiCall("GET", "/v1/watchers/$id/feed", null, "wfeed")   // step 1: the deduped feed
     }
+
+    private fun localReconResultRuns(items: JSONArray): List<LocalReconResultPage.Run> =
+        (0 until items.length()).mapNotNull { index ->
+            val item = items.optJSONObject(index) ?: return@mapNotNull null
+            val fields = item.optJSONObject("fields") ?: JSONObject()
+            val ports = item.optJSONArray("ports") ?: JSONArray()
+            val parsedPorts = (0 until ports.length()).mapNotNull { i -> ports.optJSONObject(i)?.let { LocalReconResultPage.Port(it.optInt("port"), it.optString("service")) } }
+                .ifEmpty { fields.optString("openPorts").split(',').mapNotNull { it.trim().toIntOrNull()?.let { port -> LocalReconResultPage.Port(port, "Previously observed open port") } } }
+            val findings = item.optJSONArray("findings") ?: JSONArray()
+            val time = fields.optString("time").ifBlank {
+                val instant = fields.optLong("recordedAt", 0)
+                if (instant <= 0) "Time unavailable" else java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(instant))
+            }
+            LocalReconResultPage.Run(
+                target = item.optString("url"), time = time, status = fields.optString("status"),
+                grade = fields.optString("grade"), score = fields.optInt("score", -1),
+                findingCount = fields.optInt("findings"), videoCandidate = fields.optBoolean("videoCandidate"),
+                ports = parsedPorts,
+                findings = (0 until findings.length()).mapNotNull { i -> findings.optJSONObject(i)?.let { LocalReconResultPage.Finding(it.optString("severity"), it.optString("title"), it.optString("impact")) } },
+                error = fields.optString("error"),
+            )
+        }
 
     /** Parse GET /v1/workflows → the ones with a schedule trigger are watchers. */
     private fun parseWatchers(data: String, fetchCfg: Boolean = true) {
