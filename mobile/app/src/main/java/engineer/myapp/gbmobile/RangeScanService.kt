@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 class RangeScanService : Service() {
     private val db by lazy { RangeScanDb(applicationContext) }
     private val probes = Executors.newFixedThreadPool(16)
+    private val webProbes = Executors.newSingleThreadExecutor()
     @Volatile private var stopAs: String? = null
     @Volatile private var worker: Thread? = null
     @Volatile private var finishing = false
@@ -101,7 +102,10 @@ class RangeScanService : Service() {
                     } catch (_: Exception) { null }
                 } }
                 val open = probes.invokeAll(tasks).mapNotNull { it.get() }
-                db.checkpoint(job, host, open, job.nextIndex + 1)
+                val web = if (job.webFollowUp && stopAs == null) open.filter(WebServiceProbe::supports)
+                    .mapNotNull { port -> webProbes.submit(Callable { WebServiceProbe.inspect(host, port) }).get() }
+                    else emptyList()
+                db.checkpoint(job, host, open, job.nextIndex + 1, web)
                 val current = db.read() ?: break
                 if (current.nextIndex == current.total || current.nextIndex % 4 == 0) notifyProgress(current)
             }
@@ -165,6 +169,7 @@ class RangeScanService : Service() {
             db.read()?.let { db.status(it.runId, "paused") }
         }
         probes.shutdownNow()
+        webProbes.shutdownNow()
         releaseCpu()
         if (worker?.isAlive != true || finishing) db.close()
         super.onDestroy()
