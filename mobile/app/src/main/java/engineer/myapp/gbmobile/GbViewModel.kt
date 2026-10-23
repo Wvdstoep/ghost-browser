@@ -43,6 +43,8 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var approvedCookieSync: Set<String>
         get() = sp.getStringSet("approvedCookieSync", emptySet())?.toSet() ?: emptySet()
         set(v) { sp.edit().putStringSet("approvedCookieSync", v.toSet()).apply() }
+    var syncSecurityRecon: Boolean get() = sp.getBoolean("syncSecurityRecon", false)
+        set(v) { sp.edit().putBoolean("syncSecurityRecon", v).apply() }
 
     // --- cached cluster data (so fetched platforms/flows persist across launches) ---
     var platformsJson: String get() = sp.getString("platformsCache", "") ?: ""

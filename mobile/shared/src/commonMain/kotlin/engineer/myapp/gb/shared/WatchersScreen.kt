@@ -38,6 +38,9 @@ fun WatchersScreen(
     onToggle: (id: String, active: Boolean) -> Unit,
     onOpenResults: (id: String) -> Unit,
     onRefresh: () -> Unit,
+    securitySync: Boolean = false,
+    onSecuritySync: (Boolean) -> Unit = {},
+    showSecuritySync: Boolean = false,
     modifier: Modifier = Modifier,
     topInset: Modifier = Modifier,
 ) {
@@ -46,7 +49,7 @@ fun WatchersScreen(
     var editTarget by remember { mutableStateOf<Watcher?>(null) }
     var kind by remember { mutableStateOf("browser") }
     val scopedWatchers = watchers.filter { it.kind == kind }
-    val scopedAutomations = automations.filter { it.kind == kind }
+    val scopedAutomations = automations.filter { it.kind == kind && (kind != "security" || it.goals.none { goal -> goal.startsWith("prompt:") }) }
 
     Column(modifier.fillMaxSize().background(cs.background).then(topInset).verticalScroll(rememberScrollState())
         .padding(start = 16.dp, end = 16.dp, bottom = 24.dp, top = 14.dp)) {
@@ -66,6 +69,17 @@ fun WatchersScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+
+        if (kind == "security" && showSecuritySync) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Share new recon watchers with cluster", color = cs.onSurface, fontSize = 13.sp)
+                    Text(if (securitySync) "Phone schedule stays active; a cluster copy is uploaded" else "Runs and results stay on this phone", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                }
+                Switch(checked = securitySync, onCheckedChange = onSecuritySync)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
 
         if (formOpen) {
             WatcherForm(editTarget, kind, roles, profiles, scopedAutomations,

@@ -143,6 +143,8 @@ class ShellActions(
     val onRunFlow: (String, String) -> Unit,
     val onCreateFlow: (String, String) -> Unit,
     val onCreateSecurityFlow: (String, String, String, String) -> Unit,
+    val securitySync: Boolean,
+    val onSecuritySync: (Boolean) -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
     val onOpenLearn: (String) -> Unit,
@@ -285,13 +287,16 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                                 flows = shell.flows.value, onLoad = act.onLoadFlows,
                                 onRun = { id, name -> act.onRunFlow(id, name) }, onCreate = { n, s -> act.onCreateFlow(n, s) },
                                 onCreateSecurity = { n, t, s, p -> act.onCreateSecurityFlow(n, t, s, p) },
+                                securitySync = act.securitySync, onSecuritySync = act.onSecuritySync, showSecuritySync = true,
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             ) else engineer.myapp.gb.shared.WatchersScreen(
                                 watchers = shell.watchers.value, roles = shell.watcherRoles.value, profiles = shell.watcherProfiles.value,
                                 automations = shell.flows.value, loading = shell.watchersLoading.value,
                                 onSave = { id, n, m, r, g, p, aid, iv, fuF, fuR -> act.onSaveWatcher(id, n, m, r, g, p, aid, iv, fuF, fuR) },
                                 onToggle = { id, a -> act.onToggleWatcher(id, a) }, onOpenResults = { act.onOpenWatcherResults(it) },
-                                onRefresh = act.onLoadWatchers, modifier = Modifier.weight(1f).fillMaxWidth(),
+                                onRefresh = act.onLoadWatchers, securitySync = act.securitySync,
+                                onSecuritySync = act.onSecuritySync, showSecuritySync = true,
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
                             )
                         }
                     }

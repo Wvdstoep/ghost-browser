@@ -38,6 +38,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.graphics.asImageBitmap
 import engineer.myapp.gb.shared.AgentCore
@@ -60,6 +62,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private lateinit var b: ActivityMainBinding
     private val vm: GbViewModel by viewModels()
+    private var securitySync by mutableStateOf(false)
 
     // --- tabs ---
     private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
@@ -161,6 +164,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        securitySync = vm.syncSecurityRecon && vm.clusterKey.isNotBlank()
+        if (!securitySync) vm.syncSecurityRecon = false
         b = ActivityMainBinding.inflate(layoutInflater)   // bare root FrameLayout (S6: UI is all Compose)
         setContentView(b.root)
         settingsUi.themeMode.value = vm.themeMode
@@ -212,7 +217,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
 
         // show any persisted flows immediately
-        if (vm.flowsJson.isNotBlank()) try { renderFlows(JSONObject(vm.flowsJson).optJSONArray("workflows") ?: JSONArray()) } catch (e: Exception) {}
+        refreshLocalWorkflows()
+        LocalReconWorker.schedule(this)
         if (vm.platformsJson.isNotBlank()) try { renderPlatforms(JSONObject(vm.platformsJson).optJSONArray("presets") ?: JSONArray()) } catch (e: Exception) {}
         renderRoleSpinner()
         observe()
@@ -1221,10 +1227,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun showRunSheet(id: String, name: String) {
         runFlowId.value = id; runFlowName.value = name
         runPhase.value = "pick"; runStatus.value = ""
-        runDevices.value = baseRunDevices()
+        runDevices.value = if (id.startsWith("local-recon-")) baseRunDevices().filter { it.id == "local" } else baseRunDevices()
         runVisible.value = true
         runHost?.let { it.visibility = View.VISIBLE; it.bringToFront() }
-        if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/device/list", null, "run_devices")
+        if (!id.startsWith("local-recon-") && vm.clusterKey.isNotBlank()) apiCall("GET", "/v1/device/list", null, "run_devices")
     }
 
     /** The always-available targets before the hub answers: This phone (local engine), Cluster, Auto. */
@@ -1273,6 +1279,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun onRunTarget(target: String, goal: String) {
         val id = runFlowId.value
         runPhase.value = "running"; runActivity.value = emptyList()
+        if (id?.startsWith("local-recon-") == true) {
+            runStatus.value = "Running this phone's recon automation..."
+            runFlowLocally(id, goal)
+            return
+        }
         if (target == "auto") {
             // S4: the ring decides from the shared capability registry (this phone + the desktop node + …),
             // matched to the flow's needs — not a local guess. Falls back to a local guess if the router
@@ -1332,6 +1343,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 try {
                     val report = OnDeviceAuditor.audit(target)
                     runOnUiThread {
+                        if (flowId?.startsWith("local-recon-") == true) {
+                            LocalReconStore.addResult(this, flowId, JSONObject().put("title", "Recon: $target")
+                                .put("url", target).put("kind", "security")
+                                .put("fields", JSONObject().put("time", report.timestamp).put("status", "completed on this phone")
+                                    .put("grade", report.grade).put("findings", report.findingsCount)
+                                    .put("openPorts", report.openPorts.filter { it.state.equals("OPEN", true) }.joinToString(", ") { it.port.toString() })))
+                            refreshLocalWorkflows()
+                        }
                         shellUi.reconUi.currentTarget.value = target
                         shellUi.reconUi.report.value = report
                         runStatus.value = "Local recon finished: ${report.findingsCount} findings, grade ${report.grade}. Open Security Recon for the report."
@@ -1492,8 +1511,34 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val nodes = JSONArray().put(JSONObject().put("id", "trigger").put("type", "trigger").put("label", "Manual"))
             .put(JSONObject().put("id", "recon").put("type", "recon").put("label", "Security recon").put("target", target).put("scan", scan).put("prompt", prompt))
         val edges = JSONArray().put(JSONObject().put("from", "trigger").put("to", "recon"))
-        val body = JSONObject().put("name", name).put("nodes", nodes).put("edges", edges).toString()
-        apiCall("POST", "/v1/workflows", body, "flowcreate")
+        val flow = JSONObject().put("name", name).put("nodes", nodes).put("edges", edges)
+            .put("active", false).put("trigger", JSONObject().put("type", "manual"))
+        LocalReconStore.save(this, flow)
+        refreshLocalWorkflows()
+        vm.log("+ saved security automation on this phone: $name")
+        if (securitySync && vm.clusterKey.isNotBlank()) apiCall("POST", "/v1/workflows", flow.toString(), "flowcreate")
+    }
+
+    private fun mergeLocalWorkflows(data: String): String {
+        val remote = try { JSONObject(data).optJSONArray("workflows") ?: JSONArray() } catch (_: Exception) { JSONArray() }
+        val merged = JSONArray()
+        val local = LocalReconStore.flows(this)
+        val localKeys = (0 until local.length()).mapNotNull { local.optJSONObject(it) }.map { flow ->
+            flow.optString("name") to LocalReconStore.firstRecon(flow)?.optString("target")
+        }.toSet()
+        for (i in 0 until remote.length()) remote.optJSONObject(i)?.let { flow ->
+            val key = flow.optString("name") to LocalReconStore.firstRecon(flow)?.optString("target")
+            if (!flow.optString("id").startsWith("local-recon-") && key !in localKeys) merged.put(flow)
+        }
+        for (i in 0 until local.length()) merged.put(local.optJSONObject(i))
+        return JSONObject().put("workflows", merged).toString()
+    }
+
+    private fun refreshLocalWorkflows() {
+        val combined = mergeLocalWorkflows(vm.flowsJson)
+        vm.flowsJson = combined
+        renderFlows(JSONObject(combined).optJSONArray("workflows") ?: JSONArray())
+        parseWatchers(combined, false)
     }
 
     // ---- Conversational Agent (full-screen chat, JSON tool protocol) ----------------------------
@@ -2645,10 +2690,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             onSave = { host, key, model -> agentExec.execute { aiModelSave(host, key, model) } },
             onSaveBackups = { backups -> agentExec.execute { aiModelSaveBackups(backups) } },
         ),
-        onLoadFlows = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! sign in first (Settings → Account & sync)") else { vm.log("↑ loading automations…"); apiCall("GET", "/v1/workflows", null, "flows") } },
+        onLoadFlows = { refreshLocalWorkflows(); if (vm.clusterKey.isNotBlank()) apiCall("GET", "/v1/workflows", null, "flows") },
         onRunFlow = { id, name -> runFlow(id, name) },
         onCreateFlow = { name, steps -> createFlow(name, steps) },
         onCreateSecurityFlow = { name, target, scan, prompt -> createSecurityFlow(name, target, scan, prompt) },
+        securitySync = securitySync,
+        onSecuritySync = { value ->
+            if (value && vm.clusterKey.isBlank()) vm.log("! Sign in to the cluster before enabling recon sharing")
+            else { securitySync = value; vm.syncSecurityRecon = value }
+        },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> shellUi.urlFocused.value = false; openPlatform(prof, site) },
         onOpenLearn = { slug -> load("$LEARN_SITE/learn/$slug") },
@@ -2812,7 +2862,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val watcherRaw = java.util.Collections.synchronizedMap(HashMap<String, JSONObject>())
 
     private fun loadWatchers() {
-        if (vm.clusterUrl.trim().isEmpty()) { vm.log("! sign in first (Settings → Account & sync)"); return }
+        refreshLocalWorkflows()
+        if (vm.clusterKey.isBlank()) return
         shellUi.watchersLoading.value = true
         shellUi.watcherRoles.value = roleNames().filter { it != "(none)" }
         apiCall("GET", "/v1/workflows", null, "watchers")
@@ -2889,6 +2940,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
         val body = JSONObject().put("name", name).put("active", true).put("autoApprove", false)
             .put("nodes", nodes).put("edges", edges).toString()
+        val recon = (0 until nodes.length()).mapNotNull { nodes.optJSONObject(it) }.firstOrNull { it.optString("type") == "recon" }
+        if (recon != null) {
+            if (recon.optString("scan") == "prompt") { vm.log("! Recon starter prompts run on demand; choose a target scan for a watcher"); return }
+            val local = JSONObject(body)
+            if (id?.startsWith("local-recon-") == true) local.put("id", id)
+            LocalReconStore.save(this, local)
+            LocalReconWorker.schedule(this)
+            refreshLocalWorkflows()
+            vm.log("+ saved local security watcher: $name")
+            if (securitySync && vm.clusterKey.isNotBlank() && id.isNullOrBlank()) apiCall("POST", "/v1/workflows", body, "watcher_create")
+            return
+        }
         if (id.isNullOrBlank()) {
             pendingFollowUp = followUpFlowId to followUpRepliesOnly
             vm.log("+ creating watcher \"$name\" (every $intervalMin min)…"); apiCall("POST", "/v1/workflows", body, "watcher_create")
@@ -2898,6 +2961,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
     private fun toggleWatcher(id: String, active: Boolean) {
+        if (id.startsWith("local-recon-")) {
+            if (LocalReconStore.setActive(this, id, active)) refreshLocalWorkflows()
+            return
+        }
         val raw = watcherRaw[id]
         if (raw == null) { vm.log("! watcher not loaded — refresh"); return }
         try { raw.put("active", active) } catch (e: Exception) {}
@@ -2909,15 +2976,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun openWatcherResults(id: String) {
         val name = shellUi.watchers.value.firstOrNull { it.id == id }?.name ?: "Watcher"
         pendingResults = id to name
+        if (id.startsWith("local-recon-")) {
+            showArtifact(buildArtifactHtml(name, LocalReconStore.results(this, id), emptyList()))
+            return
+        }
         vm.log("↑ opening results for \"$name\"…")
         apiCall("GET", "/v1/watchers/$id/feed", null, "wfeed")   // step 1: the deduped feed
     }
 
     /** Parse GET /v1/workflows → the ones with a schedule trigger are watchers. */
     private fun parseWatchers(data: String, fetchCfg: Boolean = true) {
-        lastWorkflowsJson = data
+        val combined = mergeLocalWorkflows(data)
+        lastWorkflowsJson = combined
         try {
-            val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
+            val arr = JSONObject(combined).optJSONArray("workflows") ?: JSONArray()
             val out = ArrayList<engineer.myapp.gb.shared.Watcher>()
             watcherRaw.clear()
             for (i in 0 until arr.length()) {
@@ -2935,11 +3007,12 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 watcherRaw[id] = w
                 val n = maxOf(1, cfg.optInt("n", 1))
                 val runs = w.optInt("runs", 0)
-                val last = if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
+                val localResults = if (id.startsWith("local-recon-")) LocalReconStore.results(this, id) else JSONArray()
+                val last = if (localResults.length() > 0) "${localResults.length()} local results" else if (runs > 0) "$runs runs, last ${w.optString("lastRunStatus", "?")}" else "never run"
                 out.add(engineer.myapp.gb.shared.Watcher(
                     id = id, name = w.optString("name", id), role = reconNode?.optString("scan") ?: agent?.optString("role") ?: "general",
                     profile = agent?.optString("profile") ?: "", intervalMin = n, active = w.optBoolean("active"),
-                    lastRun = last, resultCount = 0, goal = reconNode?.optString("target") ?: agent?.optString("goal") ?: "",
+                    lastRun = last, resultCount = localResults.length(), goal = reconNode?.optString("target") ?: agent?.optString("goal") ?: "",
                     mode = if (steps > 1) "automation" else if (reconNode != null) "security" else "role", stepCount = steps,
                     followUpFlowId = watcherCfg[id]?.first?.takeIf { !it.startsWith("[") } ?: "", followUpRepliesOnly = watcherCfg[id]?.second ?: true,
                     followUps = watcherCfg[id]?.first?.takeIf { it.startsWith("[") }?.let { routesOf(it) } ?: emptyList(),
@@ -2949,7 +3022,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             }
             shellUi.watchers.value = out
             WatchersWidgetProvider.refresh(this, out.filter { it.active }.map { it.name })
-            if (fetchCfg) out.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}"); apiCall("GET", "/v1/watchers/${it.id}/health", null, "whealth_${it.id}") }
+            if (fetchCfg) out.filterNot { it.id.startsWith("local-recon-") }.forEach { apiCall("GET", "/v1/watchers/${it.id}/config", null, "wcfg_${it.id}"); apiCall("GET", "/v1/watchers/${it.id}/health", null, "whealth_${it.id}") }
         } catch (e: Exception) { vm.log("! watchers parse: ${data.take(120)}") }
         shellUi.watchersLoading.value = false
     }
@@ -3594,9 +3667,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             "platforms_err" -> { vm.log("! load platforms: ${data.take(140)}") }
             "flows" -> {
                 try {
-                    val arr = JSONObject(data).optJSONArray("workflows") ?: JSONArray()
+                    val combined = mergeLocalWorkflows(data)
+                    val arr = JSONObject(combined).optJSONArray("workflows") ?: JSONArray()
                     renderFlows(arr)
-                    vm.flowsJson = data       // persist so it survives relaunch
+                    vm.flowsJson = combined       // persist cluster cache and phone-owned records
+                    parseWatchers(combined, false)
                     vm.log("↓ automations (${arr.length()})")
                 } catch (e: Exception) {
                     shellUi.flowsHint.value = "Sign in first (Settings → Account & sync)"
