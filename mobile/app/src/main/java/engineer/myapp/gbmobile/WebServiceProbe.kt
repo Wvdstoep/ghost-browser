@@ -15,7 +15,8 @@ import javax.net.ssl.SSLSocketFactory
 object WebServiceProbe {
     private val webPorts = setOf(80, 443, 8000, 8080, 8081, 8443, 8888)
     data class Finding(val port: Int, val scheme: String, val status: Int, val title: String, val server: String, val poweredBy: String,
-                       val contact: String = "", val redirectUrl: String = "") {
+                       val contact: String = "", val redirectUrl: String = "",
+                       val canonicalUrl: String = "", val openGraphUrl: String = "") {
         fun url(host: String): String = "$scheme://$host${if (port == 80 && scheme == "http" || port == 443 && scheme == "https") "" else ":$port"}/"
         fun label(): String = listOf("${scheme.uppercase()} $status", server, poweredBy, title.takeIf { it.isNotBlank() }?.let { "\"$it\"" })
             .filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
@@ -34,7 +35,7 @@ object WebServiceProbe {
         } catch (_: Exception) { finding.url(host) }
     }
 
-    fun inspect(host: String, port: Int): Finding? {
+    fun inspect(host: String, port: Int, includeSecurityContact: Boolean = true): Finding? {
         if (!supports(port)) return null
         val tls = port == 443 || port == 8443
         val scheme = if (tls) "https" else "http"
@@ -48,7 +49,7 @@ object WebServiceProbe {
                 socket.getOutputStream().write("GET / HTTP/1.1\r\nHost: $host\r\nUser-Agent: GhostBrowser-Recon/1.0\r\nAccept: text/html,*/*\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
                 socket.getOutputStream().flush()
                 parse(port, scheme, readBounded(socket.getInputStream()))?.let { finding ->
-                    if (tls) finding.copy(contact = securityContact(host, port)) else finding
+                    if (tls && includeSecurityContact) finding.copy(contact = securityContact(host, port)) else finding
                 }
             }
         } catch (_: Exception) { null }
@@ -62,7 +63,7 @@ object WebServiceProbe {
                 catch (_: SocketTimeoutException) { break }
             if (read <= 0) break
             count += read
-            if (String(bytes, 0, count, Charsets.ISO_8859_1).contains("</title>", ignoreCase = true)) break
+            if (String(bytes, 0, count, Charsets.ISO_8859_1).contains("</head>", ignoreCase = true)) break
         }
         return String(bytes, 0, count, Charsets.ISO_8859_1)
     }
@@ -118,14 +119,29 @@ object WebServiceProbe {
         val body = response.substring(boundary + 4)
         val title = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .find(body)?.groupValues?.get(1)?.replace(Regex("\\s+"), " ")?.trim()?.take(120).orEmpty()
-        val location = rawHeader("Location")
-        val redirect = if (status in 300..399 && location.length in 1..2048) {
+        fun absoluteWebUrl(value: String): String = if (value.length in 1..2048) {
             runCatching {
-                val uri = java.net.URI(location)
+                val uri = java.net.URI(value.trim())
                 if (uri.isAbsolute && uri.scheme.lowercase() in setOf("http", "https") &&
                     !uri.host.isNullOrBlank() && uri.userInfo == null) uri.toASCIIString() else ""
             }.getOrDefault("")
         } else ""
-        return Finding(port, scheme, status, title, header("Server"), header("X-Powered-By"), redirectUrl = redirect)
+        val redirect = if (status in 300..399) absoluteWebUrl(rawHeader("Location")) else ""
+        fun attributes(tag: String) = Regex("""([A-Za-z:-]+)\s*=\s*["']([^"']*)["']""")
+            .findAll(tag).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
+        val canonical = Regex("""<link\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(body)
+            .firstNotNullOfOrNull { tag ->
+                val attrs = attributes(tag.value)
+                if (attrs["rel"]?.split(Regex("\\s+"))?.any { it.equals("canonical", true) } == true)
+                    absoluteWebUrl(attrs["href"].orEmpty()).ifBlank { null } else null
+            }.orEmpty()
+        val openGraph = Regex("""<meta\b[^>]*>""", RegexOption.IGNORE_CASE).findAll(body)
+            .firstNotNullOfOrNull { tag ->
+                val attrs = attributes(tag.value)
+                if (attrs["property"].equals("og:url", true))
+                    absoluteWebUrl(attrs["content"].orEmpty()).ifBlank { null } else null
+            }.orEmpty()
+        return Finding(port, scheme, status, title, header("Server"), header("X-Powered-By"),
+            redirectUrl = redirect, canonicalUrl = canonical, openGraphUrl = openGraph)
     }
 }

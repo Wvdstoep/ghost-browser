@@ -34,7 +34,8 @@ class RangeScanDbTest {
         val first = RangeScanDb(context)
         val job = first.begin(plan, listOf(22, 80), 10, true)
         first.checkpoint(job, "192.168.4.1", listOf(80), 1,
-            listOf(WebServiceProbe.Finding(80, "https", 200, "Test app", "nginx", "", "security@example.org")))
+            listOf(WebServiceProbe.Finding(80, "https", 200, "Test app", "nginx", "", "security@example.org",
+                canonicalUrl = "https://app.example.test/")))
         first.close()
 
         val reopened = RangeScanDb(context)
@@ -50,6 +51,7 @@ class RangeScanDbTest {
         val evidence = reopened.reviewItems(job.runId).single()
         assertEquals("new", evidence.reviewState)
         assertEquals("security@example.org", evidence.publishedContact)
+        assertEquals("https://app.example.test/", evidence.web.single().canonicalUrl)
         assertTrue(reopened.linkResearchApp(evidence.id, "range-${evidence.id}", "https://portal.example.test/"))
         assertEquals("range-${evidence.id}", reopened.reviewItems(job.runId).single().researchAppId)
         assertEquals("https://portal.example.test/", reopened.reviewItems(job.runId).single().researchTargetUrl)

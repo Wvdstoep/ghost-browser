@@ -53,4 +53,16 @@ class WebServiceProbeTest {
         assertEquals("", WebServiceProbe.parse(80, "http", response.replace("https://site.example/path", "javascript:bad()"))!!.redirectUrl)
         assertEquals("", WebServiceProbe.parse(80, "http", response.replace("https://site.example/path", "https://user:pass@site.example/"))!!.redirectUrl)
     }
+
+    @Test fun readsCanonicalAndOpenGraphHintsAfterTheTitleWithoutTreatingTheTitleAsADomain() {
+        val response = "HTTP/1.1 200 OK\r\n\r\n<html><head><title>DataTrainingGPT</title>" +
+            "<link href='https://site.example/app' rel='canonical'>" +
+            "<meta content=\"https://site.example/\" property=\"og:url\"></head><body>Ignored</body>"
+        val finding = WebServiceProbe.parse(80, "http", WebServiceProbe.readBounded(response.byteInputStream()))!!
+        assertEquals("DataTrainingGPT", finding.title)
+        assertEquals("https://site.example/app", finding.canonicalUrl)
+        assertEquals("https://site.example/", finding.openGraphUrl)
+        assertEquals("http://192.0.2.3/", finding.url("192.0.2.3"))
+        assertEquals("", WebServiceProbe.parse(80, "http", response.replace("https://site.example/app", "javascript:bad()"))!!.canonicalUrl)
+    }
 }

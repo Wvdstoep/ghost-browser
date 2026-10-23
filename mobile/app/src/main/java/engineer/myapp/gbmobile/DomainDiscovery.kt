@@ -18,12 +18,20 @@ object DomainDiscovery {
         reverse: (String) -> String? = { InetAddress.getByName(it).canonicalHostName },
         resolve: (String) -> List<String> = { InetAddress.getAllByName(it).mapNotNull { address -> address.hostAddress } },
         certificateNames: (String, Int) -> List<String> = ::tlsNames,
+        refreshPage: (String, Int) -> WebServiceProbe.Finding? = { host, port ->
+            WebServiceProbe.inspect(host, port, includeSecurityContact = false)
+        },
     ): List<DomainCandidate> {
         val proposals = mutableListOf<DomainCandidate>()
-        evidence.web.forEach { web ->
-            val url = web.redirectUrl
-            if (url.isNotBlank()) runCatching { URI(url) }.getOrNull()?.host?.let { name ->
-                proposals += DomainCandidate(url, name, "HTTP redirect")
+        val webEvidence = evidence.web + evidence.web.take(2).mapNotNull { web ->
+            runCatching { refreshPage(evidence.host, web.port) }.getOrNull()
+        }
+        webEvidence.forEach { web ->
+            listOf(web.redirectUrl to "HTTP redirect", web.canonicalUrl to "HTML canonical link",
+                web.openGraphUrl to "Open Graph URL").forEach { (url, source) ->
+                if (url.isNotBlank()) runCatching { URI(url) }.getOrNull()?.host?.let { name ->
+                    proposals += DomainCandidate(url, name, source)
+                }
             }
         }
         evidence.web.filter { it.scheme == "https" }.take(2).forEach { web ->
