@@ -34,6 +34,7 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
     var scope by remember { mutableStateOf(RangePlan.parse(scanner.selected.value)?.scope ?: RangePlan.Scope.PRIVATE) }
     var input by remember { mutableStateOf(scanner.selected.value) }
     var adding by remember { mutableStateOf(false) }
+    var page by remember { mutableIntStateOf(0) }
     var name by remember { mutableStateOf("") }
     var cidr by remember { mutableStateOf("") }
     val plan = RangePlan.parse(input)?.takeIf { it.scope == scope }
@@ -41,6 +42,9 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
         else ScanPorts.presets[scanner.portPreset.value]
     val saved = plan != null && scanner.savedPublic.any { it.cidr == plan.cidr }
     val canStart = plan != null && ports != null && (scope == RangePlan.Scope.PRIVATE || saved) && !scanner.isRunning()
+    LaunchedEffect(scanner, page) {
+        if (page == 1) while (true) { scanner.refreshEvidence(); delay(1200) }
+    }
 
     Dialog(onDismissRequest = { scanner.open.value = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(cs.background).statusBarsPadding().navigationBarsPadding()) {
@@ -50,13 +54,20 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Range discovery", style = MaterialTheme.typography.titleLarge)
-                    Text("ON-DEVICE  ·  TCP SERVICES", style = MaterialTheme.typography.labelSmall, color = cs.primary)
+                    Text("Protection workflow", style = MaterialTheme.typography.titleLarge)
+                    Text("DISCOVER  ·  IDENTIFY  ·  REVIEW  ·  NOTIFY", style = MaterialTheme.typography.labelSmall, color = cs.primary)
                 }
                 IconButton(onClick = { scanner.open.value = false }) { Icon(Icons.Default.Close, "Close") }
             }
             HorizontalDivider(color = cs.outlineVariant)
 
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                FilterChip(selected = page == 0, onClick = { page = 0 }, label = { Text("1  Configure scan") })
+                FilterChip(selected = page == 1, onClick = { page = 1; scanner.refreshEvidence() }, label = { Text("2  Review evidence") })
+            }
+
+            if (page == 0) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(18.dp)) {
                 Text("Choose your scope", style = MaterialTheme.typography.headlineSmall)
                 Text("Select one bounded IPv4 subnet for this run.", color = cs.onSurfaceVariant)
@@ -201,7 +212,7 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
             Surface(color = cs.surface, shadowElevation = 8.dp) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    OutlinedButton(onClick = { scanner.open.value = false; onResults() }) { Text("Results") }
+                    OutlinedButton(onClick = { page = 1; scanner.refreshEvidence() }) { Text("Review") }
                     Spacer(Modifier.weight(1f))
                     if (scanner.isPaused()) {
                         OutlinedButton(onClick = scanner::stop) { Text("Stop") }
@@ -214,6 +225,9 @@ fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit) {
                         Spacer(Modifier.width(5.dp)); Text("Start scan")
                     }
                 }
+            }
+            } else Box(Modifier.weight(1f)) {
+                RangeReviewScreen(scanner, onHistory = { scanner.open.value = false; onResults() })
             }
         }
     }

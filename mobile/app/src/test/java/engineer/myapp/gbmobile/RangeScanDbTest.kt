@@ -23,6 +23,7 @@ class RangeScanDbTest {
         val upgraded = RangeScanDb(context)
         assertEquals("192.168.1.1", upgraded.results().getJSONObject(0).getString("url").removePrefix("http://"))
         assertEquals(0, upgraded.results().getJSONObject(0).getJSONObject("fields").getJSONArray("webServices").length())
+        assertEquals("new", upgraded.reviewItems(1).single().reviewState)
         upgraded.close()
     }
 
@@ -33,7 +34,7 @@ class RangeScanDbTest {
         val first = RangeScanDb(context)
         val job = first.begin(plan, listOf(22, 80), 10, true)
         first.checkpoint(job, "192.168.4.1", listOf(80), 1,
-            listOf(WebServiceProbe.Finding(80, "http", 200, "Test app", "nginx", "")))
+            listOf(WebServiceProbe.Finding(80, "https", 200, "Test app", "nginx", "", "security@example.org")))
         first.close()
 
         val reopened = RangeScanDb(context)
@@ -44,14 +45,23 @@ class RangeScanDbTest {
         assertTrue(saved.webFollowUp)
         assertEquals(listOf(22, 80), saved.ports)
         assertEquals("192.168.4.1", plan.hosts[saved.nextIndex - 1])
-        assertEquals("http://192.168.4.1:80", reopened.results().getJSONObject(0).getString("url"))
+        assertEquals("https://192.168.4.1:80", reopened.results().getJSONObject(0).getString("url"))
         assertTrue(reopened.results().getJSONObject(0).getJSONArray("ports").getJSONObject(0).getString("service").contains("Test app"))
+        val evidence = reopened.reviewItems(job.runId).single()
+        assertEquals("new", evidence.reviewState)
+        assertEquals("security@example.org", evidence.publishedContact)
+        assertTrue(reopened.setReviewState(evidence.id, "reviewed"))
+        assertEquals("reviewed", reopened.reviewItems(job.runId).single().reviewState)
+        assertFalse(reopened.setReviewState(evidence.id, "sent"))
 
         reopened.status(saved.runId, "paused")
         assertEquals("paused", reopened.read()?.status)
         reopened.checkpoint(reopened.read()!!, "192.168.4.2", emptyList(), 2)
         assertEquals(2, reopened.read()?.nextIndex)
         assertEquals(1, reopened.read()?.hits)
+        val next = reopened.begin(plan, listOf(80), 10)
+        reopened.checkpoint(next, "192.168.4.2", listOf(80), 1)
+        assertEquals(2, reopened.reviewItems().size)
         reopened.close()
     }
 }
