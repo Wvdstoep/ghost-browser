@@ -38,6 +38,7 @@ fun WatchersScreen(
     onToggle: (id: String, active: Boolean) -> Unit,
     onOpenResults: (id: String) -> Unit,
     onRefresh: () -> Unit,
+    onOpenAllResults: (() -> Unit)? = null,
     securitySync: Boolean = false,
     onSecuritySync: (Boolean) -> Unit = {},
     showSecuritySync: Boolean = false,
@@ -77,6 +78,13 @@ fun WatchersScreen(
                     Text(if (securitySync) "Phone schedule stays active; a cluster copy is uploaded" else "Runs and results stay on this phone", color = cs.onSurfaceVariant, fontSize = 11.sp)
                 }
                 Switch(checked = securitySync, onCheckedChange = onSecuritySync)
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (kind == "security" && onOpenAllResults != null) {
+            OutlinedButton(onClick = onOpenAllResults, modifier = Modifier.fillMaxWidth()) {
+                Text("View all on-device recon results")
             }
             Spacer(Modifier.height(12.dp))
         }

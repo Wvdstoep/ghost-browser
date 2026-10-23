@@ -52,6 +52,19 @@ object LocalReconStore {
         }
     } catch (_: Exception) { JSONArray() }
 
+    @Synchronized fun allResults(context: Context): JSONArray {
+        val groups = array(context, RESULTS)
+        val items = ArrayList<JSONObject>()
+        for (i in 0 until groups.length()) {
+            val results = groups.optJSONObject(i)?.optJSONArray("items") ?: continue
+            for (j in 0 until results.length()) results.optJSONObject(j)?.let { items.add(it) }
+        }
+        return JSONArray().also { output ->
+            items.sortedByDescending { it.optJSONObject("fields")?.optLong("recordedAt", 0) ?: 0 }
+                .take(1000).forEach { output.put(it) }
+        }
+    }
+
     @Synchronized fun addResult(context: Context, id: String, item: JSONObject) {
         val records = array(context, RESULTS)
         val next = JSONArray()

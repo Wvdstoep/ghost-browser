@@ -145,6 +145,7 @@ class ShellActions(
     val onCreateSecurityFlow: (String, String, String, String) -> Unit,
     val securitySync: Boolean,
     val onSecuritySync: (Boolean) -> Unit,
+    val onOpenAllReconResults: () -> Unit,
     val onLoadPlatforms: () -> Unit,
     val onOpenPlatform: (String, String) -> Unit,
     val onOpenLearn: (String) -> Unit,
@@ -296,6 +297,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                                 onToggle = { id, a -> act.onToggleWatcher(id, a) }, onOpenResults = { act.onOpenWatcherResults(it) },
                                 onRefresh = act.onLoadWatchers, securitySync = act.securitySync,
                                 onSecuritySync = act.onSecuritySync, showSecuritySync = true,
+                                onOpenAllResults = act.onOpenAllReconResults,
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                             )
                         }

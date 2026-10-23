@@ -4,7 +4,7 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.64** — Security Recon flows and scheduled watchers are stored on Android by default. A phone-owned flow runs through the on-device single-target auditor; WorkManager runs due watchers and keeps up to 100 results per watcher on the device. Android may delay background work to protect battery. The optional “Share new recon flows/watchers with cluster” switch uploads a separate copy when signed in. Existing local records are not uploaded by turning the switch on, and cluster copies continue independently if sharing is later turned off.
+> **v0.65** — Security Recon results now have a dedicated on-phone history with search, run filters, open-port evidence, findings, failures, and an RTSP service-candidate filter. The Security Watchers view can open one watcher's history or all on-device recon results. The single-target auditor checks RTSP ports 554 and 8554. An open RTSP port is only a service observation, not proof of a camera or accessible stream. Phone-owned security flows and scheduled watchers remain local by default; the optional cluster-sharing switch still uploads only new copies when signed in.
 
 Choose Ghost Browser as your default under Android **Settings → Apps → Default apps → Browser app**.
 Visited-link suggestions stay on the phone, separate for each profile; use **⋮ → Clear visited links**
@@ -39,9 +39,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.64 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.65 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `023250be3d45030e004d396fed2b73cf2f749b4809e24c18d7b0223d93dd3d77`.
+SHA-256: `b32e8eea46581d1aa5544c2f703e243231074e547eac215204debf3c1a5ca9bf`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
