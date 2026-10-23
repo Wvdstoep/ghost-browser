@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -26,20 +27,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import engineer.myapp.gbmobile.DisclosureDrafts
+import engineer.myapp.gbmobile.DomainCandidate
+import engineer.myapp.gbmobile.DomainDiscovery
 import engineer.myapp.gbmobile.LocalRangeScanner
 import engineer.myapp.gbmobile.RangeEvidence
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, clusterForResearch: Boolean,
-                      onResearch: (RangeEvidence) -> Unit,
+                      onResearch: (RangeEvidence, String?) -> Unit,
                       onOpenApp: (RangeEvidence) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("All") }
     var selectedId by remember { mutableLongStateOf(scanner.focusEvidenceId.value) }
+    var researchItem by remember { mutableStateOf<RangeEvidence?>(null) }
     LaunchedEffect(scanner.focusEvidenceId.value) {
         if (scanner.focusEvidenceId.value > 0) selectedId = scanner.focusEvidenceId.value
     }
@@ -93,7 +100,7 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, cluster
         items(filtered, key = { it.id }) { item ->
             EvidenceCard(item, selectedId == item.id, onOpen = { selectedId = if (selectedId == item.id) -1 else item.id },
                 clusterForResearch = clusterForResearch,
-                onResearch = { onResearch(item) }, onOpenApp = { onOpenApp(item) },
+                onResearch = { researchItem = item }, onOpenApp = { onOpenApp(item) },
                 onReview = { scanner.review(item.id, it) }, onDraft = { recipient, notes ->
                     val current = scanner.evidence.firstOrNull { it.id == item.id } ?: return@EvidenceCard
                     val draft = DisclosureDrafts.prepare(current, recipient, notes) ?: return@EvidenceCard
@@ -111,6 +118,75 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, cluster
             OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth()) { Text("Open full scan history") }
         }
     }
+    researchItem?.let { item ->
+        DomainResearchDialog(item, clusterForResearch,
+            onChoose = { url -> researchItem = null; onResearch(item, url) },
+            onClose = { researchItem = null })
+    }
+}
+
+@Composable private fun DomainResearchDialog(item: RangeEvidence, clusterConnected: Boolean,
+                                              onChoose: (String?) -> Unit, onClose: () -> Unit) {
+    var candidates by remember(item.id) { mutableStateOf<List<DomainCandidate>>(emptyList()) }
+    var loading by remember(item.id) { mutableStateOf(true) }
+    var manual by remember(item.id) { mutableStateOf("") }
+    var error by remember(item.id) { mutableStateOf("") }
+    var checking by remember(item.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(item.id) {
+        candidates = withContext(Dispatchers.IO) { DomainDiscovery.discover(item) }
+        loading = false
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Choose a research target") },
+        text = {
+            Column(Modifier.heightIn(max = 430.dp).verticalScroll(rememberScrollState())) {
+                Text("Observed host: ${item.host}", style = MaterialTheme.typography.titleSmall)
+                Text("A name must resolve to this IP. Reverse DNS and certificate names are clues, not proof that a particular web app owns the host.",
+                    style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(12.dp))
+                when {
+                    loading -> CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    candidates.isEmpty() -> Text("No DNS-matched domain found. You can check a domain you know or run an IP-only baseline.",
+                        style = MaterialTheme.typography.bodySmall)
+                    else -> candidates.forEach { candidate ->
+                        OutlinedButton(onClick = { onChoose(candidate.url) }, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(candidate.url, maxLines = 2)
+                                Text(candidate.source + " · DNS matched", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        Spacer(Modifier.height(5.dp))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(manual, { manual = it; error = "" }, label = { Text("Known domain or URL") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                if (error.isNotBlank()) Text(error, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+                Button(onClick = {
+                    checking = true
+                    scope.launch {
+                        val verified = withContext(Dispatchers.IO) { DomainDiscovery.manual(manual, item) }
+                        checking = false
+                        if (verified == null) error = "This domain does not resolve to ${item.host}. Check the name or select an observed candidate."
+                        else onChoose(verified.url)
+                    }
+                }, enabled = manual.isNotBlank() && !checking, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (checking) "Checking DNS…" else "Verify & use domain")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { onChoose(null) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Run IP-only local baseline")
+                }
+                Text(if (clusterConnected) "The cluster six-point suite starts only for a selected DNS-matched domain."
+                    else "Connect to the cluster to run the six-point suite on a selected domain.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
 }
 
 @Composable private fun EvidenceStat(value: String, label: String, modifier: Modifier) {
@@ -169,20 +245,24 @@ fun RangeReviewScreen(scanner: LocalRangeScanner, onHistory: () -> Unit, cluster
                 Spacer(Modifier.height(10.dp))
                 Text("These are observations, not confirmed vulnerabilities. Verify ownership and impact before reporting.",
                     style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                if (item.researchTargetUrl.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Research target: ${item.researchTargetUrl}", style = MaterialTheme.typography.bodySmall,
+                        color = cs.primary)
+                }
                 if (item.web.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = if (item.researchAppId.isBlank()) onResearch else onOpenApp,
                         modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(7.dp))
-                        Text(if (item.researchAppId.isNotBlank()) "Open Security App"
-                            else if (clusterForResearch) "Run cluster recon in Security Apps" else "Run local baseline in Security Apps")
+                        Text(if (item.researchAppId.isNotBlank()) "Open Security App" else "Find domain & research")
                     }
-                    Text(if (item.researchAppId.isBlank()) (if (clusterForResearch)
-                        "Save this host and dispatch the six-point recon suite to the cluster."
-                        else "Save this host and run an on-device baseline. Connect the cluster for the full recon suite.") +
-                        " A redirect is used only when its hostname resolves to this IP."
-                        else "Linked to a saved Security App. Open it to run another recon prompt.",
+                    if (item.researchAppId.isNotBlank()) OutlinedButton(onClick = onResearch, modifier = Modifier.fillMaxWidth()) {
+                        Text("Find domain / change research target")
+                    }
+                    Text(if (clusterForResearch) "Choose a DNS-matched domain for the cluster six-point recon suite."
+                        else "Choose a domain to save it; the local baseline works without a cluster. Connect for the full suite.",
                         style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(12.dp))

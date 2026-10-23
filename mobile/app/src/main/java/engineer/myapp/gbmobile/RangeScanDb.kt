@@ -16,17 +16,17 @@ data class RangeScanJob(
 data class RangeEvidence(
     val id: Long, val runId: Long, val cidr: String, val host: String, val ports: List<Int>,
     val recordedAt: Long, val web: List<WebServiceProbe.Finding>, val reviewState: String,
-    val researchAppId: String = "",
+    val researchAppId: String = "", val researchTargetUrl: String = "",
 ) {
     val publishedContact: String get() = web.firstOrNull { it.contact.isNotBlank() }?.contact.orEmpty()
     val researchUrl: String get() = (web.firstOrNull { it.scheme == "https" } ?: web.firstOrNull())?.url(host).orEmpty()
 }
 
 /** A single resumable job and an append-only result log. Each host checkpoint is atomic. */
-class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.db", null, 4) {
+class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.db", null, 5) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE job (slot INTEGER PRIMARY KEY CHECK(slot=1), run_id INTEGER NOT NULL, cidr TEXT NOT NULL, ports TEXT NOT NULL, rate INTEGER NOT NULL, next_index INTEGER NOT NULL, total INTEGER NOT NULL, hits INTEGER NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL, web_follow_up INTEGER NOT NULL DEFAULT 0)")
-        db.execSQL("CREATE TABLE result (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, cidr TEXT NOT NULL, host TEXT NOT NULL, ports TEXT NOT NULL, recorded_at INTEGER NOT NULL, web_services TEXT NOT NULL DEFAULT '[]', review_state TEXT NOT NULL DEFAULT 'new', research_app_id TEXT NOT NULL DEFAULT '')")
+        db.execSQL("CREATE TABLE result (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, cidr TEXT NOT NULL, host TEXT NOT NULL, ports TEXT NOT NULL, recorded_at INTEGER NOT NULL, web_services TEXT NOT NULL DEFAULT '[]', review_state TEXT NOT NULL DEFAULT 'new', research_app_id TEXT NOT NULL DEFAULT '', research_target_url TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE INDEX result_time ON result(recorded_at DESC)")
     }
 
@@ -37,6 +37,7 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
         }
         if (oldVersion < 3) db.execSQL("ALTER TABLE result ADD COLUMN review_state TEXT NOT NULL DEFAULT 'new'")
         if (oldVersion < 4) db.execSQL("ALTER TABLE result ADD COLUMN research_app_id TEXT NOT NULL DEFAULT ''")
+        if (oldVersion < 5) db.execSQL("ALTER TABLE result ADD COLUMN research_target_url TEXT NOT NULL DEFAULT ''")
     }
 
     @Synchronized fun begin(plan: RangePlan, ports: List<Int>, rate: Int, webFollowUp: Boolean = false): RangeScanJob {
@@ -92,7 +93,7 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
     @Synchronized fun reviewItems(runId: Long? = null, limit: Int = 1000): List<RangeEvidence> {
         val output = mutableListOf<RangeEvidence>()
         readableDatabase.rawQuery(
-            "SELECT id,run_id,cidr,host,ports,recorded_at,web_services,review_state,research_app_id FROM result" +
+            "SELECT id,run_id,cidr,host,ports,recorded_at,web_services,review_state,research_app_id,research_target_url FROM result" +
                 (if (runId == null) "" else " WHERE run_id=?") + " ORDER BY id DESC LIMIT ?",
             if (runId == null) arrayOf(limit.coerceIn(1, 1000).toString())
                 else arrayOf(runId.toString(), limit.coerceIn(1, 1000).toString())
@@ -104,7 +105,7 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
                     (0 until web.length()).mapNotNull { web.optJSONObject(it) }.map { item ->
                         WebServiceProbe.Finding(item.optInt("port"), item.optString("scheme"), item.optInt("status"),
                             item.optString("title"), item.optString("server"), item.optString("poweredBy"), item.optString("contact"), item.optString("redirectUrl"))
-                    }, cursor.getString(7), cursor.getString(8))
+                    }, cursor.getString(7), cursor.getString(8), cursor.getString(9))
             }
         }
         return output
@@ -123,8 +124,8 @@ class RangeScanDb(context: Context) : SQLiteOpenHelper(context, "gb_range_scan.d
             "id=?", arrayOf(id.toString())) == 1
     }
 
-    @Synchronized fun linkResearchApp(id: Long, appId: String): Boolean =
-        writableDatabase.update("result", ContentValues().apply { put("research_app_id", appId) },
+    @Synchronized fun linkResearchApp(id: Long, appId: String, url: String): Boolean =
+        writableDatabase.update("result", ContentValues().apply { put("research_app_id", appId); put("research_target_url", url) },
             "id=?", arrayOf(id.toString())) == 1
 
     @Synchronized fun results(limit: Int = 1000): JSONArray {

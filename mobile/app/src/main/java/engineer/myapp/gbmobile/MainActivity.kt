@@ -2007,8 +2007,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         assistantOpenLoad()
     }
 
-    private fun openRangeSecurityApp(item: RangeEvidence, discoveredUrl: String = item.researchUrl) {
-        val url = discoveredUrl
+    private fun openRangeSecurityApp(item: RangeEvidence, discoveredUrl: String? = null) {
+        val prefs = getSharedPreferences("gb_app_maps", MODE_PRIVATE)
+        val old = engineer.myapp.gb.shared.decodeManagedApps(prefs.getString("managed_apps_list", "").orEmpty())
+        val existing = old.firstOrNull { it.id == "range-${item.id}" }
+        val url = discoveredUrl ?: existing?.url ?: item.researchUrl
         if (url.isBlank()) return
         val app = engineer.myapp.gb.shared.ManagedAppTarget(
             id = "range-${item.id}", name = item.host,
@@ -2016,14 +2019,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             description = "Observed on ${item.cidr}: ${item.ports.size} open TCP ports · ${item.web.size} web responses",
             sourceEvidenceId = item.id, sourceCidr = item.cidr
         )
-        val prefs = getSharedPreferences("gb_app_maps", MODE_PRIVATE)
-        val old = engineer.myapp.gb.shared.decodeManagedApps(prefs.getString("managed_apps_list", "").orEmpty())
-        val existing = old.firstOrNull { it.id == app.id }
-        val saved = app.copy(profile = existing?.profile ?: "default", url = existing?.url ?: url)
+        val saved = app.copy(profile = existing?.profile ?: "default")
         prefs.edit().putString("managed_apps_list", engineer.myapp.gb.shared.encodeManagedApps(
             listOf(saved) + old.filterNot { it.id == saved.id }
         )).putString("active_target_url", saved.url).apply()
-        rangeScanner.linkResearchApp(item.id, saved.id)
+        rangeScanner.linkResearchApp(item.id, saved.id, saved.url)
         rangeScanner.open.value = false
         shellUi.switcherOpen.value = false
         shellUi.screen.value = "agent"
@@ -2767,19 +2767,25 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         },
         rangeScanner = rangeScanner,
         clusterForResearch = vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank(),
-        onResearchRangeEvidence = { item ->
+        onResearchRangeEvidence = { item, selectedUrl ->
             agentExec.execute {
-                val best = item.web.firstOrNull { it.redirectUrl.isNotBlank() }
-                    ?: item.web.firstOrNull { it.scheme == "https" }
-                    ?: item.web.firstOrNull()
-                val url = if (best == null) item.researchUrl else WebServiceProbe.confirmedUrl(item.host, best)
+                val checked = selectedUrl?.let { DomainDiscovery.manual(it, item) }
                 runOnUiThread {
+                    if (selectedUrl != null && checked == null) {
+                        android.widget.Toast.makeText(this, "The selected domain no longer resolves to ${item.host}", android.widget.Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
+                    }
+                    val url = checked?.url ?: item.researchUrl
                     openRangeSecurityApp(item, url)
                     shellUi.agentBusy.value = true
-                    if (vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank()) {
+                    if (checked != null && vm.clusterUrl.trim().isNotEmpty() && vm.clusterKey.isNotBlank()) {
                         val suite = engineer.myapp.gb.shared.RECON_PROMPT_CHIPS.firstOrNull { it.title.contains("6-Point") }
-                        val prompt = suite?.prompt?.replace("https://target-domain.com", url)
-                            ?: "Perform the six-point defensive reconnaissance suite on $url and report tested and untested stages separately."
+                        val prompt = (suite?.prompt?.replace("https://target-domain.com", url)
+                            ?: "Perform the six-point defensive reconnaissance suite on $url.") +
+                            " Scope is this selected domain. Distinguish observations, suspected issues, and confirmed vulnerabilities. " +
+                            "An open port or service banner alone never confirms RCE or exploitability. Verify CVE affected versions " +
+                            "against an official advisory and account for vendor backports. Never present a failed or untested " +
+                            "TLS, DNS, or application check as a finding. Include evidence and source links for each claim."
                         assistantSend(prompt)
                     } else agentExec.execute { runOnDeviceReconTurn("Run a focused on-device baseline security recon for $url") }
                 }

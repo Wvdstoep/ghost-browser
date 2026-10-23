@@ -131,8 +131,8 @@ class LocalRangeScanner(private val context: Context) {
         if (db.setReviewState(id, state)) refreshEvidence()
     }
 
-    fun linkResearchApp(id: Long, appId: String) {
-        if (db.linkResearchApp(id, appId)) refreshEvidence()
+    fun linkResearchApp(id: Long, appId: String, url: String) {
+        if (db.linkResearchApp(id, appId, url)) refreshEvidence()
     }
 
     fun isRunning() = db.read()?.status in listOf("starting", "running", "pausing", "stopping")

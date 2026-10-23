@@ -27,7 +27,7 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun RangeScanDialog(scanner: LocalRangeScanner, onResults: () -> Unit, clusterForResearch: Boolean,
-                    onResearch: (RangeEvidence) -> Unit, onOpenApp: (RangeEvidence) -> Unit) {
+                    onResearch: (RangeEvidence, String?) -> Unit, onOpenApp: (RangeEvidence) -> Unit) {
     if (!scanner.open.value) return
     LaunchedEffect(scanner) {
         while (true) { scanner.refresh(); delay(1000) }
