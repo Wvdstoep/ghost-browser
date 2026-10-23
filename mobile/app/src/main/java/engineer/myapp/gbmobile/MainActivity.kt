@@ -3021,6 +3021,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 ports = parsedPorts,
                 findings = (0 until findings.length()).mapNotNull { i -> findings.optJSONObject(i)?.let { LocalReconResultPage.Finding(it.optString("severity"), it.optString("title"), it.optString("impact")) } },
                 error = fields.optString("error"), scope = fields.optString("scope"),
+                webIdentified = (fields.optJSONArray("webServices")?.length() ?: 0) > 0,
             )
         }
 

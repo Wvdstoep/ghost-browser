@@ -4,7 +4,9 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
-> **v0.70** — Range discovery now has a two-screen protection workflow: configure the scan, then review a searchable evidence inbox. Each observed host can be marked reviewed or dismissed; review state persists across scan runs. A reviewed record can open an editable responsible-disclosure email draft in the phone's email app. Ghost Browser never sends the email itself.
+> **v0.71** — Scan history now opens as a compact results navigator. The overview shows result counts, open ports, web responses or findings, and scopes. Search by host, port, title, or finding; narrow by scope and result type; move through 20 results per page; tap one row to inspect its evidence in a focused sheet. The same layout serves range discoveries, on-device scans, and local watcher results.
+
+Range discovery also has a two-screen protection workflow: configure the scan, then review a searchable evidence inbox. Each observed host can be marked reviewed or dismissed; review state persists across scan runs. A reviewed record can open an editable responsible-disclosure email draft in the phone's email app. Ghost Browser never sends the email itself.
 
 When web identification is enabled, the phone requests `/` on an open web port and saves HTTP status, server headers, and page title. For HTTPS hosts it also checks that host's `/.well-known/security.txt` for a vulnerability-reporting email. A suggested contact appears only when HTTPS certificate and hostname validation succeeds, the file is current, and any Canonical field matches the fetched URL. No redirects are followed. Most IP-hosted sites have domain-only certificates, so manual contact entry remains available.
 
@@ -45,9 +47,9 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.70 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.71 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `893e3d6c5808d73c2f07b6b907d842e72afa2b913efc918ccb7d6e06a545f587`.
+SHA-256: `a2823710eec9cc4681ce1adca3934b9a2a104fd4520522dc06f42f9993d0070b`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)
