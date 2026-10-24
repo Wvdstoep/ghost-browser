@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+const { captureFileChoosers } = require('../src/fileChooser');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-fc-'));
 process.env.PROFILE_DIR = dir;
@@ -21,6 +23,30 @@ function ctx(page) {
 }
 
 describe('upload_file crop-confirm', () => {
+  it.each([false, true])('handles a pending native file chooser when setFiles fails=%s', async (fails) => {
+    const id = fa.put({ mime: 'image/png', kind: 'post', name: 'reference.png', bytes: Buffer.from([1, 2, 3]) });
+    const page = new EventEmitter();
+    page.$$ = async () => [];
+    const context = new EventEmitter();
+    context.pages = () => [page];
+    captureFileChoosers(context);
+    let received;
+    page.emit('filechooser', { setFiles: async (file) => {
+      if (fails) throw new Error('picker closed');
+      received = file;
+    } });
+    const c = ctx(page);
+    await files.upload_file(c, { assetId: id });
+    if (fails) {
+      expect(c.said.join(' ')).toMatch(/Could not set the file.*picker closed/);
+      expect(c.steps).toEqual([]);
+    } else {
+      expect(received.name).toBe('reference.png');
+      expect(received.buffer).toEqual(Buffer.from([1, 2, 3]));
+      expect(c.steps[0][0]).toBe('upload');
+    }
+  });
+
   it.each(['image', 'post'])('uses a stored image labelled %s as the reference when no asset id is given', async (kind) => {
     fa.put({ mime: 'image/png', kind, name: 'reference.png', bytes: Buffer.from([1, 2, 3, 4]) });
     fa.put({ mime: 'video/mp4', kind: 'video', name: 'old-clip.mp4', bytes: Buffer.from([5, 6, 7, 8]) });

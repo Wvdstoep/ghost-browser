@@ -272,12 +272,14 @@ class OperatorRun {
           this._failStreak = 0;
         }
         catch (e) {
-          this._event('llm-error', { message: e.message });
+          this.error = e instanceof Error ? e.message : typeof e === 'string' ? e
+            : e && typeof e.error === 'string' ? e.error : 'Model request failed';
+          this._event('llm-error', { message: this.error });
           if (this._keys.length > 1) {
             this._keyIdx = (this._keyIdx + 1) % this._keys.length;
             const nextKey = this._keys[this._keyIdx % this._keys.length];
             this.llm.key = nextKey;
-            this._event('thought', { text: `Rate limit or provider response received (${String(e.message).slice(0, 60)}). Automatically switching to alternate API key (${this._keyIdx + 1}/${this._keys.length}).` });
+            this._event('thought', { text: `Rate limit or provider response received (${String(this.error).slice(0, 60)}). Automatically switching to alternate API key (${this._keyIdx + 1}/${this._keys.length}).` });
           }
           // If the model hits a limit or 500 error, aggressively condense historical messages before retry
           for (let i = 2; i < this.messages.length - 1; i++) {
@@ -285,10 +287,11 @@ class OperatorRun {
               this.messages[i].content = String(this.messages[i].content).slice(0, 200) + ' … [trimmed on error]';
             }
           }
-          if (++this._failStreak >= 6) { this._finishAs('error', `the model stopped answering: ${e.message}`); break; }
+          if (++this._failStreak >= 6) { this._finishAs('error', `the model stopped answering: ${this.error}`); break; }
           await new Promise((r) => setTimeout(r, 3000));
           continue;
         }
+        this.error = null;
         const calls = Array.isArray(reply.toolCalls) ? reply.toolCalls : [];
         const content = String(reply.content || '');
         let thought = reply.thinking || '';
@@ -385,7 +388,11 @@ class OperatorRun {
         this._persist();
       }
       if (this._stop && this.status === 'running') this._finishAs('stopped', 'stopped by the owner');
-    } catch (e) { this.error = e.message; this._finishAs('error', e.message); }
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : typeof e === 'string' ? e
+        : e && typeof e.error === 'string' ? e.error : 'Model request failed';
+      this._finishAs('error', this.error);
+    }
     this.endedAt = this.now(); this._event('end', { status: this.status, finalLine: this.finalLine }); this._persist();
     return this.view();
   }
