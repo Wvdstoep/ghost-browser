@@ -10,6 +10,7 @@
  */
 const { recordingAsset, RECORDINGS_DIR } = require('../recordings');
 const fileAssets = require('../fileAssets');
+const { takeFileChooser } = require('../fileChooser');
 const { confirmUploadDialog, resizeImageBytes, SPEC } = require('./uihelpers');
 
 
@@ -101,9 +102,10 @@ module.exports = {
       return;
     }
     const page = ctx.page();
+    const chooser = takeFileChooser(page);
     let input = null;
     try { const all = await page.$$('input[type=file]'); input = all.length ? all[all.length - 1] : null; } catch { /* none */ }
-    if (!input) { ctx.observe('No file input is on the page yet. Open the site\'s upload / "Add media" control so its file input appears, then call upload_file again.'); return; }
+    if (!input && !chooser) { ctx.observe('No file input or pending file chooser. Open the site\'s upload menu, choose Upload / Uploaden, then call upload_file again.'); return; }
     // Size an IMAGE to spec at the last gate (a banner/cover >= 1024x576 → 2048x1152, a photo square),
     // so an undersized image can never reach the platform. Videos and other kinds pass through as-is.
     let upBytes = asset.bytes, upMime = asset.mime, upName = asset.name;
@@ -112,7 +114,11 @@ module.exports = {
       const rb = await resizeImageBytes(asset.bytes, SPEC[upKind][0], SPEC[upKind][1]);
       if (rb && rb.length) { upBytes = rb; upMime = 'image/png'; upName = String(asset.name || upKind).replace(/\.\w+$/, '') + '.png'; }
     }
-    try { await input.setInputFiles({ name: upName, mimeType: upMime, buffer: upBytes }); }
+    try {
+      const payload = { name: upName, mimeType: upMime, buffer: upBytes };
+      if (chooser) await chooser.setFiles(payload);
+      else await input.setInputFiles(payload);
+    }
     catch (e) { ctx.observe(`Could not set the file (${e.message}). The uploader may want a click first — open the upload control and retry.`); return; }
     await ctx.settle(1500);
     // Auto-confirm the crop/adjust dialog if one popped — otherwise the image never commits and the

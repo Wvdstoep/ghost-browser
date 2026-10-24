@@ -25,6 +25,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const { captureFileChoosers } = require('./fileChooser');
 
 // Where a named profile's cookies live. Mounted from a volume, so a login outlives the pod.
 const PROFILE_DIR = process.env.PROFILE_DIR || '/profiles';
@@ -608,6 +609,7 @@ class BrowserPool {
       if (cfg.blockPasskeys) await refusePasskeys(persistent, this.log);
       if (cfg.presentAs) await presentAs(persistent, cfg.presentAs, this.log);
       captureDownloads(persistent, this.log);   // any Download button → the file store
+      captureFileChoosers(persistent);
       // LOGIN SYNC: the cookies the owner's device sent for this profile (see /v1/profiles/:name/cookies)
       try { const pf = path.join(dir, 'pending-cookies.json'); if (fs.existsSync(pf)) { let list = JSON.parse(fs.readFileSync(pf, 'utf8')); if (Array.isArray(list)) list = list.filter((c) => c && !/^(__cf_bm|cf_clearance|__cfruid|__cf_ob_info|lidc|AWSALB|AWSALBCORS|incap_ses|visid_incap)/i.test(String(c.name || ''))); if (Array.isArray(list) && list.length) { await persistent.addCookies(list); this.log.info?.(`[login-sync] ${safe}: ${list.length} cookie(s) from the owner's device applied`); } } } catch (e) { this.log.warn?.(`[login-sync] ${safe}: ${e.message}`); }
       /*
@@ -661,6 +663,7 @@ class BrowserPool {
       timezoneId: profiles.DEFAULTS.timezone,
     });
     captureDownloads(context, this.log);
+    captureFileChoosers(context);
     const page = await context.newPage();
 
     const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
