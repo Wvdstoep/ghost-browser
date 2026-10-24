@@ -1487,6 +1487,24 @@ RULES:
 When the image is downloaded, note the asset id, which door, whether a reference was attached, and what it is for, then finish.`,
   },
 
+  'googleflow.video': {
+    site: 'googleflow', group: 'Studio', label: 'Studio · animate an image in Google Flow',
+    description: 'Uses Google Flow to turn a supplied still image into a video and downloads the result.',
+    tools: [...HANDS, ...LOGINS, 'upload_file', 'wait_for_ready', 'download_file'],
+    prompt: `YOU TURN THE OWNER'S EXISTING IMAGE INTO A VIDEO IN GOOGLE FLOW.
+
+Use Google Flow at https://labs.google/fx/tools/flow. Do not use Google AI Studio or a text-only Gemini chat for this task. Google Flow may offer different generation modes depending on account access; inspect the page and use its image-to-video or frames-to-video mode with Veo when available.
+
+1. Open the Flow URL and look. Confirm that the signed-in Google account is visible. If Flow shows a sign-in page, report that and stop; do not enter credentials.
+2. Find the image-to-video workflow (often called Frames to Video, Image to Video, or similar). Choose it. Do not start a text-to-video job when the owner asked to animate an existing image.
+3. Attach the reference image. If the goal includes an asset id, use upload_file with that id. Otherwise use upload_file with kind "image" to select the latest stored image. First open Flow's image upload control so its file input exists. Look afterward and confirm the source image thumbnail/frame is visibly present. If no stored image is available, stop and say the image asset is missing; do not substitute a newly generated image.
+4. Enter the motion prompt from the goal. Preserve the subject, product, and visual identity of the supplied image. Use Flow's available duration/aspect settings only when the page exposes them.
+5. Start generation and wait for an actual completed video. Use wait_for_ready as needed, then look to confirm the video preview or download control exists. A queued/running render is not a completed result.
+6. Download the generated video with download_file (use kind "video"). Report the asset id and whether the reference was attached and the video downloaded.
+
+If Flow does not expose an image-to-video/Veo option, or shows a quota, plan, region, or access restriction, report the exact visible message. Do not claim that Google cannot generate video based on the AI Studio text model. Finish after the result or the specific blocking message is established.`,
+  },
+
   'herald.facebook.group.setup': {
     site: 'facebook', group: 'Herald', label: 'Herald · create FB group',
     description: 'Creates a Facebook GROUP for a brand community from the owner\'s session. A defined multi-step walk, through the act gate.',

@@ -153,6 +153,16 @@ describe('who may be spoken to, and how loudly', () => {
     expect(t.roles.scan).toBeNull();
     expect(t.roles.scout).toBeNull();
   });
+
+  it('routes Google Flow to the Google AI Studio login profile as a tool', () => {
+    const flow = platforms.get('googleflow');
+    expect(flow.start).toBe('https://labs.google/fx/tools/flow');
+    expect(flow.loginProfile).toBe('googleaistudio');
+    expect(flow.kind).toBe('tool');
+    expect(flow.read).toBe(false);
+    expect(flow.reply).toBe(false);
+    expect(flow.roles.scan).toBeNull();
+  });
 });
 
 describe('the owner can change the rules without a deploy — but not break them', () => {

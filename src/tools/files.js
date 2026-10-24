@@ -30,6 +30,14 @@ async function fetchInPage(page, url) {
   return bytes.length ? { mime, bytes } : null;
 }
 
+function latestUploadAsset(kind) {
+  if (kind !== 'image') return fileAssets.latest(kind);
+  // Generated images may be labelled "post" or "cover"; select by MIME, not that label.
+  const images = fileAssets.list().filter((m) => /^image\//i.test(m.mime || ''));
+  images.sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  return images.length ? fileAssets.get(images[0].id) : null;
+}
+
 module.exports = {
   /**
    * Get a generated FILE off the page — the most recent video, then a download link, then the most
@@ -83,11 +91,13 @@ module.exports = {
      * So a recordingId is accepted alongside an assetId. Nothing is copied into the asset store: the
      * bytes are read at upload time and handed to the page's file input, exactly as an asset's are.
      */
-    const asset = a.recordingId ? recordingAsset(a.recordingId) : fileAssets.get(a.assetId || a.id);
+    const assetId = a.assetId || a.id;
+    const asset = a.recordingId ? recordingAsset(a.recordingId)
+      : assetId ? fileAssets.get(assetId) : a.kind ? latestUploadAsset(a.kind) : null;
     if (!asset) {
       ctx.observe(a.recordingId
         ? `No recording "${a.recordingId}" with a finished video. Recordings live in ${RECORDINGS_DIR}/<id>/final.mp4 — check the id the console showed, and that it says "done" rather than still encoding.`
-        : `No stored file with id "${a.assetId || a.id}". Download it first with download_file (or check the id from the earlier step).`);
+        : `No stored file${assetId ? ` with id "${assetId}"` : a.kind ? ` of kind "${a.kind}"` : ''}. Download it first with download_file (or check the id from the earlier step).`);
       return;
     }
     const page = ctx.page();
