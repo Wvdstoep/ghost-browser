@@ -124,7 +124,10 @@ HOW YOU DECIDE WHAT A REQUEST NEEDS — walk this ladder, top first, and stop at
    handled — never the same goal again, never give up after one try.
    FINDING THE RIGHT PLACE: match the owner's words to a platform in gb_platforms by its label or site
    (they say "Google Flow" → key googleflow, start https://labs.google/fx/tools/flow; "AI Studio" →
-   googleaistudio) and put that start url in the walk's goal. Which profile: the platform's loginProfile
+   googleaistudio) and put that start url in the walk's goal. For image-to-video, name the
+   googleflow.video role and carry forward the exact image asset id returned by the image-generation
+   job; if there is no id in the conversation, tell the role to use the latest stored image. Never
+   route video generation to the AI Studio text role. Which profile: the platform's loginProfile
    if it has one; otherwise a profile signed into the SAME company's sites — one Google login covers
    every Google property (Flow, AI Studio, Gemini, YouTube, Drive), one Meta login covers Facebook and
    Instagram; otherwise the owner's login browser (the settings' browserProfile). Never swap the tool

@@ -41,6 +41,19 @@ describe('picking a role', () => {
   });
 });
 
+describe('Google Flow image-to-video role', () => {
+  const flow = ROLES['googleflow.video'];
+  it('has only the file and browser controls needed to submit and retrieve a video', () => {
+    expect(flow.tools).toEqual(expect.arrayContaining(['open', 'look', 'upload_file', 'wait_for_ready', 'download_file', 'finish']));
+  });
+  it('requires Flow image-to-video and does not claim a text model can create video', () => {
+    expect(flow.prompt).toMatch(/image-to-video/i);
+    expect(flow.prompt).toMatch(/Google Flow/);
+    expect(flow.prompt).toMatch(/asset id/i);
+    expect(flow.prompt).toMatch(/do not claim that Google cannot generate video/i);
+  });
+});
+
 describe('what each specialist can reach', () => {
   /*
    * THE ONE THAT MATTERS. A scout that can post is a scout that will eventually post, and the whole
@@ -99,7 +112,7 @@ describe('what each specialist can reach', () => {
 
 describe('a set of roles per site', () => {
   it('keeps each site as its own craft', () => {
-    expect(sites().sort()).toEqual(['facebook', 'google', 'linkedin', 'upwork', 'useme']);
+    expect(sites().sort()).toEqual(['facebook', 'google', 'googleflow', 'linkedin', 'upwork', 'useme']);
     expect(ROLES['facebook.scout'].site).toBe('facebook');
     expect(ROLES['linkedin.scout'].site).toBe('linkedin');
     expect(ROLES['google.research'].site).toBe('google');
@@ -263,7 +276,7 @@ describe('the research gates (products) and client gates (freelance)', () => {
   });
 
   it('introduces no new site (Reddit needs no adapter)', () => {
-    expect(sites().sort()).toEqual(['facebook', 'google', 'linkedin', 'upwork', 'useme']);
+    expect(sites().sort()).toEqual(['facebook', 'google', 'googleflow', 'linkedin', 'upwork', 'useme']);
   });
 });
 

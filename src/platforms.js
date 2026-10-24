@@ -171,6 +171,18 @@ const SEED = [
     roomShape: 'not a room — an image and text workbench the desk generates in',
   },
   {
+    key: 'googleflow', label: 'Google Flow', site: 'labs.google',
+    start: 'https://labs.google/fx/tools/flow',
+    kind: 'tool', profiles: ['googleflow'], loginProfile: 'googleaistudio',
+    readNeedsLogin: true,
+    read: false, reply: false, dm: 'never',
+    readGapMs: 0, repliesPerDay: 0,
+    roles: { scan: null, scout: null, reply: null, dm: null },
+    room: {},
+    match: ['google ?flow', 'labs\\.google/fx/tools/flow'],
+    roomShape: 'not a room — Google’s image and video generation workbench',
+  },
+  {
     key: 'youtube', label: 'YouTube', site: 'youtube.com', start: 'https://www.youtube.com/',
     kind: 'community', profiles: ['youtube'], loginProfile: 'google',
     readNeedsLogin: false,   // a stranger can read it
