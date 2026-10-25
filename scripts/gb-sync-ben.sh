@@ -9,8 +9,10 @@ if [[ ! "$image" =~ ^wvdstoep/ghost-browser:v[0-9]+$ ]]; then
   exit 2
 fi
 
-namespace=pod-ben-magrill
+namespace=ghost-browser
 if [ -n "${GB_KUBECTL_BIN:-}" ]; then k=( "$GB_KUBECTL_BIN" ); else k=( sudo kubectl ); fi
+# The tool moved into Ben's dedicated k3s; the platform namespace is only its proxy.
+k+=( -n byon-cp-ben-magrill exec -i deployment/byon-ben-magrill -c k3s -- kubectl )
 current=$("${k[@]}" -n "$namespace" get deployment ghost-browser -o jsonpath='{.spec.template.spec.containers[0].image}') || {
   echo "Ben sync: cannot read deployment; retry next cycle" >&2; exit 1;
 }
@@ -19,16 +21,25 @@ if [ "$current" = "$image" ]; then
   exit 0
 fi
 
-ready=$("${k[@]}" -n "$namespace" exec -i deploy/master -- node -e '
-  fetch(process.env.GHOST_URL + "/v1/deploy/readiness", {
-    headers: { authorization: "Bearer " + process.env.GHOST_API_KEY }
+# A browser that cannot pull its old image cannot answer readiness or have active jobs.
+# Recover only when every reported container is blocked on image pull and no replica is available.
+available=$("${k[@]}" -n "$namespace" get deployment ghost-browser -o jsonpath='{.status.availableReplicas}')
+waiting=$("${k[@]}" -n "$namespace" get pods -l app=ghost-browser -o jsonpath='{range .items[*].status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}')
+pull_blocked=false
+if [ "${available:-0}" = 0 ] && [ -n "$waiting" ] && ! printf '%s\n' "$waiting" | grep -qEv '^(ErrImagePull|ImagePullBackOff)$'; then
+  pull_blocked=true
+fi
+
+ready=$("${k[@]}" -n "$namespace" exec -i deploy/ghost-browser -- node -e '
+  fetch("http://127.0.0.1:3000/v1/deploy/readiness", {
+    headers: { authorization: "Bearer " + (process.env.API_KEYS || "").split(",")[0].split(":")[0] }
   }).then(async r => {
     const j = await r.json();
     console.log("BUSY=" + (r.ok && j.busy === 0 ? 0 : 1));
     console.log(j.explain || "readiness unavailable");
   }).catch(e => { console.log("BUSY=1"); console.log(e.message); });
 ' 2>/dev/null) || ready='BUSY=1'
-if ! printf '%s\n' "$ready" | grep -qx 'BUSY=0'; then
+if [ "$pull_blocked" != true ] && ! printf '%s\n' "$ready" | grep -qx 'BUSY=0'; then
   echo "Ben sync: browser is busy or readiness is unavailable; retry next cycle"
   exit 0
 fi

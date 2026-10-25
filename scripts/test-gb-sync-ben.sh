@@ -10,8 +10,10 @@ printf '%s\n' "$*" >> "$MOCK_LOG"
 case " $* " in
   *' get deployment ghost-browser '*)
     if [ "${MOCK_GET_FAIL:-0}" = 1 ]; then exit 1; fi
+    if [[ "$*" == *availableReplicas* ]]; then printf '%s' "${MOCK_AVAILABLE:-1}"; exit 0; fi
     printf '%s' "$MOCK_CURRENT" ;;
-  *' exec -i deploy/master '*) printf 'BUSY=%s\n' "$MOCK_BUSY" ;;
+  *' get pods '*) printf '%s' "${MOCK_WAITING:-}" ;;
+  *' exec -i deploy/ghost-browser '*) printf 'BUSY=%s\n' "$MOCK_BUSY" ;;
 esac
 EOF
 chmod +x "$tmp/kubectl"
@@ -43,4 +45,18 @@ if bash "$here/gb-sync-ben.sh" 'wvdstoep/ghost-browser:latest' > "$tmp/out" 2>&1
 : > "$tmp/log"
 export MOCK_GET_FAIL=1
 if bash "$here/gb-sync-ben.sh" "$image" > "$tmp/out" 2>&1; then exit 1; fi
+! grep -q 'set image' "$tmp/log"
+
+# Every operation must tunnel into Ben's own cluster and address its tool namespace.
+grep -q -- '-n byon-cp-ben-magrill exec -i deployment/byon-ben-magrill -c k3s -- kubectl -n ghost-browser' "$tmp/log"
+! grep -q -- '-n pod-ben-magrill' "$tmp/log"
+
+unset MOCK_GET_FAIL
+: > "$tmp/log"
+export MOCK_BUSY=1 MOCK_AVAILABLE=0 MOCK_WAITING=ImagePullBackOff
+bash "$here/gb-sync-ben.sh" "$image" > "$tmp/out"
+grep -q 'rolled to' "$tmp/out"
+: > "$tmp/log"
+export MOCK_WAITING=CrashLoopBackOff
+bash "$here/gb-sync-ben.sh" "$image" > "$tmp/out"
 ! grep -q 'set image' "$tmp/log"
