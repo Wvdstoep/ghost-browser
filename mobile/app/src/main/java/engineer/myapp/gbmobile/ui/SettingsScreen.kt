@@ -61,6 +61,7 @@ class SettingsUi {
 class SettingsActions(
     val onSaveClusterUrl: (String) -> Unit,
     val onSignIn: () -> Unit,
+    val onSignOut: () -> Unit = {},
     val onConnectToggle: () -> Unit,
     val onResync: () -> Unit,
     val onOpenHub: () -> Unit,

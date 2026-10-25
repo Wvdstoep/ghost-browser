@@ -4,6 +4,8 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
+> **v0.77** — Account & sync now has **Sign out of this device**. It removes the saved Android device login so closing and reopening the app cannot reconnect it. **Disconnect** pauses the connection and keeps the login. The cluster tool is **Ghost Browser Hosted**; its web-console session is separate from the Android app's device login.
+
 > **v0.76** — The domain picker also reads a page's canonical and Open Graph URL hints, including when reviewing an older saved scan. Suggested domains must resolve to the observed IP and still require your selection. Evidence labels the page title separately from the URL. If no matching domain is found, the observed IP remains the address and the IP-only local baseline is available.
 
 After installing v0.76, the evidence action reads **Find domain & research**. If it still reads **Run cluster recon in Security Apps**, Android is running an earlier APK. Installing an APK signed with a different debug key may require replacing the app; back up local app data before uninstalling.

@@ -80,6 +80,7 @@ class LocalModelUi {
 class SettingsHandlers(
     val onSaveClusterUrl: ((String) -> Unit)? = null,
     val onSignIn: (() -> Unit)? = null,
+    val onSignOut: (() -> Unit)? = null,
     val onConnectToggle: (() -> Unit)? = null,
     /* The fallback that never depends on the platform: sign in with the owner's email and the
        password set on this instance, and set that password while signed in. */
@@ -308,6 +309,11 @@ private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
             if (h.onSignIn != null) SGhost("Sign in", Modifier.weight(1f), h.onSignIn)
             if (h.onConnectToggle != null) SPrimary(if (s.connected.value) "Disconnect" else "Connect", Modifier.weight(1f), h.onConnectToggle)
             SGhost("Re-sync now", Modifier.weight(1f), h.onResync)
+        }
+        if (h.onSignOut != null) {
+            Spacer(Modifier.height(8.dp))
+            SGhost("Sign out of this device", Modifier.fillMaxWidth(), h.onSignOut)
+            SNote("Disconnect pauses the connection. Sign out removes this device's saved login. Ghost Browser Hosted runs separately in your cluster.")
         }
         if (h.onSignIn == null) SNote("Sign in on the Browser tab (my-app.engineer → open Ghost Browser from Tools). The node then registers itself — one account, the same data on every device.")
         /*
