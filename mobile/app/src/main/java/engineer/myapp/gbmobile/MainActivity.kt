@@ -3485,6 +3485,28 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ Settings")
     }
 
+    private fun doSignOut() {
+        stopDeviceRing(); stopControlWeb()
+        DeviceSignOut.clear(this)
+        vm.clusterOn.value = false
+        vm.clusterInfo.value = "Signed out of this device"
+        ASSIST.connected.value = false
+        loginSyncHashes.clear()
+        try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
+        val managers = mutableListOf(CookieManager.getInstance())
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+            for (name in vm.profiles.value.orEmpty()) try {
+                managers.add(ProfileStore.getInstance().getOrCreateProfile(name).cookieManager)
+            } catch (e: Exception) {}
+        }
+        for (manager in managers) {
+            manager.setCookie(vm.clusterUrl, "gb_session=; Max-Age=0; Path=/; Secure; HttpOnly")
+            manager.flush()
+        }
+        vm.log("Signed out of Ghost Browser Mobile. The hosted browser has its own session.")
+        syncSettingsUi()
+    }
+
     private fun doConnectToggle() {
         if (ctrlWeb != null || ringOn) {
             stopDeviceRing(); stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
@@ -3509,6 +3531,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun buildSettingsActions() = engineer.myapp.gbmobile.ui.SettingsActions(
         onSaveClusterUrl = { vm.clusterUrl = it.trim(); settingsUi.clusterUrl = vm.clusterUrl },
         onSignIn = { doSignIn() },
+        onSignOut = { doSignOut() },
         onConnectToggle = { doConnectToggle() },
         onSetPassword = { pw -> if (vm.clusterUrl.trim().isNotEmpty()) apiCall("POST", "/api/auth/password", JSONObject().put("password", pw).toString(), "set_password") },
         onResync = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↻ re-syncing shared data…"); autoSyncSharedData() } },
@@ -3748,6 +3771,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // The one-time enrolment result: the SSO-authed WebView minted a durable device key. Store it, and
         // from now on every cluster call goes native with it — no more per-profile sign-in.
         if (tag == "enroll" || tag == "enroll_err") {
+            if (ctrlWeb == null) return // Ignore late enrolment after sign-out.
             if (tag == "enroll") try { val o = JSONObject(data); val t = o.optString("token"); if (t.isNotBlank()) { vm.clusterKey = t; vm.log("● connected — this device stays signed in"); startDeviceRing(); autoSyncSharedData() } else vm.log("! enrol: ${o.optString("error", data.take(80))}") } catch (e: Exception) { vm.log("! enrol: ${data.take(80)}") }
             else vm.log("! enrol failed: ${data.take(80)}")
             return

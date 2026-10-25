@@ -814,7 +814,7 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
     st.local.value = local
     val handlers = androidx.compose.runtime.remember(sa, act) {
         engineer.myapp.gb.shared.SettingsHandlers(
-            onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onConnectToggle = sa.onConnectToggle,
+            onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onSignOut = sa.onSignOut, onConnectToggle = sa.onConnectToggle,
             onSetPassword = sa.onSetPassword,
             onResync = sa.onResync, onOpenTraining = sa.onOpenTraining, onOpenDownloads = sa.onOpenDownloads,
             onOpenTailscale = sa.onOpenTailscale,
