@@ -9,6 +9,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class DeviceSignOutTest {
+    @Test fun rejectedDeviceKeyCannotLeaveTheAppShowingConnected() {
+        val vm = GbViewModel(RuntimeEnvironment.getApplication())
+        vm.clusterKey = "rejected-device-key"
+        vm.clusterOn.value = true
+        vm.expireDeviceLogin()
+        assertEquals("", vm.clusterKey)
+        assertEquals(false, vm.clusterOn.value)
+        assertTrue(vm.clusterInfo.value.orEmpty().contains("Sign in with MyApp.Engineer"))
+    }
     @Test fun restartCannotRestoreSignedOutDeviceOrSyncApproval() {
         val ctx = RuntimeEnvironment.getApplication()
         val prefs = ctx.getSharedPreferences("gb", Context.MODE_PRIVATE)

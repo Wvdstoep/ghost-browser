@@ -1075,7 +1075,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val code = c.responseCode
                 val txt = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
                 if (code == 401) {   // the key was revoked or expired — drop it and fall back to the SSO enrolment
-                    vm.clusterKey = ""; runOnUiThread { vm.log("· cluster login expired — reconnecting"); onBridge(tag + "_err", "unauthorized"); ensureApiWeb() }
+                    runOnUiThread { stopDeviceRing(); vm.expireDeviceLogin(); vm.log("· cluster login expired — sign in again"); onBridge(tag + "_err", "unauthorized") }
                 } else runOnUiThread { onBridge(if (code in 200..299) tag else tag + "_err", txt) }
             } catch (e: Exception) { runOnUiThread { onBridge(tag + "_err", e.message ?: "network error") } }
         }
@@ -3718,13 +3718,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 try {
                     if (!registered) {
                         val reg = ringHttp("POST", "/v1/device/register", JSONObject().put("deviceId", vm.deviceToken).put("name", android.os.Build.MODEL).put("caps", phoneCaps()).toString(), 20000)
-                        if (reg.first == 401) { runOnUiThread { vm.clusterKey = ""; vm.log("· device login expired — sign in again"); ringOn = false }; break }
+                        if (reg.first == 401) { runOnUiThread { vm.expireDeviceLogin(); vm.log("· device login expired — sign in again"); ringOn = false }; break }
                         registered = reg.first in 200..299
                         if (registered) runOnUiThread { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on — this device is connected"; vm.log("● device connected (native) — stays online while the app runs") }
                         else { Thread.sleep(4000); continue }
                     }
                     val (code, txt) = ringHttp("GET", "/v1/device/poll?deviceId=" + java.net.URLEncoder.encode(vm.deviceToken, "UTF-8"), null, 35000)
-                    if (code == 401) { runOnUiThread { vm.clusterKey = ""; ringOn = false }; break }
+                    if (code == 401) { runOnUiThread { vm.expireDeviceLogin(); ringOn = false }; break }
                     if (code == 404) { registered = false; continue }         // server forgot us (restart) → re-register
                     if (code == 200 && txt.isNotBlank()) {
                         val cmd = try { JSONObject(txt) } catch (e: Exception) { null }
