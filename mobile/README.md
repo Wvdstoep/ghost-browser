@@ -4,6 +4,8 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
+> **v0.81** — MyApp sign-in opens inside Ghost Browser when no external browser is available. Verified the actual Settings button with Chrome disabled, automatic return to the correct cluster, cookie-free device access, and login persistence after a process restart. Google sign-in still uses an external browser and explains how to enable one without cancelling an existing email login.
+
 > **v0.80** — Settings displays the installed version. A rejected device login now clears the connected state and asks for sign-in instead of showing a false connection or attempting hidden WebView enrollment. Verified the real Android Settings button, return to the app, correct-cluster discovery, and saved login after a full process restart against the live cluster proxy.
 
 > **v0.79** — Account setup no longer exposes a cluster URL or manual Connect step. Sign in with MyApp.Engineer to discover and connect the correct hosted browser automatically. MyApp.Engineer's Google button also opens the system browser when pressed inside the app, and sign-in cannot loop into Ghost Browser when it is Android's default browser. A failed browser launch now displays an error.
