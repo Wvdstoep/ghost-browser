@@ -113,15 +113,9 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
 
                 // 1 ─ Account & sync ------------------------------------------------------------------
                 SectionCard("☁", "Account & sync", "Sign in to my-app.engineer, connect this device, keep data in sync") {
-                    var url by remember { mutableStateOf(ui.clusterUrl) }
-                    Field("Cluster URL", url, { url = it; act.onSaveClusterUrl(it) }, mono = true)
-                    Spacer(Modifier.height(10.dp))
                     StatusPill(ui.connected.value, ui.clusterStatus.value)
                     Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Ghost("Sign in", Modifier.weight(1f), act.onSignIn)
-                        Primary(if (ui.connected.value) "Disconnect" else "Connect", Modifier.weight(1f), act.onConnectToggle)
-                    }
+                    Primary("Sign in with MyApp.Engineer", Modifier.fillMaxWidth(), act.onSignIn)
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Ghost("Re-sync now", Modifier.weight(1f), act.onResync)

@@ -491,6 +491,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // page, and hand any other scheme to Android — never let the WebView show the broken page.
             override fun shouldOverrideUrlLoading(view: WebView?, req: android.webkit.WebResourceRequest?): Boolean {
                 val u = req?.url?.toString() ?: return false
+                if (PlatformSignIn.isGoogleSignIn(u, req.isForMainFrame)) { doSignIn(google = true); return true }
                 if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:") ||
                     u.startsWith("about:") || u.startsWith("javascript:") || u.startsWith("data:")) return false
                 if (u.startsWith("fb-messenger://") || u.startsWith("messenger://")) {
@@ -3480,18 +3481,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             } })
     }
 
-    private fun doSignIn() {
+    private fun doSignIn(google: Boolean = false) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PlatformSignIn.begin(this))).addCategory(Intent.CATEGORY_BROWSABLE)
             // Google sign-in belongs in the system browser, where the user's Google session lives.
             // Exclude our own browser so Android's default-handler setting cannot loop back here.
-            val browsers = packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != packageName }
-            val chosen = browsers.firstOrNull { it.activityInfo.packageName == "com.android.chrome" } ?: browsers.firstOrNull()
-                ?: throw IllegalStateException("Install a system browser to sign in")
-            intent.setPackage(chosen.activityInfo.packageName)
-            startActivity(intent)
+            startActivity(PlatformSignIn.browserIntent(this, PlatformSignIn.begin(this, google)))
             vm.clusterInfo.value = "Sign in with MyApp.Engineer — this phone connects when you return"
-        } catch (e: Exception) { vm.log("Sign-in could not open: ${e.message}") }
+        } catch (e: Exception) {
+            vm.clusterInfo.value = "Sign-in could not open: ${e.message}"
+            vm.log(vm.clusterInfo.value.orEmpty())
+            android.widget.Toast.makeText(this, vm.clusterInfo.value, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun completePlatformSignIn(callback: String) {

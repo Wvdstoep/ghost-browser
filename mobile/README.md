@@ -4,6 +4,8 @@ Ghost Browser as a **native Android app** running a **real on-device Chromium We
 runs on your real phone — real residential IP, real device fingerprint, real touch — it walks straight
 through walls a server can't (proven: it passes **Cloudflare Turnstile** where the hosted server loops).
 
+> **v0.79** — Account setup no longer exposes a cluster URL or manual Connect step. Sign in with MyApp.Engineer to discover and connect the correct hosted browser automatically. MyApp.Engineer's Google button also opens the system browser when pressed inside the app, and sign-in cannot loop into Ghost Browser when it is Android's default browser. A failed browser launch now displays an error.
+
 > **v0.78** — Tap **Sign in with MyApp.Engineer** on first launch. Use your existing platform email/password or Google account in the system browser; the app opens again and connects to your own hosted browser automatically. No Tools-tab visit or separate Ghost Browser password is needed. The return uses a short-lived, single-use code protected by PKCE; the callback contains no device API key.
 
 > **v0.77** — Account & sync now has **Sign out of this device**. It removes the saved Android device login so closing and reopening the app cannot reconnect it. **Disconnect** pauses the connection and keeps the login. The cluster tool is **Ghost Browser Hosted**; its web-console session is separate from the Android app's device login.
