@@ -821,7 +821,9 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
     st.networkLine.value = "This phone operates on its own real mobile IP — the strongest fingerprint for Cloudflare-gated sites. The cluster's Ghost Browser keeps its own in-image exit node."
     st.themeDark.value = ui.themeMode.value != 1
     st.activity.value = ui.log.value
-    st.appLabel.value = "Ghost Browser Mobile"
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty() }
+    st.appLabel.value = "Ghost Browser Mobile $version"
     local.useLocal.value = ui.useLocal.value
     local.labels.value = ui.modelLabels.value
     local.index.value = ui.modelIndex.value

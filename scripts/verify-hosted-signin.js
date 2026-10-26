@@ -61,8 +61,9 @@ const { chromium, devices } = require('playwright');
         const exchange = await ctx.request.post(session.tool + '/api/auth/device-token', { data: body });
         if (exchange.status() !== 200) throw new Error('Native code redemption failed');
         const record = await exchange.json(); enrolled = true;
-        const probe = await ctx.request.get(session.tool + '/v1/device/list', { headers: { authorization: 'Bearer ' + record.token } });
-        if (probe.status() !== 200) throw new Error('Redeemed device key is not usable');
+        // A phone sends no browser cookies. Using ctx.request here would mask a broken Bearer path.
+        const probe = await fetch(session.tool + '/v1/device/list', { headers: { authorization: 'Bearer ' + record.token } });
+        if (probe.status !== 200) throw new Error('Cookie-free device login is not usable');
         if ((await ctx.request.post(session.tool + '/api/auth/device-token', { data: body })).status() !== 401) throw new Error('Code was reusable');
         results.push({ check: 'live mobile connection', callbackValidated: true, deviceKeyWorks: true, codeSingleUse: true });
       } finally {

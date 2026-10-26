@@ -186,7 +186,7 @@ fun SettingsScreenShared(
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 14.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Settings", style = MaterialTheme.typography.headlineSmall)
-                        Text("Account, browser and automation setup", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text(state.appLabel.value, color = cs.onSurfaceVariant, fontSize = 12.sp)
                     }
                     if (onClose != null) IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
                 }

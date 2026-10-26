@@ -100,6 +100,11 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     val agentRunning = MutableLiveData(false)
     val clusterOn = MutableLiveData(false)
     val clusterInfo = MutableLiveData("Cluster: off")
+    fun expireDeviceLogin() {
+        clusterKey = ""
+        clusterOn.value = false
+        clusterInfo.value = "Sign in with MyApp.Engineer to reconnect"
+    }
     val logText = MutableLiveData("")
 
     // When connected to the cluster, the Activity sets this to mirror each log line to the backend
