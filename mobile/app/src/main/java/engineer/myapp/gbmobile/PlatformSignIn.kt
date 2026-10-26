@@ -2,6 +2,7 @@ package engineer.myapp.gbmobile
 
 import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.net.Uri
 import java.net.URI
 import java.net.URLDecoder
@@ -10,18 +11,31 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 
-/** System-browser login with a single-use PKCE handoff; the callback never contains a device key. */
+/** Platform login with an in-app email fallback and a single-use PKCE handoff. */
 object PlatformSignIn {
     data class Return(val cluster: String, val code: String, val verifier: String)
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
     private fun random() = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
     fun challenge(verifier: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
-    fun browserIntent(context: Context, url: String): Intent {
+    fun open(context: Context, google: Boolean = false, launch: (Intent) -> Unit = { context.startActivity(it) }): String? {
+        val prefs = context.getSharedPreferences("gb", Context.MODE_PRIVATE)
+        val oldVerifier = prefs.getString("signinVerifier", null)
+        val oldState = prefs.getString("signinState", null)
+        val oldExpiry = prefs.getLong("signinExpires", 0)
+        val url = begin(context, google)
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
         val browsers = context.packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != context.packageName }
-        val chosen = browsers.firstOrNull { it.activityInfo.packageName == "com.android.chrome" } ?: browsers.firstOrNull()
-            ?: throw IllegalStateException("Install a system browser to sign in")
-        return intent.setPackage(chosen.activityInfo.packageName)
+        // Explicit launch is allowed even when Android package visibility hides Chrome from queries.
+        val packages = (listOf("com.android.chrome") + browsers.map { it.activityInfo.packageName }).distinct()
+        for (pkg in packages) try { launch(Intent(intent).setPackage(pkg)); return null }
+            catch (_: ActivityNotFoundException) { /* Try another browser, then use our own login tab. */ }
+        if (google) {
+            // A Google attempt must not invalidate the email login page that is already open.
+            prefs.edit().putString("signinVerifier", oldVerifier).putString("signinState", oldState)
+                .putLong("signinExpires", oldExpiry).commit()
+            throw IllegalStateException("Google sign-in needs an external browser. Use email and password here, or enable Chrome for Google.")
+        }
+        return url
     }
     fun isGoogleSignIn(url: String, mainFrame: Boolean): Boolean = try {
         val uri = URI(url)

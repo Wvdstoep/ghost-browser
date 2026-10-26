@@ -1,6 +1,7 @@
 package engineer.myapp.gbmobile
 import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
@@ -48,9 +49,23 @@ class PlatformSignInTest {
         val pm = shadowOf(ctx.packageManager)
         fun handler(pkg: String) = ResolveInfo().apply { activityInfo = ActivityInfo().apply { packageName = pkg; name = "$pkg.Browser"; exported = true } }
         pm.addResolveInfoForIntent(request, handler(ctx.packageName))
-        assertThrows(IllegalStateException::class.java) { PlatformSignIn.browserIntent(ctx, url) }
-        pm.addResolveInfoForIntent(request, handler("com.android.chrome"))
-        assertEquals("com.android.chrome", PlatformSignIn.browserIntent(ctx, url).`package`)
+        var launched: Intent? = null
+        assertNull(PlatformSignIn.open(ctx) { launched = it })
+        assertEquals("com.android.chrome", launched?.`package`)
+    }
+    @Test fun emailLoginOpensInsideTheAppWhenNoOtherBrowserIsAvailable() {
+        val url = PlatformSignIn.open(ctx, launch = { throw ActivityNotFoundException() })
+        assertNotNull(url)
+        assertEquals("my-app.engineer", URI(url!!).host)
+        val next = URLDecoder.decode(URI(url).rawQuery.substringAfter("next="), "UTF-8")
+        val result = PlatformSignIn.takeReturn(ctx, callback())
+        assertTrue(next.contains("device_challenge=${PlatformSignIn.challenge(result.verifier)}"))
+    }
+    @Test fun unavailableGoogleBrowserDoesNotBreakTheExistingEmailLogin() {
+        PlatformSignIn.begin(ctx)
+        val response = callback()
+        assertThrows(IllegalStateException::class.java) { PlatformSignIn.open(ctx, google = true, launch = { throw ActivityNotFoundException() }) }
+        assertNotNull(PlatformSignIn.takeReturn(ctx, response))
     }
     @Test fun rejectsUnrequestedCallbacksAndWrongState() {
         ctx.getSharedPreferences("gb", Context.MODE_PRIVATE).edit().clear().commit()

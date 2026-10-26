@@ -491,6 +491,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // page, and hand any other scheme to Android — never let the WebView show the broken page.
             override fun shouldOverrideUrlLoading(view: WebView?, req: android.webkit.WebResourceRequest?): Boolean {
                 val u = req?.url?.toString() ?: return false
+                if (u.startsWith("ghostbrowser://connect")) { completePlatformSignIn(u); return true }
                 if (PlatformSignIn.isGoogleSignIn(u, req.isForMainFrame)) { doSignIn(google = true); return true }
                 if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:") ||
                     u.startsWith("about:") || u.startsWith("javascript:") || u.startsWith("data:")) return false
@@ -3485,8 +3486,14 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         try {
             // Google sign-in belongs in the system browser, where the user's Google session lives.
             // Exclude our own browser so Android's default-handler setting cannot loop back here.
-            startActivity(PlatformSignIn.browserIntent(this, PlatformSignIn.begin(this, google)))
-            vm.clusterInfo.value = "Sign in with MyApp.Engineer — this phone connects when you return"
+            val inAppUrl = PlatformSignIn.open(this, google)
+            if (inAppUrl != null) {
+                shellUi.signInNeeded.value = false
+                shellUi.screen.value = "browser"
+                shellUi.menuOpen.value = false
+                newTab(inAppUrl)
+            }
+            vm.clusterInfo.value = "Sign in with MyApp.Engineer — this phone connects automatically"
         } catch (e: Exception) {
             vm.clusterInfo.value = "Sign-in could not open: ${e.message}"
             vm.log(vm.clusterInfo.value.orEmpty())
@@ -3517,6 +3524,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     stopDeviceRing(); stopControlWeb()
                     vm.clusterUrl = pending.cluster; vm.clusterKey = token
                     shellUi.signInNeeded.value = false
+                    shellUi.screen.value = "settings"
                     vm.clusterOn.value = true; vm.clusterInfo.value = "Connected to your hosted browser"
                     syncSettingsUi(); startDeviceRing(); autoSyncSharedData()
                     try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
