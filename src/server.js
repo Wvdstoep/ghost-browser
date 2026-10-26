@@ -1348,6 +1348,17 @@ app.post('/v1/device/auth', authed, (req, res) => {
   log.info(`[device-token] enrolled "${rec.name}" for ${owner}`);
   res.json({ ok: true, token: rec.token, deviceId: rec.deviceId, name: rec.name, owner });
 });
+const mobileAuth = require('./mobileAuth').makeMobileAuth({ mintDevice: (input) => deviceTokens.mint(keys, input) });
+app.post('/api/auth/device-code', authed, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(mobileAuth.issue(req.client && req.client.owner, req.body?.challenge)); }
+  catch (e) { fail(res, e); }
+});
+app.post('/api/auth/device-token', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { const rec = mobileAuth.redeem(req.body); res.json({ ok: true, token: rec.token, owner: rec.owner }); }
+  catch (e) { fail(res, e); }
+});
 app.get('/v1/device/tokens', authed, (req, res) => res.json({ devices: deviceTokens.list(req.client && req.client.owner) }));
 app.delete('/v1/device/tokens/:deviceId', authed, (req, res) => res.json({ revoked: deviceTokens.revoke(keys, req.client && req.client.owner, req.params.deviceId) }));
 

@@ -38,7 +38,7 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
         set(v) { sp.edit().putInt("themeMode", v).apply() }
 
     // --- cluster (my-app.engineer SSO) ---
-    var clusterUrl: String get() = sp.getString("clusterUrl", "https://ghost-browser.mavicpro-fan.my-app.engineer") ?: ""
+    var clusterUrl: String get() = sp.getString("clusterUrl", "") ?: ""
         set(v) { sp.edit().putString("clusterUrl", v).apply() }
     var approvedCookieSync: Set<String>
         get() = sp.getStringSet("approvedCookieSync", emptySet())?.toSet() ?: emptySet()

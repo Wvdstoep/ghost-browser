@@ -231,6 +231,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
             startDeviceRing()
         }
+        shellUi.signInNeeded.value = vm.clusterKey.isBlank()
         fetchLearnFeed()   // new-tab home feed (my-app.engineer /learn)
 
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -252,6 +253,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         when (incoming?.action) {
             Intent.ACTION_VIEW -> {
                 val uri = incoming.data ?: return
+                if (uri.scheme == "ghostbrowser") { completePlatformSignIn(uri.toString()); return }
                 if (uri.scheme != "http" && uri.scheme != "https") return
                 val url = uri.toString()
                 if (tabs.getOrNull(activeTab)?.url == HOME) load(url) else newTab(url)
@@ -3479,15 +3481,55 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun doSignIn() {
-        val platform = if (vm.clusterUrl.contains("://ghost-browser."))
-            vm.clusterUrl.replace("://ghost-browser.", "://") else "https://my-app.engineer"
-        load(platform)
-        vm.log("→ log in to my-app.engineer, open Ghost Browser from the Tools tab, then reopen ⚙ Settings")
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(PlatformSignIn.begin(this))).addCategory(Intent.CATEGORY_BROWSABLE)
+            // Google sign-in belongs in the system browser, where the user's Google session lives.
+            // Exclude our own browser so Android's default-handler setting cannot loop back here.
+            val browsers = packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != packageName }
+            val chosen = browsers.firstOrNull { it.activityInfo.packageName == "com.android.chrome" } ?: browsers.firstOrNull()
+                ?: throw IllegalStateException("Install a system browser to sign in")
+            intent.setPackage(chosen.activityInfo.packageName)
+            startActivity(intent)
+            vm.clusterInfo.value = "Sign in with MyApp.Engineer — this phone connects when you return"
+        } catch (e: Exception) { vm.log("Sign-in could not open: ${e.message}") }
+    }
+
+    private fun completePlatformSignIn(callback: String) {
+        val pending = try { PlatformSignIn.takeReturn(this, callback) }
+            catch (e: Exception) { vm.log("Sign-in could not finish: ${e.message}"); return }
+        vm.clusterInfo.value = "Connecting this phone…"
+        netExec.execute {
+            try {
+                val connection = java.net.URL(pending.cluster + "/api/auth/device-token").openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "POST"; connection.connectTimeout = 15000; connection.readTimeout = 20000
+                connection.instanceFollowRedirects = false; connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                val body = JSONObject().put("code", pending.code).put("verifier", pending.verifier)
+                    .put("deviceId", vm.deviceToken).put("name", android.os.Build.MODEL).toString()
+                connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                val status = connection.responseCode
+                val response = (if (status in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+                connection.disconnect()
+                val result = JSONObject(response)
+                val token = result.optString("token")
+                check(status in 200..299 && token.isNotBlank()) { "Please tap Sign in with MyApp.Engineer and try again." }
+                runOnUiThread {
+                    stopDeviceRing(); stopControlWeb()
+                    vm.clusterUrl = pending.cluster; vm.clusterKey = token
+                    shellUi.signInNeeded.value = false
+                    vm.clusterOn.value = true; vm.clusterInfo.value = "Connected to your hosted browser"
+                    syncSettingsUi(); startDeviceRing(); autoSyncSharedData()
+                    try { androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java)) } catch (e: Exception) {}
+                    vm.log("Signed in and connected with your MyApp.Engineer account")
+                }
+            } catch (e: Exception) { runOnUiThread { vm.clusterInfo.value = "Connection did not finish — tap Sign in to retry"; vm.log("Sign-in: ${e.message}") } }
+        }
     }
 
     private fun doSignOut() {
         stopDeviceRing(); stopControlWeb()
         DeviceSignOut.clear(this)
+        shellUi.signInNeeded.value = true
         vm.clusterOn.value = false
         vm.clusterInfo.value = "Signed out of this device"
         ASSIST.connected.value = false
@@ -3508,6 +3550,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun doConnectToggle() {
+        if (vm.clusterKey.isBlank()) { doSignIn(); return }
         if (ctrlWeb != null || ringOn) {
             stopDeviceRing(); stopControlWeb(); vm.clusterOn.value = false; vm.clusterInfo.value = "Cluster: off"
             try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
