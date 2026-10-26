@@ -51,6 +51,7 @@ COPY scripts ./scripts
 COPY training ./training
 COPY docs ./docs
 COPY public ./public
+RUN node scripts/prepare-console.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

@@ -305,8 +305,12 @@ private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
             Text(s.clusterUrl.value, color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
         }
         Spacer(Modifier.height(12.dp))
+        if (h.onSignIn != null) {
+            SPrimary("Sign in with MyApp.Engineer", Modifier.fillMaxWidth(), h.onSignIn)
+            SNote("Email or Google sign-in. This phone connects automatically when you return.")
+            Spacer(Modifier.height(10.dp))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (h.onSignIn != null) SGhost("Sign in", Modifier.weight(1f), h.onSignIn)
             if (h.onConnectToggle != null) SPrimary(if (s.connected.value) "Disconnect" else "Connect", Modifier.weight(1f), h.onConnectToggle)
             SGhost("Re-sync now", Modifier.weight(1f), h.onResync)
         }

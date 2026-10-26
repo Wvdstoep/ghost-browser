@@ -6,5 +6,6 @@ import android.content.Context
 object DeviceSignOut {
     fun clear(context: Context): Boolean = context.getSharedPreferences("gb", Context.MODE_PRIVATE).edit()
         .remove("clusterKey").remove("approvedCookieSync").remove("platformsCache")
-        .remove("flowsCache").remove("rolesCache").commit()
+        .remove("flowsCache").remove("rolesCache")
+        .remove("signinState").remove("signinVerifier").remove("signinExpires").commit()
 }

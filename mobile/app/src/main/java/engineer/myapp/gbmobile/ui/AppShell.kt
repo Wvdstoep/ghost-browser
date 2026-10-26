@@ -80,6 +80,7 @@ class ShellUi {
     val agentMsgs = mutableStateOf<List<ChatMsg>>(emptyList())
     val pipThumb = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)   // live snapshot of the tab the agent is driving
     val clusterOn = mutableStateOf(false)
+    val signInNeeded = mutableStateOf(false)
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
@@ -246,6 +247,21 @@ private fun hostOf(url: String): String {
 @Composable
 fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
     val cs = MaterialTheme.colorScheme
+    if (shell.signInNeeded.value) {
+        Column(Modifier.fillMaxSize().background(cs.background).padding(28.dp), verticalArrangement = Arrangement.Center) {
+            Text("Ghost Browser Mobile", color = cs.primary, fontSize = 15.sp)
+            Spacer(Modifier.height(18.dp))
+            Text("One account. Your browser.", color = cs.onBackground, fontSize = 30.sp)
+            Spacer(Modifier.height(12.dp))
+            Text("Sign in with your MyApp.Engineer email and password, or Google. This phone connects to your hosted browser automatically.", color = cs.onSurfaceVariant)
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = settingsAct.onSignIn, modifier = Modifier.fillMaxWidth()) { Text("Sign in with MyApp.Engineer") }
+            Spacer(Modifier.height(12.dp))
+            Text(settingsUi.clusterStatus.value, color = cs.onSurfaceVariant, fontSize = 13.sp)
+            TextButton(onClick = { shell.signInNeeded.value = false }, modifier = Modifier.fillMaxWidth()) { Text("Browse on this phone without connecting") }
+        }
+        return
+    }
     val screen = shell.screen.value
     /*
      * CHROME THAT GETS OUT OF THE WAY WHILE YOU READ.
