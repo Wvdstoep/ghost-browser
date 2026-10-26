@@ -1,6 +1,8 @@
 package engineer.myapp.gbmobile
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -14,13 +16,24 @@ object PlatformSignIn {
     private fun encode(s: String) = URLEncoder.encode(s, "UTF-8")
     private fun random() = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) })
     fun challenge(verifier: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
-    fun begin(context: Context): String {
+    fun browserIntent(context: Context, url: String): Intent {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+        val browsers = context.packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != context.packageName }
+        val chosen = browsers.firstOrNull { it.activityInfo.packageName == "com.android.chrome" } ?: browsers.firstOrNull()
+            ?: throw IllegalStateException("Install a system browser to sign in")
+        return intent.setPackage(chosen.activityInfo.packageName)
+    }
+    fun isGoogleSignIn(url: String, mainFrame: Boolean): Boolean = try {
+        val uri = URI(url)
+        mainFrame && uri.scheme == "https" && uri.host == "my-app.engineer" && uri.path == "/api/auth/google"
+    } catch (_: Exception) { false }
+    fun begin(context: Context, google: Boolean = false): String {
         val verifier = random(); val state = random()
         check(context.getSharedPreferences("gb", Context.MODE_PRIVATE).edit()
             .putString("signinVerifier", verifier).putString("signinState", state)
             .putLong("signinExpires", System.currentTimeMillis() + 10 * 60 * 1000).commit())
         val next = "/api/cluster-tools/ghost-browser/open?device_challenge=${challenge(verifier)}&device_state=$state"
-        return "https://my-app.engineer/?next=${encode(next)}"
+        return "https://my-app.engineer" + (if (google) "/api/auth/google" else "/") + "?next=${encode(next)}"
     }
     fun takeReturn(context: Context, callback: String): Return {
         val uri = URI(callback)

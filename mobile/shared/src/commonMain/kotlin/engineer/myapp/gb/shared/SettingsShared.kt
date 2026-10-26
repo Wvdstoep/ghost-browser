@@ -290,7 +290,7 @@ private fun SettingsCategory(section: String, state: SettingsState, model: AiMod
 private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
     val cs = MaterialTheme.colorScheme
     SettingsCard("Account & sync", "Sign in to my-app.engineer, connect this device, keep data in sync") {
-        if (h.onSaveClusterUrl != null) {
+        if (h.onSaveClusterUrl != null && h.onSignIn == null) {
             var url by remember(s.clusterUrl.value) { mutableStateOf(s.clusterUrl.value) }
             SField("Cluster URL", url, { url = it; h.onSaveClusterUrl.invoke(it) }, mono = true)
             Spacer(Modifier.height(10.dp))
@@ -300,7 +300,7 @@ private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
             Spacer(Modifier.width(8.dp))
             Text(s.clusterStatus.value.ifBlank { if (s.connected.value) "Cluster: connected" else "Cluster: connecting…" }, color = cs.onSurface, fontSize = 13.sp, modifier = Modifier.weight(1f))
         }
-        if (h.onSaveClusterUrl == null && s.clusterUrl.value.isNotBlank()) {
+        if (h.onSignIn == null && h.onSaveClusterUrl == null && s.clusterUrl.value.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             Text(s.clusterUrl.value, color = cs.onSurfaceVariant, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
         }
@@ -310,8 +310,8 @@ private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
             SNote("Email or Google sign-in. This phone connects automatically when you return.")
             Spacer(Modifier.height(10.dp))
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (h.onConnectToggle != null) SPrimary(if (s.connected.value) "Disconnect" else "Connect", Modifier.weight(1f), h.onConnectToggle)
+        if (s.connected.value || h.onSignIn == null) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (h.onSignIn == null && h.onConnectToggle != null) SPrimary(if (s.connected.value) "Disconnect" else "Connect", Modifier.weight(1f), h.onConnectToggle)
             SGhost("Re-sync now", Modifier.weight(1f), h.onResync)
         }
         if (h.onSignOut != null) {
@@ -339,7 +339,7 @@ private fun AccountSection(s: SettingsState, h: SettingsHandlers) {
             SPrimary("Sign in with password", Modifier.fillMaxWidth()) { s.authMessage.value = "signing in…"; h.onPasswordSignIn.invoke(email.trim(), pw) }
             if (s.hasPassword.value == false) SNote("No password is set on this instance yet. Open Ghost Browser from the platform once, then set one below.")
         }
-        if (s.connected.value && h.onSetPassword != null) {
+        if (s.connected.value && h.onSetPassword != null && h.onSignIn == null) {
             Spacer(Modifier.height(14.dp))
             Text("Sign-in password for this Ghost Browser", color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
