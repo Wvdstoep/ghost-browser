@@ -27,7 +27,7 @@ describe('a flow step learns a card of its own', () => {
   });
 
   it('arms the recorder and asks the store with that same intent — one name, both directions', () => {
-    expect(agentSrc).toMatch(/session\.recorder\.arm\(\{ intent: cardIntent \}\)/);
+    expect(agentSrc).toMatch(/session\.recorder\.arm\(\{ intent: cardIntent, verification: settings\.replayVerification \|\| null \}\)/);
     expect(agentSrc).toMatch(/const intent = cardIntent;/);
     // never the role name again in either place
     expect(agentSrc).not.toMatch(/recorder\.arm\(\{ intent: roles\.canonical\(role\) \}\)/);

@@ -33,7 +33,7 @@ const knowledge = require('./knowledge');
 const craft = require('./craft');
 
 /** name → handler. Anything absent is still handled by the switch in agent.js. */
-const REGISTRY = Object.assign({}, memory, profiles, conversation, records, navigate, perceive, images, files, record, knowledge, craft);
+const REGISTRY = Object.assign({}, memory, profiles, conversation, records, navigate, perceive, images, files, record, knowledge, craft, require('./maps'));
 
 /** Is this tool one of the extracted ones? */
 const has = (name) => Object.prototype.hasOwnProperty.call(REGISTRY, name);

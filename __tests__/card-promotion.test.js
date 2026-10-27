@@ -41,7 +41,7 @@ const send = (over = {}) => ({
   postData: '{"to":"a@b.c","subject":"re: brief","body":"yes, happy to take it on"}',
   ...over,
 });
-const record = (over = {}, now = 1) => distill({ intent: 'flow:inbox:reply', origin: 'https://mail.example.com', requests: [send(over)], now }).card;
+const record = (over = {}, now = 1) => distill({ verifiedEffect: true, intent: 'flow:inbox:reply', origin: 'https://mail.example.com', requests: [send(over)], now }).card;
 
 describe('the loop is open: two sightings earn the fast path', () => {
   it('THE REGRESSION — record, record again, and the step may now replay instead of walking', () => {
@@ -132,14 +132,14 @@ describe('the same request said twice', () => {
   it('the path is what identifies it, and pathOf drops only the query and fragment', () => {
     expect(pathOf('https://x.test/a/b?c=1#d')).toBe('https://x.test/a/b');
     expect(pathOf(null)).toBe('');
-    const elsewhere = distill({ intent: 'flow:inbox:reply', origin: 'https://other.test', now: 2,
+    const elsewhere = distill({ verifiedEffect: true, intent: 'flow:inbox:reply', origin: 'https://other.test', now: 2,
       requests: [send({ url: 'https://other.test/api/messages' })] }).card;
     expect(sameShape(record(), elsewhere)).toBe(false);
   });
 
   it('a different place for the auth token is a different request', () => {
     const withHeader = record();
-    const withoutHeader = distill({
+    const withoutHeader = distill({ verifiedEffect: true,
       intent: 'flow:inbox:reply', origin: 'https://mail.example.com', now: 2,
       requests: [send({ headers: {}, postData: '{"to":"a@b.c","csrf_token":"t","subject":"s","body":"b"}' })],
     }).card;

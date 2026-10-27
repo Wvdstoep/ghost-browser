@@ -23,7 +23,7 @@ describe('a verified replay that the API accepts', () => {
     const out = await attemptReplay({
       card: verifiedCard, values: { message: 'the replayed post' },
       runInPage: (r) => { ran = r; return { status: 200, ok: true }; },
-      now: 5,
+      verify: async () => true, now: 5,
     });
     expect(out.done).toBe(true);
     expect(out.healed).toBe(false);
@@ -31,7 +31,7 @@ describe('a verified replay that the API accepts', () => {
     expect(out.card.confidence).toBeGreaterThan(verifiedCard.confidence);   // onVerified raised it
     expect(out.card.quarantined).toBe(false);
     expect(ran.values.message).toBe('the replayed post');                   // the caller's value was carried
-    expect(out.reason).toMatch(/answered 200/);
+    expect(out.reason).toMatch(/independently verified/);
   });
 
   it('puts the page on the card origin BEFORE the fetch, exactly once', async () => {
@@ -40,7 +40,7 @@ describe('a verified replay that the API accepts', () => {
       card: verifiedCard, values: { message: 'x' },
       ensureOrigin: (o) => { seen.push(o); },
       runInPage: () => { expect(seen).toEqual(['https://app.example.com']); return { status: 200 }; },
-      now: 6,
+      verify: async () => true, now: 6,
     });
     expect(seen).toEqual(['https://app.example.com']);
   });
@@ -55,7 +55,7 @@ describe('a replay the API refuses is a failure that heals', () => {
     expect(out.done).toBe(false);
     expect(out.healed).toBe(true);
     expect(out.card.quarantined).toBe(true);
-    expect(out.reason).toMatch(/did not verify.*403/);
+    expect(out.reason).toMatch(/403/);
   });
 
   it('a thrown fetch is a failure, not a crash — quarantine and walk the UI', async () => {

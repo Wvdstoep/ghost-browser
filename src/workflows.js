@@ -182,6 +182,12 @@ function cleanNode(n) {
      * ever set, so even a trusted card came back null from buildReplay and every repeat paid for a
      * full model walk. A step with no values simply walks the UI, exactly as before.
      */
+    if (n.replayVerification && typeof n.replayVerification === 'object') {
+      const spec = n.replayVerification;
+      if (typeof spec.url === 'string' && spec.url.length < 2000 && Array.isArray(spec.path) && spec.path.length <= 12 && spec.path.every(x => typeof x === 'string' && !['__proto__','constructor','prototype'].includes(x)) && spec.match && typeof spec.match.slot === 'string') {
+        out.replayVerification = { url: spec.url, path: spec.path, match: { slot: spec.match.slot, ...(typeof spec.match.field === 'string' ? { field: spec.match.field } : {}) }, completesTask: spec.completesTask === true };
+      }
+    }
     if (n.values && typeof n.values === 'object' && !Array.isArray(n.values)) {
       const v = {};
       for (const k of Object.keys(n.values).slice(0, 40)) {
@@ -377,6 +383,10 @@ function seedFromStep(node, st, context, branchOf) {
 const PACE_MIN_MS = 60 * 1000, PACE_MAX_MS = 240 * 1000;
 const paceMs = () => PACE_MIN_MS + Math.floor(Math.random() * (PACE_MAX_MS - PACE_MIN_MS));
 
+function needsLogin(out) {
+  return !!(out && (out.outcome === 'login_required' || out.data?.replay?.needsLogin || (Array.isArray(out.items) && out.items.some(needsLogin))));
+}
+
 async function drive(wf, { runAgent, runRecon = null, runVerify = null, runFetch = null, runScript = null, input = null, persist = () => {}, now = () => new Date().toISOString(), runId, resume = null,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   /*
@@ -523,6 +533,7 @@ async function drive(wf, { runAgent, runRecon = null, runVerify = null, runFetch
         for (let i = 0; i < items.length; i++) {
           const ctx = { ...context, item: items[i], index: i };
           results.push(await runAgent({ node: resolveNode(node, ctx), goal: template(node.goal, ctx), context: ctx, autoApprove, workflowId: wf.id, runId: run.id }));
+          if (needsLogin(results[results.length - 1])) break;
           // Auto-send only: pause a human-length, random beat before the next reply so the account
           // does not fire a burst. In manual mode the owner's own pace between approvals does this.
           if (autoApprove && i < items.length - 1) { const ms = paceMs(); step.pacingMs = ms; persist(run); await sleep(ms); }
@@ -610,7 +621,10 @@ async function drive(wf, { runAgent, runRecon = null, runVerify = null, runFetch
     const runnable = frontier.filter((n) => hasLiveIn(n));
     if (!runnable.length) continue;
     try {
-      await Promise.all(runnable.map((n) => runNode(n)));   // the step that threw is already marked
+      await Promise.all(runnable.map((n) => runNode(n)));
+      if (run.steps.some(st => needsLogin(st.output))) {
+        run.status = 'needs_login'; run.ended_at = now(); persist(run); return run;
+      }   // the step that threw is already marked
     } catch (e) {
       run.status = 'error'; run.ended_at = now(); persist(run);
       return run;
@@ -725,6 +739,7 @@ function recoverRuns({ runAgent, runRecon = null, runVerify = null, runFetch = n
  */
 function outcomeOf(steps = []) {
   const kinds = (Array.isArray(steps) ? steps : []).map((s) => s && s.kind);
+  if (kinds.includes('login-required')) return 'login_required';
   if (kinds.includes('acted')) return 'posted';
   if (kinds.includes('unconfirmed')) return 'unconfirmed';
   if (kinds.includes('blocked')) return 'blocked';
