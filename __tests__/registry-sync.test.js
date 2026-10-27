@@ -52,3 +52,8 @@ describe('owner boundary and recovery integration',()=>{
   expect(run.mock.calls.some(([args])=>args.includes('rollout'))).toBe(true);
  });
 });
+
+it('captures child stderr so a credential-bearing apply failure cannot bypass the redacted error handler',()=>{
+ const fs=require('node:fs');const source=fs.readFileSync(require.resolve('../scripts/gb-sync-all'),'utf8');
+ expect(source).toContain("stdio: ['pipe', 'pipe', 'pipe']");
+});
