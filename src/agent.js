@@ -258,6 +258,7 @@ function pickPath(value, path) {
 }
 
 const TOOLS = [
+  { type: 'function', function: { name: 'maps_search', description: 'Run a reusable Google Maps business search with fresh inputs. Opens each place, checks its actual category and city, and saves verified leads. Returns partial results and blockers explicitly. categoryTerms must contain the local category names, for example kapper/kapsalon for hairdressers or dierenarts for veterinarians.', parameters: { type: 'object', properties: { business: { type: 'string' }, city: { type: 'string' }, categoryTerms: { type: 'array', items: { type: 'string' } }, limit: { type: 'integer' } }, required: ['business','city','categoryTerms'] } } },
   { type: 'function', function: { name: 'look', description: 'The CONTROLS on this page — buttons, links and fields — as a numbered list. This is how you find something to CLICK, and the numbers change whenever the page does, so call it just before clicking. It is not how you read content: for that use read.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'read', description: 'The WORDS on this page — the posts themselves. This is what you judge a lead on. Call it after every scroll: a feed loads a screenful at a time, so the first read is never all there is.', parameters: { type: 'object', properties: {} } } },
   /*
@@ -1179,7 +1180,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   const learnsCards = !!flowIntent || /^herald\./.test(String(role || ''));
   const cardIntent = flowIntent || roles.canonical(role);
   if (learnsCards && session && session.recorder) {
-    try { session.recorder.arm({ intent: cardIntent }); }
+    try { session.recorder.arm({ intent: cardIntent, verification: settings.replayVerification || null }); }
     catch (e) { log.warn?.(`[agent] ${job.id}: could not arm recorder: ${e.message}`); }
   }
 
@@ -1235,6 +1236,10 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
    * entire browser mid-run, and a tool holding a stale reference would drive the one it left.
    */
   const toolCtx = {
+    cardStore, sink,
+    addLead: (row) => jobsStore.addLead(job, row),
+    storeData: (key, value) => jobsStore.storeData(job, key, value),
+    stopForLogin: (message) => { jobsStore.step(job, 'login-required', message); jobsStore.storeData(job, 'replay', { kind: 'login_required', needsLogin: true }); jobsStore.setReport(job, message); jobsStore.finish(job, 'stopped', message); },
     page: () => page(),
     session: () => session,
     setSession: (next) => { session = next; },
@@ -1421,6 +1426,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
    * Null the rest of the time, which is every walk that never had an unconfirmed act.
    */
   let pendingSend = null;
+  let replayInspectionRequired = false;
   /* Seeded with wherever the session already sits, so the walk is not charged a page for standing
      still: an empty string here made the very first turn spend one of the fifteen on nothing. */
   let lastPageUrl = (() => { try { return page().url() || ''; } catch { return ''; } })();
@@ -1475,19 +1481,33 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
         const card = cardStore.findByIntent(intent);
         const plan = routecards.planFor(card);
         jobsStore.step(job, 'note', `route card — ${plan.reason}`);
-        if (plan.mode === 'fast') {
+        if (plan.mode === 'fast' && plan.card.verification && settings.autoAct && allowedTools.has('act')) {
           const ensureOrigin = async (origin) => {
             if (routecards.originOf(page().url()) !== origin) {
               await page().goto(origin, { waitUntil: 'domcontentloaded', timeout: 45000 });
             }
+            return page().url();
           };
           const runInPage = (r) => page().evaluate(replay.IN_PAGE_FETCH, r);
           const outcome = await replay.attemptReplay({
             card: plan.card, values: settings.replayValues || {}, runInPage, ensureOrigin, now: Date.now(),
+            prepare: ({ values }) => page().evaluate(replay.IN_PAGE_VERIFY, { spec: plan.card.verification, values }),
+            verify: ({ values, baseline }) => page().evaluate(replay.IN_PAGE_VERIFY, { spec: plan.card.verification, values, baseline }),
           });
           if (outcome.card) cardStore.put(outcome.card);
+          jobsStore.storeData(job, 'replay', { kind: outcome.kind, status: outcome.status, needsLogin: !!outcome.stop });
           jobsStore.step(job, outcome.done ? 'acted' : 'note', outcome.reason);
-          if (outcome.done) {
+          if (outcome.done && !plan.card.verification?.completesTask) observe('Replay verified this one action. Inspect the remaining goal and continue; one action does not prove the entire task is complete.');
+          if (outcome.stop) {
+            jobsStore.step(job, 'login-required', outcome.reason);
+            try { session.recorder?.discard(); } catch {}
+            jobsStore.setReport(job, outcome.reason);
+            jobsStore.finish(job, 'stopped', outcome.reason);
+          } else if (!outcome.done) {
+            replayInspectionRequired = !!outcome.inspectBeforeRetry;
+            observe(outcome.reason + ' Do not repeat the action until you inspect whether it already happened. Choose the next step from the current page.');
+          }
+          if (outcome.done && plan.card.verification?.completesTask === true) {
             try { if (session.recorder) session.recorder.discard(); } catch { /* nothing recorded to keep */ }
             jobsStore.finish(job, 'idle', 'completed by route-card replay — the UI walk was not needed');
             idleSince = Date.now();
@@ -1753,8 +1773,13 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
               + ' Call finish() now with what you already have — the links included.');
             continue;
           }
+          if (replayInspectionRequired && ['act','click','double_click','type','paste_text','run_script','upload_file','upload_image'].includes(call.name)) {
+            observe('Inspect the page with look or read before attempting any further write; the replay outcome is uncertain.');
+            continue;
+          }
           if (toolRegistry.has(call.name)) {
             await toolRegistry.run(call.name, toolCtx, a);
+            if (['look','read'].includes(call.name)) replayInspectionRequired = false;
             continue;
           }
           switch (call.name) {
@@ -2448,6 +2473,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                 break;
               }
 
+              if (learnsCards) { try { session?.recorder?.seal(); } catch {} }
               if (toSend) await typeInto(a.index, toSend, true);
               else await clickIndex(a.index);
               resetClickLoop(); // an approved action is progress
@@ -2482,7 +2508,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                * walk navigates on to find the new page's URL. Best-effort: only a Herald walk arms the
                * recorder, and a session without one simply learns nothing here.
                */
-              if (learnsCards) { try { session?.recorder?.seal(); } catch { /* never fail an act over bookkeeping */ } }
+              if (learnsCards && landed === true) { try { session?.recorder?.confirm(); } catch {} }
 
               /*
                * WRITTEN DOWN WITHOUT BEING ASKED. Relying on the model to remember to log what it

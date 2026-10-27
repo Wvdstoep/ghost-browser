@@ -34,6 +34,9 @@ function isLearnable(req) {
   const method = String(req.method || 'GET').toUpperCase();
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return false;   // reads are not the acts we replay
   if (IGNORE_EXT.test(req.url) || IGNORE_HOST.test(req.url)) return false;
+  if (/\/(?:ajax\/)?(?:bnzai|banzai|bulk-route-definitions|bootload|collect|logging)(?:[/?]|$)/i.test(req.url)) return false;
+  const op = operationOf(req);
+  if (op && /Query$/.test(op.name)) return false;
   return true;
 }
 
@@ -48,6 +51,17 @@ function originOf(url) {
  * slots; where an auth token sits is remembered by NAME, so replay can re-read the live one from
  * the same place rather than reusing a captured (and by then expired) value.
  */
+function operationOf(req) {
+  try {
+    const raw = req.postData || req.body || '';
+    let data; try { data = JSON.parse(raw); } catch { data = Object.fromEntries(new URLSearchParams(raw)); }
+    const name = data.fb_api_req_friendly_name || data.operationName;
+    const id = data.doc_id;
+    if (typeof name !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,199}$/.test(name)) return null;
+    return { name, ...(typeof id === 'string' && /^\d{1,30}$/.test(id) ? { id } : {}) };
+  } catch { return null; }
+}
+
 function shapeOf(req) {
   const headers = req.headers || {};
   const authAt = [];
@@ -75,6 +89,7 @@ function shapeOf(req) {
     bodyKind,
     slots,
     authAt: dedupeAuth(authAt),
+    operation: operationOf(req),
   };
 }
 
@@ -96,7 +111,7 @@ function dedupeAuth(list) {
  * simple operate walk whose final action IS the act, but wrong for a setup walk that keeps going.
  * Either way VERIFY (step 4, live) is what actually proves the card; distillation only proposes.
  */
-function distill({ intent, origin, requests = [], now = 0, sealIndex = null }) {
+function distill({ intent, origin, requests = [], now = 0, sealIndex = null, verifiedEffect = false, verification = null }) {
   const learnable = requests.filter(isLearnable).filter((r) => !origin || originOf(r.url) === origin);
   if (!learnable.length) return null;
   const act = (sealIndex != null && sealIndex >= 0 && sealIndex < learnable.length)
@@ -112,6 +127,8 @@ function distill({ intent, origin, requests = [], now = 0, sealIndex = null }) {
     ok: true,
     card: {
       intent, origin: shape.origin,
+      schemaVersion: 2, verifiedEffect, verification,
+      operation: shape.operation,
       method: shape.method, url: shape.url,
       bodyKind: shape.bodyKind, slots: shape.slots, authAt: shape.authAt,
       confidence: 0,            // earned by VERIFY, not granted by DISTILL
@@ -159,10 +176,19 @@ function onFailed(card, now = 0) {
  * Returns null if a required slot has no value — a replay with a missing field would post a blank.
  */
 function buildReplay(card, values = {}) {
-  if (!card || !card.url || !card.method) return null;
+  if (!card || !card.url || !card.method || originOf(card.url) !== card.origin) return null;
+  if (!isLearnable({ method: card.method, url: card.url })) return null;
+  if ((card.slots || []).includes('variables') && !card.operation) return null;
   // Every non-auth slot must be supplied — the auth-at fields are filled live in the page, not here.
   const authNames = new Set((card.authAt || []).filter((a) => a.in === 'body').map((a) => a.name));
-  const need = (card.slots || []).filter((s) => !authNames.has(s));
+  const constants = {};
+  if (card.operation) {
+    if ((card.slots || []).includes('fb_api_req_friendly_name')) constants.fb_api_req_friendly_name = card.operation.name;
+    if ((card.slots || []).includes('operationName')) constants.operationName = card.operation.name;
+    if (card.operation.id && (card.slots || []).includes('doc_id')) constants.doc_id = card.operation.id;
+    for (const [key, value] of Object.entries(constants)) if (values[key] != null && values[key] !== value) return null;
+  }
+  const need = (card.slots || []).filter((s) => !authNames.has(s) && !(s in constants));
   for (const s of need) if (values[s] == null) return null;
   return {
     url: card.url,
@@ -170,7 +196,8 @@ function buildReplay(card, values = {}) {
     bodyKind: card.bodyKind,
     slots: card.slots || [],
     authAt: card.authAt || [],
-    values,            // the caller's real field values; the page merges the live token in
+    constants,
+    values: Object.fromEntries(need.map(key => [key, values[key]])), // only this action's declared fields
   };
 }
 
@@ -198,6 +225,7 @@ function sameShape(a, b) {
   if (!a || !b) return false;
   if (String(a.origin) !== String(b.origin)) return false;
   if (String(a.method) !== String(b.method)) return false;
+  if (JSON.stringify(a.operation || null) !== JSON.stringify(b.operation || null)) return false;
   if (pathOf(a.url) !== pathOf(b.url)) return false;
   if (String(a.bodyKind) !== String(b.bodyKind)) return false;
   const fields = (l) => (l || []).map(String).sort().join('|');
@@ -231,11 +259,12 @@ function sameShape(a, b) {
  */
 function learnFrom(existing, fresh, now = 0) {
   if (!fresh) return { card: null, promoted: false, reason: 'nothing was recorded' };
+  if (fresh.schemaVersion >= 2 && !fresh.verifiedEffect) return { card: { ...fresh, lastVerified: null, confidence: 0 }, promoted: false, reason: 'request observed but its effect was not confirmed - UI verification required' };
   if (!existing) return { card: fresh, promoted: false, reason: 'first sighting of this act — recorded, not yet trusted' };
   if (!sameShape(existing, fresh)) {
     return { card: fresh, promoted: false, reason: 'the request changed shape since last time — recorded afresh, trust reset' };
   }
-  const merged = { ...existing, url: fresh.url };
+  const merged = { ...existing, ...fresh, confidence: existing.confidence, fails: existing.fails, quarantined: existing.quarantined, lastVerified: existing.lastVerified };
   if (existing.quarantined) {
     return {
       card: { ...merged, quarantined: false, fails: 0, lastVerified: null },
@@ -249,6 +278,6 @@ function learnFrom(existing, fresh, now = 0) {
 
 module.exports = {
   isLearnable, originOf, shapeOf, distill, planFor, onVerified, onFailed, buildReplay, afterReplay, cardKey,
-  learnFrom, sameShape, pathOf,
+  learnFrom, sameShape, pathOf, operationOf,
   AUTH_HEADERS, IGNORE_EXT, IGNORE_HOST,
 };

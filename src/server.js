@@ -4893,6 +4893,7 @@ function makeRunAgent(client) {
      * of every job walked the UI. A step with no values walks, as before.
      */
     if (node.values && typeof node.values === 'object') cfg.replayValues = node.values;
+    if (node.replayVerification) cfg.replayVerification = node.replayVerification;
     if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
     const base = node.profile ? profiles.safeName(node.profile) : '';
     // a WATCHER's step crawls in the watchers' own browser copy (see watchProfile.js), never the owner's

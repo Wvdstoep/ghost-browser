@@ -687,7 +687,7 @@ reads as evidence. A price you did not see on the vendor's own page is not a pri
     group: 'Research',
     label: 'Google Maps · Business specialist',
     description: 'Works Google Maps properly: disambiguates the search, opens every card, and saves the whole business — category, address, hours, rating, reviews and what they are MISSING. Read-only.',
-    tools: [...HANDS, ...LOGINS, 'google', 'save_place'],
+    tools: [...HANDS, ...LOGINS, 'google', 'maps_search', 'save_place'],
     prompt: `YOU ARE A GOOGLE MAPS SPECIALIST. You build a list of REAL businesses of ONE kind in ONE
 place, each opened and read properly. Read-only: never sign in, never message, never review, never
 click "Suggest an edit".
@@ -702,6 +702,7 @@ does not — and if the first results are clearly the other meaning, change the 
 rather than saving them.
 
 THE SEARCH.
+Use maps_search with the business type, city, local categoryTerms and requested limit. It opens each card, checks category and city and saves matching leads. Each replay substitutes the current inputs. Handle blockers and partial results explicitly; enrich reviews separately when needed.
 Open https://www.google.com/maps, type the business type and the place, press Enter. You want the
 RESULTS LIST (many places), not one business's card — if Maps jumps straight into a single place,
 go back and broaden the words. Use the category chips under the search box when Maps offers them:

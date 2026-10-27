@@ -30,9 +30,9 @@ function makeRecorder({ log = console } = {}) {
     get sealed() { return !!(armed && armed.sealIndex != null); },
 
     /** Begin recording a walk for one intent. A second arm replaces the first (the walk changed). */
-    arm({ intent, origin = '' }) {
+    arm({ intent, origin = '', verification = null }) {
       if (!intent) return;
-      armed = { intent, origin, requests: [], sealIndex: null };
+      armed = { intent, origin, requests: [], sealIndex: null, verifiedEffect: false, verification };
       dropped = 0;
       log.info?.(`[recorder] armed for ${intent}${origin ? ' @ ' + origin : ''}`);
     },
@@ -57,15 +57,16 @@ function makeRecorder({ log = console } = {}) {
      * card is whatever navigation fired last (a search to find the new page's URL), which is exactly
      * the wrong request. The last seal wins: if a walk acts twice, the culmination is the intent.
      */
-    seal() { if (armed) armed.sealIndex = armed.requests.length; },
+    seal() { if (armed) { armed.sealIndex = armed.requests.length; armed.verifiedEffect = false; } },
+    confirm() { if (armed && armed.sealIndex != null) armed.verifiedEffect = true; },
 
     /** End the walk. Returns a distilled card proposal (or null/failure), and disarms. `now` is injected. */
     finish({ now = 0 } = {}) {
       if (!armed) return null;
-      const { intent, origin, requests, sealIndex } = armed;
+      const { intent, origin, requests, sealIndex, verifiedEffect, verification } = armed;
       if (dropped) log.info?.(`[recorder] ${intent}: buffer capped, dropped ${dropped} early request(s)`);
       armed = null;
-      const out = routecards.distill({ intent, origin, requests, now, sealIndex });
+      const out = routecards.distill({ intent, origin, requests, now, sealIndex, verifiedEffect, verification });
       if (!out) { log.info?.(`[recorder] ${intent}: nothing learnable in the walk`); return null; }
       if (!out.ok) { log.info?.(`[recorder] ${intent}: ${out.reason}`); return out; }
       log.info?.(`[recorder] ${intent}: distilled a card (${out.card.method} ${out.card.url.slice(0, 60)})`);

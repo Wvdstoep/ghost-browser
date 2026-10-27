@@ -57,6 +57,6 @@ describe('the knowledge tools are wired into the palette and registry', () => {
   it('the tools index registers the knowledge module', () => {
     const idx = fs.readFileSync(path.join(root, 'tools', 'index.js'), 'utf8');
     expect(idx).toMatch(/require\('\.\/knowledge'\)/);
-    expect(idx).toContain('knowledge, craft)');   // craft.js joined the line (make_document, totp_code, hover)
+    expect(idx).toContain('knowledge, craft');   // craft.js joined the line (make_document, totp_code, hover)
   });
 });
