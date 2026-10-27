@@ -61,7 +61,7 @@ beforeAll(async () => {
       const [, , , city, index]=url.pathname.split('/');
       const row=businesses[city]?.[index];
       if(!row){res.statusCode=404;return res.end();}
-      return res.end('<main role="main"><h1>'+row.name+'</h1><button data-category>'+row.category+'</button><button data-item-id="address">'+row.address+'</button><button data-item-id="phone:tel:123">+31 123</button></main>');
+      return res.end('<main role="main"><h1>'+row.name+'</h1><button data-category>'+(url.searchParams.get('hl')==='nl'?row.category:(row.category==='Kapper'?'Hairdresser':'Veterinarian'))+'</button><button data-item-id="address">'+row.address+'</button><button data-item-id="phone:tel:123">+31 123</button></main>');
     }
     res.statusCode=404;res.end();
   });
@@ -142,9 +142,9 @@ describe('parameterized Maps routine with fresh, independently read business car
     mode='success';
     const context=await browser.newContext(),page=await context.newPage();
     const store=makeCardStore({dir:path.join(dir,'maps')});
-    const first=await searchPlaces(page,{business:'hairdressers',city:'Rotterdam',categoryTerms:['kapper'],limit:1},{store,baseUrl:base});
+    const first=await searchPlaces(page,{business:'hairdressers',city:'Rotterdam',language:'nl',categoryTerms:['kapper'],limit:1},{store,baseUrl:base});
     expect(first.mode).toBe('record');expect(first.leads.map(x=>x.name)).toEqual(['Rotterdam Hair']);
-    const next=await searchPlaces(page,{business:'animal doctors',city:'Amsterdam',categoryTerms:['dierenarts'],limit:3},{store,baseUrl:base});
+    const next=await searchPlaces(page,{business:'animal doctors',city:'Amsterdam',language:'nl',categoryTerms:['dierenarts'],limit:3},{store,baseUrl:base});
     expect(next.mode).toBe('replay');expect(next.leads.map(x=>x.name)).toEqual(['Amsterdam Animal Clinic']);
     expect(next.complete).toBe(false);
     expect(next.rejected).toHaveLength(2);
@@ -159,7 +159,7 @@ describe('Maps tool through the actual agent and real browser',()=>{
     const context=await browser.newContext();
     await context.route('https://www.google.com/maps/**',async route=>{const url=new URL(route.request().url());const response=await fetch(base+url.pathname+url.search);await route.fulfill({contentType:'text/html',body:await response.text()});});
     const page=await context.newPage();
-    for(const args of [{business:'hairdressers',city:'Rotterdam',categoryTerms:['kapper'],limit:1},{business:'animal doctors',city:'Amsterdam',categoryTerms:['dierenarts'],limit:1}]){
+    for(const args of [{business:'hairdressers',city:'Rotterdam',language:'nl',categoryTerms:['kapper'],limit:1},{business:'animal doctors',city:'Amsterdam',language:'nl',categoryTerms:['dierenarts'],limit:1}]){
       const job=jobs.create({owner:'fixture',goal:args.business+' in '+args.city,sessionId:'maps-fixture'});let turn=0;
       await agent.run({job,session:{page},role:'google.maps',settings:{singleBrowser:true,maxSteps:3},pace:0,idleTimeoutMs:0,unattended:true,
         chat:async()=>({content:'',raw:{},toolCalls:++turn===1?[{name:'maps_search',args}]:[{name:'finish',args:{summary:'Verified places saved.'}}]})});

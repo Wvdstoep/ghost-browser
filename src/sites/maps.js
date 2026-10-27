@@ -3,9 +3,11 @@
 function inputs(value) {
   const business = String(value.business || '').trim();
   const city = String(value.city || '').trim();
+  const language = String(value.language || 'en').trim();
+  if (!/^[a-z]{2,3}(?:-[a-zA-Z]{2,4})?$/.test(language)) throw new Error('Use a Maps display language such as en or nl.');
   const categoryTerms = (Array.isArray(value.categoryTerms) ? value.categoryTerms : [business]).map(x => String(x).trim()).filter(Boolean).slice(0, 12);
   if (!business || !city || business.length > 160 || city.length > 160 || !categoryTerms.length) throw new Error('Business type, city and category terms are required.');
-  return { business, city, categoryTerms, limit: Math.min(25, Math.max(1, Math.floor(Number(value.limit) || 10))) };
+  return { business, city, language, categoryTerms, limit: Math.min(25, Math.max(1, Math.floor(Number(value.limit) || 10))) };
 }
 const fold = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const contains = (value, term) => (' ' + fold(value) + ' ').includes(' ' + fold(term) + ' ');
@@ -49,7 +51,7 @@ async function searchPlaces(page, raw, { store = null, timeout = 20000, baseUrl 
   const query = input.business + ' ' + input.city;
   const intent = 'routine.google.maps.search.v1';
   const previous = store && store.get('https://www.google.com', intent);
-  const url = baseUrl + '/maps/search/?api=1&query=' + encodeURIComponent(query);
+  const url = baseUrl + '/maps/search/?api=1&query=' + encodeURIComponent(query) + '&hl=' + encodeURIComponent(input.language);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForFunction(() => document.querySelector('[role="feed"], h1, form[action*="consent"]') || /consent\.google\.|accounts\.google\./.test(location.hostname), null, { timeout }).catch(() => {});
   let state = await page.evaluate(readSearch);
@@ -79,13 +81,15 @@ async function searchPlaces(page, raw, { store = null, timeout = 20000, baseUrl 
   const leads = [], rejected = [], seen = new Set();
   for (const row of [...links.values()].slice(0, 50)) {
     if (leads.length >= input.limit) break;
-    await page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForFunction(() => !!document.querySelector('h1'), null, { timeout }).catch(() => {});
+    const detailUrl = new URL(row.url);
+    detailUrl.searchParams.set('hl', input.language);
+    await page.goto(detailUrl.href, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForFunction(() => !!document.querySelector('h1') && !!document.querySelector('[data-item-id="address"]') && !!document.querySelector('button[jsaction*="category"],button[data-category]'), null, { timeout }).catch(() => {});
     const gate = await page.evaluate(readSearch);
     if (gate.kind !== 'results') return { ...gate, input, leads, rejected, complete: false };
     const place = await page.evaluate(readPlace);
     if (!place.name || !place.category || !contains(place.address, input.city) || !input.categoryTerms.some(term => contains(place.category, term))) {
-      rejected.push({ name: place.name, reason: 'Missing details or category/city does not match.' });
+      rejected.push({ name: place.name, category: place.category, address: place.address, reason: 'Missing details or category/city does not match.' });
       continue;
     }
     const key = fold(place.name + ' ' + place.address);
@@ -98,7 +102,7 @@ async function searchPlaces(page, raw, { store = null, timeout = 20000, baseUrl 
     complete: leads.length >= input.limit, mode: previous && previous.routineVersion === 1 ? 'replay' : 'record' };
   // The card contains a reusable contract only. Never retain the old query, businesses or results.
   if (store && leads.length) store.put({ origin: 'https://www.google.com', intent, kind: 'browser-routine',
-    routine: 'google.maps.search', routineVersion: 1, inputKeys: ['business','city','categoryTerms','limit'],
+    routine: 'google.maps.search', routineVersion: 1, inputKeys: ['business','city','language','categoryTerms','limit'],
     learnedAt: previous?.learnedAt || Date.now(), lastVerified: Date.now(), confidence: Math.min(5, (previous?.confidence || 0) + 1) });
   return result;
 }

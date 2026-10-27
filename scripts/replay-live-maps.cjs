@@ -19,13 +19,16 @@ const assert = require('assert/strict');
   try {
     const page = await browser.newPage({locale:'nl-NL'});
     const cases = [
-      {business:'kappers',city:'Rotterdam',categoryTerms:['kapper','kapsalon'],limit:2},
-      {business:'dierenartsen',city:'Amsterdam',categoryTerms:['dierenarts','dierenkliniek'],limit:2},
+      {business:'kappers',city:'Rotterdam',language:'nl',categoryTerms:['kapper','kapsalon'],limit:2},
+      {business:'dierenartsen',city:'Amsterdam',language:'nl',categoryTerms:['dierenarts','dierenkliniek'],limit:2},
     ];
-    for (const input of cases) {
+    for (const [index, input] of cases.entries()) {
       const result = await maps.searchPlaces(page,input,{store});
       console.log(JSON.stringify({result,url:page.url(),pageText:(await page.locator('body').innerText()).slice(0,2000)}));
-      if (result.kind !== 'success') process.exitCode = 2;
+      assert.equal(result.kind, 'success');
+      assert.equal(result.leads.length, input.limit);
+      assert.equal(result.complete, true);
+      assert.equal(result.mode, index === 0 ? 'record' : 'replay');
     }
   } finally {await browser.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1});

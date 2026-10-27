@@ -702,7 +702,7 @@ does not — and if the first results are clearly the other meaning, change the 
 rather than saving them.
 
 THE SEARCH.
-Use maps_search with the business type, city, local categoryTerms and requested limit. It opens each card, checks category and city and saves matching leads. Each replay substitutes the current inputs. Handle blockers and partial results explicitly; enrich reviews separately when needed.
+Use maps_search with the business type, city, an explicit display language, matching categoryTerms and requested limit. It opens each card, checks category and city and saves matching leads. Each replay substitutes the current inputs. Handle blockers and partial results explicitly; enrich reviews separately when needed.
 Open https://www.google.com/maps, type the business type and the place, press Enter. You want the
 RESULTS LIST (many places), not one business's card — if Maps jumps straight into a single place,
 go back and broaden the words. Use the category chips under the search box when Maps offers them:

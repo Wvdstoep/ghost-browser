@@ -9,13 +9,14 @@ The agent's google.maps role can call:
     maps_search({
       business: "dierenartsen",
       city: "Amsterdam",
+      language: "nl",
       categoryTerms: ["dierenarts", "dierenkliniek"],
       limit: 10
     })
 
 The first successful run registers the google.maps.search routine. Later runs reuse that contract with fresh inputs; the stored card contains no old businesses, city or results. This is an explicit deterministic adapter, not a claim that arbitrary clicks were automatically generalized.
 
-Each run searches again, opens individual business cards and reads name, category, address, phone and website when present. It saves only cards whose displayed category matches categoryTerms and whose address contains the requested city. Missing information is left missing. Pagination and output are bounded; complete means the requested count was reached, not that every business in a city was found. Partial results, consent, challenges, stale queries and unrecognized layouts are explicit outcomes. The Google optional-cookie page can be dismissed only through an unambiguous Reject all control on the Google consent domain. Challenges are not bypassed.
+The display language is explicit and applied to the search and every place link, so a browser configured in English can use Dutch category terms correctly. Each run searches again, opens individual business cards and reads name, category, address, phone and website when present. It saves only cards whose displayed category matches categoryTerms and whose address contains the requested city. Missing information is left missing. Pagination and output are bounded; complete means the requested count was reached, not that every business in a city was found. Partial results, consent, challenges, stale queries and unrecognized layouts are explicit outcomes. The Google optional-cookie page can be dismissed only through an unambiguous Reject all control on the Google consent domain. Challenges are not bypassed.
 
 The adapter does not automatically read reviews or judge commercial suitability. Those are separate tasks when the goal requests them. Category terms come from the intent model and must reflect the user's meaning in the site's language.
 
