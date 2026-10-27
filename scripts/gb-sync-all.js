@@ -64,7 +64,7 @@ function syncAll(image, run, log = console.log) {
 
 if (require.main === module) {
   try {
-    const run = (args, input) => execFileSync('sudo', ['kubectl', ...args], { input, encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
+    const run = (args, input) => execFileSync('sudo', ['kubectl', ...args], { input, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
     if (!syncAll(process.argv[2], run)) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
