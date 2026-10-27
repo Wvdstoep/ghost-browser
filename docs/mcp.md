@@ -5,7 +5,15 @@ Ghost Browser exposes a Streamable HTTP MCP endpoint at `/mcp`. It accepts the s
 endpoint is `https://ghost-browser.mavicpro-fan.my-app.engineer/mcp`. The server does not yet
 provide MCP OAuth or separately scoped/revocable MCP credentials. An API key also authorizes other
 Ghost Browser API operations: give it only to a client you trust. The authenticated owner can find
-the existing keys in the Ghost Browser console; never commit a key to a repository.
+the existing keys under **Settings → Account → MCP setup** in the Ghost Browser web console;
+never commit a key to a repository. Setup uses the current instance's host and reveals its key
+only when requested. It no longer floats over the bottom navigation.
+
+The Docker build compiles the shared Kotlin/Wasm console from the release commit, so Settings
+changes ship with the server. The installed watcher's `gb-sync-ben.sh` entry point now delegates
+to `gb-sync-all.js`: it discovers installed platform browsers and hosted user clusters, updates
+idle browsers, and retries busy or unreachable instances on later cycles. It can recover an
+unavailable instance when all its reported containers are blocked on image pulls.
 
 ## Codex
 

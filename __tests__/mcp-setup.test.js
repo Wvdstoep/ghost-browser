@@ -52,8 +52,17 @@ describe('MCP setup in Settings', () => {
   });
 
   it('offers setup in the deployed Compose console and reveals a key only on request', async () => {
-    expect(composeLoader).toContain('href="/mcp-setup.html"');
-    expect(composeLoader).toContain('src="gbweb.js"');
+    expect(composeLoader).not.toContain('mcp-link');
+    expect(composeLoader).not.toContain('href="/mcp-setup.html"');
+    const shared = readFileSync(fileURLToPath(new URL('../mobile/shared/src/commonMain/kotlin/engineer/myapp/gb/shared/SettingsShared.kt', import.meta.url)), 'utf8');
+    const web = readFileSync(fileURLToPath(new URL('../mobile/shared/src/wasmJsMain/kotlin/engineer/myapp/gb/shared/Main.kt', import.meta.url)), 'utf8');
+    expect(shared.match(/SGhost\("MCP setup"/g)).toHaveLength(2);
+    expect(web).toContain('onOpenMcpSetup = { openTab("/mcp-setup.html") }');
+    const docker = readFileSync(fileURLToPath(new URL('../Dockerfile', import.meta.url)), 'utf8');
+    expect(docker).toContain(':shared:wasmJsBrowserDistribution');
+    expect(docker).toContain('COPY --from=console-build');
+    expect(composeLoader).toContain('id="ComposeTarget"');
+    expect(composeLoader).toContain('src="/js/console-auth.js"');
     expect(deployScript).toContain('LOADER_SRC="$SRC/public/compose-index.html"');
     const dom = new JSDOM(setupPage, { url: 'https://ghost-browser.example.test/mcp-setup.html', runScripts: 'outside-only' });
     const fetchKey = vi.fn(async () => ({ ok: true, json: async () => ({ keys: [{ key: 'test-secret' }] }) }));

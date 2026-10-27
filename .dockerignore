@@ -1,0 +1,10 @@
+.git
+node_modules
+public/console
+mobile/**/build
+mobile/**/.gradle
+mobile/local.properties
+mobile/dist
+mobile/.kotlin
+profiles
+*.log
