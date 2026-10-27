@@ -19,7 +19,7 @@ function syncRegistryCredentials(source, target, prefix, run) {
   if (names.size !== existing.length) run([...prefix, '-n', target.metadata.namespace, 'patch', 'deployment/' + target.metadata.name, '--type=merge', '-p', JSON.stringify({spec:{template:{spec:{imagePullSecrets:[...names].map(name=>({name}))}}}})]);
 }
 
-function syncAll(image, run, log = console.log) {
+function syncAll(image, run, log = console.log, importImage = null) {
   if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image)) throw new Error('Invalid release image');
   const root = JSON.parse(run(['get', 'deployments', '-A', '-o', 'json'])).items;
   let failed = false;
@@ -45,7 +45,10 @@ function syncAll(image, run, log = console.log) {
           if (ready.busy !== 0) { log(`${dep.metadata.namespace}: busy; retry next cycle`); continue; }
         }
         if (source) syncRegistryCredentials(source, dep, prefix, run);
-        run([...args, 'set', 'image', name, `${container.name}=${image}`]);
+        if (pullBlocked && prefix.length && importImage) {
+          importImage(image, prefix);
+          run([...args, 'patch', name, '--type=strategic', '-p', JSON.stringify({spec:{template:{spec:{containers:[{name:container.name,image,imagePullPolicy:'IfNotPresent'}]}}}})]);
+        } else run([...args, 'set', 'image', name, `${container.name}=${image}`]);
         run([...args, 'rollout', 'status', name, '--timeout=240s']);
         log(`${dep.metadata.namespace}: rolled to ${image}`);
       } catch (error) { failed = true; log(`${dep.metadata.namespace}: rollout deferred: ${error.message}`); }
@@ -62,10 +65,20 @@ function syncAll(image, run, log = console.log) {
   return !failed;
 }
 
+function importHostedImage(image, prefix, exec = execFileSync) {
+  if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image) || !Array.isArray(prefix) || prefix[prefix.length - 1] !== 'kubectl') throw new Error('Invalid browser image transfer');
+  // Stream the existing signed release, not publisher credentials, into the owned cluster cache.
+  const args = [...prefix.slice(0, -1), 'k3s', 'ctr', '-n', 'k8s.io', 'images', 'import', '-'];
+  try {
+    exec('sudo', ['cosign', 'verify', '--key', process.env.COSIGN_PUB || '/etc/cosign/cosign.pub', '--insecure-ignore-tlog', image], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
+    exec('bash', ['-o', 'pipefail', '-c', "sudo docker save \"$1\" | sudo kubectl \"${@:2}\"", 'ghost-browser-image-transfer', image, ...args], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:300000,maxBuffer:2*1024*1024});
+  } catch { throw new Error('signed browser image transfer failed'); }
+}
+
 if (require.main === module) {
   try {
     const run = (args, input) => execFileSync('sudo', ['kubectl', ...args], { input, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
-    if (!syncAll(process.argv[2], run)) process.exitCode = 1;
+    if (!syncAll(process.argv[2], run, console.log, importHostedImage)) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { syncAll, syncRegistryCredentials };
+module.exports = { syncAll, syncRegistryCredentials, importHostedImage };
