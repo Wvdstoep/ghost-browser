@@ -1,12 +1,16 @@
 import {describe,it,expect} from 'vitest';
 import {JSDOM} from 'jsdom';
 import {createRequire} from 'node:module';
-import {readSearch, readPlace, rejectOptionalConsent, searchPlaces} from '../src/sites/maps';
+import {inputs, readSearch, readPlace, rejectOptionalConsent, searchPlaces} from '../src/sites/maps';
 import {IN_PAGE_VERIFY} from '../src/replay';
 const require=createRequire(import.meta.url);
 const tools=require('../src/tools');
 const roles=require('../src/roles');
 describe('Maps contracts and blockers',()=>{
+ it('requires a valid display language and preserves the selected language independently of the browser locale',()=>{
+   expect(inputs({business:'kappers',city:'Rotterdam',language:'nl'}).language).toBe('nl');
+   expect(()=>inputs({business:'kappers',city:'Rotterdam',language:'nl&unsafe=true'})).toThrow(/display language/);
+ });
  it('reads the current query in Maps limited view without a search box',()=>{
    const dom=new JSDOM('<div role="feed"><a href="/maps/place/Test">Test</a></div>',{url:'https://www.google.com/maps/search/?api=1&query=dierenartsen+Amsterdam'});
    global.document=dom.window.document;global.location=dom.window.location;
