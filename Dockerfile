@@ -1,3 +1,9 @@
+# Build the shared Settings UI from the same commit as the server.
+FROM ghcr.io/cirruslabs/android-sdk:34 AS console-build
+WORKDIR /console-src
+COPY mobile ./
+RUN bash gradlew :shared:wasmJsBrowserDistribution --no-daemon
+
 # Its own image, with Chromium in it.
 #
 # This is the reason the service is a separate deployment rather than another app on the shared
@@ -51,6 +57,8 @@ COPY scripts ./scripts
 COPY training ./training
 COPY docs ./docs
 COPY public ./public
+COPY --from=console-build /console-src/shared/build/dist/wasmJs/productionExecutable/ ./public/console/
+COPY public/compose-index.html ./public/index.html
 RUN node scripts/prepare-console.js
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

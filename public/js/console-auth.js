@@ -39,7 +39,7 @@
     function startConsole() {
       if (started) return;
       started = true; gate.hidden = true;
-      doc.getElementById('ComposeTarget').hidden = false; doc.getElementById('mcp-link').hidden = false;
+      doc.getElementById('ComposeTarget').hidden = false;
       const overlay = doc.createElement('script'); overlay.src = '/console/live-overlay.js'; doc.body.appendChild(overlay);
       const app = doc.createElement('script'); app.src = '/console/gbweb.js';
       app.onerror = () => { gate.hidden = false; status.textContent = 'The browser interface could not load. Please refresh to retry.'; actions.hidden = false; };

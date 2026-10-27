@@ -168,6 +168,7 @@ private fun WebSettingsShared(st: WebState, repo: WebRepo, s: SettingsState, ope
             aiModel = modelActs,
             onSetPassword = { pw -> repo.setPassword(pw) { ok, msg -> s.authMessage.value = msg; if (ok) s.hasPassword.value = true } },
             onOpenApiTokens = { showApiTokens = true },
+            onOpenMcpSetup = { openTab("/mcp-setup.html") },
         )
     }
     Box(Modifier.fillMaxSize()) {

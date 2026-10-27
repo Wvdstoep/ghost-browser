@@ -37,6 +37,8 @@ describe('the shipped console authenticates before Compose starts', () => {
     await boot(dom.window);
     expect(dom.window.document.getElementById('auth-gate').hidden).toBe(true);
     expect(dom.window.document.querySelector('script[src="/console/gbweb.js"]')).not.toBeNull();
+    expect(dom.window.document.getElementById('ComposeTarget').hidden).toBe(false);
+    expect(dom.window.document.querySelector('.mcp-link')).toBeNull();
   });
   it('expired handoffs show an actionable retry instead of a password form', async () => {
     const dom = new JSDOM(html, { url: url({ auth: 'expired' }) });

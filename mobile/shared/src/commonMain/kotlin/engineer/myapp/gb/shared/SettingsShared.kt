@@ -106,6 +106,7 @@ class SettingsHandlers(
     val onDownloadLocalModel: (() -> Unit)? = null,
     /* Bearer keys for scripts and other machines - the web console's sheet; null elsewhere. */
     val onOpenApiTokens: (() -> Unit)? = null,
+    val onOpenMcpSetup: (() -> Unit)? = null,
 )
 
 /**
@@ -250,6 +251,7 @@ private fun SettingsCategory(section: String, state: SettingsState, model: AiMod
                 if (h.onOpenApiTokens != null) Column(Modifier.weight(1f)) {
                     SettingsCard("API tokens", "Keys for scripts and other devices") {
                         SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
+                        h.onOpenMcpSetup?.let { open -> SGhost("MCP setup", Modifier.fillMaxWidth(), open) }
                     }
                 }
             }
@@ -273,6 +275,7 @@ private fun SettingsCategory(section: String, state: SettingsState, model: AiMod
                 AccountSection(state, h)
                 if (h.onOpenApiTokens != null) SettingsCard("API tokens", "Keys for scripts and other devices") {
                     SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
+                        h.onOpenMcpSetup?.let { open -> SGhost("MCP setup", Modifier.fillMaxWidth(), open) }
                 }
             }
             "AI & training" -> { ModelSection(model, h.aiModel, state.local.value, h); TrainingSection(state, h) }
