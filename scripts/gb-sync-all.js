@@ -68,7 +68,7 @@ function syncAll(image, run, log = console.log, importImage = null) {
 function importHostedImage(image, prefix, exec = execFileSync) {
   if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image) || !Array.isArray(prefix) || prefix[prefix.length - 1] !== 'kubectl') throw new Error('Invalid browser image transfer');
   // Stream the existing signed release, not publisher credentials, into the owned cluster cache.
-  const args = [...prefix.slice(0, -1), 'k3s', 'ctr', '-n', 'k8s.io', 'images', 'import', '-'];
+  const args = [...prefix.slice(0, -1), 'ctr', '--address', '/run/k3s/containerd/containerd.sock', '-n', 'k8s.io', 'images', 'import', '-'];
   try {
     exec('sudo', ['cosign', 'verify', '--key', process.env.COSIGN_PUB || '/etc/cosign/cosign.pub', '--insecure-ignore-tlog', image], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
     exec('bash', ['-o', 'pipefail', '-c', "sudo docker save \"$1\" | sudo kubectl \"${@:2}\"", 'ghost-browser-image-transfer', image, ...args], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:300000,maxBuffer:2*1024*1024});

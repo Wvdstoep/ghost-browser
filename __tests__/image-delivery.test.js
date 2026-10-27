@@ -8,7 +8,7 @@ describe('signed browser artifact delivery',()=>{
   expect(exec.mock.calls[0][0]).toBe('sudo');expect(exec.mock.calls[0][1]).toEqual(['cosign','verify','--key',process.env.COSIGN_PUB || '/etc/cosign/cosign.pub','--insecure-ignore-tlog',image]);
   const [bin,args,options]=exec.mock.calls[1];
   expect(bin).toBe('bash');expect(args).toContain('pipefail');
-  expect(args.slice(5)).toEqual([image,...prefix.slice(0,-1),'k3s','ctr','-n','k8s.io','images','import','-']);
+  expect(args.slice(5)).toEqual([image,...prefix.slice(0,-1),'ctr','--address','/run/k3s/containerd/containerd.sock','-n','k8s.io','images','import','-']);
   expect(args[3]).not.toContain(image);expect(options.timeout).toBe(300000);
   expect(options.stdio).toEqual(['ignore','pipe','pipe']);
  });
