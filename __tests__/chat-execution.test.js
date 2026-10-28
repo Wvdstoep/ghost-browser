@@ -1,7 +1,7 @@
 import {describe,it,expect,vi,afterEach} from 'vitest';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 import {makeAssistant} from '../src/operator/assistant';
-import {executionStatus,captureStatus} from '../src/operator/executionStatus';
+import {executionStatus,captureStatus,withExecutionSummary} from '../src/operator/executionStatus';
 const dirs=[];afterEach(()=>{for(const d of dirs.splice(0))fs.rmSync(d,{recursive:true,force:true})});
 function setup(events){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'chat-replay-'));dirs.push(dir);
@@ -25,6 +25,7 @@ describe('execution status in existing chat UI fields',()=>{
   await s.end();
   const restarted=makeAssistant({dir:s.dir,startTurn:()=>s.run});
   expect(restarted.view(s.c.id).turns.at(-1).steps.at(-1).label).toBe('Replay succeeded · saved routine');
+  expect(restarted.view(s.c.id).turns.at(-1).text).toMatch(/^\*\*Replay succeeded · saved routine\*\*/);
  });
  it('surfaces a capture that completes after the operator has already landed its answer',async()=>{
   const s=setup(events());s.setJob({id:'j-proof',data:{execution:{mode:'Browser walk'}}});await s.end();
@@ -62,4 +63,10 @@ describe('execution status in existing chat UI fields',()=>{
  it.each(['Recording browser routine','Recorded request replay','Routine captured','Browser walk','Routine blocked','Routine failed','Browser routine completed','unknown'])('has an honest label for %s',mode=>{
   expect(executionStatus({execution:{mode,verified:true},capture:{saved:true,ready:true}}).label).toBeTruthy();
  });
+});
+
+it('puts trusted outcomes above the final answer even when the step timeline is collapsed',()=>{
+ const steps=[{label:'Listing platforms'},{browserJobId:'j-proof',label:'Replay not verified'}];
+ expect(withExecutionSummary('Original answer',steps)).toBe('**Replay not verified**\n\nOriginal answer');
+ expect(withExecutionSummary('Original answer',[{label:'Replay succeeded · saved routine'}])).toBe('Original answer');
 });
