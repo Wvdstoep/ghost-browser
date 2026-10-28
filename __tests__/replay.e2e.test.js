@@ -123,6 +123,8 @@ describe('production recording, replay and job outcomes in real Chromium',()=>{
       chat:async({messages})=>{modelCalls++;observations=messages;return {toolCalls:[{name:'finish',args:{summary:'Inspected replay outcome; stopping diagnostic.'}}],content:'',raw:{}};}});
     const completed=job.steps.some(s=>/completed by route-card replay/.test(s.text));
     expect(completed).toBe(testMode==='success');
+    expect(job.data.execution.mode).toBe(testMode==='success'?'Recorded request replay':testMode==='login'?'Login required':'Replay fallback');
+    expect(job.data.execution.verified).toBe(testMode==='success');
     expect(posts.includes(values.message)).toBe(testMode==='success');
     if(testMode==='login'){
       expect(modelCalls).toBe(0);expect(job.status).toBe('stopped');
@@ -144,8 +146,11 @@ describe('parameterized Maps routine with fresh, independently read business car
     const store=makeCardStore({dir:path.join(dir,'maps')});
     const first=await searchPlaces(page,{business:'hairdressers',city:'Rotterdam',language:'nl',categoryTerms:['kapper'],limit:1},{store,baseUrl:base});
     expect(first.mode).toBe('record');expect(first.leads.map(x=>x.name)).toEqual(['Rotterdam Hair']);
-    const next=await searchPlaces(page,{business:'animal doctors',city:'Amsterdam',language:'nl',categoryTerms:['dierenarts'],limit:3},{store,baseUrl:base});
-    expect(next.mode).toBe('replay');expect(next.leads.map(x=>x.name)).toEqual(['Amsterdam Animal Clinic']);
+    const next=await searchPlaces(page,{business:'animal doctors',city:'Amsterdam',language:'nl',categoryTerms:['dierenarts'],limit:3},{store:makeCardStore({dir:path.join(dir,'maps')}),baseUrl:base});
+    store.reload();
+    expect(next.mode).toBe('replay');
+    expect(store.list()[0].uses).toBe(1);
+    expect(store.list()[0].lastUsed).toBeGreaterThan(0);expect(next.leads.map(x=>x.name)).toEqual(['Amsterdam Animal Clinic']);
     expect(next.complete).toBe(false);
     expect(next.rejected).toHaveLength(2);
     expect(JSON.stringify(store.list())).not.toMatch(/Rotterdam Hair|hairdressers|Rotterdam|Amsterdam Animal Clinic/);
@@ -163,6 +168,9 @@ describe('Maps tool through the actual agent and real browser',()=>{
       const job=jobs.create({owner:'fixture',goal:args.business+' in '+args.city,sessionId:'maps-fixture'});let turn=0;
       await agent.run({job,session:{page},role:'google.maps',settings:{singleBrowser:true,maxSteps:3},pace:0,idleTimeoutMs:0,unattended:true,
         chat:async()=>({content:'',raw:{},toolCalls:++turn===1?[{name:'maps_search',args}]:[{name:'finish',args:{summary:'Verified places saved.'}}]})});
+      expect(job.data.execution.verified).toBe(true);
+      expect(job.data.execution.input).toBe(args.business+' in '+args.city);
+      expect(job.data.execution.mode).toBe(args.city==='Amsterdam'?'Saved routine reused':'Routine captured');
       expect(job.leads).toHaveLength(1);expect(job.leads[0].city).toBe(args.city);expect(job.data.mapsSearch.query).toBe(args.business+' '+args.city);
       if(args.city==='Amsterdam')expect(job.leads[0].name).toBe('Amsterdam Animal Clinic');
     }

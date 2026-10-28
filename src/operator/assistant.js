@@ -124,7 +124,7 @@ function briefOf(name, text) {
       case 'gb_logs': return `${s.split('\n').length} log lines`;
       case 'gb_look': return v ? `${v.title || v.url || 'page'}${n(v.controls) ? ` · ${v.controls.length} controls` : ''}` : '';
       case 'gb_walk': return v && v.jobId ? `browsing in ${v.profile || 'the browser'}` : '';
-      case 'gb_walk_wait': return v ? (v.stillRunning ? 'still browsing' : `${v.status || 'done'}${n(v.proposals) ? ` · ${v.proposals.length} draft${v.proposals.length === 1 ? '' : 's'} for you` : ''}`) : '';
+      case 'gb_walk_wait': if (v?.execution?.mode) return v.execution.mode + ' · ' + (v.execution.verified ? 'verified' : 'not yet verified') + ' · ' + (v.execution.reason || ''); return v ? (v.stillRunning ? 'still browsing' : `${v.status || 'done'}${n(v.proposals) ? ` · ${v.proposals.length} draft${v.proposals.length === 1 ? '' : 's'} for you` : ''}`) : '';
       case 'gb_flow_save': case 'gb_role_save': case 'gb_role_update': case 'gb_watcher_config': case 'gb_watcher_toggle': case 'gb_watcher_posts': return v && v.id ? `saved ${v.id}` : 'saved';
       case 'gb_flow_run': return v && v.runId ? 'run started' : '';
       case 'gb_flow_wait': return v ? `${v.status || 'done'}${v.verified ? ' · verified' : ''}` : '';
@@ -296,4 +296,4 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
   return { list, create, remove, view, send, stop, attach, land, live, labelOf, REPLY_SPEC, CHAT_DIR: dir };
 }
 
-module.exports = { makeAssistant, REPLY_SPEC, labelOf, CHAT_DIR };
+module.exports = { makeAssistant, REPLY_SPEC, labelOf, briefOf, CHAT_DIR };

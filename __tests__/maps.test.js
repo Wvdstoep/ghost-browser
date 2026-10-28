@@ -39,4 +39,12 @@ describe('Maps contracts and blockers',()=>{
    expect(tools.has('maps_search')).toBe(true);
    expect(roles.get('google.maps').tools).toContain('maps_search');
  });
+ it('only reports reuse for the same supported verified routine',async()=>{
+   const good={kind:'browser-routine',routine:'google.maps.search',routineVersion:1,lastVerified:1};
+   for(const [previous,mode] of [[good,'replay'],[{...good,quarantined:true},'record'],[{...good,routineVersion:2},'record'],[{...good,kind:'request'},'record'],[{...good,lastVerified:null},'record']]){
+     const page={goto:async()=>{},waitForFunction:async()=>{},waitForTimeout:async()=>{},evaluate:async()=>({kind:'results',query:'vets Amsterdam',links:[]})};
+     const result=await searchPlaces(page,{business:'vets',city:'Amsterdam'},{store:{get:()=>previous,put:()=>{throw Error('No leads must not save')}}});
+     expect(result.mode).toBe(mode);
+   }
+ });
 });
