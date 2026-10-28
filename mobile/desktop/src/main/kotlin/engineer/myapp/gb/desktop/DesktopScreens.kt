@@ -32,6 +32,8 @@ class DesktopState {
     val reconUi = engineer.myapp.gb.shared.ReconUi()
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("Load your automations from the cluster.")
+    val actionRecordings = mutableStateOf<List<ActionRecordingInfo>>(emptyList())
+    val recordingsError = mutableStateOf("")
     val devices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
     /* The nightly training loop, read from the cluster. One object, read by the Training screen and
@@ -323,7 +325,7 @@ fun loadApprovals(st: DesktopState) = bg {
                     url = p.optString("url"), text = p.optString("text"), jobRole = j.optString("role"),
                 ))
             }
-            out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props))
+            out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props, AssistantJson.execution(j)))
         }
         st.jobs.value = out
     } catch (e: Exception) {}
@@ -590,10 +592,16 @@ fun FlowsScreenD(st: DesktopState) {
     val cs = MaterialTheme.colorScheme
     var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
     LaunchedEffect(Unit) { if (st.flows.value.isEmpty()) loadFlows(st) }
+    LaunchedEffect(sub) {
+        if (sub == 2) while (true) {
+            loadActionRecordingsD(st); loadApprovals(st)
+            kotlinx.coroutines.delay(3000)
+        }
+    }
     Column(Modifier.fillMaxSize().background(cs.background)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-            listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
+            listOf("Automations", "Watchers", "Recordings").forEachIndexed { i, lbl ->
                 val on = sub == i
                 Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (on) Brand else androidx.compose.ui.graphics.Color.Transparent)
                     .clickable { sub = i; if (i == 1) loadWatchers(st) }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
@@ -601,7 +609,9 @@ fun FlowsScreenD(st: DesktopState) {
                 }
             }
         }
-        if (sub == 0) FlowsScreen(
+        if (sub == 2) ActionRecordingsScreen(st.actionRecordings.value, st.jobs.value, st.recordingsError.value,
+            onRefresh = { loadActionRecordingsD(st); loadApprovals(st) }, modifier = Modifier.weight(1f).fillMaxWidth())
+        else if (sub == 0) FlowsScreen(
             flows = st.flows.value, onLoad = { loadFlows(st) },
             onRun = { id, name -> showRunSheetD(id, name, st) },
             onCreate = { name, steps -> createFlowD(name, steps, st) },
@@ -616,6 +626,13 @@ fun FlowsScreenD(st: DesktopState) {
             onRefresh = { loadWatchers(st) }, modifier = Modifier.weight(1f).fillMaxWidth(),
         )
     }
+}
+
+fun loadActionRecordingsD(st: DesktopState) = bg {
+    try {
+        st.actionRecordings.value = AssistantJson.actionRecordings(Cluster.authed("GET", "/v1/route-cards", null))
+        st.recordingsError.value = ""
+    } catch (e: Exception) { st.recordingsError.value = "Could not load recordings. Check the connection and refresh." }
 }
 
 fun createFlowD(name: String, steps: String, st: DesktopState) = bg {

@@ -2752,6 +2752,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             onSave = { host, key, model -> agentExec.execute { aiModelSave(host, key, model) } },
             onSaveBackups = { backups -> agentExec.execute { aiModelSaveBackups(backups) } },
         ),
+        onLoadActionRecordings = {
+            if (vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/route-cards", null, "action_recordings")
+            else shellUi.recordingsError.value = "Connect to your cluster to load recordings."
+        },
         onLoadFlows = { refreshLocalWorkflows(); if (vm.clusterKey.isNotBlank()) apiCall("GET", "/v1/workflows", null, "flows") },
         onRunFlow = { id, name -> runFlow(id, name) },
         onCreateFlow = { name, steps -> createFlow(name, steps) },
@@ -3868,6 +3872,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 }
             }
             "platforms_err" -> { vm.log("! load platforms: ${data.take(140)}") }
+            "action_recordings" -> try {
+                shellUi.actionRecordings.value = AssistantJson.actionRecordings(data)
+                shellUi.recordingsError.value = ""
+            } catch (e: Exception) { shellUi.recordingsError.value = "Could not load recordings. Sign in and refresh." }
+            "action_recordings_err" -> { shellUi.recordingsError.value = "Could not load recordings. Check the connection and refresh." }
             "flows" -> {
                 try {
                     val combined = mergeLocalWorkflows(data)
@@ -4059,7 +4068,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                             jobRole = j.optString("role"),
                         ))
                     }
-                    out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props))
+                    out.add(engineer.myapp.gb.shared.JobInfo(j.optString("id"), j.optString("role"), j.optString("status"), steps, props, AssistantJson.execution(j)))
                 }
                 shellUi.jobs.value = out
             } catch (e: Exception) { shellUi.jobsLoading.value = false; vm.log("! approvals parse: ${data.take(120)}") }
