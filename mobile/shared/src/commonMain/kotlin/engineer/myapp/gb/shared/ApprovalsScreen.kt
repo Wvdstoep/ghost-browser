@@ -185,6 +185,7 @@ private fun WatcherCard(j: JobInfo, onStop: (String) -> Unit, onSay: (String, St
                 Text("Stop", fontSize = 12.sp, color = cs.onSurfaceVariant)
             }
         }
+        if (j.execution.isNotBlank()) Text(j.execution, color = Brand, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
         if (j.steps.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(cs.background).padding(8.dp)) {

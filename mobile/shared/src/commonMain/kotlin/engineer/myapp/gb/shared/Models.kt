@@ -98,10 +98,13 @@ data class Proposal(
     val text: String,      // the DRAFT the owner reviews and can edit before it posts
     val jobRole: String,   // which watcher produced it
 )
+data class ActionRecordingInfo(val id: String, val origin: String, val intent: String, val kind: String, val status: String, val reason: String, val uses: Int, val lastVerified: String)
+
 data class JobInfo(
     val id: String, val role: String, val status: String,   // running | idle | done | failed
     val steps: List<String>,                                 // recent activity lines (kind: text)
     val proposals: List<Proposal>,                           // pending approvals from this job
+    val execution: String = "",
 )
 
 /**

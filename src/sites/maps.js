@@ -99,10 +99,11 @@ async function searchPlaces(page, raw, { store = null, timeout = 20000, baseUrl 
       why: 'Category and address read from Maps match ' + query, sourceQuery: query });
   }
   const result = { kind: leads.length ? 'success' : 'unconfirmed', input, query, leads, rejected,
-    complete: leads.length >= input.limit, mode: previous && previous.routineVersion === 1 ? 'replay' : 'record' };
+    complete: leads.length >= input.limit, mode: previous && previous.kind === 'browser-routine' && previous.routine === 'google.maps.search' && previous.routineVersion === 1 && previous.lastVerified && !previous.quarantined ? 'replay' : 'record' };
   // The card contains a reusable contract only. Never retain the old query, businesses or results.
   if (store && leads.length) store.put({ origin: 'https://www.google.com', intent, kind: 'browser-routine',
     routine: 'google.maps.search', routineVersion: 1, inputKeys: ['business','city','language','categoryTerms','limit'],
+    uses: (previous?.uses || 0) + (result.mode === 'replay' ? 1 : 0), lastUsed: Date.now(),
     learnedAt: previous?.learnedAt || Date.now(), lastVerified: Date.now(), confidence: Math.min(5, (previous?.confidence || 0) + 1) });
   return result;
 }

@@ -1047,6 +1047,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
                      unattended = false,
                      log = console }) {
   const signal = job.stop.signal;
+  jobsStore.storeData(job, 'execution', { mode: 'Browser walk', reason: 'Agent is choosing browser steps; no compatible verified replay has been selected.', verified: false });
   /*
    * NOT a const, and not destructured. The agent can move to a different stored login mid-job, and
    * that is a different browser context with a different page object — every helper below has to
@@ -1481,6 +1482,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
         const card = cardStore.findByIntent(intent);
         const plan = routecards.planFor(card);
         jobsStore.step(job, 'note', `route card — ${plan.reason}`);
+        jobsStore.storeData(job, 'execution', { mode: 'Browser walk', recording: card ? card.origin + ' | ' + card.intent : '', reason: plan.mode !== 'fast' ? plan.reason : !card.verification ? 'Missing independent verifier' : !settings.autoAct || !allowedTools.has('act') ? 'Replay requires an allowed, approved action' : 'Preparing replay', verified: false });
         if (plan.mode === 'fast' && plan.card.verification && settings.autoAct && allowedTools.has('act')) {
           const ensureOrigin = async (origin) => {
             if (routecards.originOf(page().url()) !== origin) {
@@ -1494,7 +1496,8 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
             prepare: ({ values }) => page().evaluate(replay.IN_PAGE_VERIFY, { spec: plan.card.verification, values }),
             verify: ({ values, baseline }) => page().evaluate(replay.IN_PAGE_VERIFY, { spec: plan.card.verification, values, baseline }),
           });
-          if (outcome.card) cardStore.put(outcome.card);
+          if (outcome.card) cardStore.put({ ...outcome.card, uses: (card.uses || 0) + (outcome.done ? 1 : 0), lastUsed: Date.now() });
+          jobsStore.storeData(job, 'execution', { mode: outcome.done ? 'Recorded request replay' : outcome.stop ? 'Login required' : 'Replay fallback', recording: card.origin + ' | ' + card.intent, reason: outcome.reason, verified: !!outcome.done });
           jobsStore.storeData(job, 'replay', { kind: outcome.kind, status: outcome.status, needsLogin: !!outcome.stop });
           jobsStore.step(job, outcome.done ? 'acted' : 'note', outcome.reason);
           if (outcome.done && !plan.card.verification?.completesTask) observe('Replay verified this one action. Inspect the remaining goal and continue; one action does not prove the entire task is complete.');
@@ -1514,6 +1517,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
           }
         }
       } catch (e) {
+        jobsStore.storeData(job, 'execution', { mode: 'Replay fallback', reason: e.message, verified: false });
         jobsStore.step(job, 'error', `route-card fast path could not run (${e.message}) — walking the UI`);
       }
     }
@@ -2608,6 +2612,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
           const prior = cardStore.get(out.card.origin, out.card.intent);
           const learned = routecards.learnFrom(prior, out.card, Date.now());
           cardStore.put(learned.card);
+          jobsStore.storeData(job, 'capture', { recording: learned.card.origin + ' | ' + learned.card.intent, saved: true, promoted: learned.promoted, reason: learned.reason });
           jobsStore.step(job, 'note', `route card for ${out.card.intent}: ${learned.reason}`);
           log.info?.(`[agent] ${job.id}: route card ${learned.promoted ? 'CONFIRMED' : 'recorded'} for ${out.card.intent} — ${learned.reason}`);
         } else if (out && !out.ok) {

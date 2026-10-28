@@ -135,10 +135,7 @@ app.get('/v1/capacity', (_req, res) => res.json({ ...pool.capacity(), limits: LI
  * hand. Authed like the rest of the operator surface.
  */
 app.get('/v1/route-cards', authed, (_req, res) => {
-  res.json({ cards: agent.cardStore.list().map((c) => ({
-    intent: c.intent, origin: c.origin, method: c.method,
-    confidence: c.confidence, lastVerified: c.lastVerified, quarantined: c.quarantined, fails: c.fails,
-  })) });
+  res.json({ cards: agent.cardStore.list().map(require('./recording-status').recordingView) });
 });
 app.delete('/v1/route-cards/:origin/:intent', authed, (req, res) => {
   agent.cardStore.forget(decodeURIComponent(req.params.origin), decodeURIComponent(req.params.intent));
@@ -5964,7 +5961,7 @@ function operatorContext() {
   return {
     ops, workflows, feed, runningWatchers, postIdOf: pw.postIdOf, health: healthOf,
     jobsSummary: () => { const live = [...jobs.jobs.values()].map((j) => pickJob(jobs.view(j))); let hist = []; try { hist = (jobs.loadHistory(owner) || []).slice(0, 15).map(pickJob); } catch (e) { hist = []; } return { jobs: live, history: hist }; },
-    jobDetail: (id, last) => { const j = jobs.get(id); if (!j) return { error: 'no such job (it may have ended and been pruned — read its run instead)' }; const v = jobs.view(j); return { id: v.id, status: v.status, role: v.role, workflowId: v.workflowId, runId: v.runId, error: v.error || null, report: v.report ? String(v.report).slice(0, 1500) : null, proposals: (v.proposals || []).map((p) => ({ pid: p.pid, state: p.state, kind: p.kind, text: String(p.text || '').slice(0, 300), url: p.url })), steps: (v.steps || []).slice(-(last || 40)).map((s) => ({ kind: s.kind, text: String(s.text || '').slice(0, 300), ...(s.url ? { url: s.url } : {}) })) }; },
+    jobDetail: (id, last) => { const j = jobs.get(id); if (!j) return { error: 'no such job (it may have ended and been pruned — read its run instead)' }; const v = jobs.view(j); return { id: v.id, status: v.status, role: v.role, workflowId: v.workflowId, runId: v.runId, execution: v.data?.execution || null, capture: v.data?.capture || null, error: v.error || null, report: v.report ? String(v.report).slice(0, 1500) : null, proposals: (v.proposals || []).map((p) => ({ pid: p.pid, state: p.state, kind: p.kind, text: String(p.text || '').slice(0, 300), url: p.url })), steps: (v.steps || []).slice(-(last || 40)).map((s) => ({ kind: s.kind, text: String(s.text || '').slice(0, 300), ...(s.url ? { url: s.url } : {}) })) }; },
     sessions: () => pool.listFor(owner),
     look: async (profile) => {
       const s = await sessionFor(profiles.safeName(profile || 'facebook')); const page = s.page;

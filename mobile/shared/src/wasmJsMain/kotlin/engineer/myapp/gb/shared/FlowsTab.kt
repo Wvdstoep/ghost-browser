@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,11 +36,18 @@ fun FlowsTab(st: WebState, repo: WebRepo, openExternal: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
     var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
 
+    LaunchedEffect(sub) {
+        if (sub == 2) while (true) {
+            repo.loadActionRecordings().join()
+            repo.loadApprovals().join()
+            delay(3000)
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(cs.background)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                 .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-                listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
+                listOf("Automations", "Watchers", "Recordings").forEachIndexed { i, lbl ->
                     val on = sub == i
                     Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (on) Brand else Color.Transparent)
                         .clickable { sub = i; if (i == 1) { repo.loadWatchers(); if (st.flows.value.isEmpty()) repo.loadFlows() } else repo.loadFlows() }
@@ -47,7 +56,9 @@ fun FlowsTab(st: WebState, repo: WebRepo, openExternal: (String) -> Unit) {
                     }
                 }
             }
-            if (sub == 0) FlowsScreen(
+            if (sub == 2) ActionRecordingsScreen(st.actionRecordings.value, st.jobs.value, st.recordingsError.value,
+                onRefresh = { repo.loadActionRecordings(); repo.loadApprovals() }, modifier = Modifier.weight(1f).fillMaxWidth())
+            else if (sub == 0) FlowsScreen(
                 flows = st.flows.value, onLoad = { repo.loadFlows() },
                 onRun = { id, _ -> repo.runFlow(id, "") }, onCreate = { n, s -> repo.createFlow(n, s) },
                 onCreateSecurity = { n, t, s, p -> repo.createSecurityFlow(n, t, s, p) },

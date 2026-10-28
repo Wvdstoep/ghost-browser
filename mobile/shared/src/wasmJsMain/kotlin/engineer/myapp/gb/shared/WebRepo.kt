@@ -29,6 +29,8 @@ class WebState {
     // flows
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsLoading = mutableStateOf(false)
+    val actionRecordings = mutableStateOf<List<ActionRecordingInfo>>(emptyList())
+    val recordingsError = mutableStateOf("")
     // watchers (scheduled background tasks) + their results artifact
     val watchers = mutableStateOf<List<Watcher>>(emptyList())
     val watchersLoading = mutableStateOf(false)
@@ -398,6 +400,14 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
         loadWatcherFeed(wid)
     }
 
+    fun loadActionRecordings() = scope.launch {
+        val o = jparse(api("GET", "/v1/route-cards"))
+        st.recordingsError.value = if (ok(o)) "" else "Could not load recordings. Check the connection and refresh."
+        if (ok(o)) st.actionRecordings.value = (o.arr("cards")?.objs() ?: emptyList()).map { c ->
+            ActionRecordingInfo(c.str("id"), c.str("origin"), c.str("intent"), c.str("kind"), c.str("status"), c.str("reason"), c.int("uses"), c.str("lastVerifiedLabel"))
+        }
+    }
+
     // ── Approvals ───────────────────────────────────────────────────────────────────────────────
     fun loadApprovals() = scope.launch {
         st.jobsLoading.value = true
@@ -419,7 +429,14 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
                 Proposal(j.str("id"), p.str("pid"), p.str("kind").ifBlank { "reply" },
                     p.str("why").ifBlank { p.str("label") }, p.str("url"), p.str("text"), j.str("role"))
             }
-            JobInfo(j.str("id"), j.str("role"), j.str("status"), steps, props)
+            JobInfo(j.str("id"), j.str("role"), j.str("status"), steps, props,
+                j.obj("data").obj("execution").let { e ->
+                    if (e.str("mode").isBlank()) "No execution evidence · Older run or unsupported executor"
+                    else e.str("mode") + " · " + e.str("input") + "\n" + e.str("reason") +
+                        (if (e.str("recording").isBlank()) "" else "\nRecording: " + e.str("recording")) +
+                        (if (e.bool("verified")) "\nVerified outcome" else "\nOutcome not verified") +
+                        j.obj("data").obj("capture").let { c -> if (c.bool("saved")) "\nCaptured: " + c.str("recording") + " · " + c.str("reason") else "" }
+                })
         }
         st.jobsLoading.value = false
     }
