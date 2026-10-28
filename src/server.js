@@ -6289,6 +6289,7 @@ function startOperatorJob(goal, cfg, restore = null, opts = {}) {
    assistant's identity, the reply exit and a short budget; the chat history rides in the orientation. */
 const assistant = require('./operator/assistant').makeAssistant({
   log,
+  jobEvidence: id => { const j = jobs.get(id); return j ? { id: j.id, data: { execution: j.data?.execution, capture: j.data?.capture } } : null; },
   startTurn: ({ goal, orientation, finishSpec, meta, maxMs }) => {
     const cfg = settingsStore.read(); if (!cfg.llmModel) throw new Error('no AI model configured — set it under agent Settings first');
     const { assistantPrompt } = require('./operator/assistantPrompt');

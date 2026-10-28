@@ -161,7 +161,7 @@ function withRecordingCards(cards, steps) {
   return out;
 }
 
-function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) {
+function makeAssistant({ dir = CHAT_DIR, startTurn, jobEvidence = () => null, now = Date.now, log } = {}) {
   if (typeof startTurn !== 'function') throw new Error('assistant needs startTurn');
   const L = log || { info() {}, warn() {}, error() {} };
   const live = new Map();   // chatId → OperatorRun of the turn in flight
@@ -190,15 +190,39 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     return 'THE CONVERSATION SO FAR (oldest first):\n' + t.map((x) => `${x.role === 'user' ? 'Owner' : 'You'}: ${String(x.text || '').slice(0, x.role === 'user' ? 600 : 900)}`).join('\n');
   }
 
+  // Only identifiers returned by our own browser-start tool become live job references.
+  function parseResult(value) { try { return typeof value === 'string' ? JSON.parse(value) : value; } catch { return null; } }
+  function hydrateSteps(steps) {
+    const { executionStatus, captureStatus } = require('./executionStatus');
+    const evidence = new Map();
+    const read = id => {
+      if (!evidence.has(id)) { try { const j = jobEvidence(id); evidence.set(id, j?.id === id ? j : null); } catch { evidence.set(id, null); } }
+      return evidence.get(id);
+    };
+    const clean = steps.filter(s => s.name !== 'execution_capture' || !s.sourceBrowserJobId || !read(s.sourceBrowserJobId));
+    const last = new Map(); clean.forEach((s, i) => { if (s.browserJobId) last.set(s.browserJobId, i); });
+    const out = [];
+    clean.forEach((s, i) => {
+      const j = s.browserJobId ? read(s.browserJobId) : null;
+      const latest = last.get(s.browserJobId) === i;
+      const status = latest ? executionStatus(j) : null;
+      const captured = captureStatus(j?.data?.capture || j?.capture);
+      if (captured && latest && status?.label !== captured.label) out.push({ name: 'execution_capture', sourceBrowserJobId: s.browserJobId, ...captured, args: '', t: s.t });
+      out.push(status ? { ...s, ...status } : j && !latest ? { ...s, label: s.name === 'gb_walk' ? 'Browser job started' : 'Browser status checked' } : { ...s });
+    });
+    return out;
+  }
+
   /** Steps as the app shows them: one per tool call, with its (short) result. */
   function stepsOf(run) {
     const out = []; const ev = run.events || [];
+    const started = new Set(ev.filter(e => e.kind === 'result' && e.name === 'gb_walk').map(e => parseResult(e.text)?.jobId).filter(id => /^j-[a-z0-9-]{1,100}$/i.test(id || '')));
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i];
       if (e.kind === 'thought' && e.text) {
         const clean = String(e.text).trim().replace(/<\/?think>/g, '');
         // Exclude full final reports from duplicating as a tiny step
-        if (clean && clean.length > 5 && !clean.startsWith('# Enterprise Security Audit Report')) {
+        if (clean && clean.length > 5 && clean !== String(run.report?.answer || run.finalLine || '').trim() && !clean.startsWith('# Enterprise Security Audit Report')) {
           out.push({ name: 'thought', label: 'Thinking & Strategy', args: '', text: clean.slice(0, 32000), t: e.t });
         }
         continue;
@@ -226,12 +250,17 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
         continue;
       }
       if (e.kind !== 'tool' || HIDDEN_STEPS.has(e.name)) continue;
-      const r = ev.slice(i + 1, i + 4).find((x) => x.kind === 'result' && x.name === e.name);
+      let r = null;
+      for (let k = i + 1; k < ev.length && ev[k].kind !== 'tool'; k++) {
+        if (ev[k].kind === 'result' && ev[k].name === e.name) { r = ev[k]; break; }
+      }
       // the harness keeps the args as clipped JSON TEXT (sometimes an object): both are fine here
       const argText = typeof e.args === 'string' ? e.args : (e.args && typeof e.args === 'object' ? JSON.stringify(e.args) : '');
-      out.push({ name: e.name, label: labelOf(e.name), args: String(argText || '').slice(0, 2500), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}), ...(r && r.recording ? { recording: r.recording } : {}) });
+      const id = e.name === 'gb_walk' ? parseResult(r?.text)?.jobId : e.name === 'gb_walk_wait' ? parseResult(e.args)?.jobId : null;
+      const browserJobId = started.has(id) ? id : null;
+      out.push({ name: e.name, ...(browserJobId ? { browserJobId } : {}), label: labelOf(e.name), args: String(argText || '').slice(0, 2500), text: r ? briefOf(e.name, r.text) : '', t: e.t, ...(r && r.image ? { image: r.image } : {}), ...(r && r.download ? { download: r.download, fileName: r.fileName || '', fileKind: r.fileKind || '', fileMime: r.fileMime || '' } : {}), ...(r && r.recording ? { recording: r.recording } : {}) });
     }
-    return out.slice(-250);
+    return hydrateSteps(out.slice(-250));
   }
 
   /** The pictures the tools took, inlined for the app (it has no byte channel of its own): the last few
@@ -251,7 +280,7 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, now = Date.now, log } = {}) 
     const c = load(id); if (!c) return null;
     const run = live.get(id);
     const liveView = run ? { jobId: run.id, status: run.stopped && run.stopped() && run.status === 'running' ? 'stopping' : run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
-    const turns = c.turns.map((t) => ({ ...t, steps: (t.steps || []).map((s) => ({ ...s })) }));
+    const turns = c.turns.map((t) => ({ ...t, steps: hydrateSteps(t.steps || []) }));
     inlineImages(turns, liveView);
     return { id: c.id, title: c.title, agentType: c.agentType || 'browser', createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
   }

@@ -1181,7 +1181,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
   const learnsCards = !!flowIntent || /^herald\./.test(String(role || ''));
   const cardIntent = flowIntent || roles.canonical(role);
   if (learnsCards && session && session.recorder) {
-    try { session.recorder.arm({ intent: cardIntent, verification: settings.replayVerification || null }); }
+    try { session.recorder.arm({ intent: cardIntent, verification: settings.replayVerification || null }); jobsStore.storeData(job, 'capture', { state: 'recording', saved: false, recording: cardIntent }); }
     catch (e) { log.warn?.(`[agent] ${job.id}: could not arm recorder: ${e.message}`); }
   }
 
@@ -1484,6 +1484,7 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
         jobsStore.step(job, 'note', `route card — ${plan.reason}`);
         jobsStore.storeData(job, 'execution', { mode: 'Browser walk', recording: card ? card.origin + ' | ' + card.intent : '', reason: plan.mode !== 'fast' ? plan.reason : !card.verification ? 'Missing independent verifier' : !settings.autoAct || !allowedTools.has('act') ? 'Replay requires an allowed, approved action' : 'Preparing replay', verified: false });
         if (plan.mode === 'fast' && plan.card.verification && settings.autoAct && allowedTools.has('act')) {
+          jobsStore.storeData(job, 'execution', { mode: 'Replaying recorded request', recording: card.origin + ' | ' + card.intent, reason: 'Checking fresh inputs and independently verifying the action.', verified: false });
           const ensureOrigin = async (origin) => {
             if (routecards.originOf(page().url()) !== origin) {
               await page().goto(origin, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -2611,11 +2612,12 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
            */
           const prior = cardStore.get(out.card.origin, out.card.intent);
           const learned = routecards.learnFrom(prior, out.card, Date.now());
-          cardStore.put(learned.card);
-          jobsStore.storeData(job, 'capture', { recording: learned.card.origin + ' | ' + learned.card.intent, saved: true, promoted: learned.promoted, reason: learned.reason });
+          const saved = !!cardStore.put(learned.card);
+          jobsStore.storeData(job, 'capture', { recording: learned.card.origin + ' | ' + learned.card.intent, saved, state: saved ? 'saved' : 'failed', ready: saved && routecards.planFor(learned.card).mode === 'fast' && !!learned.card.verification, promoted: learned.promoted, reason: saved ? learned.reason : 'Recording storage failed; no recording was saved.' });
           jobsStore.step(job, 'note', `route card for ${out.card.intent}: ${learned.reason}`);
           log.info?.(`[agent] ${job.id}: route card ${learned.promoted ? 'CONFIRMED' : 'recorded'} for ${out.card.intent} — ${learned.reason}`);
         } else if (out && !out.ok) {
+          jobsStore.storeData(job, 'capture', { saved: false, state: 'not_captured', reason: out.reason });
           jobsStore.step(job, 'note', `no route card learned this run: ${out.reason}`);
         }
       } else {
