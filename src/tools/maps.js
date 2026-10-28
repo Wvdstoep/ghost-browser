@@ -11,7 +11,7 @@ module.exports = {
       throw error;
     }
     ctx.storeData('execution', { mode: result.kind === 'login_required' ? 'Login required' : result.kind !== 'success' ? 'Routine blocked' : result.mode === 'replay' ? 'Saved routine reused' : 'Routine captured',
-      recording: 'https://www.google.com | routine.google.maps.search.v1', reason: result.reason || (result.complete ? 'Fresh category and city verified; requested lead count reached.' : 'Partial results; requested lead count not reached.'), verified: result.kind === 'success', count: result.leads.length, durationMs: Date.now() - started,
+      recording: 'https://www.google.com | routine.google.maps.search.v1', reason: result.reason || (result.kind !== 'success' ? 'Browser stopped: ' + result.kind + '. Inspect the browser before continuing.' : result.complete ? 'Fresh category and city verified; requested lead count reached.' : 'Partial results; requested lead count not reached.'), verified: result.kind === 'success', count: result.leads.length, durationMs: Date.now() - started,
       input: result.input.business + ' in ' + result.input.city });
     ctx.storeData('mapsSearch', result);
     if (result.kind === 'login_required') {
