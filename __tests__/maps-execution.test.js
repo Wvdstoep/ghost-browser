@@ -16,4 +16,10 @@ describe('Maps execution evidence',()=>{
    expect(c.addLead).not.toHaveBeenCalled();
    expect(c.storeData).toHaveBeenCalledWith('execution',expect.objectContaining({mode:'Login required',verified:false}));
  });
+ it('names a challenge blocker rather than presenting it as partial results',async()=>{
+   const c=ctx({goto:async()=>{},waitForFunction:async()=>{},evaluate:async()=>({kind:'challenge_required'})});
+   await maps_search(c,{business:'vets',city:'Amsterdam'});
+   expect(c.storeData).toHaveBeenCalledWith('execution',expect.objectContaining({mode:'Routine blocked',reason:expect.stringContaining('challenge_required'),verified:false}));
+   expect(c.addLead).not.toHaveBeenCalled();
+ });
 });
