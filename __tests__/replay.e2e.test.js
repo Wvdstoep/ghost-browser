@@ -19,6 +19,7 @@ const require = createRequire(import.meta.url);
 delete require.cache[require.resolve('../src/cardstore')];
 const agent = require('../src/agent');
 const jobs = require('../src/jobs');
+const {makeAssistant}=require('../src/operator/assistant');
 let server, browser, base, token = 'initial-token', mode = 'success';
 const posts = [];
 const businesses = {
@@ -169,6 +170,12 @@ describe('Maps tool through the actual agent and real browser',()=>{
       await agent.run({job,session:{page},role:'google.maps',settings:{singleBrowser:true,maxSteps:3},pace:0,idleTimeoutMs:0,unattended:true,
         chat:async()=>({content:'',raw:{},toolCalls:++turn===1?[{name:'maps_search',args}]:[{name:'finish',args:{summary:'Verified places saved.'}}]})});
       expect(job.data.execution.verified).toBe(true);
+      const projection=makeAssistant({dir:path.join(dir,'chat-'+args.city),startTurn:()=>({id:'operator-proof',status:'running',done:new Promise(()=>{}),events:[
+        {kind:'tool',name:'gb_walk',args:'{}'}, {kind:'result',name:'gb_walk',text:JSON.stringify({jobId:job.id})},
+        {kind:'tool',name:'gb_walk_wait',args:JSON.stringify({jobId:job.id})}],startedAt:Date.now()}),jobEvidence:id=>jobs.get(id)});
+      const chat=projection.create();projection.send(chat.id,args.business+' in '+args.city);
+      const label=projection.view(chat.id).live.steps.at(-1).label;
+      expect(label).toBe(args.city==='Amsterdam'?'Replay succeeded · saved routine':'Recording saved · ready for reuse');
       expect(job.data.execution.input).toBe(args.business+' in '+args.city);
       expect(job.data.execution.mode).toBe(args.city==='Amsterdam'?'Saved routine reused':'Routine captured');
       expect(job.leads).toHaveLength(1);expect(job.leads[0].city).toBe(args.city);expect(job.data.mapsSearch.query).toBe(args.business+' '+args.city);

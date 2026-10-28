@@ -32,3 +32,5 @@ it('surfaces execution evidence in the actual assistant chat step',()=>{
  expect(briefOf('gb_walk_wait',JSON.stringify({execution:{mode:'Login required',verified:false}}))).toContain('not yet verified');
  expect(assistantPrompt()).toContain('role "google.maps"');
 });
+
+it('does not advertise a failed durable save as ready',()=>{expect(recordingView({origin:'https://example.com',intent:'write',lastVerified:123,verification:{},_persisted:false})).toMatchObject({eligible:false,status:'Not saved'});});

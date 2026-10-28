@@ -322,7 +322,8 @@ const get = (jid) => {
   } catch { return null; }
 };
 /* One row per job, in the shape the console and the tools both read. */
-const rowOf = (j) => ({ id: j.id, goal: j.goal, status: j.status, createdAt: j.createdAt,
+const executionData = j => ({ execution: j.data?.execution || null, capture: j.data?.capture || null });
+const rowOf = (j) => ({ data: executionData(j), id: j.id, goal: j.goal, status: j.status, createdAt: j.createdAt,
   owner: j.owner, profile: j.profile || null,
   workflowId: j.workflowId || null, runId: j.runId || null, nodeId: j.nodeId || null,
   steps: j.steps.length, leads: j.leads.length,
@@ -334,7 +335,7 @@ const listAll = () => [...jobs.values()].sort(newestFirst).map(rowOf);
 
 const listFor = (owner) => [...jobs.values()].filter((j) => j.owner === owner)
   .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
-  .map((j) => ({ id: j.id, goal: j.goal, status: j.status, createdAt: j.createdAt,
+  .map((j) => ({ data: executionData(j), id: j.id, goal: j.goal, status: j.status, createdAt: j.createdAt,
                  workflowId: j.workflowId || null, runId: j.runId || null, nodeId: j.nodeId || null,
                  steps: j.steps.length, leads: j.leads.length,
                  pending: j.proposals.filter((p) => p.state === 'pending').length }));

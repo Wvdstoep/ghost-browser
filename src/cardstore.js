@@ -30,8 +30,10 @@ function makeCardStore({ dir = DIR, file = FILE, log = console } = {}) {
   function persist() {
     try {
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(full, JSON.stringify(cards, null, 2));
-    } catch (e) { log.warn?.(`[cards] could not persist ${full}: ${e.message}`); }   // never fatal
+      fs.writeFileSync(full + '.tmp', JSON.stringify(cards, null, 2));
+      fs.renameSync(full + '.tmp', full);
+      return true;
+    } catch (e) { log.warn?.(`[cards] could not persist ${full}: ${e.message}`); return false; }   // never fatal
   }
 
   return {
@@ -48,9 +50,11 @@ function makeCardStore({ dir = DIR, file = FILE, log = console } = {}) {
     },
     put(card) {
       if (!card || !card.origin || !card.intent) return null;
-      cards[cardKey(card.origin, card.intent)] = card;
-      persist();
-      return card;
+      const entry = { ...card };
+      cards[cardKey(card.origin, card.intent)] = entry;
+      const saved = persist();
+      Object.defineProperty(entry, '_persisted', { value: saved, enumerable: false });
+      return saved ? entry : null;
     },
     forget(origin, intent) { delete cards[cardKey(origin, intent)]; persist(); },
     /** Everything learned, for the UI — shapes only, so this is safe to render. */

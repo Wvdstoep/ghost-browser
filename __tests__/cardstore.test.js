@@ -9,7 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { makeCardStore } from '../src/cardstore.js';
-import { distill, onVerified } from '../src/routecards.js';
+import { distill, onVerified, planFor } from '../src/routecards.js';
 
 let dir;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cards-')); });
@@ -81,4 +81,16 @@ describe('a broken store degrades to empty, never crashes', () => {
     const s = makeCardStore({ dir, file: path.join('no', 'such', 'nested', 'x.json') });
     expect(() => s.put(aCard())).not.toThrow();
   });
+});
+
+describe('durable capture acknowledgement',()=>{
+ it('returns failure and disables replay when storage cannot commit the new card',()=>{
+  const s=makeCardStore({dir,log:{warn(){}}});expect(s.put(aCard())).toBeTruthy();
+  fs.mkdirSync(path.join(dir,'route-cards.json.tmp'));
+  const card={...aCard(),intent:'new.capture'};
+  expect(s.put(card)).toBeNull();expect(s.get(card.origin,card.intent)._persisted).toBe(false);
+  expect(makeCardStore({dir}).get(card.origin,card.intent)).toBeNull();
+  expect(planFor(s.get(card.origin,card.intent)).mode).toBe('ui');
+  expect(JSON.stringify(s.list())).not.toContain('_persisted');
+ });
 });

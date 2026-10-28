@@ -23,3 +23,18 @@ describe('Maps execution evidence',()=>{
    expect(c.addLead).not.toHaveBeenCalled();
  });
 });
+
+describe('record-save evidence',()=>{
+ it.each([true,false])('reports durable capture only when storage succeeds: %s',async saved=>{
+  const page={goto:async()=>{},waitForFunction:async()=>{},waitForTimeout:async()=>{},evaluate:async fn=>fn.name==='readPlace'?{name:'Vet',category:'vets',address:'Street Amsterdam',mapsUrl:'https://www.google.com/maps/place/Vet'}:fn.name==='readSearch'?{kind:'results',query:'vets Amsterdam',links:[{url:'https://www.google.com/maps/place/Vet'}]}:undefined};
+  const c=ctx(page);c.cardStore={get:()=>null,put:()=>saved?{}:null};
+  await maps_search(c,{business:'vets',city:'Amsterdam',limit:1});
+  expect(c.storeData).toHaveBeenCalledWith('capture',expect.objectContaining({saved,state:saved?'saved':'failed'}));
+  expect(c.storeData).toHaveBeenCalledWith('execution',expect.objectContaining({mode:saved?'Routine captured':'Browser routine completed',verified:true}));
+ });
+ it('announces saved-routine replay before navigating the browser',async()=>{
+  const c=ctx({goto:async()=>{throw Error('fixture stop')}});c.cardStore={get:()=>({kind:'browser-routine',routine:'google.maps.search',routineVersion:1,lastVerified:1})};
+  await expect(maps_search(c,{business:'vets',city:'Amsterdam'})).rejects.toThrow('fixture stop');
+  expect(c.storeData.mock.calls[0]).toEqual(['execution',expect.objectContaining({mode:'Replaying saved routine'})]);
+ });
+});

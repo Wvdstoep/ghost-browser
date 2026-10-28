@@ -1,8 +1,9 @@
 'use strict';
-const { searchPlaces } = require('../sites/maps');
+const { searchPlaces, canReuseMapsCard } = require('../sites/maps');
 module.exports = {
   async maps_search(ctx, args) {
-    ctx.storeData('execution', { mode: 'Browser routine running', reason: 'Maps reads current results with fresh inputs; no LLM is used for individual browser steps.', verified: false });
+    const reused = canReuseMapsCard(ctx.cardStore?.get('https://www.google.com', 'routine.google.maps.search.v1'));
+    ctx.storeData('execution', { mode: reused ? 'Replaying saved routine' : 'Recording browser routine', reason: 'Maps reads current results with fresh inputs; no LLM is used for individual browser steps.', verified: false });
     const started = Date.now();
     let result;
     try { result = await searchPlaces(ctx.page(), args, { store: ctx.cardStore }); }
@@ -10,10 +11,13 @@ module.exports = {
       ctx.storeData('execution', { mode: 'Routine failed', reason: String(error.message || error), verified: false, durationMs: Date.now() - started });
       throw error;
     }
-    ctx.storeData('execution', { mode: result.kind === 'login_required' ? 'Login required' : result.kind !== 'success' ? 'Routine blocked' : result.mode === 'replay' ? 'Saved routine reused' : 'Routine captured',
+    ctx.storeData('execution', { mode: result.kind === 'login_required' ? 'Login required' : result.kind !== 'success' ? 'Routine blocked' : result.mode === 'replay' ? 'Saved routine reused' : result.recordingSaved ? 'Routine captured' : 'Browser routine completed',
       recording: 'https://www.google.com | routine.google.maps.search.v1', reason: result.reason || (result.kind !== 'success' ? 'Browser stopped: ' + result.kind + '. Inspect the browser before continuing.' : result.complete ? 'Fresh category and city verified; requested lead count reached.' : 'Partial results; requested lead count not reached.'), verified: result.kind === 'success', count: result.leads.length, durationMs: Date.now() - started,
       input: result.input.business + ' in ' + result.input.city });
     ctx.storeData('mapsSearch', result);
+    if (result.mode === 'record' && result.kind === 'success') ctx.storeData('capture', {
+      recording: 'https://www.google.com | routine.google.maps.search.v1', saved: !!result.recordingSaved, ready: !!result.recordingSaved,
+      state: result.recordingSaved ? 'saved' : 'failed', reason: result.recordingSaved ? 'Built-in Maps routine saved with fresh input slots.' : 'Recording storage failed; no recording was saved.' });
     if (result.kind === 'login_required') {
       ctx.stopForLogin('Google Maps needs you to sign in. Sign in in this browser, then run the task again.');
       return;

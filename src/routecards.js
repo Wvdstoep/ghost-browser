@@ -147,6 +147,7 @@ function distill({ intent, origin, requests = [], now = 0, sealIndex = null, ver
  */
 function planFor(card) {
   if (!card) return { mode: 'ui', reason: 'no card for this intent — walk the UI (and record)' };
+  if (card._persisted === false) return { mode: 'ui', reason: 'recording could not be saved — walk the UI' };
   if (card.quarantined) return { mode: 'ui', reason: 'card quarantined after a failure — walk the UI (and re-record)' };
   if (!card.lastVerified) return { mode: 'ui', reason: 'card not yet verified — walk the UI and verify it in passing' };
   return { mode: 'fast', card, reason: `replaying verified card (confidence ${card.confidence})` };
