@@ -280,7 +280,10 @@ function makeAssistant({ dir = CHAT_DIR, startTurn, jobEvidence = () => null, no
     const c = load(id); if (!c) return null;
     const run = live.get(id);
     const liveView = run ? { jobId: run.id, status: run.stopped && run.stopped() && run.status === 'running' ? 'stopping' : run.status, iterations: run.iterations, tasks: run.tasks, steps: stepsOf(run), startedAt: run.startedAt } : null;
-    const turns = c.turns.map((t) => ({ ...t, steps: hydrateSteps(t.steps || []) }));
+    const turns = c.turns.map((t) => {
+      const steps = hydrateSteps(t.steps || []);
+      return { ...t, text: t.role === 'assistant' ? require('./executionStatus').withExecutionSummary(t.text, steps) : t.text, steps };
+    });
     inlineImages(turns, liveView);
     return { id: c.id, title: c.title, agentType: c.agentType || 'browser', createdAt: c.createdAt, updatedAt: c.updatedAt, turns, live: liveView };
   }

@@ -32,4 +32,8 @@ function executionStatus(job) {
   return { label, text: [text(e.input, 400), text(e.reason), e.recording ? 'Recording: ' + text(e.recording, 400) : '',
     e.verified === true ? 'Outcome verified against the current page.' : '', saved?.text || ''].filter(Boolean).join('\n') };
 }
-module.exports = { executionStatus, captureStatus };
+function withExecutionSummary(answer, steps) {
+  const labels = [...new Set(steps.slice().reverse().filter(s => (s.browserJobId || s.sourceBrowserJobId) && /^(Replay succeeded|Replay not verified|Recording saved|Replay fallback|Login required|Recording not saved|Browser routine failed|Browser routine blocked)/.test(s.label)).map(s => s.label))].slice(0, 3);
+  return labels.length ? labels.map(label => '**' + label + '**').join('\n') + '\n\n' + answer : answer;
+}
+module.exports = { executionStatus, captureStatus, withExecutionSummary };
