@@ -431,11 +431,9 @@ class WebRepo(private val scope: CoroutineScope, val st: WebState) {
             }
             JobInfo(j.str("id"), j.str("role"), j.str("status"), steps, props,
                 j.obj("data").obj("execution").let { e ->
-                    if (e.str("mode").isBlank()) "No execution evidence · Older run or unsupported executor"
-                    else e.str("mode") + " · " + e.str("input") + "\n" + e.str("reason") +
-                        (if (e.str("recording").isBlank()) "" else "\nRecording: " + e.str("recording")) +
-                        (if (e.bool("verified")) "\nVerified outcome" else "\nOutcome not verified") +
-                        j.obj("data").obj("capture").let { c -> if (c.bool("saved")) "\nCaptured: " + c.str("recording") + " · " + c.str("reason") else "" }
+                    val c = j.obj("data").obj("capture")
+                    executionEvidence(e.str("mode"), e.str("input"), e.str("reason"), e.str("recording"), e.bool("verified"),
+                        if (c.bool("saved")) c.str("recording") else "", c.str("reason"))
                 })
         }
         st.jobsLoading.value = false

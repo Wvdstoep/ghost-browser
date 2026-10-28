@@ -6,6 +6,24 @@ import org.json.JSONObject
 
 /** GET /v1/assistant/chats/:id → the shared view; GET /v1/assistant/chats → summaries. (org.json; the shared module has no JSON.) */
 object AssistantJson {
+    fun actionRecordings(raw: String): List<ActionRecordingInfo> {
+        val root = JSONObject(raw)
+        require(!root.has("error")) { "Could not load recordings. Sign in and refresh." }
+        val cards = root.getJSONArray("cards")
+        return (0 until cards.length()).map { i ->
+            val c = cards.getJSONObject(i)
+            ActionRecordingInfo(c.optString("id"), c.optString("origin"), c.optString("intent"), c.optString("kind"),
+                c.optString("status"), c.optString("reason"), c.optInt("uses"), c.optString("lastVerifiedLabel", "Never"))
+        }
+    }
+    fun execution(job: JSONObject): String {
+        val data = job.optJSONObject("data")
+        val e = data?.optJSONObject("execution") ?: JSONObject()
+        val c = data?.optJSONObject("capture")
+        return executionEvidence(e.optString("mode"), e.optString("input"), e.optString("reason"), e.optString("recording"),
+            e.optBoolean("verified"), if (c?.optBoolean("saved") == true) c.optString("recording") else "", c?.optString("reason") ?: "")
+    }
+
     private fun steps(a: JSONArray?): List<AssistantStep> {
         val out = ArrayList<AssistantStep>(); if (a == null) return out
         for (i in 0 until a.length()) { val s = a.optJSONObject(i) ?: continue; out.add(AssistantStep(s.optString("name"), s.optString("label", s.optString("name")), s.optString("args"), s.optString("text"), s.optString("image"), s.optString("imageData"), s.optString("download"), s.optString("fileName"), s.optString("fileKind"), s.optString("fileMime"), s.optString("recording"))) }

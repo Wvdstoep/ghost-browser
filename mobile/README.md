@@ -65,9 +65,15 @@ Turn the phone into a Ghost Browser node your platform can drive for a hunt:
 So control travels the tailnet; browsing travels the device.
 
 ## Try it (development APK)
-Download the checked-in [v0.76 debug APK](dist/app-debug.apk). It was built from the source in this
+Download the checked-in [v0.82 debug APK](dist/app-debug.apk). It was built from the source in this
 repository after the Android build, app unit tests, shared desktop tests, and desktop compilation passed.
-SHA-256: `6ee872f48f75599dcf9c6c2582bac60089d648869b2e71cc5996a5023cff7577`.
+Verify the download against its [SHA-256 checksum](dist/app-debug.apk.sha256).
+
+Android 0.82 and desktop 1.0.31 expose **Flows → Recordings** using the same shared Compose screen.
+The library and recent execution evidence refresh while the tab is open. Captured requests,
+built-in Maps routines, browser walks, replay fallbacks and login blockers remain distinct.
+The Android workflow also publishes a `ghost-browser-desktop-windows` artifact containing the
+portable Windows app and its Java runtime; extract it and run `Ghost Browser.exe`.
 
 This is a debuggable build signed with an Android debug key. Use a test account only. There is no
 signed production release build yet. The [Android workflow](https://github.com/Wvdstoep/ghost-browser/actions/workflows/android.yml)

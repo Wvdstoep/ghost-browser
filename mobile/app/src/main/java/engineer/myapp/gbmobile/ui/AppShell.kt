@@ -69,6 +69,8 @@ class ShellUi {
     val clearHistoryConfirm = mutableStateOf(false)
     val flows = mutableStateOf<List<FlowInfo>>(emptyList())
     val flowsHint = mutableStateOf("")
+    val actionRecordings = mutableStateOf<List<engineer.myapp.gb.shared.ActionRecordingInfo>>(emptyList())
+    val recordingsError = mutableStateOf("")
     val openWatchersTab = mutableStateOf(false)
     val platforms = mutableStateOf<List<PlatformOpt>>(emptyList())
     val reconUi = engineer.myapp.gb.shared.ReconUi()
@@ -141,6 +143,7 @@ class ShellActions(
     val assistant: engineer.myapp.gb.shared.AssistantActions,
     val aiModel: engineer.myapp.gb.shared.AiModelActions,
     val onLoadFlows: () -> Unit,
+    val onLoadActionRecordings: () -> Unit,
     val onRunFlow: (String, String) -> Unit,
     val onCreateFlow: (String, String) -> Unit,
     val onCreateSecurityFlow: (String, String, String, String) -> Unit,
@@ -288,6 +291,12 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                 when (screen) {
                     "flows" -> {
                         var sub by remember { mutableStateOf(0) }   // 0 = Automations, 1 = Watchers
+                        LaunchedEffect(sub) {
+                            if (sub == 2) while (true) {
+                                act.onLoadActionRecordings(); act.onRefreshApprovals()
+                                kotlinx.coroutines.delay(3000)
+                            }
+                        }
                         LaunchedEffect(shell.openWatchersTab.value) {
                             if (shell.openWatchersTab.value) {
                                 sub = 1
@@ -297,7 +306,7 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         Column(Modifier.fillMaxSize().background(cs.background)) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                                 .clip(RoundedCornerShape(10.dp)).border(1.dp, cs.outline, RoundedCornerShape(10.dp))) {
-                                listOf("Automations", "Watchers").forEachIndexed { i, lbl ->
+                                listOf("Automations", "Watchers", "Recordings").forEachIndexed { i, lbl ->
                                     val on = sub == i
                                     Box(Modifier.weight(1f).clip(RoundedCornerShape(9.dp)).background(if (on) Brand else Color.Transparent)
                                         .clickable { sub = i; if (i == 1) act.onLoadWatchers() }.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
@@ -305,7 +314,10 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                                     }
                                 }
                             }
-                            if (sub == 0) engineer.myapp.gb.shared.FlowsScreen(
+                            if (sub == 2) engineer.myapp.gb.shared.ActionRecordingsScreen(
+                                shell.actionRecordings.value, shell.jobs.value, shell.recordingsError.value,
+                                onRefresh = { act.onLoadActionRecordings(); act.onRefreshApprovals() }, modifier = Modifier.weight(1f).fillMaxWidth())
+                            else if (sub == 0) engineer.myapp.gb.shared.FlowsScreen(
                                 flows = shell.flows.value, onLoad = act.onLoadFlows,
                                 onRun = { id, name -> act.onRunFlow(id, name) }, onCreate = { n, s -> act.onCreateFlow(n, s) },
                                 onCreateSecurity = { n, t, s, p -> act.onCreateSecurityFlow(n, t, s, p) },
