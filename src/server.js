@@ -173,7 +173,14 @@ const bearer = auth(keys);
 const deviceTokens = require('./deviceTokens'); try { deviceTokens.load(keys, log); } catch (e) { log.warn(`[device-token] load: ${e.message}`); }
 
 // MCP uses program credentials only; never forward a browser console cookie into a tool call.
-require('./mcp').mount(app, { keys, requestApi: require('./mcp').localApi(PORT) });
+const mcpOauth = require('./mcpOauth');
+require('./mcp').mount(app, { keys, requestApi: require('./mcp').localApi(PORT), challenge: mcpOauth.challengeFor });
+/* A claude.ai connector signs in instead of holding the API key: the owner consents in the console's
+   own session, and the access token is a device login for them — same map, same revoke. */
+mcpOauth.mount(app, {
+  accounts, log,
+  mintToken: (owner, client) => deviceTokens.mint(keys, { owner, ...mcpOauth.connectorDevice(client) }).token,
+});
 
 /*
  * SSO-ONLY mode. A platform-managed install (Ghost Browser connected from the Tools tab) belongs to
