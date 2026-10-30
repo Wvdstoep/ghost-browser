@@ -128,3 +128,19 @@ describe('marketplaces go to the device first', () => {
     expect(ring.knownWall('https://example.com/')).toBe('');
   });
 });
+
+describe('a page that never finishes loading on the device', () => {
+  it('says the app must be open instead of returning an empty page', async () => {
+    let t = 0;
+    const run = async (id, spec) => (spec.path === '/v1/info'
+      ? { result: { result: JSON.stringify({ url: 'https://nl.aliexpress.com/w/x.html', title: '', ready: 'loading' }) } }
+      : { result: { result: '""' } });
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, now: () => t, wait: async (ms) => { t += ms; } });
+    const s = { id: 's9' }; ring.attach(s, ['me']);
+    const nav = await ring.navigate(s, 'https://www.aliexpress.com/w/x.html');
+    expect(nav.notice).toMatch(/app is open with the screen on/);
+    const a = await ring.analyze(s);
+    expect(a.elementCount).toBe(0);
+    expect(a.notice).toMatch(/screen on/);
+  });
+});
