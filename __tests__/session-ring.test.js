@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { createSessionRing, looksWalled, unwrap, toElements } = require('../src/sessionRing');
+const { createSessionRing, looksWalled, unwrap, toElements, regionScriptFor } = require('../src/sessionRing');
 
 function phone() {
   const calls = [];
@@ -85,5 +85,35 @@ describe('a session on the device', () => {
     expect(ring.knownWall('https://bol.com/nl/')).toBe('HTTP 403');
     t += 7 * 60 * 60 * 1000;
     expect(ring.knownWall('https://bol.com/nl/')).toBe('');
+  });
+});
+
+describe('working the page like a person', () => {
+  it('accepts the cookie banner after loading a page, and says so', async () => {
+    const p = phone();
+    const run = async (id, spec) => (spec.path === '/v1/eval'
+      ? { result: { result: JSON.stringify('Akceptuj pliki cookie') } }
+      : p.run(id, spec));
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's2' }; ring.attach(s, ['me']);
+    const nav = await ring.navigate(s, 'https://www.bol.com/nl/');
+    expect(nav.acceptedCookies).toBe('Akceptuj pliki cookie');
+  });
+  it('sets AliExpress to the shop market and loads the page again with it', async () => {
+    const calls = [];
+    const run = async (id, spec) => {
+      calls.push(spec);
+      if (spec.path === '/v1/eval') return { result: { result: JSON.stringify(/aep_usuc_f/.test(spec.body.code) ? 'set' : '') } };
+      return { result: { result: JSON.stringify({ url: 'https://nl.aliexpress.com/w/x.html', title: 'x' }) } };
+    };
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's3' }; ring.attach(s, ['me']);
+    await ring.navigate(s, 'https://www.aliexpress.com/w/wholesale-derma-roller.html');
+    expect(calls.filter((c) => c.path === '/v1/navigate')).toHaveLength(2);
+    expect(calls.find((c) => /aep_usuc_f/.test(c.body.code || '')).body.code).toMatch(/region=NL/);
+  });
+  it('leaves other sites alone', () => {
+    expect(regionScriptFor('https://www.bol.com/nl/')).toBe('');
+    expect(regionScriptFor('https://nl.aliexpress.com/item/1.html')).toMatch(/aep_usuc_f/);
   });
 });
