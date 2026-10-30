@@ -39,10 +39,14 @@ function validate(tool, args) {
   if (args.sessionId && !/^s-[a-z0-9]+-[a-z0-9]+$/.test(args.sessionId)) throw new Error('Invalid sessionId');
 }
 
+const CONNECTOR_ORIGINS = new Set(['https://claude.ai', 'https://claude.com']);
+
 function createHandler({ requestApi }) {
   return async (req, res) => {
     // Browser-originated requests are not needed by CLI clients; refuse them to prevent cross-site use.
-    if (req.get('origin')) return res.status(403).json({ error: 'Browser origins are not supported' });
+    // Claude's own connector origins are the exception: claude.ai may present one when it relays a call.
+    const origin = req.get('origin');
+    if (origin && !CONNECTOR_ORIGINS.has(origin)) return res.status(403).json({ error: 'Browser origins are not supported' });
     const server = new Server({ name: 'ghost-browser', version: '1.0.0' }, { capabilities: { tools: {} } });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -90,12 +94,22 @@ function localApi(port) {
   };
 }
 
-function mount(app, { keys, requestApi }) {
+/*
+ * EVERY 401 SAYS WHERE TO LOG IN. A claude.ai connector starts OAuth only when the challenge names
+ * the resource metadata (RFC 9728), and it must do so for a revoked or unknown token as well as a
+ * missing one — otherwise a revoked connector just fails instead of asking to reconnect.
+ */
+function mount(app, { keys, requestApi, challenge = () => 'Bearer' }) {
   const bearer = require('./keys').auth(keys);
   app.all('/mcp', (req, res, next) => {
-    if (!/^Bearer\s+\S+$/i.test(req.get('authorization') || '')) {
-      res.set('WWW-Authenticate', 'Bearer');
+    const header = req.get('authorization') || '';
+    if (!/^Bearer\s+\S+$/i.test(header)) {
+      res.set('WWW-Authenticate', challenge(req));
       return res.status(401).json({ error: 'Bearer key required' });
+    }
+    if (keys.size && !keys.get(header.replace(/^Bearer\s+/i, '').trim())) {
+      res.set('WWW-Authenticate', `${challenge(req)}, error="invalid_token"`);
+      return res.status(401).json({ error: 'invalid_token' });
     }
     return bearer(req, res, next);
   }, createHandler({ requestApi }));

@@ -2,9 +2,9 @@
 
 Ghost Browser exposes a Streamable HTTP MCP endpoint at `/mcp`. It accepts the same
 `Authorization: Bearer <key>` credential as the browser API. For the mavicpro-fan workspace the
-endpoint is `https://ghost-browser.mavicpro-fan.my-app.engineer/mcp`. The server does not yet
-provide MCP OAuth or separately scoped/revocable MCP credentials. An API key also authorizes other
-Ghost Browser API operations: give it only to a client you trust. The authenticated owner can find
+endpoint is `https://ghost-browser.mavicpro-fan.my-app.engineer/mcp`. It also supports MCP OAuth,
+so claude.ai can connect by signing in instead of holding a key (see **Claude (claude.ai)** below).
+An API key also authorizes other Ghost Browser API operations: give it only to a client you trust. The authenticated owner can find
 the existing keys under **Settings → Account → MCP setup** in the Ghost Browser web console;
 never commit a key to a repository. Setup uses the current instance's host and reveals its key
 only when requested. It no longer floats over the bottom navigation.
@@ -29,11 +29,32 @@ tool_timeout_sec = 90
 See the [Codex MCP documentation](https://developers.openai.com/codex/mcp) for configuration.
 Restart or start a new Codex session after configuring it.
 
+## Claude (claude.ai)
+
+In claude.ai open **Settings → Connectors → Add custom connector**, give it a name and paste the
+endpoint above as the URL. Leave the OAuth client fields empty: Claude registers itself. Click
+**Connect**. A Ghost Browser page opens and asks you, the owner, to allow the connection. If you are
+not signed in, it sends you to sign in first and then continues by itself.
+
+Allowing it adds a device login named "Claude (connector)" for your account. That device login is
+the connector's credential. To revoke it, find it with `GET /v1/device/tokens` and remove it with
+`DELETE /v1/device/tokens/:deviceId` (the console has no button for this yet). Claude then asks you
+to connect again. Connecting the same client again
+replaces its old token.
+
+What is implemented: Protected Resource Metadata (RFC 9728) at
+`/.well-known/oauth-protected-resource`, Authorization Server Metadata (RFC 8414) at
+`/.well-known/oauth-authorization-server`, open Dynamic Client Registration (RFC 7591) at
+`/oauth/register`, the authorization code flow with PKCE S256 only, and resource binding (RFC 8707).
+Codes are single use and expire after one minute. Consent is accepted only from this server's own
+page. The issuer is `TOOL_PUBLIC_URL` (or `PUBLIC_URL`) when set, otherwise the forwarded host.
+
 ## Claude Code
 
-Configure a remote HTTP server with the endpoint above and an `Authorization` header containing
-`Bearer ` followed by your key. Use a private configuration or environment variable, not a checked-in
-project file containing the secret. This endpoint does not support OAuth login.
+`claude mcp add --transport http ghost-browser <endpoint>`, then run `/mcp` in Claude Code and choose
+to authenticate. It follows the same sign-in. Alternatively, configure an `Authorization` header
+containing `Bearer ` followed by your key. Use a private configuration or environment variable, not a
+checked-in project file containing the secret.
 
 ## Tools
 

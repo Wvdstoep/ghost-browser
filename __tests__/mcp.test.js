@@ -27,6 +27,7 @@ describe('Ghost Browser MCP', () => {
     expect((await send({})).status).toBe(401);
     expect((await send({ authorization: 'Bearer wrong' })).status).toBe(401);
     expect((await send({ authorization: 'Bearer key-one', origin: 'https://example.com' })).status).toBe(403);
+    expect((await send({ authorization: 'Bearer key-one', origin: 'https://claude.ai', accept: 'application/json, text/event-stream' })).status).not.toBe(403);
   });
 
   it('works through the official MCP client and forwards the caller key', async () => {
