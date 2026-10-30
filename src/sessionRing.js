@@ -23,6 +23,13 @@ const WALL_STATUS = new Set([401, 403, 407, 429, 503]);
 // What a refusal or challenge page says about itself, in the languages these shops answer in.
 const WALL_WORDS = /just a moment|attention required|verify you are (a )?human|are you a robot|robot check|unusual traffic|captcha|access denied|pardon our interruption|checking your browser|security check|please verify|request blocked|bot detection|geen toegang|toegang geweigerd|controleer of je een mens bent|ben je een robot/i;
 const REMEMBER_MS = 6 * 60 * 60 * 1000;
+/*
+ * MARKETPLACES GO TO THE DEVICE FIRST. Measured 2026-10-31: AliExpress let the server in (200) but
+ * served it the English site with foreign prices, while the phone got the Dutch market — the data a
+ * Dutch shop is sourced from. A wall is not the only reason to prefer the home connection; for a
+ * marketplace the country is the content. (Used only when a device is online; else the server.)
+ */
+const MARKETPLACES = /(^|\.)(aliexpress\.(com|us|ru)|alibaba\.com|temu\.com|bol\.com|amazon\.[a-z.]+|ebay\.[a-z.]+|etsy\.com|marktplaats\.nl|cjdropshipping\.com|trends\.google\.[a-z.]+)$/i;
 const SETTLE_MS = 2500;
 
 /*
@@ -147,8 +154,9 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   return {
     hostOf,
     looksWalled,
-    /** Has this host walled us recently? Then go straight to a device. */
+    /** Has this host walled us recently, or is it a marketplace? Then go straight to a device. */
     knownWall(url) {
+      if (MARKETPLACES.test(hostOf(url))) return 'marketplaces show the shop’s own country, prices and stock only to a home connection';
       const w = walledHosts.get(hostOf(url));
       if (!w) return '';
       if (w.until < now()) { walledHosts.delete(hostOf(url)); return ''; }

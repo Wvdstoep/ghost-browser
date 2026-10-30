@@ -81,10 +81,10 @@ describe('a session on the device', () => {
   it('remembers a host that walled the server, for a while', () => {
     let t = 1000;
     const ring = createSessionRing({ run: phone().run, pickDevice: () => device, log: {}, now: () => t });
-    ring.remember('https://www.bol.com/nl/s/?q=x', 'HTTP 403');
-    expect(ring.knownWall('https://bol.com/nl/')).toBe('HTTP 403');
+    ring.remember('https://www.wholesale-shop.example/nl/s/?q=x', 'HTTP 403');
+    expect(ring.knownWall('https://wholesale-shop.example/nl/')).toBe('HTTP 403');
     t += 7 * 60 * 60 * 1000;
-    expect(ring.knownWall('https://bol.com/nl/')).toBe('');
+    expect(ring.knownWall('https://wholesale-shop.example/nl/')).toBe('');
   });
 });
 
@@ -115,5 +115,16 @@ describe('working the page like a person', () => {
   it('leaves other sites alone', () => {
     expect(regionScriptFor('https://www.bol.com/nl/')).toBe('');
     expect(regionScriptFor('https://nl.aliexpress.com/item/1.html')).toMatch(/aep_usuc_f/);
+  });
+});
+
+describe('marketplaces go to the device first', () => {
+  it('sends AliExpress, bol.com and Amazon to the device even when the server is let in', () => {
+    const ring = createSessionRing({ run: phone().run, pickDevice: () => device, log: {} });
+    expect(ring.knownWall('https://www.aliexpress.com/w/x.html')).toMatch(/home connection/);
+    expect(ring.knownWall('https://nl.aliexpress.com/item/1.html')).toMatch(/home connection/);
+    expect(ring.knownWall('https://www.bol.com/nl/')).toMatch(/home connection/);
+    expect(ring.knownWall('https://www.amazon.nl/s?k=x')).toMatch(/home connection/);
+    expect(ring.knownWall('https://example.com/')).toBe('');
   });
 });
