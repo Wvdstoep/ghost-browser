@@ -828,6 +828,7 @@ function mine(req) {
 app.get('/v1/sessions/:id/product', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) return res.json(await sessionRing.product(s));
     res.json(await require('./productExtract').extractProduct(s.page));
   } catch (e) { fail(res, e); }
 });
@@ -838,6 +839,13 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
     const s = mine(req);
     const target = String(req.body?.url || '');
     await assertPublicUrl(target);
+
+    // Already on a device, or a host that walled the server's address recently: go (straight) there.
+    const known = sessionRing.knownWall(target);
+    const wasOnDevice = !!s.ring;
+    if (wasOnDevice || (known && sessionRing.attach(s, ringOwners(req)))) {
+      return res.json({ ...(await sessionRing.navigate(s, target)), ...(!wasOnDevice ? { handedOver: true, reason: known } : {}) });
+    }
 
     const r = await s.page.goto(target, { waitUntil: req.body?.waitUntil || 'domcontentloaded', timeout: NAV_TIMEOUT });
 
@@ -854,7 +862,24 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
         return res.status(403).json({ error: `redirected to a private address and was stopped (${e.message})` });
       }
     }
-    res.json({ url: landed, status: r ? r.status() : null, title: await s.page.title().catch(() => '') });
+    const status = r ? r.status() : null;
+    const title = await s.page.title().catch(() => '');
+    /*
+     * A REFUSAL IS NOT THE PAGE. 403 / 429 / a "verify you are human" page means the site turned the
+     * server's datacenter address away — hand the session to a device on a home connection and load
+     * it there, rather than reporting the wall as if it were the content.
+     */
+    const sample = await s.page.evaluate(() => (document.body && document.body.innerText || '').slice(0, 4000)).catch(() => '');
+    const wall = sessionRing.looksWalled({ status, title, sample });
+    if (wall) {
+      sessionRing.remember(target, wall);
+      if (sessionRing.attach(s, ringOwners(req))) {
+        return res.json({ ...(await sessionRing.navigate(s, target)), handedOver: true, reason: wall });
+      }
+      return res.json({ url: landed, status, title, walled: wall,
+        hint: 'No device with a home connection is online for this browser. Open the Ghost Browser app on the phone (or the desktop app) and try again.' });
+    }
+    res.json({ url: landed, status, title });
   } catch (e) { fail(res, e); }
 });
 
@@ -862,6 +887,7 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
 app.get('/v1/sessions/:id/analyze', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) return res.json(await sessionRing.analyze(s));
     const analysis = await analyzePage(s.page);
     // Kept so a click by index has something to resolve against, with the url and scroll position
     // it was taken at — a click against a stale analysis is a click in the wrong place.
@@ -883,6 +909,7 @@ app.post('/v1/sessions/:id/click', async (req, res) => {
   try {
     const s = mine(req);
     const { index, text } = req.body || {};
+    if (s.ring) return res.json(await sessionRing.click(s, { index, text }));
 
     if (text) {
       const el = s.page.getByText(String(text), { exact: false }).first();
@@ -934,6 +961,7 @@ app.post('/v1/sessions/:id/type', async (req, res) => {
   try {
     const s = mine(req);
     const { index, text = '', submit = false, paste = false, clear = true } = req.body || {};
+    if (s.ring) return res.json(await sessionRing.type(s, { index, text, submit }));
     if (!s.lastAnalysis) return res.status(409).json({ error: 'analyze the page first' });
     await freshIfMoved(s);
     const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
@@ -1077,6 +1105,7 @@ app.post('/v1/sessions/:id/keys', async (req, res) => {
 app.post('/v1/sessions/:id/scroll', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) return res.json(await sessionRing.scroll(s, req.body?.dy));
     await s.page.mouse.wheel(0, Number(req.body?.dy) || 400);
     res.json({ url: s.page.url() });
   } catch (e) { fail(res, e); }
@@ -1341,6 +1370,24 @@ app.delete('/v1/site-walls/:host', authed, (req, res) => {
  * because there is nothing to type.
  */
 const deviceHub = require('./device-hub').mountDeviceHub(app, authed); // reverse (poll) channel for GB Mobile devices
+/*
+ * A SESSION THAT HITS A WALL MOVES TO A DEVICE (sessionRing.js). The device is the key's own, or —
+ * when the key belongs to an organ or a platform tool — the install's, as long as every online device
+ * with a home connection belongs to one person (the same rule organ keys follow for jobs).
+ */
+const sessionRing = require('./sessionRing').createSessionRing({
+  run: (id, spec, timeoutMs) => deviceHub.runCommand(id, spec, timeoutMs),
+  pickDevice: (owners) => {
+    for (const o of owners) {
+      if (!o) continue;
+      try { const d = deviceHub.capableDevice(o, { realIp: true }); if (d) return d; } catch (_) { /* next */ }
+    }
+    const online = deviceHub.deviceList().filter((d) => d.online && d.caps && d.caps.realIp);
+    return new Set(online.map((d) => d.owner)).size === 1 ? online[0] : null;
+  },
+  log,
+});
+const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
 /* DURABLE DEVICE LOGIN: the app signs in ONCE through the SSO handoff (this call rides that cookie), gets a
    durable Bearer token, and from then on reaches the cluster natively with it — no WebView, no per-profile
    sign-in. Only the signed-in owner (the console) may enroll a device; a device token is the owner on their
@@ -7568,6 +7615,7 @@ app.get('/v1/sessions/:id/probe', async (req, res) => {
 app.get('/v1/sessions/:id/content', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) return res.json(await sessionRing.content(s));
     const content = await s.page.evaluate(() => {
       const junk = document.querySelectorAll('script, style, noscript, svg, iframe');
       junk.forEach((n) => n.remove());
@@ -7581,6 +7629,7 @@ app.get('/v1/sessions/:id/content', async (req, res) => {
 app.get('/v1/sessions/:id/screenshot', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) return res.type('png').send(await sessionRing.screenshot(s));
     const buf = await s.page.screenshot({ type: 'jpeg', quality: 80 });
     res.type('jpeg').send(buf);
   } catch (e) { fail(res, e); }

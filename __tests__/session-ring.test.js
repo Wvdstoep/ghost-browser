@@ -1,0 +1,89 @@
+/*
+ * A SESSION THAT HITS A WALL MOVES TO A DEVICE.
+ *
+ * Measured 2026-10-30: through the BIAB connector, bol.com answered 403, Google Trends 429 and CJ a
+ * "verify you are human" page — all because a session runs on the cluster's datacenter address,
+ * while the owner's phone sat connected on a home line the whole time. The ring took jobs, never
+ * sessions. These tests hold the handover to its promise with a stubbed phone.
+ */
+import { describe, it, expect } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { createSessionRing, looksWalled, unwrap, toElements } = require('../src/sessionRing');
+
+function phone() {
+  const calls = [];
+  const answers = {
+    '/v1/navigate': { url: 'https://www.bol.com/nl/' },
+    '/v1/info': JSON.stringify({ url: 'https://www.bol.com/nl/', title: 'bol.com | de winkel van ons allemaal' }),
+    '/v1/content': JSON.stringify('Bestsellers\nWekkerlicht €39,99'),
+    '/v1/analyze': JSON.stringify([{ i: 0, tag: 'a', text: 'Bestsellers', href: '/bestsellers' }, { i: 1, tag: 'input', label: 'Zoeken' }]),
+    '/v1/click': '"ok"', '/v1/type': '"ok"', '/v1/scroll': '"ok"',
+    '/v1/screenshot': { png_base64: Buffer.from('png').toString('base64') },
+  };
+  // The hub hands back the device's own POST body: { id, result: <string> }.
+  const run = async (deviceId, spec) => { calls.push({ deviceId, ...spec }); return { id: 'c1', result: { id: 'c1', result: answers[spec.path] } }; };
+  return { run, calls };
+}
+const device = { deviceId: 'd1', name: 'SM-F926B' };
+
+describe('telling a wall from a page', () => {
+  it('reads refusals and challenges as walls', () => {
+    expect(looksWalled({ status: 403 })).toMatch(/403/);
+    expect(looksWalled({ status: 429 })).toMatch(/429/);
+    expect(looksWalled({ status: 200, title: 'Just a moment...' })).toMatch(/challenge/);
+    expect(looksWalled({ status: 200, sample: 'Please verify you are a human to continue' })).toMatch(/challenge/);
+  });
+  it('does not mistake a real page for one', () => {
+    expect(looksWalled({ status: 200, title: 'Wekkerlicht kopen', sample: 'x'.repeat(5000) })).toBe('');
+    expect(looksWalled({ status: 200, title: 'Blog', sample: 'How captcha works. ' + 'y'.repeat(5000) })).toBe('');
+    expect(looksWalled({ status: 404 })).toBe('');
+  });
+});
+
+describe('the phone answers in wrappers', () => {
+  it('unwraps the hub and device envelopes and JSON strings', () => {
+    expect(unwrap({ id: 'c', result: { id: 'c', result: '{"a":1}' } })).toEqual({ a: 1 });
+    expect(unwrap({ id: 'c', result: '"ok"' })).toBe('ok');
+    expect(() => unwrap({ id: 'c', error: 'no webview' })).toThrow(/no webview/);
+  });
+  it('numbers the phone list the way the cluster does', () => {
+    const els = toElements([{ i: 0, tag: 'a', text: 'A' }, { i: 1, tag: 'button', text: 'B' }]);
+    expect(els.map((e) => e.index)).toEqual([1, 2]);
+  });
+});
+
+describe('a session on the device', () => {
+  it('attaches only when a device with a home connection is online', () => {
+    const ring = createSessionRing({ run: phone().run, pickDevice: () => null, log: {} });
+    const s = { id: 's1' };
+    expect(ring.attach(s, ['me'])).toBe(null);
+    expect(s.ring).toBeUndefined();
+  });
+  it('navigates, reads, analyzes and clicks on the phone, with the cluster numbering', async () => {
+    const p = phone();
+    const ring = createSessionRing({ run: p.run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's1' };
+    ring.attach(s, ['me']);
+    const nav = await ring.navigate(s, 'https://www.bol.com/nl/');
+    expect(nav).toMatchObject({ url: 'https://www.bol.com/nl/', title: expect.stringMatching(/bol\.com/), onDevice: 'SM-F926B' });
+    expect((await ring.content(s)).content).toMatch(/Wekkerlicht/);
+    const a = await ring.analyze(s);
+    expect(a.elements[0]).toMatchObject({ index: 1, text: 'Bestsellers' });
+    await ring.click(s, { index: 2 });
+    expect(p.calls.find((c) => c.path === '/v1/click').body).toEqual({ index: 1 });
+    await ring.type(s, { index: 2, text: 'wekkerlicht' });
+    expect(p.calls.find((c) => c.path === '/v1/type').body).toEqual({ index: 1, text: 'wekkerlicht' });
+    expect((await ring.screenshot(s)).toString()).toBe('png');
+    expect(p.calls.every((c) => c.deviceId === 'd1')).toBe(true);
+  });
+  it('remembers a host that walled the server, for a while', () => {
+    let t = 1000;
+    const ring = createSessionRing({ run: phone().run, pickDevice: () => device, log: {}, now: () => t });
+    ring.remember('https://www.bol.com/nl/s/?q=x', 'HTTP 403');
+    expect(ring.knownWall('https://bol.com/nl/')).toBe('HTTP 403');
+    t += 7 * 60 * 60 * 1000;
+    expect(ring.knownWall('https://bol.com/nl/')).toBe('');
+  });
+});

@@ -58,13 +58,17 @@ describe('Ghost Browser MCP', () => {
     backend.use(express.json());
     backend.post('/v1/sessions', (req, res) => res.status(403).json({ error: req.get('authorization') }));
     backend.get('/v1/sessions/s-abc-123/screenshot', (_req, res) => res.type('jpeg').send(Buffer.from('image')));
+    backend.get('/v1/sessions/s-png/screenshot', (_req, res) => res.type('png').send(Buffer.from('image')));
     const server = await new Promise(resolve => { const s = backend.listen(0, '127.0.0.1', () => resolve(s)); });
     try {
       const api = mcp.localApi(server.address().port);
       const error = await api({ method: 'POST', path: '/v1/sessions', body: {}, authorization: 'Bearer key-one' });
       expect(error).toEqual({ ok: false, data: { error: 'Bearer key-one' } });
       const image = await api({ method: 'GET', path: '/v1/sessions/s-abc-123/screenshot', authorization: 'Bearer key-one' });
-      expect(image).toEqual({ ok: true, data: 'aW1hZ2U=' });
+      expect(image).toEqual({ ok: true, data: 'aW1hZ2U=', mimeType: 'image/jpeg' });
+      // A session handed to a phone answers in PNG: the image keeps its real type.
+      const png = await api({ method: 'GET', path: '/v1/sessions/s-png/screenshot', authorization: 'Bearer key-one' });
+      expect(png).toEqual({ ok: true, data: 'aW1hZ2U=', mimeType: 'image/png' });
     } finally { await new Promise(resolve => server.close(resolve)); }
   });
 });

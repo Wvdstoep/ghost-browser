@@ -72,7 +72,7 @@ function createHandler({ requestApi }) {
         const [method, path, body] = routes[tool.name];
         const result = await requestApi({ method, path, body, authorization: req.get('authorization') });
         if (!result.ok) return { isError: true, content: [{ type: 'text', text: JSON.stringify(result.data) }] };
-        if (tool.name === 'browser_screenshot') return { content: [{ type: 'image', mimeType: 'image/jpeg', data: result.data }] };
+        if (tool.name === 'browser_screenshot') return { content: [{ type: 'image', mimeType: result.mimeType || 'image/jpeg', data: result.data }] };
         return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
       } catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] }; }
     });
@@ -86,11 +86,11 @@ function localApi(port) {
   return async ({ method, path, body, authorization }) => {
     const response = await fetch(`http://127.0.0.1:${port}${path}`, {
       method, headers: { authorization, ...(body ? { 'content-type': 'application/json' } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60000),
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(150000),   // a walled page tries the server, then loads on a device
     });
     const image = response.ok && response.headers.get('content-type')?.startsWith('image/');
     const data = image ? Buffer.from(await response.arrayBuffer()).toString('base64') : await response.json();
-    return { ok: response.ok, data };
+    return { ok: response.ok, data, mimeType: image ? response.headers.get('content-type').split(';')[0] : undefined };
   };
 }
 
