@@ -138,8 +138,24 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   const call = async (s, path, body = {}, timeoutMs = 120000) => unwrap(await run(s.ring.deviceId, { method: 'POST', path, body }, timeoutMs));
 
   async function info(s) {
-    try { const i = await call(s, '/v1/info', {}, 30000); return { url: (i && i.url) || '', title: (i && i.title) || '' }; }
-    catch (_) { return { url: '', title: '' }; }
+    try { const i = await call(s, '/v1/info', {}, 30000); return { url: (i && i.url) || '', title: (i && i.title) || '', ready: (i && i.ready) || '' }; }
+    catch (_) { return { url: '', title: '', ready: '' }; }
+  }
+  /*
+   * WAIT FOR THE PAGE, AND SAY SO WHEN IT NEVER COMES. Measured 2026-10-31 after midnight: the phone
+   * kept polling but its page stayed readyState "loading" with no body — Android pauses a WebView whose
+   * app is in the background or whose screen is off. Reading then returned an empty page, which the
+   * caller took for "nothing found". Now the session waits for the load and, if it never finishes,
+   * answers with what is actually wrong.
+   */
+  async function loaded(s, maxMs = 20000) {
+    const until = now() + maxMs;
+    let here = await info(s);
+    while (here.ready === 'loading' && now() < until) { await wait(1500); here = await info(s); }
+    if (here.ready === 'loading') {
+      here.notice = `The page is still loading on ${s.ring.name}. Its browser only works while the Ghost Browser app is open with the screen on — ask the owner to open it, then try again.`;
+    }
+    return here;
   }
   /** Press the cookie banner's accept, if there is one. Returns the button text it pressed. */
   async function acceptCookies(s) {
@@ -184,18 +200,24 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         const set = await call(s, '/v1/eval', { code: region }, 30000).catch(() => '');
         if (set === 'set') { await call(s, '/v1/navigate', { url }); await wait(SETTLE_MS); }
       }
+      await loaded(s);
       const cookies = await acceptCookies(s);
-      const here = await info(s);
+      const here = await loaded(s, 5000);
       s.ring.elements = [];
-      return { url: here.url || url, status: null, title: here.title, onDevice: s.ring.name, ...(cookies ? { acceptedCookies: cookies } : {}) };
+      return { url: here.url || url, status: null, title: here.title, onDevice: s.ring.name,
+        ...(cookies ? { acceptedCookies: cookies } : {}), ...(here.notice ? { notice: here.notice } : {}) };
     },
     async content(s) {
+      const first = await loaded(s);
+      if (first.notice) return { url: first.url, title: '', chars: 0, content: '', onDevice: s.ring.name, notice: first.notice };
       const t = await call(s, '/v1/content');
       const text = typeof t === 'string' ? t : String((t && (t.text || t.content)) || '');
       const here = await info(s);
       return { url: here.url, title: here.title, chars: text.length, content: text.slice(0, 200000), onDevice: s.ring.name };
     },
     async analyze(s) {
+      const first = await loaded(s);
+      if (first.notice) return { url: first.url, title: '', elementCount: 0, elements: [], summary: '', screenshot: null, onDevice: s.ring.name, notice: first.notice };
       await acceptCookies(s);
       const elements = toElements(await call(s, '/v1/analyze'));
       s.ring.elements = elements;
