@@ -69,6 +69,21 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
     fun ringReady(): Boolean = ::web.isInitialized && !isDestroyed && !isFinishing
 
+    private val VISIBLE_JS = """(function(){try{
+  var D=Document.prototype;
+  Object.defineProperty(D,'hidden',{configurable:true,get:function(){return false}});
+  Object.defineProperty(D,'visibilityState',{configurable:true,get:function(){return 'visible'}});
+  var raf=window.requestAnimationFrame&&window.requestAnimationFrame.bind(window), caf=window.cancelAnimationFrame&&window.cancelAnimationFrame.bind(window), n=0, live={};
+  if(raf){window.requestAnimationFrame=function(cb){var id=++n,done=false;var fire=function(t){if(done)return;done=true;delete live[id];try{cb(t)}catch(e){setTimeout(function(){throw e})}};
+    live[id]={r:raf(fire),t:setTimeout(function(){fire(performance.now())},40)};return id};
+    window.cancelAnimationFrame=function(id){var x=live[id];if(!x)return;delete live[id];try{caf(x.r)}catch(e){}clearTimeout(x.t)}}
+  var IO=window.IntersectionObserver;
+  if(IO){window.IntersectionObserver=function(cb,opt){var io=new IO(cb,opt),obs=io.observe.bind(io);
+    io.observe=function(el){obs(el);if(!window.innerWidth||!window.innerHeight){setTimeout(function(){var r={top:0,left:0,bottom:1,right:1,width:1,height:1,x:0,y:0};
+      try{cb([{target:el,isIntersecting:true,intersectionRatio:1,boundingClientRect:r,intersectionRect:r,rootBounds:r,time:performance.now()}],io)}catch(e){}},0)}};return io};
+    window.IntersectionObserver.prototype=IO.prototype}
+}catch(e){}})();"""
+
     private val HOME = "file:///android_asset/home.html"
     private val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -3694,6 +3709,18 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             try { w.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false) } catch (e: Exception) {}
         }
+        /*
+         * A PAGE THAT THINKS NOBODY IS LOOKING DOES NOT DRAW ITSELF. Measured 2026-10-31 with the phone
+         * locked: AliExpress search pages loaded, but product pages stayed an empty shell ("Probeer de
+         * app ... Openen") — a hidden page gets no animation frames and its lazy content never
+         * intersects. Before any page script runs, this tells the page it is visible, gives it frames
+         * from a timer when the real ones stop, and lets lazy content load when the view has no size.
+         */
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(w, VISIBLE_JS, setOf("*"))
+            }
+        } catch (e: Exception) {}
     }
     private fun wakeForCommand() {
         val l = CountDownLatch(1)
