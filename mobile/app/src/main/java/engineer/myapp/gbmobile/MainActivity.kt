@@ -66,10 +66,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     companion object {
         @Volatile var live: MainActivity? = null
         val ringRunning = java.util.concurrent.atomic.AtomicBoolean(false)
-    }
-    fun ringReady(): Boolean = ::web.isInitialized && !isDestroyed && !isFinishing
-
-    private val VISIBLE_JS = """(function(){try{
+        /** Tells every page it is visible (see keepWorkingWhenHidden); shared with ServiceBrowser. */
+        val VISIBLE_JS = """(function(){try{
   var D=Document.prototype;
   Object.defineProperty(D,'hidden',{configurable:true,get:function(){return false}});
   Object.defineProperty(D,'visibilityState',{configurable:true,get:function(){return 'visible'}});
@@ -83,6 +81,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
       try{cb([{target:el,isIntersecting:true,intersectionRatio:1,boundingClientRect:r,intersectionRect:r,rootBounds:r,time:performance.now()}],io)}catch(e){}},0)}};return io};
     window.IntersectionObserver.prototype=IO.prototype}
 }catch(e){}})();"""
+    }
+    fun ringReady(): Boolean = ::web.isInitialized && !isDestroyed && !isFinishing
+
 
     private val HOME = "file:///android_asset/home.html"
     private val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -3790,7 +3791,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun startDeviceRing() {
         if (ringOn || vm.clusterKey.isBlank()) return
         if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption(); requestOverlayPermission() }; scheduleRingWatchdog() }
-        // A ring already polling in this process (started by a screen that has since closed) serves this one too.
+        /*
+         * THE RING LIVES IN THE SERVICE NOW (GbService + ServiceBrowser), so it keeps working whatever this
+         * screen does — swiped away, in the background, never opened. The screen only tells the service what
+         * this device can do (its profiles), and makes sure the service runs.
+         */
+        try {
+            getSharedPreferences("gb", MODE_PRIVATE).edit().putString("ringCaps", phoneCaps().toString()).apply()
+            androidx.core.content.ContextCompat.startForegroundService(this, Intent(this, GbService::class.java).putExtra("reason", "ring"))
+            vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on — this device is connected"
+            return
+        } catch (e: Exception) { vm.log("! could not hand the ring to the service: ${e.message}") }
         if (!ringRunning.compareAndSet(false, true)) { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on — this device is connected"; return }
         ringOn = true
         ringExec.execute {
@@ -3826,7 +3837,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun stopDeviceRing() { ringOn = false; ringRunning.set(false) }
 
     /** The screen whose browser runs ring commands: the live one, or the app reopened in the background. */
-    private fun ringTarget(): MainActivity? {
+    fun ringTarget(): MainActivity? {
         live?.let { if (it.ringReady()) return it }
         try {
             applicationContext.startActivity(Intent(applicationContext, MainActivity::class.java)
