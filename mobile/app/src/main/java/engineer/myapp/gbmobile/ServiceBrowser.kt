@@ -153,13 +153,16 @@ class ServiceBrowser(private val ctx: Context) {
         onMain(10) {
             val w = web ?: return@onMain
             if (w.width <= 0 || w.height <= 0) return@onMain
-            val b = Bitmap.createBitmap(w.width, w.height, Bitmap.Config.ARGB_8888)
-            w.draw(Canvas(b))
+            // A full-resolution PNG of the whole screen was too heavy to send back in time (measured): scale
+            // to at most 720 px wide and send a JPEG.
+            val scale = minOf(1f, 720f / w.width)
+            val b = Bitmap.createBitmap((w.width * scale).toInt().coerceAtLeast(1), (w.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(b); canvas.scale(scale, scale); w.draw(canvas)
             val out = java.io.ByteArrayOutputStream()
-            b.compress(Bitmap.CompressFormat.PNG, 90, out); b.recycle()
+            b.compress(Bitmap.CompressFormat.JPEG, 72, out); b.recycle()
             holder[0] = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
         }
-        return if (holder[0] == null) "{\"error\":\"no screenshot\"}" else "{\"png_base64\":\"${holder[0]}\"}"
+        return if (holder[0] == null) "{\"error\":\"no screenshot\"}" else "{\"jpeg_base64\":\"${holder[0]}\"}"
     }
 
     /** One ring command. Same paths, same answers as MainActivity.runDeviceCommand. */
