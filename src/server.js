@@ -1392,6 +1392,25 @@ const sessionRing = require('./sessionRing').createSessionRing({
   log,
 });
 const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
+
+/*
+ * WHICH PROFILE, AND WHAT IT HOLDS. A caller (Claude through MCP) picks the profile a site needs, so it has
+ * to be able to see them: this install's profiles with what each is for, and the profiles on the owner's
+ * online devices (a phone keeps its own logins; its named profiles carry a "p_" prefix). "default" is the
+ * owner's main profile, signed in with their Google account.
+ */
+app.get('/v1/browser-profiles', authed, (req, res) => {
+  try {
+    const here = pool.listProfilesDetailed().map((p) => ({
+      name: p.name, role: p.role || '', purpose: p.purpose || p.hint || p.label || '', signedInTo: p.sites || p.signedIn || [],
+    }));
+    const devices = deviceHub.deviceList().filter((d) => d.online).map((d) => ({
+      name: d.name, platform: (d.caps && d.caps.platform) || '', homeConnection: !!(d.caps && d.caps.realIp),
+      profiles: ((d.caps && d.caps.profiles) || []).map((n) => String(n).replace(/^p_/, '')),
+    }));
+    res.json({ default: 'default', note: '"default" is the owner\'s main profile, signed in with their Google account. Pass a profile name to browser_open; marketplaces and walled sites run on a device with a home connection in the same profile.', profiles: here, devices });
+  } catch (e) { fail(res, e); }
+});
 /* DURABLE DEVICE LOGIN: the app signs in ONCE through the SSO handoff (this call rides that cookie), gets a
    durable Bearer token, and from then on reaches the cluster natively with it — no WebView, no per-profile
    sign-in. Only the signed-in owner (the console) may enroll a device; a device token is the owner on their

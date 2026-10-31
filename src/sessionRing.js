@@ -161,7 +161,8 @@ function toElements(raw) {
 function createSessionRing({ run, pickDevice, log = console, now = Date.now, wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const walledHosts = new Map(); // host -> { until, why }
 
-  const call = async (s, path, body = {}, timeoutMs = 120000) => unwrap(await run(s.ring.deviceId, { method: 'POST', path, body }, timeoutMs));
+  const call = async (s, path, body = {}, timeoutMs = 120000) => unwrap(await run(s.ring.deviceId,
+    { method: 'POST', path, body: s.ring.profile ? { ...body, profile: s.ring.profile } : body }, timeoutMs));
 
   async function info(s) {
     try {
@@ -229,7 +230,9 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (s.ring) return s.ring;
       const dev = pickDevice(owners);
       if (!dev) return null;
-      s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [] };
+      // The device runs the session in the profile the session was opened with (a phone names them p_<name>).
+      const prof = String(s.profile || 'default');
+      s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [], profile: prof === 'default' ? '' : (prof.startsWith('p_') ? prof : `p_${prof}`) };
       log.info?.(`[ring] session ${s.id}: handed to ${dev.name} (home connection)`);
       return s.ring;
     },
