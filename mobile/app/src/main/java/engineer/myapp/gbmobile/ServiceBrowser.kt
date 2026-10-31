@@ -35,7 +35,8 @@ import java.util.concurrent.TimeUnit
  */
 class ServiceBrowser(private val ctx: Context) {
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var web: WebView? = null
+    @Volatile private var web: WebView? = null            // the browser of the profile the current command names
+    private val webs = HashMap<String, WebView>()          // one invisible browser per profile, created on first use
     @Volatile private var loadLatch: CountDownLatch? = null
     private val gbJs: String by lazy { try { ctx.assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" } }
 
@@ -50,13 +51,30 @@ class ServiceBrowser(private val ctx: Context) {
         l.await(timeoutS, TimeUnit.SECONDS)
     }
 
-    /** Create the window once. False when the owner has not granted "Display over other apps". */
-    fun ensure(): Boolean {
-        if (web != null) return true
+    /*
+     * THE PROFILE THE CALLER CHOSE, AS THE APP KNOWS IT. A session is opened in a profile ("default" = the
+     * owner's main one, signed in with their Google account; "p_linkedin" and so on hold other logins), and
+     * every command carries it. Each profile gets its own invisible browser on the app's own ProfileStore
+     * profile of that name — the same cookies, logins and trust as that profile in the Ghost Browser app.
+     * (A jar of its own made this browser a stranger to every shop: AliExpress answered its product clicks
+     * with a human check the owner never saw in the app, measured 2026-10-31.)
+     * False when the owner has not granted "Display over other apps".
+     */
+    fun ensure(profile: String = "default"): Boolean {
+        val name = profile.ifBlank { "default" }
+        webs[name]?.let { web = it; return true }
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(ctx)) return false
+        var made: WebView? = null
         onMain {
             val w = WebView(ctx)
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                try {
+                    androidx.webkit.ProfileStore.getInstance().getOrCreateProfile(name)
+                    WebViewCompat.setProfile(w, name)
+                } catch (e: Exception) { /* the built-in jar */ }
+            }
             w.settings.javaScriptEnabled = true
+            w.settings.databaseEnabled = true
             w.settings.domStorageEnabled = true
             w.settings.useWideViewPort = true
             w.settings.loadWithOverviewMode = true
@@ -84,17 +102,20 @@ class ServiceBrowser(private val ctx: Context) {
             lp.gravity = Gravity.TOP or Gravity.START
             lp.alpha = 0f   // invisible: the owner never sees it, the page still has a full-size layout
             (ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager).addView(w, lp)
-            web = w
+            made = w
         }
-        return web != null
+        val w = made ?: return false
+        webs[name] = w; web = w
+        return true
     }
 
     fun close() {
-        val w = web ?: return
-        web = null
+        val all = webs.values.toList(); webs.clear(); web = null
         main.post {
-            try { (ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(w) } catch (e: Exception) {}
-            try { w.destroy() } catch (e: Exception) {}
+            for (w in all) {
+                try { (ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(w) } catch (e: Exception) {}
+                try { w.destroy() } catch (e: Exception) {}
+            }
         }
     }
 
