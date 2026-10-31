@@ -286,8 +286,11 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
        * what a person achieves by clicking it.
        */
       const el = !text && (s.ring.elements || [])[Number(index) - 1];
-      if (el && /^https?:\/\//i.test(el.href || '') && here.url === before) {
-        await call(s, '/v1/navigate', { url: el.href }, 40000);
+      // Shops write links without a scheme (AliExpress: "//nl.aliexpress.com/item/…") or relative to the page.
+      let target = '';
+      try { target = el && el.href ? new URL(el.href, before || undefined).href : ''; } catch (_) { target = ''; }
+      if (/^https?:\/\//i.test(target) && here.url === before) {
+        await call(s, '/v1/navigate', { url: target }, 40000);
         await loaded(s, 12000);
         here = await info(s);
       }
