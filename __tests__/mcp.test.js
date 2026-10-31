@@ -30,6 +30,15 @@ describe('Ghost Browser MCP', () => {
     expect((await send({ authorization: 'Bearer key-one', origin: 'https://claude.ai', accept: 'application/json, text/event-stream' })).status).not.toBe(403);
   });
 
+  it('accepts the key as x-api-key (a browser reached through its own cluster API proxy) and forwards it', async () => {
+    const send = (headers) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'browser_list', arguments: {} } }) });
+    expect((await send({ 'x-api-key': 'wrong' })).status).toBe(401);
+    calls.length = 0;
+    const res = await send({ 'x-api-key': 'key-one' });
+    expect(res.status).toBe(200);
+    expect(calls[0].authorization).toBe('Bearer key-one');
+  });
+
   it('works through the official MCP client and forwards the caller key', async () => {
     const client = new Client({ name: 'test', version: '1' });
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: 'Bearer key-one' } } });

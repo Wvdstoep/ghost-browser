@@ -104,6 +104,14 @@ function localApi(port) {
 function mount(app, { keys, requestApi, challenge = () => 'Bearer' }) {
   const bearer = require('./keys').auth(keys);
   app.all('/mcp', (req, res, next) => {
+    /*
+     * x-api-key COUNTS TOO, as on every other route (keys.js). The platform reaches a browser on the
+     * tenant's OWN cluster through the cluster API's service proxy, which consumes Authorization - so
+     * the key arrives as x-api-key, and /mcp answered 401 to every connector call (ben-magrill,
+     * 2026-10-31). Normalised to a Bearer header so the tool calls forward it unchanged.
+     */
+    const apiKey = String(req.get('x-api-key') || '').trim();
+    if (!req.get('authorization') && apiKey) req.headers.authorization = `Bearer ${apiKey}`;
     const header = req.get('authorization') || '';
     if (!/^Bearer\s+\S+$/i.test(header)) {
       res.set('WWW-Authenticate', challenge(req));
