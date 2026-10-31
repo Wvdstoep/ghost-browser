@@ -140,8 +140,12 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   const call = async (s, path, body = {}, timeoutMs = 120000) => unwrap(await run(s.ring.deviceId, { method: 'POST', path, body }, timeoutMs));
 
   async function info(s) {
-    try { const i = await call(s, '/v1/info', {}, 30000); return { url: (i && i.url) || '', title: (i && i.title) || '', ready: (i && i.ready) || '' }; }
-    catch (_) { return { url: '', title: '', ready: '' }; }
+    try {
+      const i = await call(s, '/v1/info', {}, 30000);
+      // null = no page to ask: the app on the device is closed (Android destroys its browser with it).
+      if (!i || typeof i !== 'object') return { url: '', title: '', ready: 'closed' };
+      return { url: i.url || '', title: i.title || '', ready: i.ready || '' };
+    } catch (_) { return { url: '', title: '', ready: '' }; }
   }
   /*
    * WAIT FOR THE PAGE, AND SAY SO WHEN IT NEVER COMES. Measured 2026-10-31 after midnight: the phone
@@ -154,8 +158,10 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     const until = now() + maxMs;
     let here = await info(s);
     while (here.ready === 'loading' && now() < until) { await wait(1500); here = await info(s); }
-    if (here.ready === 'loading') {
-      here.notice = `The page is still loading on ${s.ring.name}. Its browser only works while the Ghost Browser app is open with the screen on — ask the owner to open it, then try again.`;
+    if (here.ready === 'closed') {
+      here.notice = `The Ghost Browser app on ${s.ring.name} is closed, so there is no browser to load the page in. Ask the owner to open the app once (the phone may be locked after that), then try again.`;
+    } else if (here.ready === 'loading') {
+      here.notice = `The page is still loading on ${s.ring.name}. Ask the owner to make sure the Ghost Browser app is open (it may be in the background, the phone may be locked), then try again.`;
     }
     return here;
   }
