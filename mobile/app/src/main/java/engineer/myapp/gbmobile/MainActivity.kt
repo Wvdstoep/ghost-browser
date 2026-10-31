@@ -182,8 +182,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         b = ActivityMainBinding.inflate(layoutInflater)   // bare root FrameLayout (S6: UI is all Compose)
         setContentView(b.root)
         live = this
-        // Reopened only to give the ring a browser: step aside instead of covering what the owner is doing.
-        if (intent?.getBooleanExtra("forRing", false) == true) b.root.post { try { moveTaskToBack(true) } catch (e: Exception) {} }
+        // Reopened only to give the ring a browser: step aside at once instead of covering what the owner is doing.
+        if (intent?.getBooleanExtra("forRing", false) == true) {
+            try { moveTaskToBack(true); overridePendingTransition(0, 0) } catch (e: Exception) {}
+        }
         settingsUi.themeMode.value = vm.themeMode
 
         gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }

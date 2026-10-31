@@ -58,8 +58,11 @@ class GbService : Service() {
         // revived by the watchdog after the app was killed: bring the app back so the ring + its browser live
         // again (the ring needs the app process, a headless service cannot drive a WebView). Best-effort —
         // Android may refuse a background Activity start, in which case the next launch or watchdog tick retries.
-        if (intent?.getStringExtra("reason") == "watchdog") {
-            try { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
+        // Only when the ring is really gone (the whole process was killed). After a plain swipe-away the ring
+        // keeps polling in this process, and reopening the app then undid every swipe the moment the owner
+        // granted "Display over other apps" (measured 2026-10-31). Reopened, it steps straight aside.
+        if (intent?.getStringExtra("reason") == "watchdog" && !MainActivity.ringRunning.get()) {
+            try { startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("forRing", true)) } catch (e: Exception) {}
         }
         return START_STICKY
     }
