@@ -101,11 +101,10 @@ class GbService : Service() {
     /** Commands for the default browser run in the service's own window; logged-in profiles and anything
      *  else run in the app (reopened in the background when it is not open). */
     private fun dispatch(path: String, body: org.json.JSONObject): String {
-        val prof = body.optString("profile", "")
-        val plain = prof.isBlank() || prof == "default"
-        if (plain && path in ServiceBrowser.PATHS) {
+        // Every profile runs here — each in its own invisible browser on the app's profile of that name.
+        if (path in ServiceBrowser.PATHS) {
             val b = browser ?: ServiceBrowser(applicationContext).also { browser = it }
-            if (b.ensure()) return b.run(path, body)
+            if (b.ensure(body.optString("profile", ""))) return b.run(path, body)
         }
         val screen = MainActivity.live?.takeIf { it.ringReady() } ?: MainActivity.live?.ringTarget()
             ?: run {
