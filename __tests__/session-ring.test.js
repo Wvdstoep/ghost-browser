@@ -156,3 +156,24 @@ describe('the app on the device is closed', () => {
     expect((await ring.content(s)).notice).toMatch(/closed/);
   });
 });
+
+describe('a phone browser nobody has drawn', () => {
+  it('lists the page from the DOM when the screen scan finds next to nothing, and clicks through the page', async () => {
+    const calls = [];
+    const run = async (id, spec) => {
+      calls.push(spec);
+      if (spec.path === '/v1/analyze') return { result: { result: JSON.stringify([{ i: 0, tag: 'div', text: 'x' }]) } };
+      if (spec.path === '/v1/eval' && /__ringEls=keep/.test(spec.body.code)) return { result: { result: JSON.stringify([{ tag: 'a', text: 'Haargroei serum €3,99', href: 'https://nl.aliexpress.com/item/1.html' }, { tag: 'a', text: 'b' }, { tag: 'a', text: 'c' }, { tag: 'a', text: 'd' }, { tag: 'a', text: 'e' }, { tag: 'button', text: 'Zoeken' }]) } };
+      if (spec.path === '/v1/info') return { result: { result: JSON.stringify({ url: 'https://nl.aliexpress.com/w/x.html', title: 't', ready: 'complete' }) } };
+      return { result: { result: '""' } };
+    };
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's11' }; ring.attach(s, ['me']);
+    const a = await ring.analyze(s);
+    expect(a.elementCount).toBe(6);
+    expect(a.elements[0]).toMatchObject({ index: 1, href: 'https://nl.aliexpress.com/item/1.html' });
+    await ring.click(s, { index: 1 });
+    expect(calls.some((c) => c.path === '/v1/eval' && /__ringEls\[0\]/.test(c.body.code))).toBe(true);
+    expect(calls.some((c) => c.path === '/v1/click')).toBe(false);
+  });
+});
