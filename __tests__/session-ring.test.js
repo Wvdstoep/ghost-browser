@@ -138,9 +138,21 @@ describe('a page that never finishes loading on the device', () => {
     const ring = createSessionRing({ run, pickDevice: () => device, log: {}, now: () => t, wait: async (ms) => { t += ms; } });
     const s = { id: 's9' }; ring.attach(s, ['me']);
     const nav = await ring.navigate(s, 'https://www.aliexpress.com/w/x.html');
-    expect(nav.notice).toMatch(/app is open with the screen on/);
+    expect(nav.notice).toMatch(/app is open/);
     const a = await ring.analyze(s);
     expect(a.elementCount).toBe(0);
-    expect(a.notice).toMatch(/screen on/);
+    expect(a.notice).toMatch(/still loading/);
+  });
+});
+
+describe('the app on the device is closed', () => {
+  it('says the app must be opened instead of returning an empty page', async () => {
+    let t = 0;
+    const run = async (id, spec) => ({ result: { result: 'null' } });
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, now: () => t, wait: async (ms) => { t += ms; } });
+    const s = { id: 's10' }; ring.attach(s, ['me']);
+    const nav = await ring.navigate(s, 'https://www.bol.com/nl/');
+    expect(nav.notice).toMatch(/app on SM-F926B is closed/);
+    expect((await ring.content(s)).notice).toMatch(/closed/);
   });
 });
