@@ -67,6 +67,12 @@ class ServiceBrowser(private val ctx: Context) {
             }
             w.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) { loadLatch?.countDown() }
+                // Shops push their own app (aliexpress://…, intent://…) the moment a page loads; following that
+                // replaced the page with "Web page not available" (measured 2026-10-31). Only the web is loaded.
+                override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                    val scheme = request?.url?.scheme?.lowercase() ?: return false
+                    return scheme != "http" && scheme != "https"
+                }
             }
             val dm = ctx.resources.displayMetrics
             val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
