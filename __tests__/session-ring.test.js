@@ -75,7 +75,7 @@ describe('a session on the device', () => {
     expect(p.calls.find((c) => c.path === '/v1/click').body).toEqual({ index: 1 });
     await ring.type(s, { index: 2, text: 'wekkerlicht' });
     expect(p.calls.find((c) => c.path === '/v1/type').body).toEqual({ index: 1, text: 'wekkerlicht' });
-    expect((await ring.screenshot(s)).toString()).toBe('png');
+    expect((await ring.screenshot(s)).data.toString()).toBe('png');
     expect(p.calls.every((c) => c.deviceId === 'd1')).toBe(true);
   });
   it('remembers a host that walled the server, for a while', () => {
@@ -175,5 +175,23 @@ describe('a phone browser nobody has drawn', () => {
     await ring.click(s, { index: 1 });
     expect(calls.some((c) => c.path === '/v1/eval' && /__ringEls\[0\]/.test(c.body.code))).toBe(true);
     expect(calls.some((c) => c.path === '/v1/click')).toBe(false);
+  });
+});
+
+describe('a clicked link goes where it points', () => {
+  it('opens the link when the tap left the page unchanged', async () => {
+    const calls = []; let url = 'https://nl.aliexpress.com/w/x.html';
+    const run = async (id, spec) => {
+      calls.push(spec);
+      if (spec.path === '/v1/navigate') url = spec.body.url;
+      if (spec.path === '/v1/info') return { result: { result: JSON.stringify({ url, title: 't', ready: 'complete' }) } };
+      if (spec.path === '/v1/analyze') return { result: { result: JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ i, tag: 'a', text: 'p' + i, href: `https://nl.aliexpress.com/item/${i}.html` }))) } };
+      return { result: { result: '"ok"' } };
+    };
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's12' }; ring.attach(s, ['me']);
+    await ring.analyze(s);
+    const c = await ring.click(s, { index: 3 });
+    expect(c.url).toBe('https://nl.aliexpress.com/item/2.html');
   });
 });

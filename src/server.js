@@ -7633,7 +7633,7 @@ app.get('/v1/sessions/:id/content', async (req, res) => {
 app.get('/v1/sessions/:id/screenshot', async (req, res) => {
   try {
     const s = mine(req);
-    if (s.ring) return res.type('png').send(await sessionRing.screenshot(s));
+    if (s.ring) { const shot = await sessionRing.screenshot(s); return res.type(shot.type).send(shot.data); }
     const buf = await s.page.screenshot({ type: 'jpeg', quality: 80 });
     res.type('jpeg').send(buf);
   } catch (e) { fail(res, e); }
