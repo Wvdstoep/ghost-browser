@@ -185,7 +185,7 @@ describe('a clicked link goes where it points', () => {
       calls.push(spec);
       if (spec.path === '/v1/navigate') url = spec.body.url;
       if (spec.path === '/v1/info') return { result: { result: JSON.stringify({ url, title: 't', ready: 'complete' }) } };
-      if (spec.path === '/v1/analyze') return { result: { result: JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ i, tag: 'a', text: 'p' + i, href: `https://nl.aliexpress.com/item/${i}.html` }))) } };
+      if (spec.path === '/v1/analyze') return { result: { result: JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ i, tag: 'a', text: 'p' + i, href: `//nl.aliexpress.com/item/${i}.html` }))) } };
       return { result: { result: '"ok"' } };
     };
     const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
