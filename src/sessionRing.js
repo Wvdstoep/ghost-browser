@@ -31,6 +31,7 @@ const REMEMBER_MS = 6 * 60 * 60 * 1000;
  */
 const MARKETPLACES = /(^|\.)(aliexpress\.(com|us|ru)|alibaba\.com|temu\.com|bol\.com|amazon\.[a-z.]+|ebay\.[a-z.]+|etsy\.com|marktplaats\.nl|cjdropshipping\.com|trends\.google\.[a-z.]+)$/i;
 const SETTLE_MS = 2500;
+const NAV_BUDGET_MS = 48000;   // under the 60 s a client such as Claude gives one tool call
 
 /*
  * A COOKIE BANNER IS THE FIRST THING ON EVERY SHOP — AND ON THE PHONE NOTHING CLICKED IT.
@@ -221,26 +222,34 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       return s.ring;
     },
 
+    /*
+     * EVERY STEP ANSWERS WITHIN A CLIENT'S PATIENCE. Claude gives a tool 60 s (measured: "browser_navigate
+     * timed out after 60s"), and a phone navigate could take 31 s twice plus waits. So a navigate spends at
+     * most NAV_BUDGET_MS; a page still loading then is reported as such — the phone keeps loading it, and the
+     * next read or analyze picks it up — instead of the call being cut off with nothing.
+     */
     async navigate(s, asked) {
       const url = marketUrl(asked);
-      await call(s, '/v1/navigate', { url });
-      await wait(SETTLE_MS);
-      // The shop's market, not the phone's language: set it once, then load the page again with it.
+      const deadline = now() + NAV_BUDGET_MS;
+      const left = () => deadline - now();
+      await call(s, '/v1/navigate', { url }, Math.max(5000, left() - 8000));
+      // The shop's market, not the phone's language: set it once (it sticks), then load the page with it.
       const region = regionScriptFor(url);
-      if (region) {
-        const set = await call(s, '/v1/eval', { code: region }, 30000).catch(() => '');
-        if (set === 'set') { await call(s, '/v1/navigate', { url }); await wait(SETTLE_MS); }
+      if (region && left() > 20000) {
+        const set = await call(s, '/v1/eval', { code: region }, 15000).catch(() => '');
+        if (set === 'set' && left() > 20000) await call(s, '/v1/navigate', { url }, Math.max(5000, left() - 8000));
       }
-      // A load that stalls (measured: one set off by reloading mid-load) gets one fresh try before we give up.
-      if ((await loaded(s)).notice) { await call(s, '/v1/navigate', { url }); await loaded(s); }
-      const cookies = await acceptCookies(s);
-      const here = await loaded(s, 5000);
+      await loaded(s, Math.max(0, left() - 6000));
+      const cookies = left() > 3000 ? await acceptCookies(s) : '';
+      const here = await info(s);
+      if (here.ready === 'loading') here.notice = `Still loading on ${s.ring.name}. It keeps loading there — call browser_read or browser_analyze in a few seconds.`;
+      else if (here.ready === 'closed') here.notice = (await loaded(s, 0)).notice;
       s.ring.elements = [];
       return { url: here.url || url, status: null, title: here.title, onDevice: s.ring.name,
         ...(cookies ? { acceptedCookies: cookies } : {}), ...(here.notice ? { notice: here.notice } : {}) };
     },
     async content(s) {
-      const first = await loaded(s);
+      const first = await loaded(s, 15000);
       if (first.notice) return { url: first.url, title: '', chars: 0, content: '', onDevice: s.ring.name, notice: first.notice };
       const t = await call(s, '/v1/content');
       const text = typeof t === 'string' ? t : String((t && (t.text || t.content)) || '');
@@ -248,7 +257,7 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       return { url: here.url, title: here.title, chars: text.length, content: text.slice(0, 200000), onDevice: s.ring.name };
     },
     async analyze(s) {
-      const first = await loaded(s);
+      const first = await loaded(s, 15000);
       if (first.notice) return { url: first.url, title: '', elementCount: 0, elements: [], summary: '', screenshot: null, onDevice: s.ring.name, notice: first.notice };
       await acceptCookies(s);
       let elements = toElements(await call(s, '/v1/analyze'));
