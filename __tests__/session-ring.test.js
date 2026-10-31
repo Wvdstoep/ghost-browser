@@ -138,7 +138,7 @@ describe('a page that never finishes loading on the device', () => {
     const ring = createSessionRing({ run, pickDevice: () => device, log: {}, now: () => t, wait: async (ms) => { t += ms; } });
     const s = { id: 's9' }; ring.attach(s, ['me']);
     const nav = await ring.navigate(s, 'https://www.aliexpress.com/w/x.html');
-    expect(nav.notice).toMatch(/app is open/);
+    expect(nav.notice).toMatch(/Still loading on SM-F926B/);
     const a = await ring.analyze(s);
     expect(a.elementCount).toBe(0);
     expect(a.notice).toMatch(/still loading/);

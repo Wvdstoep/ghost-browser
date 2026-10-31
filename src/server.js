@@ -1377,13 +1377,17 @@ const deviceHub = require('./device-hub').mountDeviceHub(app, authed); // revers
  */
 const sessionRing = require('./sessionRing').createSessionRing({
   run: (id, spec, timeoutMs) => deviceHub.runCommand(id, spec, timeoutMs),
+  // The desktop node first: real Chromium renders heavy shop pages a locked phone's WebView will not.
   pickDevice: (owners) => {
-    for (const o of owners) {
-      if (!o) continue;
-      try { const d = deviceHub.capableDevice(o, { realIp: true }); if (d) return d; } catch (_) { /* next */ }
+    for (const need of [{ realIp: true, platform: 'desktop' }, { realIp: true }]) {
+      for (const o of owners) {
+        if (!o) continue;
+        try { const d = deviceHub.capableDevice(o, need); if (d) return d; } catch (_) { /* next */ }
+      }
     }
     const online = deviceHub.deviceList().filter((d) => d.online && d.caps && d.caps.realIp);
-    return new Set(online.map((d) => d.owner)).size === 1 ? online[0] : null;
+    if (new Set(online.map((d) => d.owner)).size !== 1) return null;
+    return online.find((d) => d.caps.platform === 'desktop') || online[0];
   },
   log,
 });
