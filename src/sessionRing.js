@@ -59,7 +59,9 @@ const REGION_JS = {
   // Three cookies, measured 2026-10-31: aep_usuc_f alone was answered with gatewayAdapt=nld2pol (the
   // phone's own language won); with intl_locale + xman_us_f as well the site serves Dutch and euros.
   'aliexpress.com': `(function(){var want='site=${MARKET.site}&c_tp=${MARKET.currency}&region=${MARKET.region}&b_locale=${MARKET.locale}';
-    if(document.cookie.indexOf('aep_usuc_f='+want)>=0&&document.cookie.indexOf('intl_locale=${MARKET.locale}')>=0)return '';
+    // AliExpress rewrites the cookie in its own order (…&isb=y&region=NL…): check the parts, or every page reloads.
+    var c=document.cookie,m=(c.match(/aep_usuc_f=[^;]*/)||[''])[0];
+    if(m.indexOf('site=${MARKET.site}')>=0&&m.indexOf('region=${MARKET.region}')>=0&&m.indexOf('b_locale=${MARKET.locale}')>=0&&c.indexOf('intl_locale=${MARKET.locale}')>=0)return '';
     var o='; domain=.aliexpress.com; path=/; max-age=31536000';
     document.cookie='aep_usuc_f='+want+o; document.cookie='intl_locale=${MARKET.locale}'+o;
     document.cookie='xman_us_f=x_l=0&x_locale=${MARKET.locale}&x_c_chg=1'+o; return 'set'})()`,
@@ -200,7 +202,8 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         const set = await call(s, '/v1/eval', { code: region }, 30000).catch(() => '');
         if (set === 'set') { await call(s, '/v1/navigate', { url }); await wait(SETTLE_MS); }
       }
-      await loaded(s);
+      // A load that stalls (measured: one set off by reloading mid-load) gets one fresh try before we give up.
+      if ((await loaded(s)).notice) { await call(s, '/v1/navigate', { url }); await loaded(s); }
       const cookies = await acceptCookies(s);
       const here = await loaded(s, 5000);
       s.ring.elements = [];
