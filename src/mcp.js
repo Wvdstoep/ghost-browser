@@ -21,10 +21,14 @@ const tools = [
   ['browser_extract_product', 'Extract factual product fields from the current page for review before importing to a shop. Does not verify variants, stock, shipping or fulfillment.', { sessionId: id }, ['sessionId']],
   ['browser_screenshot', 'Capture an image of the current page.', { sessionId: id }, ['sessionId']],
   ['browser_close', 'Close your browser session.', { sessionId: id }, ['sessionId']],
+  ['browser_images', 'List the pictures on the current page, biggest first and numbered, with their address, alt text and size. Use browser_save_image to keep one.', { sessionId: id }, ['sessionId']],
+  ['browser_save_image', 'Keep a picture from the current page — by its number from browser_images, or its src — read through this session, so signed-in and generated images (e.g. Google Flow) work. Returns a fileId for browser_upload_file or a shop\'s image import.', { sessionId: id, image: { type: 'integer', minimum: 1 }, src: string('Picture address from browser_images.'), name: string('File name to keep it under.') }, ['sessionId']],
+  ['browser_upload_file', 'Put a kept file (fileId from browser_save_image) into a numbered upload button or file field from the most recent analysis, e.g. a product photo as a reference image.', { sessionId: id, index: { type: 'integer', minimum: 1 }, fileId: string('fileId from browser_save_image.') }, ['sessionId', 'index', 'fileId']],
+  ['browser_file', 'Show a kept picture (fileId from browser_save_image).', { fileId: string('fileId from browser_save_image.') }, ['fileId']],
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot'].includes(name),
-    destructiveHint: ['browser_click', 'browser_type'].includes(name), openWorldHint: true },
+  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file'].includes(name),
+    destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file'].includes(name), openWorldHint: true },
 }));
 
 function validate(tool, args) {
@@ -38,6 +42,8 @@ function validate(tool, args) {
         (typeof value === 'number' && !Number.isFinite(value))) throw new Error(`Invalid ${key}`);
   }
   if (args.sessionId && !/^s-[a-z0-9]+-[a-z0-9]+$/.test(args.sessionId)) throw new Error('Invalid sessionId');
+  if (args.fileId && !/^f[0-9a-f]{16}$/.test(args.fileId)) throw new Error('Invalid fileId');
+  if (tool.name === 'browser_save_image' && !args.image && !args.src) throw new Error('Give image (a number from browser_images) or src');
 }
 
 const CONNECTOR_ORIGINS = new Set(['https://claude.ai', 'https://claude.com']);
@@ -70,11 +76,21 @@ function createHandler({ requestApi }) {
           browser_read: ['GET', `${base}/content`], browser_screenshot: ['GET', `${base}/screenshot`],
           browser_extract_product: ['GET', `${base}/product`],
           browser_close: ['DELETE', base],
+          browser_images: ['GET', `${base}/images`],
+          browser_save_image: ['POST', `${base}/save-image`, { image: args.image, src: args.src, name: args.name }],
+          browser_upload_file: ['POST', `${base}/upload-file`, { index: args.index, fileId: args.fileId }],
+          browser_file: ['GET', `/v1/files/${encodeURIComponent(String(args.fileId))}/b64`],
         };
         const [method, path, body] = routes[tool.name];
         const result = await requestApi({ method, path, body, authorization: req.get('authorization') });
         if (!result.ok) return { isError: true, content: [{ type: 'text', text: JSON.stringify(result.data) }] };
         if (tool.name === 'browser_screenshot') return { content: [{ type: 'image', mimeType: result.mimeType || 'image/jpeg', data: result.data }] };
+        // A kept file comes back as itself: the picture, plus what it is (a shop import reads the bytes from here).
+        if (tool.name === 'browser_file') {
+          const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(result.data && result.data.data || ''));
+          if (!m) return { isError: true, content: [{ type: 'text', text: 'That file is not a picture.' }] };
+          return { content: [{ type: 'image', mimeType: m[1].toLowerCase(), data: m[2] }, { type: 'text', text: JSON.stringify({ fileId: result.data.id, name: result.data.name, mime: m[1].toLowerCase(), bytes: result.data.size }) }] };
+        }
         return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
       } catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] }; }
     });

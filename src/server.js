@@ -833,6 +833,101 @@ app.get('/v1/sessions/:id/product', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+/*
+ * THE PICTURES ON A PAGE, ONE OF THEM KEPT, AND A KEPT FILE PUT INTO AN UPLOAD BUTTON.
+ *
+ * An agent that found the right picture — a supplier's product photo, an image it just made in Google
+ * Flow — had no way to take it anywhere: a screenshot is the page, not the picture, and a signed-in or
+ * blob: image has no address anyone else can load (LunaGrow, 2026-10-31: the Flow image could not
+ * reach the shop). A picture is read THROUGH THE SESSION — its cookies for an http(s) address, the
+ * page itself for blob: and data: — and kept on the file shelf, where browser_upload_file and a
+ * shop's import_image pick it up by id.
+ */
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const sniffImage = (b) => (b[0] === 0x89 && b[1] === 0x50 ? 'image/png' : b[0] === 0xff && b[1] === 0xd8 ? 'image/jpeg'
+  : b.slice(0, 3).toString() === 'GIF' ? 'image/gif' : b.slice(8, 12).toString() === 'WEBP' ? 'image/webp' : '');
+/* The pictures worth naming, biggest first, numbered — the same order every call, so a number from
+   browser_images still names the same picture when it is saved. Icons and tracking pixels are left out. */
+function pageImages(page) {
+  return page.evaluate(() => {
+    const seen = new Set(); const out = [];
+    document.querySelectorAll('img').forEach((img, dom) => {
+      const src = img.currentSrc || img.src; const w = img.naturalWidth; const h = img.naturalHeight;
+      if (!src || seen.has(src) || w < 64 || h < 64) return;
+      seen.add(src);
+      const r = img.getBoundingClientRect();
+      out.push({ src, alt: String(img.alt || '').slice(0, 160), width: w, height: h, visible: r.width > 0 && r.height > 0, dom });
+    });
+    out.sort((a, b) => (b.width * b.height) - (a.width * a.height) || a.dom - b.dom);
+    return out.map(({ dom, ...i }, n) => ({ image: n + 1, ...i }));
+  });
+}
+app.get('/v1/sessions/:id/images', async (req, res) => {
+  try {
+    const s = mine(req);
+    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; its pictures cannot be read from here' });
+    const images = (await pageImages(s.page)).slice(0, 60)
+      .map((i) => ({ ...i, src: /^data:/i.test(i.src) ? 'data: (inline picture — save it by its number)' : i.src.slice(0, 600) }));
+    res.json({ url: s.page.url(), images, hint: 'browser_save_image with image=<number> keeps one and returns its fileId' });
+  } catch (e) { fail(res, e); }
+});
+app.post('/v1/sessions/:id/save-image', async (req, res) => {
+  try {
+    const s = mine(req);
+    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; its pictures cannot be read from here' });
+    const { image, src: asked } = req.body || {};
+    let src = asked ? String(asked) : null;
+    if (!src) {
+      const found = (await pageImages(s.page)).find((i) => i.image === Number(image));
+      if (!found) return res.status(404).json({ error: 'no such picture on this page — call browser_images for the numbers' });
+      src = found.src;
+    }
+    let bytes = null; let mime = '';
+    if (/^https?:\/\//i.test(src)) {
+      await assertPublicUrl(src);
+      const r = await s.page.context().request.get(src, { timeout: 30000, headers: { referer: s.page.url() } });
+      if (!r.ok()) return res.status(502).json({ error: `the picture answered ${r.status()}` });
+      bytes = await r.body(); mime = String(r.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
+    } else if (/^(blob|data):/i.test(src)) {
+      const got = await s.page.evaluate(async (u) => {
+        const blob = await (await fetch(u)).blob();
+        const data = await new Promise((resolve) => { const fr = new FileReader(); fr.onloadend = () => resolve(String(fr.result).split(',')[1] || ''); fr.readAsDataURL(blob); });
+        return { data, type: blob.type };
+      }, src);
+      bytes = Buffer.from(got.data || '', 'base64'); mime = String(got.type || '').toLowerCase();
+    } else return res.status(400).json({ error: 'src must be an http(s), blob: or data: address' });
+    if (!bytes || !bytes.length) return res.status(502).json({ error: 'the picture came back empty' });
+    if (bytes.length > IMAGE_MAX_BYTES) return res.status(413).json({ error: 'that picture is over 10 MB' });
+    if (!/^image\//.test(mime)) mime = sniffImage(bytes) || mime;   // a CDN that labels a picture octet-stream
+    if (!/^image\//.test(mime)) return res.status(415).json({ error: `that is not a picture (${mime || 'unknown type'})` });
+    const name = String(req.body?.name || '').replace(/[^\w .-]+/g, '_').slice(0, 80) || null;
+    const fileId = fileAssets.put({ kind: 'image', mime, name, source: 'browser', bytes });
+    if (!fileId) return res.status(500).json({ error: 'the picture could not be stored' });
+    const kept = fileAssets.get(fileId);
+    res.json({ fileId, mime, bytes: bytes.length, width: kept?.width || null, height: kept?.height || null, from: /^https?:/i.test(src) ? src.slice(0, 600) : src.slice(0, 5) });
+  } catch (e) { fail(res, e); }
+});
+app.post('/v1/sessions/:id/upload-file', async (req, res) => {
+  try {
+    const s = mine(req);
+    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; files cannot be uploaded to it from here' });
+    const { index, fileId } = req.body || {};
+    const f = fileAssets.get(String(fileId || ''));
+    if (!f || !f.bytes) return res.status(404).json({ error: 'no such file — save one first with browser_save_image' });
+    await freshIfMoved(s);
+    const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
+    /* The element is a file input or a button that opens one; either way the picker is caught, never shown. */
+    const chooser = s.page.waitForEvent('filechooser', { timeout: 8000 }).catch(() => null);
+    await s.page.mouse.click(target.x, target.y);
+    const picked = (await chooser) || require('./fileChooser').takeFileChooser(s.page);
+    require('./fileChooser').takeFileChooser(s.page);
+    if (!picked) return res.status(409).json({ error: 'that element did not open a file picker — pick the upload button or file field' });
+    await picked.setFiles({ name: f.name || `${f.id}.${f.ext}`, mimeType: f.mime, buffer: f.bytes });
+    await s.page.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {});
+    res.json({ uploaded: { fileId: f.id, name: f.name, bytes: f.size }, into: { index: Number(index), text: target.text }, url: s.page.url() });
+  } catch (e) { fail(res, e); }
+});
+
 // ── Navigation ──────────────────────────────────────────────────────────────────────────
 app.post('/v1/sessions/:id/navigate', async (req, res) => {
   try {
