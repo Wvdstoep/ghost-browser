@@ -273,11 +273,24 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       return { url: here.url, title: here.title, elementCount: elements.length, elements, summary, screenshot: null, onDevice: s.ring.name };
     },
     async click(s, { index, text }) {
+      const before = (await info(s)).url;
       if (text) await call(s, '/v1/click_text', { text: String(text) });
       else if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domClickJs(Number(index) - 1) });
       else await call(s, '/v1/click', { index: Number(index) - 1 });
       await wait(1500);
-      const here = await info(s);
+      let here = await info(s);
+      /*
+       * A LINK THAT WAS CLICKED GOES WHERE IT POINTS. Measured 2026-10-31 on the phone's invisible service
+       * browser: a tap on an AliExpress product card left the search page as it was (shops open products in
+       * a new tab or behind script handlers). When a click on a link changed nothing, open its address —
+       * what a person achieves by clicking it.
+       */
+      const el = !text && (s.ring.elements || [])[Number(index) - 1];
+      if (el && /^https?:\/\//i.test(el.href || '') && here.url === before) {
+        await call(s, '/v1/navigate', { url: el.href }, 40000);
+        await loaded(s, 12000);
+        here = await info(s);
+      }
       return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name };
     },
     async type(s, { index, text = '', submit = false }) {
@@ -298,12 +311,13 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       const here = await info(s);
       return { url: here.url, onDevice: s.ring.name };
     },
-    /** PNG bytes. */
+    /** { type, data }: the app's own screen sends PNG, the service browser a scaled JPEG. */
     async screenshot(s) {
       const r = await call(s, '/v1/screenshot', {}, 60000);
-      const b64 = (r && (r.png_base64 || r.png)) || '';
+      const jpeg = r && r.jpeg_base64;
+      const b64 = jpeg || (r && (r.png_base64 || r.png)) || '';
       if (!b64) throw new Error('the device returned no screenshot');
-      return Buffer.from(b64, 'base64');
+      return { type: jpeg ? 'jpeg' : 'png', data: Buffer.from(b64, 'base64') };
     },
     /** The product on the page: schema.org markup when it has it, else its meta tags, visible prices and large images. */
     async product(s) {
