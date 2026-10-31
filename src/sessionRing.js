@@ -85,6 +85,29 @@ const SUBMIT_JS = `(function(){
   var b=[].slice.call(box.querySelectorAll('button,[role=button],input[type=submit],a')).find(function(x){var t=(x.innerText||x.value||x.getAttribute('aria-label')||x.className||'').toString();return /search|zoek|szukaj|suche|cherch|busca/i.test(t)});
   if(b){b.click();return 'pressed search'} return 'sent enter'})()`;
 
+/*
+ * A BROWSER NOBODY HAS DRAWN. Reopened in the background for the ring, the app's WebView may never be laid
+ * out: measured 2026-10-31, innerWidth/innerHeight 0, the page fully loaded (20 product links, prices) yet
+ * the phone's element scan — which keeps only what is on screen — returned 1 element. So the session can
+ * list the page's own links, buttons and fields from the DOM, and act on them through the page itself.
+ */
+const DOM_LIST_JS = `(function(){
+  var sel='a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[role=tab],[contenteditable=true]';
+  var out=[];var keep=[];
+  [].slice.call(document.querySelectorAll(sel)).forEach(function(e){
+    var cs=getComputedStyle(e); if(cs.display==='none'||cs.visibility==='hidden')return;
+    var t=(e.innerText||e.value||'').trim().replace(/\s+/g,' ').slice(0,200);
+    var l=(e.getAttribute('aria-label')||e.getAttribute('placeholder')||e.getAttribute('title')||'').slice(0,200);
+    if(!t&&!l&&e.tagName!=='INPUT'&&e.tagName!=='TEXTAREA')return;
+    keep.push(e); out.push({tag:e.tagName.toLowerCase(),type:e.getAttribute('type')||'',role:e.getAttribute('role')||'',text:t,label:l,href:e.href||''});
+  });
+  window.__ringEls=keep.slice(0,400); return out.slice(0,400)})()`;
+const domClickJs = (i) => `(function(){var e=window.__ringEls&&window.__ringEls[${Number(i)}];if(!e)return 'gone';if(e.scrollIntoView)e.scrollIntoView({block:'center'});e.click();return 'clicked'})()`;
+const domTypeJs = (i, text) => `(function(){var e=window.__ringEls&&window.__ringEls[${Number(i)}];if(!e)return 'gone';e.focus();
+  var p=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var d=Object.getOwnPropertyDescriptor(p,'value');
+  if(d&&d.set&&e.tagName!=='DIV')d.set.call(e,${JSON.stringify(String(text))});else e.innerText=${JSON.stringify(String(text))};
+  e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return 'typed'})()`;
+
 /* A product page without schema.org markup still names itself in its meta tags and shows a price. */
 const PRODUCT_JS = `(function(){
   var out=[];document.querySelectorAll('script[type="application/ld+json"]').forEach(function(n){try{var j=JSON.parse(n.textContent);(Array.isArray(j)?j:(j['@graph']||[j])).forEach(function(x){if(x&&/Product/i.test(String(x['@type'])))out.push(x)})}catch(e){}});
@@ -228,7 +251,13 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       const first = await loaded(s);
       if (first.notice) return { url: first.url, title: '', elementCount: 0, elements: [], summary: '', screenshot: null, onDevice: s.ring.name, notice: first.notice };
       await acceptCookies(s);
-      const elements = toElements(await call(s, '/v1/analyze'));
+      let elements = toElements(await call(s, '/v1/analyze'));
+      s.ring.mode = 'screen';
+      if (elements.length < 5) {
+        // Nothing (or next to nothing) on screen: list the page itself and act through it.
+        const dom = toElements(await call(s, '/v1/eval', { code: DOM_LIST_JS }).catch(() => []));
+        if (dom.length > elements.length) { elements = dom; s.ring.mode = 'dom'; }
+      }
       s.ring.elements = elements;
       const here = await info(s);
       const summary = elements.slice(0, 150).map((e) => `[${e.index}] ${e.tag}${e.role ? `(${e.role})` : ''} ${e.text || e.label}`.trim()).join('\n');
@@ -236,13 +265,15 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     },
     async click(s, { index, text }) {
       if (text) await call(s, '/v1/click_text', { text: String(text) });
+      else if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domClickJs(Number(index) - 1) });
       else await call(s, '/v1/click', { index: Number(index) - 1 });
       await wait(1500);
       const here = await info(s);
       return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name };
     },
     async type(s, { index, text = '', submit = false }) {
-      await call(s, '/v1/type', { index: Number(index) - 1, text: String(text) });
+      if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domTypeJs(Number(index) - 1, text) });
+      else await call(s, '/v1/type', { index: Number(index) - 1, text: String(text) });
       if (submit) {
         // The phone's type has no Enter key. Do what Enter does: submit the field's form; a search bar
         // that is no form (AliExpress) gets the key events, then its own search button is pressed.
