@@ -448,6 +448,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildWebView(h: TabHandle): WebView {
         val w = WebView(this)
+        keepWorkingWhenHidden(w)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try {
                 ProfileStore.getInstance().getOrCreateProfile(h.profile)
@@ -3665,6 +3666,27 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     /** Run one device command on the browser and return its result JSON. Shared by the WebView control
      *  channel and the native device ring, so both drive the phone the same way. Runs on a worker thread;
      *  the eval/nav helpers hop to the main thread themselves. */
+    /*
+     * A LOCKED PHONE MUST STILL BROWSE. The ring keeps polling with the screen off (foreground service +
+     * wake lock), but Android lowers the renderer of a WebView nobody can see and freezes its page:
+     * measured 2026-10-31, a navigate sent to the locked phone sat at readyState "loading" with no body
+     * for minutes. So every WebView keeps an IMPORTANT renderer even when not visible, and each ring
+     * command first wakes the browser (timers and the view itself) before it acts.
+     */
+    private fun keepWorkingWhenHidden(w: WebView) {
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            try { w.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false) } catch (e: Exception) {}
+        }
+    }
+    private fun wakeForCommand() {
+        val l = CountDownLatch(1)
+        runOnUiThread {
+            try { val t = cmdTarget(); t.resumeTimers(); keepWorkingWhenHidden(t); t.onResume() } catch (e: Exception) {}
+            l.countDown()
+        }
+        l.await(3, TimeUnit.SECONDS)
+    }
+
     fun runDeviceCommand(path: String, bodyStr: String): String {
         val body = try { JSONObject(bodyStr) } catch (e: Exception) { JSONObject() }
         return try {
@@ -3672,6 +3694,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // Kept inside the try so a build failure returns an error result instead of leaving the ring silent.
             val prof = body.optString("profile", "")
             cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
+            wakeForCommand()
             // a command may ask for the DESKTOP site (LinkedIn's mobile web omits comments; desktop renders the
             // full, stable comment DOM). Set the reader's UA before it loads; "desktop":false restores mobile.
             if (body.has("desktop")) { val ua = if (body.optBoolean("desktop")) DESKTOP_UA else null
