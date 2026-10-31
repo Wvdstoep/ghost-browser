@@ -213,3 +213,16 @@ describe('a human check on the device', () => {
     expect(c.notice).toMatch(/Do not try to solve it/);
   });
 });
+
+describe('the session profile on the device', () => {
+  it('sends the profile the session was opened with (p_ on the phone), none for default', async () => {
+    const seen = [];
+    const run = async (id, spec) => { seen.push(spec.body); return { result: { result: JSON.stringify({ url: 'u', title: 't', ready: 'complete' }) } }; };
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const a = { id: 'a', profile: 'linkedin' }; ring.attach(a, ['me']); await ring.scroll(a, 100);
+    expect(seen.every((b) => b.profile === 'p_linkedin')).toBe(true);
+    seen.length = 0;
+    const b = { id: 'b', profile: 'default' }; ring.attach(b, ['me']); await ring.scroll(b, 100);
+    expect(seen.every((x) => x.profile === undefined)).toBe(true);
+  });
+});
