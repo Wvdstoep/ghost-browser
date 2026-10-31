@@ -56,6 +56,18 @@ import engineer.myapp.gb.shared.RunSheet
  * drives it via the GB API over the tailnet).
  */
 class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser {
+    /*
+     * THE RING OUTLIVES THE SCREEN. A swipe-away destroys this Activity and every WebView with it, but the
+     * ring thread (kept alive by GbService) went on polling and answered each command from a dead browser:
+     * measured 2026-10-31, every page script came back null and a session read empty pages. Now the ring is
+     * one per process, and a command is run by whichever screen is LIVE — reopened in the background when
+     * there is none (Android allows that start once the owner granted "Display over other apps").
+     */
+    companion object {
+        @Volatile var live: MainActivity? = null
+        val ringRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+    fun ringReady(): Boolean = ::web.isInitialized && !isDestroyed && !isFinishing
 
     private val HOME = "file:///android_asset/home.html"
     private val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -169,6 +181,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (!securitySync) vm.syncSecurityRecon = false
         b = ActivityMainBinding.inflate(layoutInflater)   // bare root FrameLayout (S6: UI is all Compose)
         setContentView(b.root)
+        live = this
+        // Reopened only to give the ring a browser: step aside instead of covering what the owner is doing.
+        if (intent?.getBooleanExtra("forRing", false) == true) b.root.post { try { moveTaskToBack(true) } catch (e: Exception) {} }
         settingsUi.themeMode.value = vm.themeMode
 
         gbJs = try { assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" }
@@ -3745,7 +3760,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @Volatile private var askedBattery = false
     private fun startDeviceRing() {
         if (ringOn || vm.clusterKey.isBlank()) return
-        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption() }; scheduleRingWatchdog() }
+        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption(); requestOverlayPermission() }; scheduleRingWatchdog() }
+        // A ring already polling in this process (started by a screen that has since closed) serves this one too.
+        if (!ringRunning.compareAndSet(false, true)) { vm.clusterOn.value = true; vm.clusterInfo.value = "Cluster: on — this device is connected"; return }
         ringOn = true
         ringExec.execute {
             var registered = false
@@ -3765,16 +3782,44 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                         val cmd = try { JSONObject(txt) } catch (e: Exception) { null }
                         val cid = cmd?.optString("id") ?: ""
                         if (cmd != null && cid.isNotBlank()) {
-                            val out = runDeviceCommand(cmd.optString("path", "/v1/info"), cmd.optJSONObject("body")?.toString() ?: "{}")
+                            val target = ringTarget()
+                            val out = target?.runDeviceCommand(cmd.optString("path", "/v1/info"), cmd.optJSONObject("body")?.toString() ?: "{}")
+                                ?: "{\"error\":\"Ghost Browser could not reopen its browser on this phone. Open the app once and allow 'Display over other apps'.\"}"
                             try { ringHttp("POST", "/v1/device/result", JSONObject().put("deviceId", vm.deviceToken).put("id", cid).put("result", out).toString(), 20000) } catch (e: Exception) {}
                         }
                     }
                     // 204 (no command within the long-poll window) just loops; lastSeen was refreshed by the poll
                 } catch (e: Exception) { Thread.sleep(3000) }
             }
+            ringRunning.set(false)
         }
     }
-    private fun stopDeviceRing() { ringOn = false }
+    private fun stopDeviceRing() { ringOn = false; ringRunning.set(false) }
+
+    /** The screen whose browser runs ring commands: the live one, or the app reopened in the background. */
+    private fun ringTarget(): MainActivity? {
+        live?.let { if (it.ringReady()) return it }
+        try {
+            applicationContext.startActivity(Intent(applicationContext, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION).putExtra("forRing", true))
+        } catch (e: Exception) {}
+        val until = System.currentTimeMillis() + 20000
+        while (System.currentTimeMillis() < until) {
+            Thread.sleep(500)
+            live?.let { if (it.ringReady()) { Thread.sleep(1500); return it } }   // a beat for its first tab to attach
+        }
+        return null
+    }
+
+    /** Ask once for "Display over other apps": the only way Android lets the ring reopen a closed app. */
+    private fun requestOverlayPermission() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)) {
+                vm.log("· asking to reopen in the background when a browsing task arrives")
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
+            }
+        } catch (e: Exception) { vm.log("! overlay permission: ${e.message}") }
+    }
 
     /** Ask Android once to exempt GB from battery optimization, so the foreground service + device ring keep
      *  polling when the screen is off / the app is backgrounded (Samsung Doze otherwise kills them). */
@@ -4314,6 +4359,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     override fun onDestroy() {
+        if (live === this) live = null
         rangeScanner.close()
         if (fullscreenView != null) hideFullscreenView()
         agentStop = true
