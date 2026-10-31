@@ -195,3 +195,21 @@ describe('a clicked link goes where it points', () => {
     expect(c.url).toBe('https://nl.aliexpress.com/item/2.html');
   });
 });
+
+describe('a human check on the device', () => {
+  it('is reported as one, never read as an empty product', async () => {
+    let url = 'https://nl.aliexpress.com/w/x.html';
+    const run = async (id, spec) => {
+      if (spec.path === '/v1/navigate') url = 'https://nl.aliexpress.com//item/1.html/_____tmd_____/punish?x5secdata=abc';
+      if (spec.path === '/v1/info') return { result: { result: JSON.stringify({ url, title: '', ready: 'complete' }) } };
+      if (spec.path === '/v1/analyze') return { result: { result: JSON.stringify(Array.from({ length: 6 }, (_, i) => ({ i, tag: 'a', text: 'p', href: `//nl.aliexpress.com/item/${i}.html` }))) } };
+      return { result: { result: '""' } };
+    };
+    const ring = createSessionRing({ run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's13' }; ring.attach(s, ['me']);
+    await ring.analyze(s);
+    const c = await ring.click(s, { index: 2 });
+    expect(c.notice).toMatch(/verify you are human/);
+    expect(c.notice).toMatch(/Do not try to solve it/);
+  });
+});

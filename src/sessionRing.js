@@ -189,6 +189,18 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     }
     return here;
   }
+  /*
+   * A HUMAN CHECK IS NOT A PAGE. Measured 2026-10-31: after many visits AliExpress answered a product
+   * click with its slider check (/_____tmd_____/punish). Read as a product it came back empty. Say what it
+   * is: the owner solves it once in the Ghost Browser app (the same cookies), the session never tries to.
+   */
+  async function humanCheck(s, here) {
+    if (/\/_____tmd_____\/|\/punish\b|x5secdata|captcha|challenge/i.test(here.url || '')) return true;
+    const t = await call(s, '/v1/eval', { code: '(document.title+"\\n"+(document.body?document.body.innerText.slice(0,1500):""))' }, 15000).catch(() => '');
+    return typeof t === 'string' && t.length < 1500 && WALL_WORDS.test(t);
+  }
+  const checkNotice = (s) => `${s.ring.name} was shown a "verify you are human" check by this site. Do not try to solve it: ask the owner to open the Ghost Browser app on ${s.ring.name}, solve it there once, then continue.`;
+
   /** Press the cookie banner's accept, if there is one. Returns the button text it pressed. */
   async function acceptCookies(s) {
     try {
@@ -243,6 +255,7 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       const cookies = left() > 3000 ? await acceptCookies(s) : '';
       const here = await info(s);
       if (here.ready === 'loading') here.notice = `Still loading on ${s.ring.name}. It keeps loading there — call browser_read or browser_analyze in a few seconds.`;
+      else if (here.ready !== 'closed' && await humanCheck(s, here)) here.notice = checkNotice(s);
       else if (here.ready === 'closed') here.notice = (await loaded(s, 0)).notice;
       s.ring.elements = [];
       return { url: here.url || url, status: null, title: here.title, onDevice: s.ring.name,
@@ -294,6 +307,7 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         await loaded(s, 12000);
         here = await info(s);
       }
+      if (await humanCheck(s, here)) return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name, notice: checkNotice(s) };
       return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name };
     },
     async type(s, { index, text = '', submit = false }) {
