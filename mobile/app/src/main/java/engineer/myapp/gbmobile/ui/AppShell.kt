@@ -121,6 +121,9 @@ class ShellUi {
     val profileRoleNames = mutableStateOf<List<String>>(emptyList())
     val profileRoleDetail = mutableStateOf<engineer.myapp.gb.shared.RoleChoice?>(null)
     val profileStatus = mutableStateOf("")
+    /* A platform shortcut whose profile this phone does not have opens the Add form with these
+       (name, site): profiles are only ever created on the Profiles page. */
+    val profileAddPrefill = mutableStateOf<Pair<String, String>?>(null)
     /* The address bar slides away while a page is scrolled down. Fed by the WebView's
        own scroll reports; see ChromeScroll for why it is direction-with-a-threshold and not position. */
     val chrome = engineer.myapp.gb.shared.ChromeScroll()
@@ -229,6 +232,10 @@ class ShellActions(
     val onReadRole: (String) -> Unit = {},
     val onSetProfileRole: (profile: String, role: String) -> Unit = { _, _ -> },
     val onCreateProfile: (name: String, site: String) -> Unit = { _, _ -> },
+    /** The phone's Add: where the new profile is kept ("synced" | "phone"). */
+    val onCreateProfileIn: (name: String, site: String, storage: String) -> Unit = { _, _, _ -> },
+    /** Move a profile: "synced" (also on the cluster; on a cluster-only card = use it on this phone) or "phone". */
+    val onSetProfileStorage: (engineer.myapp.gb.shared.ProfileCard, String) -> Unit = { _, _ -> },
     val onRenameProfile: (profile: String, to: String) -> Unit = { _, _ -> },
     val onDuplicateProfile: (profile: String, to: String) -> Unit = { _, _ -> },
     val onClearProfileLogin: (engineer.myapp.gb.shared.ProfileCard) -> Unit = {},
@@ -352,9 +359,11 @@ fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settings
                         profiles = shell.profileCards.value,
                         onOpen = { p -> act.onOpenProfile(p) },
                         onRefresh = { act.onLoadProfiles(); act.onLoadPlatforms() },
-                        phonePlatforms = settingsUi.platforms.value,
-                        onOpenPhonePlatform = { p -> act.onOpenPlatform(p.profile, p.site) },
-                        onSetPhoneCookieSync = settingsAct.onSetCookieSync,
+                        // One list: every profile says where it lives, and Add asks where to keep a new one.
+                        onCreateIn = { n, s, where -> shell.profileAddPrefill.value = null; act.onCreateProfileIn(n, s, where) },
+                        onSetStorage = { p, where -> act.onSetProfileStorage(p, where) },
+                        addPrefill = shell.profileAddPrefill.value,
+                        openLabel = "Open in a new tab",
                         roleNames = shell.profileRoleNames.value,
                         roleDetail = shell.profileRoleDetail.value,
                         onReadRole = { r -> act.onReadRole(r) },

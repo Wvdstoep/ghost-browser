@@ -101,10 +101,19 @@ class GbService : Service() {
     /** Commands for the default browser run in the service's own window; logged-in profiles and anything
      *  else run in the app (reopened in the background when it is not open). */
     private fun dispatch(path: String, body: org.json.JSONObject): String {
-        // Every profile runs here — each in its own invisible browser on the app's profile of that name.
+        /* Only a profile this phone has and shares with the cluster ("default" or synced), in the store
+           behind that name. A name it does not have used to get a fresh, empty store: the AliExpress pages
+           of 2026-11-01 all showed the login screen though the owner had signed in. Now the cluster is told
+           why, in words the owner can act on. */
+        val list = ProfileRegistry.load(sp.getString(ProfileRegistry.PREF, null), sp.getString("profiles", null),
+            sp.getStringSet("approvedCookieSync", emptySet()) ?: emptySet(), sp.getString("clusterUrl", "") ?: "")
+        val requested = body.optString("profile", "")
+        val prof = ProfileRegistry.forCluster(list, requested)
+            ?: return org.json.JSONObject().put("error", ProfileRegistry.refusalFor(list, requested)).put("profileMissing", true).toString()
+        // Every profile runs here — each in its own invisible browser on that profile's own store.
         if (path in ServiceBrowser.PATHS) {
             val b = browser ?: ServiceBrowser(applicationContext).also { browser = it }
-            if (b.ensure(body.optString("profile", ""))) return b.run(path, body)
+            if (b.ensure(prof.jar)) return b.run(path, body)
         }
         val screen = MainActivity.live?.takeIf { it.ringReady() } ?: MainActivity.live?.ringTarget()
             ?: run {
@@ -124,13 +133,19 @@ class GbService : Service() {
         MainActivity.ringRunning.set(true)
         ringExec.execute {
             var registered = false
+            var sentCaps = ""
             while (ringOn) {
                 try {
+                    // The app rewrites ringCaps when a profile is added, moved or removed: say so at once,
+                    // or the cluster keeps offering work in profiles this phone no longer has (or not yet).
+                    val capsNow = caps().toString()
+                    if (registered && capsNow != sentCaps) registered = false
                     if (!registered) {
-                        val reg = ringHttp("POST", "/v1/device/register", org.json.JSONObject().put("deviceId", deviceToken()).put("name", Build.MODEL).put("caps", caps()).toString(), 20000)
+                        val reg = ringHttp("POST", "/v1/device/register", org.json.JSONObject().put("deviceId", deviceToken()).put("name", Build.MODEL).put("caps", org.json.JSONObject(capsNow)).toString(), 20000)
                         if (reg.first == 401) { sp.edit().putString("clusterKey", "").apply(); break }
                         registered = reg.first in 200..299
                         if (!registered) { Thread.sleep(4000); continue }
+                        sentCaps = capsNow
                     }
                     val (code, txt) = ringHttp("GET", "/v1/device/poll?deviceId=" + java.net.URLEncoder.encode(deviceToken(), "UTF-8"), null, 35000)
                     if (code == 401) { sp.edit().putString("clusterKey", "").apply(); break }

@@ -69,7 +69,6 @@ class SettingsActions(
     val onOpenTraining: () -> Unit = {},
     val trainingLine: () -> String = { "" },
     val onSwitchProfile: (String) -> Unit,
-    val onAddProfile: (String) -> Unit,
     val onSetRole: (String) -> Unit,
     val onLoadRoles: () -> Unit,
     val onLoadPlatforms: () -> Unit,
@@ -165,11 +164,7 @@ fun SettingsScreen(visible: Boolean, ui: SettingsUi, act: SettingsActions, onClo
                     Spacer(Modifier.height(6.dp))
                     FlowChips(ui.profiles.value, ui.currentProfile.value) { act.onSwitchProfile(it) }
                     Spacer(Modifier.height(12.dp))
-                    var np by remember { mutableStateOf("") }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(Modifier.weight(1f)) { Field("New profile name", np, { np = it }) }
-                        Primary("Add") { if (np.isNotBlank()) { act.onAddProfile(np); np = "" } }
-                    }
+                    Text("New profiles are added on the Profiles page, where you choose where each one is kept.", color = cs.onSurfaceVariant, fontSize = 12.sp)
                     Spacer(Modifier.height(14.dp))
                     Text("Role for “${ui.currentProfile.value}”", color = cs.onSurfaceVariant, fontSize = 12.sp)
                     Spacer(Modifier.height(6.dp))

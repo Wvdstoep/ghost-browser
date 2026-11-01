@@ -94,7 +94,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private val rangeScanner by lazy { LocalRangeScanner(applicationContext) }
 
     // --- tabs ---
-    private inner class TabHandle(var url: String, var title: String, val profile: String, var desktop: Boolean = false) {
+    private inner class TabHandle(var url: String, var title: String, var profile: String, var desktop: Boolean = false) {
         var web: WebView? = null
         var thumb: Bitmap? = null   // last snapshot for the tab grid
     }
@@ -332,7 +332,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val arr = JSONArray(raw)
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    tabs.add(TabHandle(o.optString("url", HOME), o.optString("title", "Tab"), o.optString("profile", "default"), o.optBoolean("desktop", false)))
+                    // A tab saved before 0.92 names its store ("p_linkedin"); it reopens under the profile's name.
+                    val saved = o.optString("profile", ProfileRegistry.DEFAULT)
+                    val prof = (vm.registry.firstOrNull { it.name == saved } ?: vm.registry.firstOrNull { it.jar == saved })?.name ?: ProfileRegistry.DEFAULT
+                    tabs.add(TabHandle(o.optString("url", HOME), o.optString("title", "Tab"), prof, o.optBoolean("desktop", false)))
                 }
             }
         } catch (e: Exception) {}
@@ -484,8 +487,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         keepWorkingWhenHidden(w)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try {
-                ProfileStore.getInstance().getOrCreateProfile(h.profile)
-                WebViewCompat.setProfile(w, h.profile)
+                val jar = vm.jarOf(h.profile)   // the store behind the name ("p_linkedin" behind "linkedin")
+                ProfileStore.getInstance().getOrCreateProfile(jar)
+                WebViewCompat.setProfile(w, jar)
             } catch (e: Exception) { /* fall back to the default shared profile */ }
         }
         val s = w.settings
@@ -752,7 +756,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun cookiesFor(url: String): String {
         return try {
             val cm = if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE))
-                ProfileStore.getInstance().getOrCreateProfile(vm.currentProfile.value ?: "default").cookieManager
+                ProfileStore.getInstance().getOrCreateProfile(vm.jarOf(vm.currentProfile.value)).cookieManager
             else CookieManager.getInstance()
             cm.getCookie(url) ?: ""
         } catch (e: Exception) {
@@ -873,9 +877,17 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     private fun profilesLoad() {
         runOnUiThread { shellUi.profileStatus.value = "loading your profiles…" }
         agentExec.execute {
+            // This phone's own profiles show even without a cluster: they live here.
+            if (vm.clusterUrl.trim().isEmpty()) {
+                runOnUiThread { shellUi.profileCards.value = withPhoneProfiles(emptyList(), clusterKnown = false); shellUi.profileStatus.value = "" }
+                return@execute
+            }
             val raw = apiAwait("GET", "/v1/profiles/overview", null)
             val o = try { JSONObject(raw) } catch (e: Exception) { JSONObject().put("error", raw.take(120)) }
-            if (o.has("error")) { runOnUiThread { shellUi.profileStatus.value = o.optString("error") }; return@execute }
+            if (o.has("error")) {
+                runOnUiThread { shellUi.profileCards.value = withPhoneProfiles(emptyList(), clusterKnown = false); shellUi.profileStatus.value = "Cluster: " + o.optString("error") }
+                return@execute
+            }
             val arr = o.optJSONArray("profiles") ?: JSONArray()
             val cards = ArrayList<engineer.myapp.gb.shared.ProfileCard>()
             for (i in 0 until arr.length()) {
@@ -892,12 +904,161 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             val rs = o.optJSONArray("roles") ?: JSONArray()
             for (i in 0 until rs.length()) rs.optString(i).takeIf { it.isNotBlank() }?.let { names.add(it) }
             runOnUiThread {
-                shellUi.profileCards.value = cards
+                shellUi.profileCards.value = withPhoneProfiles(cards, clusterKnown = true)
                 shellUi.profileRoleNames.value = names
                 shellUi.profileStatus.value = ""
             }
             migrateLocalProfileRoles(cards)
         }
+    }
+
+    /**
+     * The cluster's profiles and this phone's, as ONE list where each card says where it lives. A phone
+     * profile the cluster does not have gets a card of its own; "login saved" on it means this phone's
+     * store holds a cookie for its site.
+     */
+    private fun withPhoneProfiles(cluster: List<engineer.myapp.gb.shared.ProfileCard>, clusterKnown: Boolean): List<engineer.myapp.gb.shared.ProfileCard> {
+        val names = cluster.map { it.name }
+        val place = ProfileRegistry.placement(vm.registry, names)
+        val fromCluster = cluster.map { it.copy(storage = place[it.name] ?: "cluster") }
+        val phoneOnly = vm.registry.filter { it.name !in names }.map { p ->
+            val site = if (p.site.isBlank()) "" else if (p.site.startsWith("http")) p.site else "https://${p.site}/"
+            engineer.myapp.gb.shared.ProfileCard(
+                name = p.name, site = p.site, storage = place[p.name] ?: "phone",
+                hasLogin = site.isNotBlank() && profileHasSession(p.jar, site),
+                note = if (p.storage == Storage.SYNCED && clusterKnown) "not on the cluster yet: open it once to sync" else "",
+            )
+        }
+        return fromCluster + phoneOnly
+    }
+
+    /** The cluster names this screen knows (the cards that came from the cluster). */
+    private fun clusterProfileNames(): Set<String> = shellUi.profileCards.value.filter { it.storage == "cluster" || it.storage == "synced" || it.storage == "main" }.map { it.name }.toSet()
+
+    /** After any change to the phone's profiles: tell the ring what this phone can run now. */
+    private fun savePhoneProfiles(list: List<PhoneProfile>) {
+        vm.saveRegistry(list)
+        renderChips()
+        try { getSharedPreferences("gb", MODE_PRIVATE).edit().putString("ringCaps", phoneCaps().toString()).apply() } catch (e: Exception) {}
+    }
+
+    /** Add on the phone, kept where the owner chose. "synced" also creates it on the cluster under the same name. */
+    private fun profileCreateIn(rawName: String, site: String, storage: String) {
+        val where = if (storage == "phone") Storage.PHONE else Storage.SYNCED
+        val name = rawName.trim()
+        if (where == Storage.SYNCED && vm.clusterUrl.trim().isEmpty()) {
+            shellUi.profileStatus.value = "Sign in to your cluster first (Settings → Account & sync), or keep \"$name\" on this phone only."; return
+        }
+        // The cluster already has it: this is "use it on this phone", not a second identity.
+        if (where == Storage.SYNCED && name in clusterProfileNames()) { profileUseOnPhone(name, site); return }
+        when (val c = ProfileRegistry.add(vm.registry, name, where, site, clusterProfileNames())) {
+            is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
+            is ProfileRegistry.Change.Ok -> if (where == Storage.PHONE) {
+                savePhoneProfiles(c.list)
+                shellUi.profileStatus.value = "\"$name\" is on this phone only. Open it and sign in once."
+                profilesLoad()
+            } else clusterThenPhone("POST", "/v1/profiles", JSONObject().put("name", name).put("site", site).toString(), okIfExists = false) {
+                savePhoneProfiles(ProfileRegistry.add(vm.registry, name, where, site).let { (it as? ProfileRegistry.Change.Ok)?.list ?: vm.registry })
+                "\"$name\" is on this phone and your cluster. Open it here and sign in once; the login is copied to the cluster."
+            }
+        }
+    }
+
+    private fun profileUseOnPhone(name: String, site: String) {
+        when (val c = ProfileRegistry.useOnPhone(vm.registry, name, site)) {
+            is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
+            is ProfileRegistry.Change.Ok -> {
+                savePhoneProfiles(c.list)
+                shellUi.profileStatus.value = "\"$name\" is on this phone now. Open it and sign in once here: tasks the cluster hands to this phone run in it."
+                profilesLoad()
+            }
+        }
+    }
+
+    private fun profileSetStorage(card: engineer.myapp.gb.shared.ProfileCard, to: String) {
+        when {
+            card.storage == "cluster" && to == "synced" -> profileUseOnPhone(card.name, card.site)
+            card.storage == "phone" && to == "synced" -> {
+                if (vm.clusterUrl.trim().isEmpty()) { shellUi.profileStatus.value = "Sign in to your cluster first (Settings → Account & sync)."; return }
+                clusterThenPhone("POST", "/v1/profiles", JSONObject().put("name", card.name).put("site", card.site).toString(), okIfExists = true) {
+                    (ProfileRegistry.setStorage(vm.registry, card.name, Storage.SYNCED) as? ProfileRegistry.Change.Ok)?.let { savePhoneProfiles(it.list) }
+                    syncLoginsToCluster()
+                    "\"${card.name}\" now syncs with your cluster: its logins are copied there."
+                }
+            }
+            card.storage == "synced" && to == "phone" -> when (val c = ProfileRegistry.setStorage(vm.registry, card.name, Storage.PHONE)) {
+                is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
+                is ProfileRegistry.Change.Ok -> { savePhoneProfiles(c.list); shellUi.profileStatus.value = "\"${card.name}\" stays on this phone only. The cluster's copy remains until you delete it there."; profilesLoad() }
+            }
+        }
+    }
+
+    /**
+     * A cluster change first, the phone's after it succeeded, then one line saying what happened. A
+     * cluster refusal is shown as it came back and the phone is left as it was.
+     */
+    private fun clusterThenPhone(method: String, path: String, body: String?, okIfExists: Boolean, phone: () -> String) {
+        shellUi.profileStatus.value = "…"
+        agentExec.execute {
+            val raw = apiAwait(method, path, body)
+            val r = try { JSONObject(raw) } catch (e: Exception) { JSONObject().put("error", raw.take(140)) }
+            val exists = r.optString("error").contains("already exists")
+            runOnUiThread {
+                shellUi.profileStatus.value = if (r.has("error") && !(okIfExists && exists)) r.optString("error") else phone()
+            }
+            profilesLoad()
+        }
+    }
+
+    /** Rename, duplicate, sign out, delete: on the cluster, on the phone, or both, by where the profile lives. */
+    private fun profileManageAt(card: engineer.myapp.gb.shared.ProfileCard, op: String, to: String = "") {
+        if (card.storage == "main" && (op == "rename" || op == "delete")) { shellUi.profileStatus.value = "\"default\" is this phone's main browser and stays as it is."; return }
+        val onPhone = card.storage == "phone" || card.storage == "synced" || card.storage == "main"
+        val onCluster = card.storage != "phone"
+        val mine = ProfileRegistry.find(vm.registry, card.name)
+        fun local(): String = when (op) {
+            "rename" -> when (val c = ProfileRegistry.rename(vm.registry, card.name, to)) {
+                is ProfileRegistry.Change.Refused -> c.why
+                is ProfileRegistry.Change.Ok -> { for (t in tabs) if (t.profile == card.name) t.profile = to; savePhoneProfiles(c.list); "renamed to \"$to\"" }
+            }
+            "duplicate" -> when (val c = ProfileRegistry.add(vm.registry, to, mine?.storage ?: Storage.PHONE, mine?.site ?: card.site, if (onCluster) emptyList() else clusterProfileNames())) {
+                is ProfileRegistry.Change.Refused -> c.why
+                is ProfileRegistry.Change.Ok -> { savePhoneProfiles(c.list); "copied to \"$to\" — settings only, so sign into it once" }
+            }
+            "clear" -> { clearStore(mine?.jar ?: card.name); "signed \"${card.name}\" out on this phone; its settings are untouched" }
+            "delete" -> when (val c = ProfileRegistry.remove(vm.registry, card.name)) {
+                is ProfileRegistry.Change.Refused -> c.why
+                is ProfileRegistry.Change.Ok -> { closeTabsOf(card.name); savePhoneProfiles(c.list); deleteStore(c.profile.jar); "deleted \"${card.name}\"" }
+            }
+            else -> ""
+        }
+        if (!onCluster) { shellUi.profileStatus.value = local(); profilesLoad(); return }
+        val (method, path, body) = when (op) {
+            "rename" -> Triple("POST", "/v1/profiles/${card.name}/rename", JSONObject().put("to", to).toString())
+            "duplicate" -> Triple("POST", "/v1/profiles/${card.name}/duplicate", JSONObject().put("to", to).toString())
+            "clear" -> Triple("POST", "/v1/profiles/${card.name}/clear-login", "{}")
+            else -> Triple("DELETE", "/v1/profiles/${card.name}", null)
+        }
+        clusterThenPhone(method, path, body, okIfExists = false) {
+            if (onPhone && mine != null) local() else when (op) {
+                "rename" -> "renamed to \"$to\""; "duplicate" -> "copied to \"$to\" — settings only, so sign into it once"
+                "clear" -> "signed \"${card.name}\" out; its settings are untouched"; else -> "deleted \"${card.name}\""
+            }
+        }
+    }
+
+    private fun clearStore(jar: String) {
+        try {
+            val cm = if (jar != ProfileRegistry.DEFAULT && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(jar).cookieManager else CookieManager.getInstance()
+            cm.removeAllCookies(null); cm.flush()
+        } catch (e: Exception) {}
+    }
+    private fun closeTabsOf(name: String) { for (i in tabs.indices.reversed()) if (tabs[i].profile == name) closeTab(i) }
+    /** Android removes a WebView store only when no browser uses it; if one still does, it goes empty and stays. */
+    private fun deleteStore(jar: String) {
+        if (jar == ProfileRegistry.DEFAULT) return
+        clearStore(jar)
+        try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().deleteProfile(jar) } catch (e: Exception) {}
     }
 
     /**
@@ -976,24 +1137,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
-    /**
-     * One management call, and its answer shown as it came back.
-     *
-     * Every one of these refuses on the server while a session holds the profile: pulling a profile
-     * directory out from under a running Chromium leaves the browser writing into a folder that no
-     * longer exists, and that surfaces minutes later somewhere unrelated. The refusal names the way
-     * out ("close that session first"), so it is shown verbatim rather than swallowed.
-     */
-    private fun profileManage(method: String, path: String, body: String?, ok: String) {
-        runOnUiThread { shellUi.profileStatus.value = "…" }
-        agentExec.execute {
-            val raw = apiAwait(method, path, body)
-            val r = try { JSONObject(raw) } catch (e: Exception) { JSONObject().put("error", raw.take(140)) }
-            runOnUiThread { shellUi.profileStatus.value = if (r.has("error")) r.optString("error") else ok }
-            profilesLoad()
-        }
-    }
-
     /** Make a role this profile's default, or clear it back to the site match with "". */
     private fun profileRoleSet(profile: String, role: String) {
         agentExec.execute {
@@ -1046,7 +1189,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         apiReady = false
         val w = WebView(this)
         val bridgeToken = java.util.UUID.randomUUID().toString()
-        val prof = vm.currentProfile.value ?: "default"
+        val prof = vm.jarOf(vm.currentProfile.value)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}
         }
@@ -1148,7 +1291,6 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     private fun renderPlatforms(arr: JSONArray) {
-        val known = (vm.profiles.value ?: emptyList()).toSet()
         val out = ArrayList<engineer.myapp.gbmobile.ui.PlatformOpt>()
         for (i in 0 until arr.length()) {
             val p = arr.optJSONObject(i) ?: continue
@@ -1158,78 +1300,97 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // the cookie lookup finds nothing, and the login never syncs — normalise it to a real address
             val site = p.optString("site").trim().let { if (it.isBlank() || it.startsWith("http")) it else "https://${if (it.startsWith("www.")) it else "www.$it"}/" }
             if (key.isBlank() || site.isBlank()) continue
-            val prof = "p_" + key.lowercase().replace(Regex("[^a-z0-9_-]"), "")
+            // The phone's profile for this platform: its own name, else one kept for this site. None = the
+            // shortcut leads to the Profiles page to add one; nothing is created behind the owner's back.
+            val mine = profileForSite(ProfileRegistry.key(key), site)
+            val name = mine?.name ?: ProfileRegistry.key(key)
             // "signed in" ONLY if this phone's profile actually holds a session cookie for the site.
-            val signedIn = known.contains(prof) && profileHasSession(prof, site)
-            out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, prof, signedIn, cookieSyncApproved(prof)))
+            val signedIn = mine != null && profileHasSession(mine.jar, site)
+            out.add(engineer.myapp.gbmobile.ui.PlatformOpt(label, site, name, signedIn, mine?.storage == Storage.SYNCED))
         }
         settingsUi.platforms.value = out
         shellUi.platforms.value = out   // also feed the omnibox shortcuts
         vm.log("● signed in on this phone: " + (out.filter { it.signedIn }.map { it.label }.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "none"))
-        syncLoginsToCluster(out)
+        syncLoginsToCluster()
     }
 
-    /** Only approved platform profiles export cookies to the matching cluster profile.
-     *  Hashing avoids sending the same cookie set twice. */
+    private fun hostOf(site: String): String? = try { Uri.parse(if (site.startsWith("http")) site else "https://$site").host?.removePrefix("www.") } catch (e: Exception) { null }
+
+    /** The phone profile named [name], else one kept for [site]'s host. */
+    private fun profileForSite(name: String, site: String): PhoneProfile? {
+        ProfileRegistry.find(vm.registry, name)?.let { return it }
+        val h = hostOf(site) ?: return null
+        return vm.registry.firstOrNull { p -> p.name != ProfileRegistry.DEFAULT && hostOf(p.site).let { it != null && (h == it || h.endsWith(".$it")) } }
+    }
+
+    /**
+     * LOGIN SYNC: a profile kept on "this phone + cluster" copies every login made in it on the phone to
+     * the cluster profile of the SAME name — any site, not only the platform list. A phone-only profile
+     * never sends anything. Hashed per profile and host, so nothing goes twice.
+     */
     private val loginSyncHashes = HashMap<String, Int>()
-    private var platformsRequested = false
-    private fun cookieSyncApprovalKey(profile: String) = CookieSyncPolicy.key(vm.clusterUrl, profile)
-    private fun cookieSyncApproved(profile: String) = CookieSyncPolicy.allows(vm.approvedCookieSync, vm.clusterUrl, profile)
     private fun apexOf(host: String): String { val parts = host.split("."); return if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host }
-    private fun syncLoginsToCluster(list: List<engineer.myapp.gbmobile.ui.PlatformOpt>) {
+    private fun syncLoginsToCluster() {
         if (vm.clusterUrl.trim().isEmpty()) return
-        for (p in list) {
-            if (!p.signedIn || !cookieSyncApproved(p.profile)) continue
-            val cookieStr = try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.profile).cookieManager.getCookie(p.site) ?: "" else "" } catch (e: Exception) { "" }
-            pushLoginCookies(p, cookieStr)
+        for (p in vm.registry) {
+            if (p.storage != Storage.SYNCED || p.site.isBlank()) continue
+            val site = if (p.site.startsWith("http")) p.site else "https://${p.site}/"
+            val cookieStr = try { if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.jar).cookieManager.getCookie(site) ?: "" else "" } catch (e: Exception) { "" }
+            pushLoginCookies(p, site, cookieStr)
         }
     }
-    /** Sync only the approved platform profile. A matching site opened in a different identity must
-     *  never silently copy that identity's login into the approved cluster profile. */
     private fun syncLoginForTab(h: TabHandle, url: String) {
         if (vm.clusterUrl.trim().isEmpty() || !url.startsWith("http")) return
-        val host = try { Uri.parse(url).host } catch (e: Exception) { null } ?: return
-        val plats = settingsUi.platforms.value ?: emptyList()
-        if (plats.isEmpty()) { if (!platformsRequested) { platformsRequested = true; loadPlatforms() }; return }
-        // the LONGEST preset host the tab's host ends with wins: aistudio.google.com over google.com, the
-        // GB console's own host over my-app.engineer; the console itself is never a platform to sync
-        val tabHost = host.removePrefix("www.")
-        val clusterHost = try { Uri.parse(vm.clusterUrl.trim()).host?.removePrefix("www.") } catch (e: Exception) { null }
-        val p = plats.mapNotNull { pl -> val ph = (try { Uri.parse(pl.site).host } catch (e: Exception) { null })?.removePrefix("www.") ?: return@mapNotNull null
-                if (ph == clusterHost) null else if (tabHost == ph || tabHost.endsWith(".$ph")) pl to ph.length else null }
-            .maxByOrNull { it.second }?.first ?: return
-        if (!CookieSyncPolicy.allows(vm.approvedCookieSync, vm.clusterUrl, p.profile, h.profile)) return
+        val p = ProfileRegistry.find(vm.registry, h.profile) ?: return
+        if (p.storage != Storage.SYNCED) return
+        val host = hostOf(url) ?: return
+        // the GB console itself is never a site to copy a login for
+        if (host == hostOf(vm.clusterUrl.trim())) return
         val cookieStr = try {
-            if (h.profile != "default" && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(h.profile).cookieManager.getCookie(url) ?: ""
+            if (p.jar != ProfileRegistry.DEFAULT && WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(p.jar).cookieManager.getCookie(url) ?: ""
             else CookieManager.getInstance().getCookie(url) ?: ""
         } catch (e: Exception) { "" }
-        if (cookieStr.isBlank()) { if (loginSyncHashes[p.profile] != 0) { loginSyncHashes[p.profile] = 0; vm.log("· ${p.label}: no cookies yet in this tab's profile (${h.profile}) — sign in here and they sync by themselves") }; return }
-        pushLoginCookies(p, cookieStr)
+        pushLoginCookies(p, "https://$host/", cookieStr)
     }
-    private fun pushLoginCookies(p: engineer.myapp.gbmobile.ui.PlatformOpt, cookieStr: String) {
-        if (cookieStr.isBlank() || !cookieSyncApproved(p.profile)) return
-        val hsh = cookieStr.hashCode(); if (loginSyncHashes[p.profile] == hsh) return; loginSyncHashes[p.profile] = hsh
-        val host = try { Uri.parse(p.site).host } catch (e: Exception) { null } ?: return
+    private fun pushLoginCookies(p: PhoneProfile, site: String, cookieStr: String) {
+        if (cookieStr.isBlank() || p.storage != Storage.SYNCED) return
+        val host = hostOf(site) ?: return
+        val hashKey = "${p.name}|$host"
+        val hsh = cookieStr.hashCode(); if (loginSyncHashes[hashKey] == hsh) return; loginSyncHashes[hashKey] = hsh
         val apex = apexOf(host)
         val arr = JSONArray(); val exp = System.currentTimeMillis() / 1000 + 30L * 86400
         for (kv in cookieStr.split(";")) { val t = kv.trim(); val eq = t.indexOf('='); if (eq <= 0) continue
             arr.put(JSONObject().put("name", t.substring(0, eq)).put("value", t.substring(eq + 1)).put("domain", ".$apex").put("path", "/").put("expires", exp).put("secure", true).put("httpOnly", false).put("sameSite", "Lax")) }
         if (arr.length() == 0) return
-        val cluster = p.profile.removePrefix("p_")
-        apiCall("POST", "/v1/profiles/$cluster/cookies", JSONObject().put("site", p.site).put("cookies", arr).toString(), "loginsync")
-        vm.log("↑ ${p.label}: login synced to the cluster (${arr.length()} cookies)")
+        apiCall("POST", "/v1/profiles/${p.name}/cookies", JSONObject().put("site", "https://$host/").put("cookies", arr).toString(), "loginsync")
+        vm.log("↑ ${p.name}: login for $host copied to the cluster (${arr.length()} cookies)")
     }
 
-    private fun profileHasSession(prof: String, site: String): Boolean {
+    private fun profileHasSession(jar: String, site: String): Boolean {
         return try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return false
-            val cm = ProfileStore.getInstance().getOrCreateProfile(prof).cookieManager
+            val cm = ProfileStore.getInstance().getOrCreateProfile(jar).cookieManager
             (cm.getCookie(site) ?: "").isNotBlank()
         } catch (e: Exception) { false }
     }
 
-    private fun openPlatform(prof: String, site: String) {
-        vm.addProfile(prof)              // creates it if new and selects it
+    /**
+     * Open a site in a profile this phone HAS. A name it does not have is never created here (that is
+     * how "AliExpress" on the cluster became an empty "aliexpress" on the phone): the Profiles page
+     * opens with the Add form filled in, so the owner decides where it is kept.
+     */
+    private fun openPlatform(name: String, site: String, exact: Boolean = false) {
+        // A card on the Profiles page means THAT profile; a shortcut may use whichever one is kept for its site.
+        val mine = if (exact) ProfileRegistry.find(vm.registry, name) else profileForSite(name, site)
+        if (mine == null) {
+            val host = hostOf(site) ?: ""
+            shellUi.profileAddPrefill.value = ProfileRegistry.key(name).ifBlank { ProfileRegistry.key(host.substringBefore('.')) } to host
+            shellUi.profileStatus.value = "\"$name\" is not on this phone yet. Choose where to keep it, then open it."
+            shellUi.screen.value = "profiles"
+            return
+        }
+        val prof = mine.name
+        vm.selectProfile(prof)
         renderChips()
         val host = try { Uri.parse(site).host } catch (e: Exception) { null }
         val existing = tabs.indexOfFirst { it.profile == prof && host != null && (try { Uri.parse(it.url).host } catch (e: Exception) { null }) == host }
@@ -1302,7 +1463,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
      *  router (/v1/device/route) so the ring picks this device only for runs it can actually handle. */
     private fun phoneCaps(): JSONObject {
         val hasModel = (vm.useLocal && models.isReady(vm.selectedModel)) || (!vm.useLocal && vm.endpoint.isNotBlank())
-        val profs = JSONArray(); for (p in (vm.profiles.value ?: emptyList())) profs.put(p)
+        // Exactly the profiles work from the cluster may run in here ("default" + synced) — what browser_profiles shows.
+        val profs = JSONArray(); for (p in ProfileRegistry.deviceProfiles(vm.registry)) profs.put(p)
         val feats = JSONArray().put("native_tap").put("upload_file").put("click_xy").put("drag_xy")
         return JSONObject()
             .put("platform", "android")
@@ -2754,7 +2916,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onNav = { s ->
             shellUi.screen.value = s
             if (s == "flows" && vm.flowsJson.isBlank() && vm.clusterUrl.trim().isNotEmpty()) apiCall("GET", "/v1/workflows", null, "flows")
-            if (s == "profiles" && shellUi.profileCards.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) profilesLoad()
+            if (s == "profiles") profilesLoad()   // phone profiles show without a cluster too
             if (s == "profiles" && settingsUi.platforms.value.isEmpty() && vm.clusterUrl.trim().isNotEmpty()) loadPlatforms()
         },
         onOpenSettings = { openSettings() },
@@ -2946,14 +3108,16 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         onDeleteRecording = { id -> deleteRecording(id) },
         // profiles — the surface; opening one still opens it in a NEW TAB in its own cookie jar
         onLoadProfiles = { profilesLoad() },
-        onOpenProfile = { p -> openPlatform(p.name, if (p.site.isNotBlank()) "https://${p.site}" else HOME) },
+        onOpenProfile = { p -> openPlatform(p.name, if (p.site.isNotBlank()) "https://${p.site}" else HOME, exact = true) },
         onReadRole = { r -> profileRoleRead(r) },
         onSetProfileRole = { p, r -> profileRoleSet(p, r) },
-        onCreateProfile = { n, s -> profileManage("POST", "/v1/profiles", JSONObject().put("name", n).put("site", s).toString(), "created \"$n\" — sign into it once by hand") },
-        onRenameProfile = { p, to -> profileManage("POST", "/v1/profiles/$p/rename", JSONObject().put("to", to).toString(), "renamed to \"$to\"") },
-        onDuplicateProfile = { p, to -> profileManage("POST", "/v1/profiles/$p/duplicate", JSONObject().put("to", to).toString(), "copied to \"$to\" — settings only, so sign into it once") },
-        onClearProfileLogin = { p -> profileManage("POST", "/v1/profiles/${p.name}/clear-login", "{}", "signed \"${p.name}\" out; its settings are untouched") },
-        onDeleteProfile = { p -> profileManage("DELETE", "/v1/profiles/${p.name}", null, "deleted \"${p.name}\"") },
+        // The ONLY place a profile is made on this phone; each action acts where the profile lives.
+        onCreateProfileIn = { n, s, where -> profileCreateIn(n, s, where) },
+        onSetProfileStorage = { p, where -> profileSetStorage(p, where) },
+        onRenameProfile = { p, to -> shellUi.profileCards.value.firstOrNull { it.name == p }?.let { profileManageAt(it, "rename", to) } },
+        onDuplicateProfile = { p, to -> shellUi.profileCards.value.firstOrNull { it.name == p }?.let { profileManageAt(it, "duplicate", to) } },
+        onClearProfileLogin = { p -> profileManageAt(p, "clear") },
+        onDeleteProfile = { p -> profileManageAt(p, "delete") },
     )
 
     /* ── Downloads: the files the cluster browser captured (GET /v1/files), like any browser's list ── */
@@ -3583,8 +3747,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         try { stopService(Intent(this, GbService::class.java)) } catch (e: Exception) {}
         val managers = mutableListOf(CookieManager.getInstance())
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
-            for (name in vm.profiles.value.orEmpty()) try {
-                managers.add(ProfileStore.getInstance().getOrCreateProfile(name).cookieManager)
+            for (p in vm.registry) try {
+                managers.add(ProfileStore.getInstance().getOrCreateProfile(p.jar).cookieManager)
             } catch (e: Exception) {}
         }
         for (manager in managers) {
@@ -3632,19 +3796,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 ?: engineer.myapp.gb.shared.TrainingWatch.readiness(v.corpus)
         },
         onSwitchProfile = { p -> vm.selectProfile(p); renderChips(); renderRoleSpinner(); newTab(profile = p); syncSettingsUi() },
-        onAddProfile = { name -> vm.addProfile(name); renderChips(); newTab(profile = name); syncSettingsUi() },
         onSetRole = { r -> setRoleForProfile(vm.currentProfile.value ?: "default", r); settingsUi.roleForCurrent.value = r.ifBlank { "(none)" }; renderRoleSpinner() },
         onLoadRoles = { if (vm.clusterUrl.trim().isEmpty()) vm.log("! set the cluster URL first") else { vm.log("↑ loading agent roles…"); apiCall("GET", "/v1/agent/roles", null, "roles_list") } },
         onLoadPlatforms = { loadPlatforms() },
         onOpenPlatform = { prof, site -> openPlatform(prof, site) },
+        // "Share login with cluster" is where the profile lives now: synced, or this phone only.
         onSetCookieSync = { profile, approved ->
-            val key = cookieSyncApprovalKey(profile)
-            vm.approvedCookieSync = if (approved) vm.approvedCookieSync + key else vm.approvedCookieSync - key
-            loginSyncHashes.remove(profile)
-            settingsUi.platforms.value = settingsUi.platforms.value.map { if (it.profile == profile) it.copy(syncApproved = approved) else it }
-            shellUi.platforms.value = settingsUi.platforms.value
-            if (approved) syncLoginsToCluster(settingsUi.platforms.value)
-            vm.log(if (approved) "● cookie sharing approved for $profile" else "● future cookie sharing stopped for $profile; sign out in the cluster profile to clear an existing login")
+            val card = shellUi.profileCards.value.firstOrNull { it.name == profile }
+                ?: engineer.myapp.gb.shared.ProfileCard(name = profile, storage = if (ProfileRegistry.find(vm.registry, profile)?.storage == Storage.SYNCED) "synced" else "phone")
+            profileSetStorage(card, if (approved) "synced" else "phone")
         },
         onSetUseLocal = { vm.useLocal = it; settingsUi.useLocal.value = it },
         onSelectModelIndex = { i -> settingsUi.modelIndex.value = i; vm.selectedModel = ModelCatalog.models.getOrElse(i) { ModelCatalog.models[0] }.id; refreshSettingsModel() },
@@ -3738,6 +3898,9 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             // a command may name a profile → run it in that profile's own hidden browser (the login lives there).
             // Kept inside the try so a build failure returns an error result instead of leaving the ring silent.
             val prof = body.optString("profile", "")
+            // The same gate as the service: a profile this phone has and shares, never an empty stand-in.
+            if (ProfileRegistry.forCluster(vm.registry, prof) == null)
+                return JSONObject().put("error", ProfileRegistry.refusalFor(vm.registry, prof)).put("profileMissing", true).toString()
             cmdWeb = if (prof.isNotBlank() && prof != (vm.currentProfile.value ?: "default")) ringWebFor(prof) else null
             wakeForCommand()
             // a command may ask for the DESKTOP site (LinkedIn's mobile web omits comments; desktop renders the
@@ -4343,7 +4506,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         stopControlWeb()
         val w = WebView(this)
         val bridgeToken = java.util.UUID.randomUUID().toString()
-        val prof = vm.currentProfile.value ?: "default"
+        val prof = vm.jarOf(vm.currentProfile.value)   // ctrlProfile is a STORE: clusterCookie() reads it directly
         ctrlProfile = prof
         if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
             try { ProfileStore.getInstance().getOrCreateProfile(prof); WebViewCompat.setProfile(w, prof) } catch (e: Exception) {}

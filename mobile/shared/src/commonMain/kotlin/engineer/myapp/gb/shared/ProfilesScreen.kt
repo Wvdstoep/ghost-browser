@@ -57,6 +57,32 @@ data class ProfileCard(
     val automations: Int = 0,         // how many saved automations run steps in this profile
     val live: Boolean = false,        // a session is open on it right now
     val exit: String = "",            // where it leaves from: tailscale | direct | a proxy
+    /** Where it lives, on a surface that has a store of its own (the phone): "main" | "synced" | "phone" | "cluster". "" elsewhere. */
+    val storage: String = "",
+)
+
+/**
+ * WHERE A PROFILE LIVES, IN THE WORDS THE PAGE USES.
+ *
+ * A profile made on the Profiles page used to exist on the cluster only, and the phone's own
+ * automation then opened an empty one of the same name: a login made by hand reached nothing
+ * (AliExpress, 2026-11-01). On the phone every profile now says where it is, and the choice is made
+ * once, when it is added.
+ */
+data class StorageWords(val badge: String, val explain: String)
+
+fun storageWords(storage: String): StorageWords? = when (storage) {
+    "main" -> StorageWords("📱 This phone's main browser", "Plain tasks on this phone run here.")
+    "synced" -> StorageWords("📱☁ This phone + cluster", "Sign in on this phone; the login is copied to your cluster. Tasks can use it on the phone and on the cluster.")
+    "phone" -> StorageWords("📱 This phone only", "The login never leaves this phone. Tasks from the cluster or Claude cannot use it.")
+    "cluster" -> StorageWords("☁ Cluster only", "Not on this phone. Tasks the cluster hands to this phone cannot use it until you add it here.")
+    else -> null
+}
+
+/** The two places a new profile can be kept, on a surface with a store of its own. */
+val STORAGE_CHOICES = listOf(
+    "synced" to "This phone + my cluster (recommended for sites tasks work on)",
+    "phone" to "This phone only (private: tasks cannot use it)",
 )
 
 /**
@@ -170,6 +196,15 @@ fun ProfilesScreen(
      */
     openLabel: String = "Open in a new tab",
     openHint: String = "",
+    /*
+     * THE PHONE: the only place a profile is created, so the choice of where it lives is made here.
+     * When [onCreateIn] is given the Add form asks where to keep it, every card says where it lives,
+     * and [onSetStorage] moves one ("synced" | "phone"; on a cluster-only card "synced" = use it on
+     * this phone too). [addPrefill] opens the Add form filled in (a platform shortcut with no profile).
+     */
+    onCreateIn: ((name: String, site: String, storage: String) -> Unit)? = null,
+    onSetStorage: ((ProfileCard, String) -> Unit)? = null,
+    addPrefill: Pair<String, String>? = null,
     modifier: Modifier = Modifier,
     topInset: Modifier = Modifier,
 ) {
@@ -181,6 +216,7 @@ fun ProfilesScreen(
     /* Which profile is being managed, and whether the Add row is showing. */
     var managing by remember { mutableStateOf<ProfileCard?>(null) }
     var adding by remember { mutableStateOf(false) }
+    LaunchedEffect(addPrefill) { if (addPrefill != null) { adding = true; managing = null; picking = null } }
 
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = modifier.fillMaxSize()) {
         val manage = managing
@@ -200,6 +236,7 @@ fun ProfilesScreen(
                     onDuplicate = { to -> onDuplicate(live.name, to); managing = null },
                     onClearLogin = { onClearLogin(live) },
                     onDelete = { onDelete(live); managing = null },
+                    onSetStorage = onSetStorage?.let { set -> { to: String -> set(live, to) } },
                     onBack = { managing = null },
                     status = status,
                     topInset = topInset,
@@ -239,7 +276,11 @@ fun ProfilesScreen(
                 TextButton(onClick = onRefresh) { Text("Refresh") }
             }
             if (adding) {
-                AddProfileRow(onCreate = { n, s -> onCreate(n, s); adding = false })
+                AddProfileRow(
+                    onCreate = { n, s, where -> if (onCreateIn != null) onCreateIn(n, s, where) else onCreate(n, s); adding = false },
+                    askWhere = onCreateIn != null,
+                    prefill = addPrefill,
+                )
             }
             if (status.isNotBlank()) {
                 Text(status, color = cs.onSurfaceVariant, fontSize = 12.sp,
@@ -287,15 +328,17 @@ fun ProfilesScreen(
                         HorizontalDivider(color = cs.outline)
                         Text("Cluster profiles", style = MaterialTheme.typography.titleMedium)
                     }
+                    if (onCreateIn != null) WhereProfilesLive()
                     if (openHint.isNotBlank()) {
                         Text(openHint, color = cs.onSurfaceVariant, fontSize = 11.sp)
                     }
                     if (profiles.isEmpty()) {
-                        Text("No cluster profiles yet.", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text(if (onCreateIn != null) "No profiles yet. Tap Add to make one." else "No cluster profiles yet.", color = cs.onSurfaceVariant, fontSize = 12.sp)
                     } else {
                         sortProfiles(profiles).forEach { p ->
                             ProfileRow(p, openLabel = openLabel, onOpen = { onOpen(p) },
-                                onRole = { picking = p; reading = "" }, onManage = { managing = p })
+                                onRole = { picking = p; reading = "" }, onManage = { managing = p },
+                                onUseHere = if (p.storage == "cluster" && onSetStorage != null) ({ onSetStorage(p, "synced") }) else null)
                         }
                     }
                     Spacer(Modifier.height(24.dp))
@@ -306,7 +349,7 @@ fun ProfilesScreen(
 }
 
 @Composable
-private fun ProfileRow(p: ProfileCard, openLabel: String, onOpen: () -> Unit, onRole: () -> Unit, onManage: () -> Unit) {
+private fun ProfileRow(p: ProfileCard, openLabel: String, onOpen: () -> Unit, onRole: () -> Unit, onManage: () -> Unit, onUseHere: (() -> Unit)? = null) {
     val cs = MaterialTheme.colorScheme
     Surface(color = cs.surface, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, cs.outline),
         modifier = Modifier.fillMaxWidth()) {
@@ -319,6 +362,11 @@ private fun ProfileRow(p: ProfileCard, openLabel: String, onOpen: () -> Unit, on
                     Text(p.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(profileSubtitle(p), color = cs.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+            }
+            storageWords(p.storage)?.let { w ->
+                Spacer(Modifier.height(6.dp))
+                Text(w.badge, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    color = if (p.storage == "cluster") cs.onSurfaceVariant else Brand)
             }
             Spacer(Modifier.height(10.dp))
 
@@ -356,10 +404,11 @@ private fun ProfileRow(p: ProfileCard, openLabel: String, onOpen: () -> Unit, on
 
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onOpen, shape = RoundedCornerShape(10.dp),
+                // Not on this phone yet: opening it would mean an empty store, so the one action is to add it here.
+                Button(onClick = onUseHere ?: onOpen, shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp)) {
-                    Text(openLabel, fontSize = 13.sp)
+                    Text(if (onUseHere != null) "Use on this phone" else openLabel, fontSize = 13.sp)
                 }
                 TextButton(onClick = onManage, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp)) {
                     Text("Manage", fontSize = 13.sp)
@@ -378,27 +427,64 @@ private fun ProfileRow(p: ProfileCard, openLabel: String, onOpen: () -> Unit, on
  * can reason about.
  */
 @Composable
-private fun AddProfileRow(onCreate: (String, String) -> Unit) {
+private fun AddProfileRow(onCreate: (String, String, String) -> Unit, askWhere: Boolean = false, prefill: Pair<String, String>? = null) {
     val cs = MaterialTheme.colorScheme
-    var name by remember { mutableStateOf("") }
-    var site by remember { mutableStateOf("") }
+    var name by remember(prefill) { mutableStateOf(prefill?.first ?: "") }
+    var site by remember(prefill) { mutableStateOf(prefill?.second ?: "") }
+    var where by remember { mutableStateOf("synced") }
+    // The cluster's own rule: what is typed is what both sides call it, never a silently changed copy.
+    val badName = name.isNotBlank() && !Regex("^[A-Za-z0-9_-]{1,40}$").matches(name.trim())
     Surface(color = cs.surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, cs.outline),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Column(Modifier.padding(12.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true,
-                placeholder = { Text("capcut-second") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, isError = badName,
+                placeholder = { Text("aliexpress") }, modifier = Modifier.fillMaxWidth())
+            Text(if (badName) "Letters, digits, - and _ only (at most 40)." else "Letters, digits, - and _ only. The same name is used everywhere.",
+                color = if (badName) cs.error else cs.onSurfaceVariant, fontSize = 11.sp)
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(site, { site = it }, label = { Text("Site") }, singleLine = true,
-                placeholder = { Text("capcut.com") }, modifier = Modifier.fillMaxWidth())
+                placeholder = { Text("aliexpress.com") }, modifier = Modifier.fillMaxWidth())
+            if (askWhere) {
+                Spacer(Modifier.height(10.dp))
+                Text("Where is it kept?", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                STORAGE_CHOICES.forEach { (value, label) ->
+                    Row(Modifier.fillMaxWidth().clickable { where = value }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = where == value, onClick = { where = value })
+                        Text(label, fontSize = 12.sp)
+                    }
+                }
+                storageWords(where)?.let { Text(it.explain, color = cs.onSurfaceVariant, fontSize = 11.sp) }
+            }
             Spacer(Modifier.height(10.dp))
-            Button(onClick = { if (name.isNotBlank()) onCreate(name.trim(), site.trim()) },
-                enabled = name.isNotBlank(), shape = RoundedCornerShape(10.dp),
+            Button(onClick = { if (name.isNotBlank() && !badName) onCreate(name.trim(), site.trim(), where) },
+                enabled = name.isNotBlank() && !badName, shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) {
                 Text("Create", fontSize = 13.sp)
             }
             Spacer(Modifier.height(4.dp))
-            Text("It starts empty. Sign into it once by hand and the login stays.",
+            Text(if (askWhere) "It starts empty. Open it here and sign in once by hand; the login stays in it."
+                else "It starts empty. Sign into it once by hand and the login stays.",
                 color = cs.onSurfaceVariant, fontSize = 11.sp)
+        }
+    }
+}
+
+/** The three places a profile can be, said once at the top of the phone's list. */
+@Composable
+private fun WhereProfilesLive() {
+    val cs = MaterialTheme.colorScheme
+    Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Where your profiles live", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            listOf("synced", "phone", "cluster").forEach { s ->
+                storageWords(s)?.let { w ->
+                    Column {
+                        Text(w.badge, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(w.explain, color = cs.onSurfaceVariant, fontSize = 11.sp)
+                    }
+                }
+            }
+            Text("Profiles are only added here.", color = cs.onSurfaceVariant, fontSize = 11.sp)
         }
     }
 }
@@ -419,6 +505,7 @@ private fun ManagePanel(
     onDuplicate: (String) -> Unit,
     onClearLogin: () -> Unit,
     onDelete: () -> Unit,
+    onSetStorage: ((String) -> Unit)? = null,
     onBack: () -> Unit,
     status: String,
     topInset: Modifier,
@@ -446,6 +533,29 @@ private fun ManagePanel(
 
             val meta = profileMeta(profile)
             if (meta.isNotBlank()) Text(meta, color = cs.onSurfaceVariant, fontSize = 11.sp)
+
+            val words = storageWords(profile.storage)
+            if (words != null) {
+                ManageCard("Where it lives", words.explain) {
+                    Text(words.badge, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    if (onSetStorage != null && profile.storage != "main") {
+                        Spacer(Modifier.height(8.dp))
+                        when (profile.storage) {
+                            "synced" -> {
+                                OutlinedButton(onClick = { onSetStorage("phone") }, shape = RoundedCornerShape(10.dp)) { Text("Keep on this phone only", fontSize = 13.sp) }
+                                Text("Stops copying its login to the cluster. The cluster's copy stays until you delete it there.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                            }
+                            "phone" -> {
+                                Button(onClick = { onSetStorage("synced") }, shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Sync with cluster", fontSize = 13.sp) }
+                                Text("Creates \"${profile.name}\" on your cluster and copies its login there, so tasks can use it.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                            }
+                            "cluster" -> Button(onClick = { onSetStorage("synced") }, shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Use on this phone", fontSize = 13.sp) }
+                        }
+                    }
+                }
+            }
 
             /*
              * THE ROLE, FIRST — it is the thing most likely to be wanted here.

@@ -77,21 +77,30 @@ class GbViewModel(app: Application) : AndroidViewModel(app) {
     var clusterKey: String get() = sp.getString("clusterKey", "") ?: ""
         set(v) { sp.edit().putString("clusterKey", v).apply() }
 
-    // --- profiles (isolated cookie jars) ---
-    val profiles = MutableLiveData<List<String>>(loadProfiles())
-    val currentProfile = MutableLiveData(sp.getString("profile", "default") ?: "default")
+    // --- profiles: ProfileRegistry is the one list; created on the Profiles page only ---
+    /** This phone's profiles, each with the cookie store behind it and where it lives. The 0.91
+     *  layout (a comma list of stores + per-cluster share approvals) moves over once, losing no store. */
+    internal var registry: List<PhoneProfile> = loadRegistry()
+        private set
+    val profiles = MutableLiveData<List<String>>(registry.map { it.name })
+    val currentProfile = MutableLiveData((sp.getString("profile", ProfileRegistry.DEFAULT) ?: ProfileRegistry.DEFAULT).let { saved ->
+        (registry.firstOrNull { it.name == saved } ?: registry.firstOrNull { it.jar == saved })?.name ?: ProfileRegistry.DEFAULT
+    })
 
-    private fun loadProfiles(): List<String> {
-        val raw = sp.getString("profiles", "default") ?: "default"
-        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    private fun loadRegistry(): List<PhoneProfile> {
+        val stored = sp.getString(ProfileRegistry.PREF, null)
+        val list = ProfileRegistry.load(stored, sp.getString("profiles", null), approvedCookieSync, clusterUrl)
+        if (stored == null) sp.edit().putString(ProfileRegistry.PREF, ProfileRegistry.serialize(list)).apply()
+        return list
     }
-    fun addProfile(name: String) {
-        val clean = name.trim().lowercase().replace(Regex("[^a-z0-9_-]"), "")
-        if (clean.isEmpty()) return
-        val list = (profiles.value ?: emptyList()).toMutableList()
-        if (!list.contains(clean)) { list.add(clean); sp.edit().putString("profiles", list.joinToString(",")).apply(); profiles.value = list }
-        selectProfile(clean)
+    internal fun saveRegistry(list: List<PhoneProfile>) {
+        registry = list
+        sp.edit().putString(ProfileRegistry.PREF, ProfileRegistry.serialize(list)).apply()
+        profiles.value = list.map { it.name }
+        if (ProfileRegistry.find(list, currentProfile.value ?: "") == null) selectProfile(ProfileRegistry.DEFAULT)
     }
+    /** The WebView store behind a profile name ("default" when the phone does not have it). */
+    fun jarOf(name: String?): String = ProfileRegistry.jarOf(registry, name ?: "") ?: ProfileRegistry.DEFAULT
     fun selectProfile(name: String) {
         sp.edit().putString("profile", name).apply(); currentProfile.value = name
     }

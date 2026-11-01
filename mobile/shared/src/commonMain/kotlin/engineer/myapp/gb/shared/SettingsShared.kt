@@ -93,7 +93,6 @@ class SettingsHandlers(
     val onLoadPlatforms: () -> Unit = {},
     val onOpenPlatform: (profile: String, site: String) -> Unit = { _, _ -> },
     val onSwitchProfile: ((String) -> Unit)? = null,
-    val onAddProfile: ((String) -> Unit)? = null,
     val onSetRole: ((String) -> Unit)? = null,
     val onLoadRoles: (() -> Unit)? = null,
     val onRefreshDevices: () -> Unit = {},
@@ -457,14 +456,8 @@ private fun ProfilesSection(s: SettingsState, h: SettingsHandlers) {
             Text("Active", color = cs.onSurfaceVariant, fontSize = 12.sp)
             Spacer(Modifier.height(6.dp))
             SChips(s.profiles.value, s.currentProfile.value) { h.onSwitchProfile.invoke(it) }
-            if (h.onAddProfile != null) {
-                Spacer(Modifier.height(12.dp))
-                var np by remember { mutableStateOf("") }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(Modifier.weight(1f)) { SField("New profile name", np, { np = it }) }
-                    SPrimary("Add") { if (np.isNotBlank()) { h.onAddProfile.invoke(np); np = "" } }
-                }
-            }
+            Spacer(Modifier.height(8.dp))
+            Text("New profiles are added on the Profiles page, where you choose where each one is kept.", color = cs.onSurfaceVariant, fontSize = 11.sp)
             if (h.onSetRole != null && s.roleNames.value.isNotEmpty()) {
                 Spacer(Modifier.height(14.dp))
                 Text("Role for “${s.currentProfile.value}”", color = cs.onSurfaceVariant, fontSize = 12.sp)
