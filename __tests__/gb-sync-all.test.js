@@ -43,6 +43,26 @@ describe('all installed Ghost Browser releases', () => {
     syncAll(image, run, () => {});
     expect(run.mock.calls.some(([a]) => a.includes('set'))).toBe(reason === 'ImagePullBackOff');
   });
+  it('delivers the signed release to an owned cluster before switching, never a pull that must fail first', () => {
+    const run = mock([browser('pod-ann'), host], [browser('ghost-browser')]);
+    const order = [];
+    run.mockImplementation(args => {
+      order.push(args.includes('--') ? 'hosted:' + args[args.indexOf('kubectl') + 3] : 'platform:' + args[2]);
+      if (args.includes('get')) return JSON.stringify({ items: args.includes('--') ? [browser('ghost-browser')] : [browser('pod-ann'), host] });
+      if (args.includes('node')) return JSON.stringify({ busy: 0 });
+      return '';
+    });
+    const importImage = vi.fn(() => order.push('import'));
+    expect(syncAll(image, run, () => {}, importImage)).toBe(true);
+    expect(importImage).toHaveBeenCalledWith(image, expect.arrayContaining(['byon-cp-ann', 'k3s', 'kubectl']));
+    const hosted = run.mock.calls.map(([a]) => a).filter(a => a.includes('--'));
+    expect(hosted.some(a => a.includes('set'))).toBe(false);
+    const patch = hosted.find(a => a.includes('patch'));
+    expect(JSON.parse(patch.at(-1)).spec.template.spec.containers[0]).toEqual({ name: 'ghost-browser', image, imagePullPolicy: 'IfNotPresent' });
+    expect(order.indexOf('import')).toBeLessThan(order.indexOf('hosted:patch'));
+    // the platform's own browser keeps its rolling set image (its image is ctr-imported by the build)
+    expect(run.mock.calls.some(([a]) => !a.includes('--') && a.includes('set'))).toBe(true);
+  });
   it('reports a dedicated cluster discovery failure', () => {
     const run = mock([host]);
     run.mockImplementationOnce(() => JSON.stringify({ items: [host] })).mockImplementationOnce(() => { throw Error('offline'); });

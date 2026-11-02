@@ -45,7 +45,13 @@ function syncAll(image, run, log = console.log, importImage = null) {
           if (ready.busy !== 0) { log(`${dep.metadata.namespace}: busy; retry next cycle`); continue; }
         }
         if (source) syncRegistryCredentials(source, dep, prefix, run);
-        if (pullBlocked && prefix.length && importImage) {
+        // A RELEASE IS DELIVERED TO AN OWNED CLUSTER, NOT PULLED THERE. The platform cluster never pulls
+        // its browser either (gb-auto-deploy ctr-imports it). An owned cluster used to "set image" and
+        // pull from the private repo with the owner's copied credential; that pull was refused on every
+        // release (v702-v704). Its browser runs Recreate, so it was DOWN until the next 15-minute
+        // pass found it pull-blocked and imported the image. The signed image now goes in first, and
+        // the pod starts from that copy.
+        if (prefix.length && importImage) {
           importImage(image, prefix);
           run([...args, 'patch', name, '--type=strategic', '-p', JSON.stringify({spec:{template:{spec:{containers:[{name:container.name,image,imagePullPolicy:'IfNotPresent'}]}}}})]);
         } else run([...args, 'set', 'image', name, `${container.name}=${image}`]);
