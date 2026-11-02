@@ -158,6 +158,8 @@ function toElements(raw) {
   }));
 }
 
+const { deviceProfileFor, baseName } = require('./deviceProfile');
+
 function createSessionRing({ run, pickDevice, log = console, now = Date.now, wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const walledHosts = new Map(); // host -> { until, why }
 
@@ -230,9 +232,12 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (s.ring) return s.ring;
       const dev = pickDevice(owners);
       if (!dev) return null;
-      // The device runs the session in the profile the session was opened with (a phone names them p_<name>).
+      // The device runs the session in the profile the session was opened with, under the name the device
+      // holds it by (deviceProfile.js). One it does not hold goes as the plain name: the app refuses it and
+      // says how to add it, instead of opening an empty store.
       const prof = String(s.profile || 'default');
-      s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [], profile: prof === 'default' ? '' : (prof.startsWith('p_') ? prof : `p_${prof}`) };
+      const held = deviceProfileFor(dev.caps, prof) || baseName(prof);
+      s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [], profile: held === 'default' ? '' : held };
       log.info?.(`[ring] session ${s.id}: handed to ${dev.name} (home connection)`);
       return s.ring;
     },

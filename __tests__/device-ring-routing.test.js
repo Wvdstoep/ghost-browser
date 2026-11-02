@@ -177,7 +177,7 @@ describe('the scheduler dispatches a gated pass to the ring', () => {
   });
 
   it('the pass opens the profile where the login lives, and reads with the device', () => {
-    expect(server).toMatch(/const profile = 'p_' \+ wProfile;/);
+    expect(server).toContain('const profile = deviceProfileFor(dev && dev.caps, wProfile) || wProfile;');
     expect(server).toMatch(/deviceHub\.runCommand\(dev\.deviceId, \{ method: 'POST', path: '\/v1\/navigate'/);
     expect(server).toMatch(/path: '\/v1\/content'/);
   });

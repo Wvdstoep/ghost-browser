@@ -17,13 +17,15 @@
  *
  * Returns the list of unmet requirements: empty means this device can do the job.
  */
+const { deviceProfileFor } = require("./deviceProfile");
+
 function missesFor(caps, need) {
   const c = caps || {};
   const n = need || {};
   const m = [];
   for (const k of ["mobileApp", "cdp", "model", "realIp"]) if (n[k] && !c[k]) m.push(k);
   if (n.platform && c.platform !== n.platform) m.push("platform:" + n.platform);
-  if (n.profile && !(c.profiles || []).includes(n.profile)) m.push("profile:" + n.profile);
+  if (n.profile && !deviceProfileFor(c, n.profile)) m.push("profile:" + n.profile);
   for (const f of (n.features || [])) if (!(c.features || []).includes(f)) m.push("feature:" + f);
   return m;
 }

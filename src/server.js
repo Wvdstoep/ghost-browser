@@ -1416,7 +1416,7 @@ app.post('/v1/site-walls/check', authed, async (req, res) => {
         url,
       });
       let dev = null;
-      try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
+      try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: prof }); } catch (e) { dev = null; }
       log.warn(`[ring] ${site.label}: the "${prof}" profile is signed out — ${dev ? dev.name + ' holds this login' : 'no connected device holds this login'}`);
       return res.json({ ok: true, surface: key, signedIn: false, reason: 'signed-out', profile: prof,
         device: dev ? dev.name : null, landed, enteredBy: entered || '', entryTried: tried, record: rec });
@@ -1491,7 +1491,7 @@ const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
 /*
  * WHICH PROFILE, AND WHAT IT HOLDS. A caller (Claude through MCP) picks the profile a site needs, so it has
  * to be able to see them: this install's profiles with what each is for, and the profiles on the owner's
- * online devices (a phone keeps its own logins; its named profiles carry a "p_" prefix). "default" is the
+ * online devices (a phone keeps its own logins under the same names; apps before 0.92 used "p_<name>"). "default" is the
  * owner's main profile, signed in with their Google account.
  */
 app.get('/v1/browser-profiles', authed, (req, res) => {
@@ -6935,7 +6935,7 @@ async function ringGate({ goal, owner }) {
     if (!blocked) continue;
     const prof = sites.profileNameFor ? (f.profile || f.key) : (f.profile || f.key);
     let dev = null;
-    try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + prof }); } catch (e) { dev = null; }
+    try { dev = deviceHub.capableDevice(owner, { realIp: true, profile: prof }); } catch (e) { dev = null; }
     const why = reason === 'signed-out'
       ? `${f.label} needs a signed-in session and the "${prof}" profile here is signed out`
         + (dev ? `. ${dev.name} holds that login — run it there, or sign in on this profile.`
@@ -6972,9 +6972,11 @@ async function devicePassTargets(wid, wProfile) {
   return [];
 }
 
+const { deviceProfileFor } = require('./deviceProfile');
 async function runPassOnDevice(wf, owner, dev, wProfile) {
   const targets = await devicePassTargets(wf.id, wProfile);
-  const profile = 'p_' + wProfile;
+  // The name this device holds the profile under (deviceProfile.js): "linkedin", or "p_linkedin" before app 0.92.
+  const profile = deviceProfileFor(dev && dev.caps, wProfile) || wProfile;
   const read = [];
   if (!targets.length) {
     log.warn(`[ring] "${wf.name}" has nothing to open — no postUrls and no start URL for ${wProfile}`);
@@ -7064,7 +7066,7 @@ async function scheduleTick() {
       // Cloudflare-gated: NEVER on the cluster (it only redirect-loops there). It runs on a real device.
       // The on-device pass is dispatched by the device ring; here we only make sure the cluster never
       // attempts it, and we record whether a capable device is connected so the app can show the state.
-      const dev = deviceHub.capableDevice(owner, { realIp: true, profile: 'p_' + wProfile });
+      const dev = deviceHub.capableDevice(owner, { realIp: true, profile: wProfile });
       if (!dev) {
         /* NO DEVICE MEANS WAIT, NOT FALL BACK. The cluster never runs a gated platform — not as a
            fallback and not "to try" (Principle 6). It waits, visibly, until the device is back. */
