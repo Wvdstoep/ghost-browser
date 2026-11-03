@@ -28,6 +28,17 @@
     }
     return state;
   }
+  /*
+   * The way back into the app. A bare ghostbrowser:// link lets Android offer a choice of apps; on a
+   * phone where Chrome was offered and picked, the same sign-in page just opened again, forever
+   * (2026-11-03). On Android an intent:// link names the app itself, so there is no choice to get wrong.
+   */
+  const APP_PACKAGE = 'engineer.myapp.gbmobile';
+  function appLink(win, query) {
+    const ua = String((win.navigator && win.navigator.userAgent) || '');
+    if (/Android/i.test(ua)) return 'intent://connect?' + query + '#Intent;scheme=ghostbrowser;package=' + APP_PACKAGE + ';end';
+    return 'ghostbrowser://connect?' + query;
+  }
   async function boot(win) {
     const doc = win.document, gate = doc.getElementById('auth-gate');
     if (!gate) return;
@@ -53,8 +64,8 @@
         if (!reply.ok) throw new Error('We could not connect this phone. Please start sign-in again in the app.');
         const result = await reply.json();
         if (!/^[A-Za-z0-9_-]{43}$/.test(result.code || '')) throw new Error('Device connection could not finish. Please try again.');
-        const callback = 'ghostbrowser://connect?' + new URLSearchParams({ cluster: win.location.origin, code: result.code, state: state.device.state });
-        status.textContent = 'Signed in. Return to Ghost Browser Mobile to finish connecting.';
+        const callback = appLink(win, new URLSearchParams({ cluster: win.location.origin, code: result.code, state: state.device.state }));
+        status.textContent = 'Signed in. Tap the button to finish connecting in Ghost Browser Mobile.';
         platform.textContent = 'Open Ghost Browser Mobile'; platform.href = callback;
         actions.hidden = false; password.hidden = true;
         win.location.assign(callback);
@@ -91,6 +102,6 @@
     });
     return boot(win);
   }
-  if (typeof module !== 'undefined') module.exports = { authenticate, takeHandoff, boot, install, PLATFORM_SIGN_IN };
+  if (typeof module !== 'undefined') module.exports = { authenticate, takeHandoff, boot, install, appLink, PLATFORM_SIGN_IN };
   else install(root);
 })(typeof window !== 'undefined' ? window : globalThis);

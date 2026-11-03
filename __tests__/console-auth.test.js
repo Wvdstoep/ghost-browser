@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 const require = createRequire(import.meta.url);
-const { authenticate, boot, PLATFORM_SIGN_IN } = require('../public/js/console-auth');
+const { authenticate, boot, PLATFORM_SIGN_IN, appLink } = require('../public/js/console-auth');
 const { prepareConsole } = require('../scripts/prepare-console');
 const html = readFileSync(new URL('../public/compose-index.html', import.meta.url), 'utf8');
 const url = (envelope) => 'https://ghost-browser.ben.my-app.engineer/#leadflow=' + encodeURIComponent(JSON.stringify(envelope));
@@ -79,6 +79,26 @@ describe('the shipped console authenticates before Compose starts', () => {
     expect(callback.searchParams.get('code')).toBe('k'.repeat(43));
     expect(callback.searchParams.get('state')).toBe(device.state);
     expect(callback.searchParams.has('token')).toBe(false);
+  });
+  it('on Android opens the app by name, so the system cannot offer Chrome for the way back', async () => {
+    const device = { challenge: 'c'.repeat(43), state: 's'.repeat(43) };
+    const dom = new JSDOM(html, { url: url({ auth: 'valid', device }) });
+    const assign = vi.fn();
+    const win = { document: dom.window.document, history: dom.window.history,
+      navigator: { userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36' },
+      location: { hash: dom.window.location.hash, pathname: '/', search: '', origin: dom.window.location.origin, assign },
+      fetch: vi.fn(async path => reply(path.endsWith('/state') ? { signedIn: true } : path.endsWith('/device-code') ? { code: 'k'.repeat(43) } : {})) };
+    await boot(win);
+    const link = assign.mock.calls[0][0];
+    expect(link).toMatch(/^intent:\/\/connect\?/);
+    expect(link).toMatch(/#Intent;scheme=ghostbrowser;package=engineer\.myapp\.gbmobile;end$/);
+    const query = new URLSearchParams(link.slice('intent://connect?'.length, link.indexOf('#')));
+    expect(query.get('code')).toBe('k'.repeat(43));
+    expect(query.get('state')).toBe(device.state);
+    expect(dom.window.document.getElementById('platform-sign-in').getAttribute('href')).toBe(link);
+  });
+  it('keeps the plain app link off Android', () => {
+    expect(appLink({ navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, 'a=1')).toBe('ghostbrowser://connect?a=1');
   });
 });
 
