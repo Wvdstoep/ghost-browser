@@ -3953,7 +3953,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     @Volatile private var askedBattery = false
     private fun startDeviceRing() {
         if (ringOn || vm.clusterKey.isBlank()) return
-        if (!askedBattery) { askedBattery = true; runOnUiThread { requestBatteryExemption(); requestOverlayPermission() }; scheduleRingWatchdog() }
+        if (!askedBattery) { askedBattery = true; runOnUiThread { refreshPermissionAsk() }; scheduleRingWatchdog() }
         /*
          * THE RING LIVES IN THE SERVICE NOW (GbService + ServiceBrowser), so it keeps working whatever this
          * screen does — swiped away, in the background, never opened. The screen only tells the service what
@@ -4014,28 +4014,52 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         return null
     }
 
-    /** Ask once for "Display over other apps": the only way Android lets the ring reopen a closed app. */
-    private fun requestOverlayPermission() {
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)) {
-                vm.log("· asking to reopen in the background when a browsing task arrives")
-                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
-            }
-        } catch (e: Exception) { vm.log("! overlay permission: ${e.message}") }
+    /*
+     * The two permissions the background work needs ("Display over other apps" so the ring can reopen the app,
+     * no battery restriction so Doze does not kill the service). Up to 0.92 both settings screens were opened
+     * BY THE APP on every start until allowed — on Samsung the overlay screen is the whole app list, so the
+     * icon looked like it opened Android settings. Now a card in the app asks; settings open only on a tap.
+     */
+    private val permPrefs by lazy { getSharedPreferences("gb_permissions", MODE_PRIVATE) }
+    private fun needsOverlay() = android.os.Build.VERSION.SDK_INT >= 23 && !android.provider.Settings.canDrawOverlays(this)
+    private fun needsBattery() = try {
+        val pm = getSystemService(android.os.PowerManager::class.java); pm != null && !pm.isIgnoringBatteryOptimizations(packageName)
+    } catch (e: Exception) { false }
+
+    private fun refreshPermissionAsk() {
+        if (vm.clusterKey.isBlank()) { shellUi.permissionAsk.value = null; return }
+        val overlay = needsOverlay(); val battery = needsBattery()
+        val laterAt = permPrefs.getLong("laterAt", 0L)
+        val snoozed = System.currentTimeMillis() - laterAt < 7L * 24 * 3600 * 1000
+        if ((!overlay && !battery) || snoozed) { shellUi.permissionAsk.value = null; return }
+        shellUi.permissionAsk.value = engineer.myapp.gbmobile.ui.PermissionAsk(
+            needBattery = battery, needOverlay = overlay,
+            dutch = java.util.Locale.getDefault().language == "nl",
+            onBattery = { requestBatteryExemption() },
+            onOverlay = { requestOverlayPermission() },
+            onLater = { permPrefs.edit().putLong("laterAt", System.currentTimeMillis()).apply(); shellUi.permissionAsk.value = null },
+        )
     }
 
-    /** Ask Android once to exempt GB from battery optimization, so the foreground service + device ring keep
-     *  polling when the screen is off / the app is backgrounded (Samsung Doze otherwise kills them). */
+    /** Opens "Display over other apps" — only from the card's button. */
+    private fun requestOverlayPermission() {
+        if (android.os.Build.VERSION.SDK_INT < 23) return
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
+        } catch (e: Exception) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)) } catch (e2: Exception) { vm.log("! overlay permission: ${e2.message}") }
+        }
+    }
+
+    /** Asks Android to stop restricting GB's battery — only from the card's button. */
     private fun requestBatteryExemption() {
         try {
-            val pm = getSystemService(android.os.PowerManager::class.java)
-            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
-                vm.log("· asking Android to keep this device connected in the background")
-                @android.annotation.SuppressLint("BatteryLife")
-                val i = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))
-                startActivity(i)
-            }
-        } catch (e: Exception) { vm.log("! battery exemption: ${e.message}") }
+            @android.annotation.SuppressLint("BatteryLife")
+            val i = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName"))
+            startActivity(i)
+        } catch (e: Exception) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (e2: Exception) { vm.log("! battery exemption: ${e2.message}") }
+        }
     }
 
     // JS -> app bridge: injected page code hands results back here.
@@ -4553,6 +4577,11 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         ctrlApiReady = false
         ctrlWeb?.let { cw -> try { (cw.parent as? ViewGroup)?.removeView(cw); cw.destroy() } catch (e: Exception) {} }
         ctrlWeb = null
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshPermissionAsk()   // back from Settings: tick off what was allowed, hide the card when both are
     }
 
     override fun onPause() {

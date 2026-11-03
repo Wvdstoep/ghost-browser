@@ -83,6 +83,8 @@ class ShellUi {
     val pipThumb = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)   // live snapshot of the tab the agent is driving
     val clusterOn = mutableStateOf(false)
     val signInNeeded = mutableStateOf(false)
+    /** The two Android permissions the background work needs, asked in a card (null = nothing to ask). */
+    val permissionAsk = mutableStateOf<PermissionAsk?>(null)
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
@@ -256,6 +258,15 @@ private fun hostOf(url: String): String {
 
 @Composable
 fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
+    Box(Modifier.fillMaxSize()) {
+        AppShellMain(shell, act, webHolder, settingsUi, settingsAct)
+        val ask = shell.permissionAsk.value
+        if (ask != null && !shell.signInNeeded.value) PermissionCard(ask, Modifier.align(Alignment.BottomCenter))
+    }
+}
+
+@Composable
+private fun AppShellMain(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
     val cs = MaterialTheme.colorScheme
     if (shell.signInNeeded.value) {
         Column(Modifier.fillMaxSize().background(cs.background).padding(28.dp), verticalArrangement = Arrangement.Center) {
