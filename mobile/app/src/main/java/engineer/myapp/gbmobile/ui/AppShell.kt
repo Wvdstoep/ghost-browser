@@ -83,8 +83,6 @@ class ShellUi {
     val pipThumb = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)   // live snapshot of the tab the agent is driving
     val clusterOn = mutableStateOf(false)
     val signInNeeded = mutableStateOf(false)
-    /** The two Android permissions the background work needs, asked in a card (null = nothing to ask). */
-    val permissionAsk = mutableStateOf<PermissionAsk?>(null)
     // device hub (native, local render)
     val hubDevices = mutableStateOf<List<HubDevice>>(emptyList())
     val hubSummary = mutableStateOf("")
@@ -258,15 +256,6 @@ private fun hostOf(url: String): String {
 
 @Composable
 fun AppShell(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
-    Box(Modifier.fillMaxSize()) {
-        AppShellMain(shell, act, webHolder, settingsUi, settingsAct)
-        val ask = shell.permissionAsk.value
-        if (ask != null && !shell.signInNeeded.value) PermissionCard(ask, Modifier.align(Alignment.BottomCenter))
-    }
-}
-
-@Composable
-private fun AppShellMain(shell: ShellUi, act: ShellActions, webHolder: FrameLayout, settingsUi: SettingsUi, settingsAct: SettingsActions) {
     val cs = MaterialTheme.colorScheme
     if (shell.signInNeeded.value) {
         Column(Modifier.fillMaxSize().background(cs.background).padding(28.dp), verticalArrangement = Arrangement.Center) {
@@ -862,6 +851,8 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
     local.status.value = ui.modelStatus.value
     local.progress.value = ui.modelProgress.value
     st.local.value = local
+    st.needOverlay.value = ui.needOverlay.value
+    st.needBattery.value = ui.needBattery.value
     val handlers = androidx.compose.runtime.remember(sa, act) {
         engineer.myapp.gb.shared.SettingsHandlers(
             onSaveClusterUrl = sa.onSaveClusterUrl, onSignIn = sa.onSignIn, onSignOut = sa.onSignOut, onConnectToggle = sa.onConnectToggle,
@@ -871,6 +862,7 @@ private fun PhoneSettings(ui: SettingsUi, sa: SettingsActions, shell: ShellUi, a
             onSetTheme = { dark -> sa.onSetTheme(if (dark) 0 else 1) }, onClearLog = sa.onClearLog,
             aiModel = act.aiModel,
             onSetUseLocal = sa.onSetUseLocal, onSelectLocalModel = sa.onSelectModelIndex, onDownloadLocalModel = sa.onDownloadModel,
+            onAllowOverlay = sa.onAllowOverlay, onAllowBattery = sa.onAllowBattery,
         )
     }
     engineer.myapp.gb.shared.SettingsScreenShared(st, shell.aiModel, handlers, onClose = onClose)

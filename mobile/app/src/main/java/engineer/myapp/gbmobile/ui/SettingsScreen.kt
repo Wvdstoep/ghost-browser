@@ -55,6 +55,10 @@ class SettingsUi {
     val log = mutableStateOf("")             // live activity log (restored)
 
     val themeMode = mutableStateOf(0)        // 0 dark, 1 light
+
+    /* The two Android permissions background work needs; the Activity refreshes them on every resume. */
+    val needOverlay = mutableStateOf(false)
+    val needBattery = mutableStateOf(false)
 }
 
 /** Actions wired to the Activity's existing logic (so both UIs drive the same code paths). */
@@ -87,6 +91,9 @@ class SettingsActions(
     val onClearLog: () -> Unit,
     /* The password that opens the instance without the platform, set from the phone too. */
     val onSetPassword: (String) -> Unit = {},
+    /* Open the Android screen for each background permission — only ever from a tap here. */
+    val onAllowOverlay: () -> Unit = {},
+    val onAllowBattery: () -> Unit = {},
 )
 
 @Composable

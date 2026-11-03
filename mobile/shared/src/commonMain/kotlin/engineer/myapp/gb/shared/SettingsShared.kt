@@ -65,6 +65,9 @@ class SettingsState {
     val authMessage = mutableStateOf("")
     /* The on-device model (a phone thing). Null on a device that has none. */
     val local = mutableStateOf<LocalModelUi?>(null)
+    /* The phone's two background permissions ("Display over other apps", battery). False = allowed or not a phone. */
+    val needOverlay = mutableStateOf(false)
+    val needBattery = mutableStateOf(false)
 }
 
 /** The phone's on-device model: a switch, a choice, a download. */
@@ -106,6 +109,9 @@ class SettingsHandlers(
     /* Bearer keys for scripts and other machines - the web console's sheet; null elsewhere. */
     val onOpenApiTokens: (() -> Unit)? = null,
     val onOpenMcpSetup: (() -> Unit)? = null,
+    /* The phone opens the Android screen for each background permission; null hides the card (desktop, web). */
+    val onAllowOverlay: (() -> Unit)? = null,
+    val onAllowBattery: (() -> Unit)? = null,
 )
 
 /**
@@ -246,7 +252,7 @@ private fun SettingsCategory(section: String, state: SettingsState, model: AiMod
         Text(section, color = cs.onSurface, style = MaterialTheme.typography.titleLarge)
         if (wide) when (section) {
             "Account" -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(2f)) { AccountSection(state, h) }
+                Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(12.dp)) { AccountSection(state, h); BackgroundSection(state, h) }
                 if (h.onOpenApiTokens != null) Column(Modifier.weight(1f)) {
                     SettingsCard("API tokens", "Keys for scripts and other devices") {
                         SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
@@ -272,6 +278,7 @@ private fun SettingsCategory(section: String, state: SettingsState, model: AiMod
         } else when (section) {
             "Account" -> {
                 AccountSection(state, h)
+                BackgroundSection(state, h)
                 if (h.onOpenApiTokens != null) SettingsCard("API tokens", "Keys for scripts and other devices") {
                     SGhost("Manage API tokens", Modifier.fillMaxWidth(), h.onOpenApiTokens)
                         h.onOpenMcpSetup?.let { open -> SGhost("MCP setup", Modifier.fillMaxWidth(), open) }
@@ -493,6 +500,43 @@ private fun DevicesSection(s: SettingsState, h: SettingsHandlers) {
             }
         }
         TextButton(onClick = h.onOpenHub) { Text("Open full Device Hub", color = Brand) }
+    }
+}
+
+/*
+ * BACKGROUND WORK — the phone's two Android permissions, asked here and only on a tap. Up to app 0.92 the
+ * app opened both Android screens by itself on every start until allowed; on Samsung the overlay screen is
+ * the whole app list, so a new user's app icon seemed to open Android settings instead of the app.
+ */
+@Composable
+private fun BackgroundSection(s: SettingsState, h: SettingsHandlers) {
+    if (h.onAllowOverlay == null && h.onAllowBattery == null) return
+    SettingsCard("Background work", "Lets this device run tasks while the app is closed or the screen is off") {
+        PermissionRow(
+            allowed = !s.needOverlay.value, title = "Display over other apps",
+            hint = "Lets the app reopen itself when a task arrives. Android shows a list of apps: find GB Mobile, switch it on, then go back.",
+            button = "Allow", onAllow = h.onAllowOverlay,
+        )
+        Spacer(Modifier.height(12.dp))
+        PermissionRow(
+            allowed = !s.needBattery.value, title = "Unrestricted battery",
+            hint = "Stops Android from pausing the app when the screen is off. Android asks once: choose Allow.",
+            button = "Allow", onAllow = h.onAllowBattery,
+        )
+    }
+}
+
+@Composable
+private fun PermissionRow(allowed: Boolean, title: String, hint: String, button: String, onAllow: (() -> Unit)?) {
+    val cs = MaterialTheme.colorScheme
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (allowed) "Allowed" else hint, color = cs.onSurfaceVariant, fontSize = 12.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        if (allowed) Icon(Icons.Default.CheckCircle, null, tint = cs.secondary, modifier = Modifier.size(20.dp))
+        else if (onAllow != null) SPrimary(button, Modifier, onAllow)
     }
 }
 
