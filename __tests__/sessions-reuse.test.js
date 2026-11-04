@@ -33,7 +33,8 @@ describe('POST /v1/sessions with reuse', () => {
     // the reuse block only returns when something matched; createSession follows with the profile
     expect(handler).toMatch(/if \(existing\) return res\.json/);
     // a generous window: the single-browser block now sits between the preset setup and this call
-    expect(src.slice(at, at + 4200)).toMatch(/pool\.createSession\(\{[\s\S]{0,320}profile: profileName/);
+    // (the window grew 4200 → 4800 when the handler gained where-it-runs, placeSession, 2026-11-04)
+    expect(src.slice(at, at + 4800)).toMatch(/pool\.createSession\(\{[\s\S]{0,320}profile: profileName/);
   });
 
   it('keeps the old meaning for a caller that names no profile', () => {

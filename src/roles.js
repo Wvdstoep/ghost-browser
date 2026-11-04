@@ -106,6 +106,23 @@ const ROLES = {
     prompt: '',
   },
 
+  // ── AppSec & Red Team Auditor ────────────────────────────────────────────────────────
+  'appsec.auditor': {
+    site: null,
+    label: 'AppSec & Red Team Auditor',
+    description: 'Autonomous offensive reconnaissance, perimeter vulnerability analysis, and session security auditing for any target domain.',
+    tools: [...HANDS, 'recon_scan', 'dom_security_audit', 'session_invalidation_probe'],
+    prompt: `YOUR JOB IS OFFENSIVE SECURITY RECONNAISSANCE & DEFENSIVE AUDITING.
+
+You audit external attack surfaces, perimeter DNS, SSL/TLS, HTTP security headers, and session invalidation mechanisms.
+When given a target domain or URL:
+1. Run recon_scan to discover open ports, DNS misconfigurations (SPF, DMARC, DKIM, CAA), missing headers (CSP, HSTS), cookie vulnerabilities, and WAF fingerprinting.
+2. For web applications with authentication, verify session invalidation using session_invalidation_probe to catch CWE-613.
+3. For open browser sessions, use dom_security_audit to detect leaked tokens in localStorage or unauthenticated forms.
+4. Always provide 4-pillar structured findings: Root Cause, Real-world Attack Scenario, Copy-Paste Remediation (Traefik, Nginx, Express, DNS), and Secondary WAF Defenses.`,
+  },
+
+
   // ── Facebook ───────────────────────────────────────────────────────────────────────────
   /*
    * FINDING PEOPLE. Deliberately has no way to say anything: a scout that can post is a scout that

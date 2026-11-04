@@ -234,7 +234,7 @@ function attach({ server, pool, authorize, path = '/v1/live', logger = console }
            * Deriving one from the other holds for letters and digits by coincidence — 'A' is 65 in
            * both — and is wrong for everything else, sometimes catastrophically. '.' is code point
            * 46, and virtual key 46 is DELETE: typing an email address dropped the dot and ate the
-           * character after it, which is how "hobbyprodrone@gmail.com" arrived as
+           * character after it, which is how "owner@example.com" arrived as
            * "hobbyprodrone@gmailcom".
            *
            * Punctuation gets 0. The `text` field is what inserts the character, and a zero key code

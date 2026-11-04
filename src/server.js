@@ -535,12 +535,17 @@ app.post('/v1/sessions', async (req, res) => {
       }
     }
 
+    const place = placeSession(req, profileName); if (place.refusal) return res.status(409).json(place.refusal);
+
     const s = await pool.createSession({
       owner: req.client.owner, maxConcurrent: req.client.maxConcurrent,
       reserved: !!req.client.console,   // the owner is never refused for the session limit — see pool.createSession
       profile: profileName,
       takeover: !!(req.body && req.body.takeover),
     });
+    const live = pool.get(s.sessionId);
+    if (live && place.where === 'cluster') live.stayOnCluster = true;
+    if (live && place.device) { sessionRing.attach(live, ringOwners(req), { device: place.device }); s.onDevice = place.device.name; }
     // Opened where a person setting up a login actually wants to be, rather than on a home page
     // that will redirect them somewhere else first.
     if (preset) s.startUrl = preset.start;
@@ -936,7 +941,7 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
     await assertPublicUrl(target);
 
     // Already on a device, or a host that walled the server's address recently: go (straight) there.
-    const known = sessionRing.knownWall(target);
+    const known = s.stayOnCluster ? '' : sessionRing.knownWall(target);
     const wasOnDevice = !!s.ring;
     if (wasOnDevice || (known && sessionRing.attach(s, ringOwners(req)))) {
       return res.json({ ...(await sessionRing.navigate(s, target)), ...(!wasOnDevice ? { handedOver: true, reason: known } : {}) });
@@ -966,7 +971,7 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
      */
     const sample = await s.page.evaluate(() => (document.body && document.body.innerText || '').slice(0, 4000)).catch(() => '');
     const wall = sessionRing.looksWalled({ status, title, sample });
-    if (wall) {
+    if (wall && !s.stayOnCluster) {
       sessionRing.remember(target, wall);
       if (sessionRing.attach(s, ringOwners(req))) {
         return res.json({ ...(await sessionRing.navigate(s, target)), handedOver: true, reason: wall });
@@ -974,7 +979,21 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
       return res.json({ url: landed, status, title, walled: wall,
         hint: 'No device with a home connection is online for this browser. Open the Ghost Browser app on the phone (or the desktop app) and try again.' });
     }
-    res.json({ url: landed, status, title });
+    /*
+     * A SIGN-IN PAGE, AND THE LOGIN IS ON A DEVICE: go there. Only to a device that holds this session's
+     * profile — that is where the owner signed in. The cluster copy stays as it is (never signed in for them).
+     */
+    const signIn = !s.stayOnCluster && !wall && sessionRing.signInPage({ url: landed, title });
+    if (signIn) {
+      const r = pickDeviceFor(req, { profile: s.profile || 'default' });
+      if (r.device && sessionRing.attach(s, ringOwners(req), { device: r.device })) {
+        const reason = `${signIn}: this browser's "${s.profile || 'default'}" profile is not signed in there, ${r.device.name} holds the same profile`;
+        return res.json({ ...(await sessionRing.navigate(s, target)), handedOver: true, reason });
+      }
+      return res.json({ url: landed, status, title, signInRequired: signIn,
+        hint: `This profile is not signed in here. ${r.reason} The owner signs in once (never you); then try again, or open the session with device "device" or a device name.` });
+    }
+    res.json({ url: landed, status, title, ...(wall ? { walled: wall, stayedOnCluster: true } : {}) });
   } catch (e) { fail(res, e); }
 });
 
@@ -1487,6 +1506,45 @@ const sessionRing = require('./sessionRing').createSessionRing({
   log,
 });
 const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
+/*
+ * WHICH DEVICE MAY RUN THIS SESSION: the caller's own online devices with a home connection (or, for an
+ * organ or platform-tool key, the install's when they all belong to one person — pickDevice's rule), that
+ * hold the profile under some name (deviceProfile.js). `name` picks one of them; else the desktop first.
+ * Always returns the reason, so a refusal tells Claude what the owner can do about it.
+ */
+/*
+ * WHERE A NEW SESSION RUNS, CHOSEN BY THE CALLER (browser_open { device }, 2026-11-04). "auto" (the default):
+ * the cluster, moving to a device by itself at a wall, a marketplace or a sign-in page whose login a device
+ * holds. "cluster": never move. "device": straight to the owner's phone or desktop that holds the profile.
+ * Or a device's name from browser_profiles. Decided before the session opens, so a refusal costs nothing.
+ */
+function placeSession(req, profileName) {
+  const where = String((req.body && req.body.device) || 'auto').trim();
+  if (where === 'auto' || where === 'cluster') return { where };
+  const r = pickDeviceFor(req, { name: where === 'device' ? '' : where, profile: profileName || 'default' });
+  if (r.device) return { where, device: r.device };
+  return { where, refusal: { error: r.reason, devices: r.devices,
+    hint: 'Open the Ghost Browser app on that device (or add the profile there), or open the session with device "auto" or "cluster".' } };
+}
+function pickDeviceFor(req, { name = '', profile = 'default' } = {}) {
+  const { deviceProfileFor } = require('./deviceProfile');
+  const owners = ringOwners(req).filter(Boolean);
+  const all = deviceHub.deviceList().filter((d) => d.online && d.caps && d.caps.realIp);
+  let mine = all.filter((d) => owners.includes(d.owner));
+  if (!mine.length && new Set(all.map((d) => d.owner)).size === 1) mine = all;
+  const devices = mine.map((d) => ({ name: d.name, platform: d.caps.platform || '', holdsProfile: !!deviceProfileFor(d.caps, profile) }));
+  let pool_ = mine;
+  if (name) {
+    pool_ = mine.filter((d) => String(d.name).toLowerCase() === name.toLowerCase());
+    if (!pool_.length) return { device: null, devices, reason: `No online device called "${name}" (online: ${devices.map((d) => d.name).join(', ') || 'none'}).` };
+  }
+  const holding = pool_.filter((d) => deviceProfileFor(d.caps, profile));
+  if (!holding.length) return { device: null, devices, reason: pool_.length
+    ? `${pool_.map((d) => d.name).join(', ')} ${pool_.length > 1 ? 'do' : 'does'} not hold the profile "${profile}".`
+    : 'No device of the owner is online with a home connection.' };
+  const d = holding.find((x) => x.caps.platform === 'desktop') || holding[0];
+  return { device: { deviceId: d.deviceId, name: d.name, caps: d.caps }, devices, reason: `${d.name} holds "${profile}".` };
+}
 
 /*
  * WHICH PROFILE, AND WHAT IT HOLDS. A caller (Claude through MCP) picks the profile a site needs, so it has
@@ -1503,7 +1561,7 @@ app.get('/v1/browser-profiles', authed, (req, res) => {
       name: d.name, platform: (d.caps && d.caps.platform) || '', homeConnection: !!(d.caps && d.caps.realIp),
       profiles: ((d.caps && d.caps.profiles) || []).map((n) => String(n).replace(/^p_/, '')),
     }));
-    res.json({ default: 'default', note: '"default" is the owner\'s main profile, signed in with their Google account. Pass a profile name to browser_open; marketplaces and walled sites run on a device with a home connection in the same profile.', profiles: here, devices });
+    res.json({ default: 'default', note: '"default" is the owner\'s main profile, signed in with their Google account. Pass a profile name to browser_open; marketplaces, walled sites and sign-in pages whose login is on a device move to that device by themselves. A profile a device lists under devices[].profiles can also be opened there directly: browser_open { profile, device: "device" or the device name }.', profiles: here, devices });
   } catch (e) { fail(res, e); }
 });
 /* DURABLE DEVICE LOGIN: the app signs in ONCE through the SSO handoff (this call rides that cookie), gets a

@@ -10,7 +10,7 @@ const string = (description) => ({ type: 'string', minLength: 1, description });
 const id = string('Browser session ID returned by browser_open.');
 const tools = [
   ['browser_profiles', 'List the browser profiles and what each is signed in to or used for, on this browser and on the owner\'s devices. "default" is the owner\'s main profile, signed in with their Google account. Call this before browser_open when a site needs a login.', {}, []],
-  ['browser_open', 'Open an isolated browser session. Pass profile to use a signed-in profile from browser_profiles (default: "default"). Close it when finished.', { profile: string('Profile name from browser_profiles, e.g. "default".') }, []],
+  ['browser_open', 'Open an isolated browser session. Pass profile to use a signed-in profile from browser_profiles (default: "default"). device chooses where it runs: "auto" (default) = this browser, moving to the owner\'s phone or desktop by itself at a refusal, a marketplace, or a sign-in page whose login that device holds; "device" = straight to the owner\'s device that holds this profile (use it when browser_profiles lists the profile on a device and the login lives there); a device name from browser_profiles = that device; "cluster" = never move. Close it when finished.', { profile: string('Profile name from browser_profiles, e.g. "default".'), device: string('"auto", "device", "cluster", or a device name from browser_profiles.') }, []],
   ['browser_list', 'List your open browser sessions.', {}, []],
   ['browser_navigate', 'Navigate to a public HTTP(S) URL in your session.', { sessionId: id, url: string('Public URL to visit.') }, ['sessionId', 'url']],
   ['browser_analyze', 'Inspect the current page and return numbered interactive elements.', { sessionId: id }, ['sessionId']],
@@ -66,7 +66,7 @@ function createHandler({ requestApi }) {
         const session = args.sessionId && encodeURIComponent(args.sessionId);
         const base = `/v1/sessions/${session}`;
         const routes = {
-          browser_open: ['POST', '/v1/sessions', args.profile ? { profile: String(args.profile) } : {}], browser_list: ['GET', '/v1/sessions'],
+          browser_open: ['POST', '/v1/sessions', { ...(args.profile ? { profile: String(args.profile) } : {}), ...(args.device ? { device: String(args.device) } : {}) }], browser_list: ['GET', '/v1/sessions'],
           browser_profiles: ['GET', '/v1/browser-profiles'],
           browser_navigate: ['POST', `${base}/navigate`, { url: args.url }],
           browser_analyze: ['GET', `${base}/analyze?screenshot=false`],

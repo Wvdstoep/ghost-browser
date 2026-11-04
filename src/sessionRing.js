@@ -124,6 +124,26 @@ function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch (_) { return ''; }
 }
 
+/*
+ * A SIGN-IN PAGE WHERE A LOGIN WAS EXPECTED. Measured 2026-11-04: the owner signed in to Google in the
+ * "default" profile on the phone, but the cluster's "default" had no Google session (a Google login does
+ * not travel with a cookie sync), so Merchant Center answered with its public page and the sign-in form.
+ * That is not a wall — the site lets the server in — but the login lives on the device. When the device
+ * holds the same profile, the session moves there (the server decides, sessionRing only recognises it).
+ */
+const SIGNIN_HOSTS = /^(accounts\.google\.com|login\.microsoftonline\.com|login\.live\.com|www\.facebook\.com|m\.facebook\.com|www\.linkedin\.com|www\.amazon\.[a-z.]+|login\.aliexpress\.com)$/i;
+const SIGNIN_PATH = /(^|\/)(signin|sign-in|login|log-in|logon|servicelogin|accountchooser|identifier|checkpoint|uas\/login|ap\/signin)(\/|$|\?)/i;
+const SIGNIN_TITLE = /^(sign in|log in|login|inloggen|aanmelden|zaloguj|anmelden|se connecter|iniciar sesi[oó]n)\b|sign in - google accounts|inloggen - google-accounts/i;
+function signInPage({ url = '', title = '' } = {}) {
+  let u; try { u = new URL(url); } catch (_) { return ''; }
+  const host = u.hostname.toLowerCase();
+  const path = u.pathname + (u.search ? '?' : '');
+  if ((SIGNIN_HOSTS.test(host) && SIGNIN_PATH.test(path)) || (SIGNIN_PATH.test(path) && SIGNIN_TITLE.test(String(title).trim()))) {
+    return `${host} asked to sign in`;
+  }
+  return '';
+}
+
 /** Does this landing look like a wall rather than the page? `sample` = the first bit of its text. */
 function looksWalled({ status, title = '', sample = '' } = {}) {
   if (WALL_STATUS.has(Number(status))) return `the site answered HTTP ${status} to the server's address`;
@@ -227,10 +247,14 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     },
     remember(url, why) { const h = hostOf(url); if (h) walledHosts.set(h, { until: now() + REMEMBER_MS, why }); },
 
-    /** Move this session to a device with a home connection. Returns the device, or null when none is online. */
-    attach(s, owners) {
+    signInPage,
+    /**
+     * Move this session to a device with a home connection. Returns the device, or null when none is online.
+     * `device` is one the caller already chose (browser_open { device }, or the device that holds a login).
+     */
+    attach(s, owners, { device = null } = {}) {
       if (s.ring) return s.ring;
-      const dev = pickDevice(owners);
+      const dev = device || pickDevice(owners, { profile: s.profile });
       if (!dev) return null;
       // The device runs the session in the profile the session was opened with, under the name the device
       // holds it by (deviceProfile.js). One it does not hold goes as the plain name: the app refuses it and
@@ -353,4 +377,4 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   };
 }
 
-module.exports = { createSessionRing, looksWalled, unwrap, toElements, hostOf, regionScriptFor, marketUrl, WALL_STATUS, CONSENT_JS, PRODUCT_JS };
+module.exports = { createSessionRing, signInPage, looksWalled, unwrap, toElements, hostOf, regionScriptFor, marketUrl, WALL_STATUS, CONSENT_JS, PRODUCT_JS };

@@ -49,9 +49,9 @@ describe('an account chooser is its own answer, not a missing login', () => {
 
 describe('which account is configured, never inferred', () => {
   it('picks the configured account when the chooser is up', () => {
-    const d = decide(CHOOSER, 'owner@gmail.com');
+    const d = decide(CHOOSER, 'owner@example.org');
     expect(d.act).toBe('pick');
-    expect(d.email).toBe('owner@gmail.com');
+    expect(d.email).toBe('owner@example.org');
   });
 
   /*
@@ -72,12 +72,12 @@ describe('which account is configured, never inferred', () => {
   });
 
   it('is case and whitespace tolerant about the configured address', () => {
-    expect(decide(CHOOSER, '  Owner@Gmail.COM ').email).toBe('owner@gmail.com');
+    expect(decide(CHOOSER, '  Owner@Example.ORG ').email).toBe('owner@example.org');
   });
 
   it('does nothing at all when the page is not a chooser, configured or not', () => {
-    expect(decide('https://search.google.com/search-console', 'owner@gmail.com').act).toBe('none');
-    expect(decide(SIGNIN, 'owner@gmail.com').act).toBe('none');   // a wall is the wall detector's job
+    expect(decide('https://search.google.com/search-console', 'owner@example.org').act).toBe('none');
+    expect(decide(SIGNIN, 'owner@example.org').act).toBe('none');   // a wall is the wall detector's job
   });
 });
 
@@ -146,16 +146,16 @@ describe('signed out, challenged, or actually in', () => {
    * as a Google penalty, because that misreading already shut the whole search channel once.
    */
   it('blames the missing login, not Google, and says who to sign in as', () => {
-    const r = googleState(INSIDE, [], 'wesley.biab@gmail.com');
+    const r = googleState(INSIDE, [], 'owner.example@example.org');
     expect(r.state).toBe('signed-out');
     expect(r.why).toMatch(/no Google session/i);
     expect(r.why).toMatch(/by hand/i);
-    expect(r.why).toContain('wesley.biab@gmail.com');
+    expect(r.why).toContain('owner.example@example.org');
     expect(r.why).toMatch(/not a Google permission problem/i);
   });
 
   it('reports a challenge as a wall to be signed in by hand, never pushed through', () => {
-    const r = googleState(CH_PK, LIVE, 'wesley.biab@gmail.com');
+    const r = googleState(CH_PK, LIVE, 'owner.example@example.org');
     expect(r.state).toBe('challenge');
     expect(r.why).toMatch(/re-verify/i);
     expect(r.why).toMatch(/by hand/i);
@@ -167,7 +167,7 @@ describe('signed out, challenged, or actually in', () => {
   });
 
   it('says plainly when it is actually inside', () => {
-    const r = googleState(INSIDE, LIVE, 'wesley.biab@gmail.com');
+    const r = googleState(INSIDE, LIVE, 'owner.example@example.org');
     expect(r.state).toBe('in');
     expect(r.why).toBe('');
   });

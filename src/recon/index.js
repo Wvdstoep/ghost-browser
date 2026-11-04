@@ -48,6 +48,7 @@ const targetWorkspace = require('./targetWorkspace');
 
 
 // Multi-Layer AppSec Pipelines
+const deepSpiderPipeline = require('./deepSpiderPipeline');
 const bolaLifecyclePipeline = require('./bolaLifecyclePipeline');
 const reachabilityProofPipeline = require('./reachabilityProofPipeline');
 const blindDetectionPipeline = require('./blindDetectionPipeline');
@@ -103,6 +104,7 @@ module.exports = {
   ...oauthPkceAuditor,
   ...businessLogicAuditor,
   ...targetWorkspace,
+  ...deepSpiderPipeline,
   ...bolaLifecyclePipeline,
   ...reachabilityProofPipeline,
   ...blindDetectionPipeline,

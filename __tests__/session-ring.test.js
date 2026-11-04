@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { createSessionRing, looksWalled, unwrap, toElements, regionScriptFor } = require('../src/sessionRing');
+const { createSessionRing, signInPage, looksWalled, unwrap, toElements, regionScriptFor } = require('../src/sessionRing');
 
 function phone() {
   const calls = [];
@@ -225,5 +225,43 @@ describe('the session profile on the device', () => {
     seen.length = 0;
     const b = { id: 'b', profile: 'default' }; ring.attach(b, ['me']); await ring.scroll(b, 100);
     expect(seen.every((x) => x.profile === undefined)).toBe(true);
+  });
+});
+
+/*
+ * WHERE A SESSION RUNS IS THE CALLER'S CHOICE TOO (2026-11-04). The owner signed in to Google in "default"
+ * on the phone; the cluster's "default" had no Google session and Merchant Center showed its sign-in page.
+ */
+describe('a sign-in page where a login was expected', () => {
+  it('recognises the sign-in pages of the sites people sign in to', () => {
+    expect(signInPage({ url: 'https://accounts.google.com/v3/signin/identifier?flowName=GlifWebSignIn', title: 'Sign in - Google Accounts' })).toMatch(/accounts\.google\.com asked to sign in/);
+    expect(signInPage({ url: 'https://accounts.google.com/ServiceLogin?continue=x', title: '' })).toMatch(/sign in/);
+    expect(signInPage({ url: 'https://www.linkedin.com/uas/login', title: 'LinkedIn Login' })).toMatch(/linkedin/);
+    expect(signInPage({ url: 'https://shop.example.com/login', title: 'Inloggen' })).toMatch(/asked to sign in/);
+  });
+  it('does not take an ordinary page for one', () => {
+    expect(signInPage({ url: 'https://business.google.com/pl/merchant-center/', title: 'Merchant Center' })).toBe('');
+    expect(signInPage({ url: 'https://shop.example.com/login', title: 'Our login bags collection' })).toBe('');
+    expect(signInPage({ url: 'https://accounts.google.com/', title: 'Google Account' })).toBe('');
+    expect(signInPage({ url: 'not a url' })).toBe('');
+  });
+});
+
+describe('a device the caller chose', () => {
+  it('runs the session on that device, not on the one pickDevice would pick', async () => {
+    const { run, calls } = phone();
+    const picked = [];
+    const ring = createSessionRing({ run, pickDevice: (o, opts) => { picked.push(opts); return { deviceId: 'other', name: 'Desktop' }; }, wait: async () => {} });
+    const s = { id: 'm1', profile: 'default' };
+    expect(ring.attach(s, ['me'], { device })).toMatchObject({ deviceId: 'd1', name: 'SM-F926B' });
+    expect(picked).toEqual([]);
+    await ring.scroll(s, 100);
+    expect(calls.every((c) => c.deviceId === 'd1')).toBe(true);
+  });
+  it('without a choice, asks pickDevice for a device holding the session\'s profile', () => {
+    const asked = [];
+    const ring = createSessionRing({ run: async () => ({}), pickDevice: (o, opts) => { asked.push(opts); return device; } });
+    ring.attach({ id: 'm2', profile: 'AliExpress' }, ['me']);
+    expect(asked).toEqual([{ profile: 'AliExpress' }]);
   });
 });

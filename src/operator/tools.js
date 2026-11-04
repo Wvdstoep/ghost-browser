@@ -647,7 +647,7 @@ function registerOperatorTools(reg, ctx, { mode = "all" } = {}) {
 
   
   // ── 6 advanced security auditor tools ──
-  R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials with Gmail alias (e.g. wesley.biab+audit123@gmail.com), fills form, submits, checks the logged-in Gmail inbox for verification links or OTP codes, and establishes an authenticated session in the chosen profile.',
+  R('gb_auth_register', 'AUTONOMOUS ACCOUNT REGISTRATION FOR AUDITING: automatically finds signup/registration on the target website, generates credentials with Gmail alias (e.g. owner+audit123@<the owner’s Gmail>), fills form, submits, checks the logged-in Gmail inbox for verification links or OTP codes, and establishes an authenticated session in the chosen profile.',
     obj({ targetUrl: { type: 'string', description: 'target website or base URL' }, url: { type: 'string', description: 'alias for targetUrl' }, profile: { type: 'string', description: 'browser profile to store the session into (e.g. "audit_tenant_a", "audit_tenant_b", "default")' }, username: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' }, useGmail: { type: 'boolean', description: 'whether to use logged-in Gmail alias (default true)' } }),
     async ({ targetUrl, url, target, profile, username, email, password, useGmail }) => {
       if (!ctx.recon || !ctx.recon.authRegister) return { error: 'Account automation not wired in context' };

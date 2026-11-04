@@ -5,7 +5,7 @@
  * Autonomous Account Creation, Login & Email Verification Engine for Security Recon & Auditing
  *
  * Allows the Ghost Browser agent to:
- *   1. Dynamically generate Gmail-aliased auditor credentials (e.g. wesley.biab+audit123@gmail.com).
+ *   1. Dynamically generate Gmail-aliased auditor credentials (e.g. owner+audit123@<the owner's Gmail>).
  *   2. Automatically discover and submit signup forms on target web applications.
  *   3. Coordinate with the logged-in Google browser profile to check Gmail inbox, extract verification links or OTP codes.
  *   4. Automatically complete email verification and establish authenticated sessions.
@@ -29,7 +29,9 @@ function getGoogleEmail() {
       }
     }
   } catch (_) {}
-  return process.env.GOOGLE_ACCOUNT_EMAIL || 'wesley.biab@gmail.com';
+  // No built-in address: an install without one keeps the local auditor address below (2026-11-04: this
+  // used to fall back to the owner's own Gmail, in the public source too).
+  return process.env.GOOGLE_ACCOUNT_EMAIL || '';
 }
 
 /**
@@ -44,8 +46,8 @@ function generateAuditorCredentials(prefix = 'sec_audit', useGmail = true) {
   const rand = crypto.randomBytes(4).toString('hex');
   let email = `${prefix}.${rand}@recon-auditor.local`;
 
-  if (useGmail) {
-    const baseEmail = getGoogleEmail();
+  const baseEmail = useGmail ? getGoogleEmail() : '';
+  if (baseEmail.includes('@')) {
     const [user, domain] = baseEmail.split('@');
     // Sanitize tag to alphanumeric
     const safeTag = prefix.replace(/[^a-zA-Z0-9]/g, '_');
@@ -56,7 +58,7 @@ function generateAuditorCredentials(prefix = 'sec_audit', useGmail = true) {
     username: `${prefix}_${rand}`,
     email,
     password: `SecAud!t_${crypto.randomBytes(6).toString('base64url')}#9A`,
-    isGmailAlias: !!useGmail
+    isGmailAlias: baseEmail.includes('@')
   };
 }
 
@@ -295,7 +297,7 @@ async function completeEmailVerification(targetPage, { verificationUrl, otp } = 
  * Autonomously registers a new test account on the target web application.
  *
  * Automatically:
- *   - Generates a Gmail alias (e.g. wesley.biab+auditA_123@gmail.com).
+ *   - Generates a Gmail alias (e.g. owner+auditA_123@<the owner's Gmail>).
  *   - Fills and submits the registration form.
  *   - Detects if email verification is requested.
  *   - If googlePage is provided, autonomously opens Gmail, extracts the verification link/OTP, and completes verification!

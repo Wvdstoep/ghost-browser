@@ -204,6 +204,18 @@ function ingestAuditData(targetUrl, auditResult = {}) {
     }
   }
 
+  // 5b. Merge Probed Endpoints (with active security verification status)
+  if (Array.isArray(auditResult.probedEndpoints)) {
+    ws.probedEndpoints = ws.probedEndpoints || [];
+    const existingMap = new Map(ws.probedEndpoints.map(p => [p.path, p]));
+    for (const p of auditResult.probedEndpoints) {
+      if (p && p.path) {
+        existingMap.set(p.path, p);
+      }
+    }
+    ws.probedEndpoints = Array.from(existingMap.values());
+  }
+
   // 6. Update Scorecards & Findings
   if (Array.isArray(auditResult.findings)) {
     ws.findings = auditResult.findings;

@@ -6,3 +6,13 @@ node_modules/
 __pycache__/
 mobile/dist/windows/
 # the browser's own state, not its source: logins, cookies, flows, roles, assets, run journals
+# Built apps are release files, not source (mobile/release-apps.sh builds and publishes them).
+/dist/
+/desktop/dist/
+mobile/dist/*.apk
+mobile/dist/*.sha256
+mobile/desktop/dist/
+mobile/**/build/
+mobile/.gradle/
+mobile/.kotlin/
+mobile/local.properties

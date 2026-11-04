@@ -31,9 +31,11 @@ const files = require('./files');
 const record = require('./record');
 const knowledge = require('./knowledge');
 const craft = require('./craft');
+const security = require('./security');   // recon_scan, dom_security_audit, session_invalidation_probe (appsec.auditor)
 
 /** name → handler. Anything absent is still handled by the switch in agent.js. */
 const REGISTRY = Object.assign({}, memory, profiles, conversation, records, navigate, perceive, images, files, record, knowledge, craft, require('./maps'));
+Object.assign(REGISTRY, security);
 
 /** Is this tool one of the extracted ones? */
 const has = (name) => Object.prototype.hasOwnProperty.call(REGISTRY, name);
