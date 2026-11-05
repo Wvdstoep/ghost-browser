@@ -111,6 +111,9 @@ app.use(express.static(path.join(__dirname, '..', 'public'), {
 
 const pool = new BrowserPool({ logger: log });
 const keys = parseKeys();
+/* Owner-minted API tokens (Settings → API tokens) answer beside the environment keys. See apiTokens.js. */
+const apiTokens = require('./apiTokens');
+apiTokens.extend(keys);
 
 /** Turn a thrown error into the answer it deserves, with the status it carried. */
 const fail = (res, e) => {
@@ -445,6 +448,23 @@ function watchOrAuthed(scope) {
     return next();
   };
 }
+
+/* Settings → API tokens. The signed-in owner only: a key — environment, minted or watch — is refused,
+   so a token handed to a script can never mint itself a successor or revoke the owner's others. */
+function ownerOnly(req, res, next) {
+  if (!req.client || !req.client.console) return res.status(403).json({ error: 'only the signed-in owner can manage API tokens, from the console' });
+  return next();
+}
+app.get('/v1/tokens', authed, ownerOnly, (req, res) => res.json({ tokens: apiTokens.list() }));
+app.post('/v1/tokens', authed, ownerOnly, (req, res) => {
+  try { res.json(apiTokens.mint((req.body || {}).name)); }
+  catch (e) { res.status(500).json({ error: 'could not store the token: ' + e.message }); }
+});
+app.delete('/v1/tokens/:id', authed, ownerOnly, (req, res) => {
+  const ok = apiTokens.revoke(String(req.params.id));
+  if (!ok) return res.status(404).json({ error: 'no such token' });
+  res.json({ revoked: true });
+});
 
 app.use('/v1/sessions', authed);
 
