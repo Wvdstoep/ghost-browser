@@ -37,7 +37,7 @@ const REQUEST_GAP_MS = 2000;
 const TIMEOUT_MS = 25000;
 const MAX_BYTES = 3 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
-const MAX_SOURCES = 40;
+const MAX_SOURCES = 150;
 const MAX_KEYWORDS = 100;
 const MAX_NEW_PER_SOURCE = 25;
 const MAX_BASELINE_HITS = 5;
@@ -67,6 +67,11 @@ function normalizeSources(list) {
       id, name: String(s.name || s.id || u.hostname).trim().slice(0, 80), url: u.toString(),
       lang: /^[a-z]{2}$/i.test(String(s.lang || '')) ? String(s.lang).toLowerCase() : '',
       kind: isTelegram(u) ? 'telegram' : 'page',
+      /* A region label the reader groups by; "all" files every new item, else only keyword hits;
+         a source switched off stays in the list (and in the editor) but is not read. */
+      region: slug(s.region || ''),
+      all: s.all === true,
+      enabled: s.enabled !== false,
     });
     if (out.length >= MAX_SOURCES) break;
   }
@@ -198,7 +203,8 @@ function extractTelegram(html) {
   for (const p of parts) {
     const post = (p.match(/^([A-Za-z0-9_]{3,64}\/\d{1,12})"/) || [])[1];
     if (!post) continue;
-    const body = (p.match(/<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1];
+    /* A reply QUOTES its parent in a js-message_reply_text block first; that is not this post. */
+    const body = (p.match(/<div class="tgme_widget_message_text(?![^"]*reply)[^"]*"[^>]*>([\s\S]*?)<\/div>/) || [])[1];
     const text = clean(body || '');
     if (text.length < 15) continue;
     const when = (p.match(/<time[^>]+datetime="([^"]+)"/) || [])[1] || '';
@@ -239,8 +245,36 @@ function extractHeadlines(html, baseUrl) {
   return out;
 }
 
+/** An RSS or Atom feed: one item per <item>/<entry>, with its link, summary and date. */
+const isFeed = (text) => /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<(rss|feed|rdf:RDF)\b/i.test(String(text || '').slice(0, 2000));
+const cdata = (x) => String(x || '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+function tagOf(block, name) {
+  const m = block.match(new RegExp('<' + name + '\\b[^>]*>([\\s\\S]*?)<\\/' + name + '>', 'i'));
+  return cdata(m ? m[1] : '');
+}
+function extractFeed(xml, baseUrl) {
+  const out = []; const seen = new Set();
+  const blocks = String(xml || '').match(/<(item|entry)\b[\s\S]*?<\/\1>/gi) || [];
+  for (const b of blocks.slice(0, 200)) {
+    const title = clean(decodeEntities(tagOf(b, 'title')));   // feeds often escape their HTML once more
+    let link = clean(tagOf(b, 'link'));
+    if (!link) link = (b.match(/<link\b[^>]*href=["']([^"']+)["']/i) || [])[1] || '';
+    if (!link) link = clean(tagOf(b, 'guid'));
+    const url = canonicalUrl(link, baseUrl);
+    if (!title || !url || seen.has(url)) continue;
+    seen.add(url);
+    const summary = clean(decodeEntities(tagOf(b, 'description') || tagOf(b, 'summary') || tagOf(b, 'content'))).slice(0, SUMMARY_CHARS);
+    const when = clean(tagOf(b, 'pubDate') || tagOf(b, 'updated') || tagOf(b, 'published') || tagOf(b, 'dc:date'));
+    const t = Date.parse(when);
+    out.push({ key: 'url:' + url, url, title: title.slice(0, 200), summary, published: Number.isFinite(t) ? new Date(t).toISOString() : '' });
+  }
+  return out;
+}
+
 function extract(source, html) {
-  return source.kind === 'telegram' ? extractTelegram(html) : extractHeadlines(html, source.url);
+  if (source.kind === 'telegram') return extractTelegram(html);
+  if (isFeed(html)) return extractFeed(html, source.url);
+  return extractHeadlines(html, source.url);
 }
 
 function keywordHits(text, keywords) {
@@ -275,7 +309,7 @@ function mayRun(state, { force = false, now = Date.now() } = {}) {
  * temp dir). Returns a report; per-source status is kept in the state and on the watcher's config.
  */
 async function pass(wid, config, { feed, fetchImpl, lookup, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = () => Date.now(), force = false, log = () => {} } = {}) {
-  const sources = normalizeSources(config && config.sources);
+  const sources = normalizeSources(config && config.sources).filter((x) => x.enabled);
   const keywords = normalizeKeywords(config && config.keywords);
   const state = loadState(wid);
   const gate = mayRun(state, { force, now: now() });
@@ -291,7 +325,7 @@ async function pass(wid, config, { feed, fetchImpl, lookup, sleep = (ms) => new 
     const row = { id: src.id, name: src.name, url: src.url, status: 'ok', found: 0, filed: 0, error: '' };
     try {
       const got = await fetchPage(src.url, { fetchImpl, lookup, lang: src.lang });
-      if (isWall(got.status, pageText(got.html))) {
+      if (!isFeed(got.html) && isWall(got.status, pageText(got.html))) {
         row.status = 'blocked'; row.error = `the server address was refused (HTTP ${got.status})`;
       } else if (got.status >= 400) {
         row.status = 'error'; row.error = `HTTP ${got.status}`;
@@ -303,12 +337,14 @@ async function pass(wid, config, { feed, fetchImpl, lookup, sleep = (ms) => new 
         const baseline = !st.baselineAt;
         let fresh = items.filter((it) => !seen.has(it.key));
         const withHits = fresh.map((it) => ({ it, hits: keywordHits(it.title + ' ' + it.summary, keywords) }));
+        /* A source marked "all" (a border guard, a municipality) files every new item; a general
+           newsroom files only what hits a keyword, or the feed drowns in weather and football. */
         const toFile = baseline
           ? withHits.filter((x) => x.hits.length).slice(0, MAX_BASELINE_HITS)
-          : withHits.slice(0, MAX_NEW_PER_SOURCE);
+          : withHits.filter((x) => src.all || x.hits.length).slice(0, MAX_NEW_PER_SOURCE);
         for (const { it, hits } of toFile) {
-          const r = feed.upsert(wid, { title: it.title, url: it.url, kind: 'source', fields: { source: src.name, sourceId: src.id, lang: src.lang, published: it.published, baseline } });
-          if (r && r.item) feed.mark(wid, r.item.key, { source: src.name, sourceId: src.id, lang: src.lang, summary: it.summary, keywordHits: hits, urgency: urgencyOf(hits), published: it.published });
+          const r = feed.upsert(wid, { title: it.title, url: it.url, kind: 'source', fields: { source: src.name, sourceId: src.id, lang: src.lang, region: src.region, published: it.published, baseline } });
+          if (r && r.item) feed.mark(wid, r.item.key, { source: src.name, sourceId: src.id, lang: src.lang, region: src.region, summary: it.summary, keywordHits: hits, urgency: urgencyOf(hits), published: it.published });
           row.filed += 1;
         }
         for (const it of items) seen.add(it.key);
@@ -335,7 +371,7 @@ function statusOf(wid, config) {
     lastPassAt: state.lastPassAt || 0,
     sources: normalizeSources(config && config.sources).map((s) => {
       const st = state.sources[s.id] || {};
-      return { id: s.id, name: s.name, url: s.url, lang: s.lang, status: st.status || 'not-read-yet', error: st.error || '', lastAt: st.lastAt || 0, found: st.found || 0, filed: st.filed || 0 };
+      return { id: s.id, name: s.name, url: s.url, lang: s.lang, region: s.region, all: s.all, enabled: s.enabled, status: s.enabled ? (st.status || 'not-read-yet') : 'off', error: st.error || '', lastAt: st.lastAt || 0, found: st.found || 0, filed: st.filed || 0 };
     }),
   };
 }
@@ -357,7 +393,7 @@ async function egress({ fetchImpl = fetch } = {}) {
 }
 
 module.exports = {
-  pass, statusOf, egress, mayRun, normalizeSources, normalizeKeywords, extract, extractTelegram, extractHeadlines,
+  pass, statusOf, egress, mayRun, normalizeSources, normalizeKeywords, extract, extractTelegram, extractHeadlines, extractFeed, isFeed,
   keywordHits, isWall, isPrivateIp, assertPublicUrl, fetchPage, decode, loadState,
   MIN_INTERVAL_MS, FORCE_GAP_MS,
 };

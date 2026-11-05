@@ -146,6 +146,49 @@ describe('a pass files only what is new', () => {
   });
 });
 
+describe('feeds, replies and what gets filed', () => {
+  let clock = Date.parse('2026-11-05T08:00:00Z');
+  const rss = (items, host = 'news.err.ee') => '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>ERR</title>'
+    + items.map(([id, t, d]) => `<item><title><![CDATA[${t}]]></title><link>https://${host}/${id}?utm_source=rss</link><description>${d || ''}</description><pubDate>Wed, 04 Nov 2026 10:00:00 GMT</pubDate></item>`).join('') + '</channel></rss>';
+
+  it('reads an RSS feed: title, clean link, unescaped summary, ISO date', () => {
+    const [it] = sw.extract({ kind: 'page', url: 'https://news.err.ee/rss' }, rss([['1', 'Drone spotted over Narva', '&lt;p&gt;An object crossed the &amp;quot;border&amp;quot;&lt;/p&gt;']]));
+    expect(it).toMatchObject({ url: 'https://news.err.ee/1', title: 'Drone spotted over Narva', published: '2026-11-04T10:00:00.000Z' });
+    expect(it.summary).toBe('An object crossed the "border"');
+  });
+
+  it('reads an Atom feed', () => {
+    const atom = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Border guard notice</title><link href="https://raja.fi/en/n/1"/><updated>2026-11-04T09:00:00Z</updated><summary>Text</summary></entry></feed>';
+    expect(sw.extract({ kind: 'page', url: 'https://raja.fi/' }, atom)[0]).toMatchObject({ url: 'https://raja.fi/en/n/1', title: 'Border guard notice' });
+  });
+
+  it('a Telegram reply is the reply, not the message it quotes', () => {
+    const html = '<div class="tgme_widget_message" data-post="motolkohelp/9"><div class="tgme_widget_message_text js-message_reply_text" dir="auto">The quoted parent message text here</div>'
+      + '<div class="tgme_widget_message_text js-message_text" dir="auto">The reply itself, about the border guard committee</div></div>';
+    expect(sw.extractTelegram(html)[0].title).toBe('The reply itself, about the border guard committee');
+  });
+
+  it('a general newsroom files keyword hits only; a source marked "all" files everything new', async () => {
+    const id = wid();
+    const cfg2 = { keywords: ['Narva'], sources: [{ id: 'err', url: 'https://news.err.ee/rss' }, { id: 'ppa', url: 'https://www.politsei.ee/rss', all: true }] };
+    const pages = { first: rss([['0', 'Old news nobody needs']]), second: rss([['0', 'Old news nobody needs'], ['1', 'Football results tonight'], ['2', 'Drone over Narva river']]) };
+    let page = pages.first;
+    const go = () => sw.pass(id, cfg2, { feed, lookup: publicLookup, sleep: noSleep, now: () => clock, fetchImpl: async (u) => res(200, u.includes('politsei') ? page.replace(/news\.err\.ee/g, 'www.politsei.ee') : page, { 'content-type': 'application/rss+xml' }) });
+    await go(); page = pages.second; clock += sw.MIN_INTERVAL_MS; await go();
+    const bySrc = (s) => feed.list(id).filter((i) => i.sourceId === s).map((i) => i.title).sort();
+    expect(bySrc('err')).toEqual(['Drone over Narva river']);
+    expect(bySrc('ppa')).toEqual(['Drone over Narva river', 'Football results tonight']);
+  });
+
+  it('a switched-off source stays in the list and is not read', async () => {
+    const id = wid(); const asked = [];
+    const cfg3 = { keywords: [], sources: [{ id: 'a', url: 'https://a.example/' }, { id: 'b', url: 'https://b.example/', enabled: false }] };
+    await sw.pass(id, cfg3, { feed, lookup: publicLookup, sleep: noSleep, now: () => clock, fetchImpl: async (u) => { asked.push(u); return res(200, '<html></html>'); } });
+    expect(asked).toEqual(['https://a.example/']);
+    expect(sw.statusOf(id, cfg3).sources.map((s) => [s.id, s.status])).toEqual([['a', 'thin'], ['b', 'off']]);
+  });
+});
+
 describe('the address the sources see', () => {
   it('is measured with the same plain fetch and always reports via cluster', async () => {
     const out = await sw.egress({ fetchImpl: async () => res(200, JSON.stringify({ ip: '65.108.13.228', country: 'FI', org: 'AS24940 Hetzner Online GmbH' })) });

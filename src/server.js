@@ -5435,6 +5435,22 @@ app.post('/v1/watchers/sources', authed, (req, res) => {
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
 });
 
+/*
+ * A sources watcher's list and keywords, editable by a watch key with the `sources` scope — so a site's
+ * own admin panel can manage what it watches without ever holding a full key. Only these two fields
+ * are written, normalised exactly as the pass reads them; the mode, schedule and everything else stay.
+ */
+app.put('/v1/watchers/:id/sources', watchOrAuthed('sources'), (req, res) => {
+  const feed = require('./watcherFeed');
+  if (String((feed.getConfig(req.params.id) || {}).mode) !== 'sources') return res.status(400).json({ error: 'not a sources watcher' });
+  const sw = require('./sourceWatch'); const b = req.body || {};
+  const patch = {};
+  if (b.sources !== undefined) { patch.sources = sw.normalizeSources(b.sources); if (!patch.sources.length) return res.status(400).json({ error: 'keep at least one https source' }); }
+  if (b.keywords !== undefined) patch.keywords = sw.normalizeKeywords(b.keywords);
+  const c = feed.setConfig(req.params.id, patch);
+  res.json({ sources: (c.sources || []).length, keywords: (c.keywords || []).length, ...sw.statusOf(req.params.id, c) });
+});
+
 /* Watch keys: minted, listed and revoked by the owner only (a watch key cannot reach these). */
 app.post('/v1/watchers/:id/keys', authed, (req, res) => {
   if (String((require('./watcherFeed').getConfig(req.params.id) || {}).mode) !== 'sources') return res.status(400).json({ error: 'a watch key is only made for a sources watcher' });

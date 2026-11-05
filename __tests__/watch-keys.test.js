@@ -42,6 +42,10 @@ describe('minting and checking', () => {
     expect(wk.allows(rec, 'sessions', 'border-watch')).toBe(false);
     const runner = wk.verify(wk.mint('border-watch', { scopes: ['feed', 'run'] }).key);
     expect(wk.allows(runner, 'run', 'border-watch')).toBe(true);
+    expect(wk.allows(runner, 'sources', 'border-watch')).toBe(false);
+    const editor = wk.verify(wk.mint('border-watch', { scopes: ['feed', 'sources', 'admin'] }).key);
+    expect(editor.scopes).toEqual(['feed', 'sources']);   // an unknown scope is dropped, never granted
+    expect(wk.allows(editor, 'sources', 'other-watcher')).toBe(false);
   });
 
   it('a revoked key stops working', () => {
@@ -57,11 +61,12 @@ describe('minting and checking', () => {
 });
 
 describe('the server opens exactly three routes to it', () => {
-  it('feed, egress and run go through watchOrAuthed; everything else stays authed', () => {
+  it('feed, egress, run and the source list go through watchOrAuthed; everything else stays authed', () => {
     expect(server).toContain("app.get('/v1/watchers/:id/feed', watchOrAuthed('feed')");
     expect(server).toContain("app.get('/v1/egress', watchOrAuthed('egress')");
     expect(server).toContain("app.post('/v1/workflows/:id/run', watchOrAuthed('run')");
-    expect(server.match(/watchOrAuthed\('/g)).toHaveLength(3);
+    expect(server).toContain("app.put('/v1/watchers/:id/sources', watchOrAuthed('sources')");
+    expect(server.match(/watchOrAuthed\('/g)).toHaveLength(4);
     for (const r of ["'/v1/watchers/:id/config', authed", "'/v1/watchers/:id/keys', authed", "'/v1/watchers/:id/feed/approve', authed", "app.use('/v1/sessions', authed)"]) expect(server).toContain(r);
   });
 

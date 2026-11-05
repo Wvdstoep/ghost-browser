@@ -17,7 +17,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PREFIX = 'gbw_';
-const SCOPES = ['feed', 'egress', 'run'];
+const SCOPES = ['feed', 'egress', 'run', 'sources'];   // sources = edit this watcher's source list and keywords, nothing else
 const fileOf = () => path.join(process.env.PROFILE_DIR || '/profiles', 'watch-keys.json');
 const hash = (k) => crypto.createHash('sha256').update(String(k)).digest('hex');
 
