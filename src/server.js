@@ -426,6 +426,26 @@ function authed(req, res, next) {
   return bearer(req, res, next);
 }
 
+/*
+ * THE ONLY DOOR A WATCH KEY FITS (see watchKeys.js). A gbw_ key is let through here for one scope on
+ * one watcher of mode "sources"; anything else falls to `authed`, which does not know watch keys and
+ * refuses them — so a watch key opens these few routes and nothing more.
+ */
+const watchKeys = require('./watchKeys');
+function watchOrAuthed(scope) {
+  return (req, res, next) => {
+    const presented = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '').trim() || String(req.get('x-api-key') || '').trim();
+    if (!watchKeys.isWatchKey(presented)) return authed(req, res, next);
+    const rec = watchKeys.verify(presented);
+    if (!rec) return res.status(401).json({ error: 'this watch key is not valid (revoked or mistyped)' });
+    const wid = req.params.id || rec.watcherId;
+    if (!watchKeys.allows(rec, scope, wid)) return res.status(403).json({ error: `this key may only ${rec.scopes.join(', ')} on watcher ${rec.watcherId}` });
+    if (scope !== 'egress' && String((require('./watcherFeed').getConfig(wid) || {}).mode) !== 'sources') return res.status(403).json({ error: 'a watch key only reaches a sources watcher' });
+    req.client = { owner: 'watch:' + rec.watcherId, watchKey: rec, plan: 'trial', maxConcurrent: 0 };
+    return next();
+  };
+}
+
 app.use('/v1/sessions', authed);
 
 // ── Sessions ────────────────────────────────────────────────────────────────────────────
@@ -5266,10 +5286,18 @@ app.get('/v1/workflows/:id/export', authed, (req, res) => {
   res.json(p);
 });
 app.get('/v1/workflows/:id/runs', authed, (req, res) => res.json({ runs: workflows.runsFor(req.params.id) }));
-app.post('/v1/workflows/:id/run', authed, (req, res) => {
+app.post('/v1/workflows/:id/run', watchOrAuthed('run'), (req, res) => {
   const wf = workflows.read(req.params.id);
   if (!wf) return res.status(404).json({ error: 'No such automation.' });
   const runId = `${wf.id}-${Date.now()}`;
+  /* A sources pass holds no browser, so it neither waits for the watcher gate nor holds it. */
+  if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'sources') {
+    if (sourcePasses.has(wf.id)) return res.json({ runId: null, status: 'busy', mode: 'sources', note: 'a pass of this watcher is already reading its sources' });
+    const gate = require('./sourceWatch').mayRun(require('./sourceWatch').loadState(wf.id), { force: true });
+    if (!gate.ok) return res.status(429).json({ runId: null, status: 'too-soon', mode: 'sources', note: gate.why });
+    startSourcePass(wf, { force: true });
+    return res.json({ runId, status: 'running', mode: 'sources' });
+  }
   /* The run's input, if the caller has one: {"input": {...}} becomes {{input.*}} in every goal. */
   const input = req.body && req.body.input && typeof req.body.input === 'object' ? req.body.input : null;
   if (runningWatchers.size) return res.json({ runId: null, status: 'busy', note: `another watcher pass holds the browser (${[...runningWatchers].join(', ')}) — it starts as soon as that finishes` });
@@ -5364,14 +5392,59 @@ app.get('/v1/workflow-runs/:id', authed, (req, res) => {
   res.json(r);
 });
 // A watcher's deduped, accumulating result feed (only-new, urgency-ranked, handled-aware).
-app.get('/v1/watchers/:id/feed', authed, (req, res) => {
+app.get('/v1/watchers/:id/feed', watchOrAuthed('feed'), (req, res) => {
   try {
     const wf = require('./watcherFeed'); const c = wf.getConfig(req.params.id) || {};
     const hideAfter = Number(c.hideAfterDays) || 14;   // older than this is history, not a to-do
-    const items = wf.list(req.params.id).filter((it) => it.handled || wf.ageDays(it) <= hideAfter).map((it) => ({ ...it, draftState: wf.stateOf(it) }));
-    res.json({ items, counts: wf.counts(req.params.id) });
+    let items = wf.list(req.params.id).filter((it) => it.handled || wf.ageDays(it) <= hideAfter).map((it) => ({ ...it, draftState: wf.stateOf(it) }));
+    const limit = Number(req.query.limit);
+    if (Number.isFinite(limit) && limit > 0) items = items.slice(0, Math.min(500, Math.round(limit)));
+    /* A sources watcher also says how each source stood on its last read (ok / blocked / thin / …). */
+    const extra = String(c.mode) === 'sources' ? require('./sourceWatch').statusOf(req.params.id, c) : {};
+    res.json({ items, counts: wf.counts(req.params.id), ...extra });
   }
   catch (e) { res.json({ items: [], counts: { total: 0, unhandled: 0 } }); }
+});
+
+/* Where the SERVER leaves the internet — the address a sources pass is seen from. The tailnet exit
+   the browser may use is reported beside it, so nobody mistakes one for the other. */
+app.get('/v1/egress', watchOrAuthed('egress'), async (req, res) => {
+  try {
+    const out = await require('./sourceWatch').egress();
+    let browserExit = null;
+    try { const s = await tailscale.status(); browserExit = (s && s.exitNode) || null; } catch (e) { browserExit = null; }
+    res.json({ ...out, browserExit, note: 'a sources watcher reads over this address with no proxy and no device; browser sessions may leave elsewhere' });
+  } catch (e) { res.status(502).json({ error: `could not measure the address: ${e.message}`, via: 'cluster' }); }
+});
+
+/*
+ * A SOURCES WATCHER, MADE IN ONE CALL: the flow (just a schedule) and its config. Hours, not minutes —
+ * sourceWatch refuses to read the same pages more than once an hour anyway.
+ */
+app.post('/v1/watchers/sources', authed, (req, res) => {
+  try {
+    const sw = require('./sourceWatch'); const b = req.body || {};
+    const sources = sw.normalizeSources(b.sources); const keywords = sw.normalizeKeywords(b.keywords);
+    if (!sources.length) return res.status(400).json({ error: 'give at least one https source: [{id, name, url, lang}]' });
+    const hours = Math.max(1, Math.min(24, Math.round(Number(b.everyHours) || 1)));
+    const trigger = { type: 'schedule', every: 'hour', n: hours };
+    const rec = workflows.save({ name: String(b.name || 'Sources watcher'), active: b.active !== false, trigger, nodes: [{ id: 'trigger', type: 'trigger', label: 'Every ' + hours + ' h', trigger }], edges: [] }, wfRoleNames());
+    const wid = (rec && rec.id) || (rec && rec.workflow && rec.workflow.id);
+    require('./watcherFeed').setConfig(wid, { mode: 'sources', sources, keywords, hideAfterDays: Number(b.hideAfterDays) || 30 });
+    res.json({ id: wid, sources: sources.length, keywords: keywords.length, everyHours: hours });
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
+/* Watch keys: minted, listed and revoked by the owner only (a watch key cannot reach these). */
+app.post('/v1/watchers/:id/keys', authed, (req, res) => {
+  if (String((require('./watcherFeed').getConfig(req.params.id) || {}).mode) !== 'sources') return res.status(400).json({ error: 'a watch key is only made for a sources watcher' });
+  try { const b = req.body || {}; res.json(watchKeys.mint(req.params.id, { scopes: b.scopes, label: b.label })); }
+  catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+app.get('/v1/watchers/:id/keys', authed, (req, res) => res.json({ keys: watchKeys.list(req.params.id) }));
+app.delete('/v1/watchers/:id/keys/:kid', authed, (req, res) => {
+  const mine = watchKeys.list(req.params.id).some((k) => k.id === req.params.kid);
+  res.json({ revoked: mine ? watchKeys.revoke(req.params.kid) : false });
 });
 app.post('/v1/watchers/:id/feed/handled', authed, (req, res) => {
   try { const b = req.body || {}; res.json({ ok: require('./watcherFeed').markHandled(req.params.id, b.key, b.handled !== false) }); }
@@ -5585,6 +5658,32 @@ const scheduleDue = (cfg, lastMs, when) => workflows.scheduleDue(cfg, lastMs, wh
  */
 const { RunningWatchers } = require('./runningWatchers');
 const runningWatchers = new RunningWatchers(log);
+
+/*
+ * SOURCES PASSES HAVE THEIR OWN FLAG. They read public pages over plain HTTP from this process (see
+ * sourceWatch.js) and never touch a browser, a profile, the tailnet or a device, so they must not
+ * take the one-browser gate above — nor be held up by it. The same reaping flag, one per watcher.
+ */
+const sourcePasses = new RunningWatchers(log);
+function startSourcePass(wf, { force = false } = {}) {
+  if (sourcePasses.has(wf.id)) return false;
+  sourcePasses.add(wf.id);
+  const feed = require('./watcherFeed');
+  /* Recorded BEFORE it runs, as every non-flow mode does: scheduleDue() reads the last run, and a mode
+     that never records one fires again on the very next tick. */
+  const startedAt = new Date();
+  workflows.persistRun({ id: `${wf.id}-${startedAt.getTime()}`, workflow_id: wf.id, name: wf.name, status: 'done', started_at: startedAt.toISOString(), ended_at: startedAt.toISOString(), steps: [] });
+  require('./sourceWatch').pass(wf.id, feed.getConfig(wf.id) || {}, { feed, force, log: (m) => log.info(m) })
+    .then((r) => {
+      if (!r || !r.ran) { if (r && r.why) log.info(`[source-watch] ${wf.id}: skipped — ${r.why}`); return; }
+      const blocked = r.sources.filter((s) => s.status === 'blocked').length;
+      const ok = r.sources.filter((s) => s.status === 'ok').length;
+      feed.setConfig(wf.id, { lastPass: { at: r.at, status: ok ? 'ok' : 'nothing-read', via: 'cluster', note: `${ok}/${r.sources.length} source(s) read from the server, ${blocked} refused it, ${r.filed} new item(s)` } });
+    })
+    .catch((e) => log.error(`[source-watch] ${wf.id}: ${e.message}`))
+    .finally(() => sourcePasses.delete(wf.id));
+  return true;
+}
 
 /*
  * POST WATCHER PASS. A watcher whose config says mode:"posts" is not driven as a flow: the server
@@ -6211,6 +6310,7 @@ function operatorContext() {
     },
     runWatcher: (id) => {
       const wf = workflows.read(id); if (!wf) return { error: 'no such watcher' };
+      if (String((feed.getConfig(wf.id) || {}).mode) === 'sources') return startSourcePass(wf, { force: true }) ? { runId: `${wf.id}-${Date.now()}`, status: 'running', mode: 'sources' } : { status: 'busy', note: 'a pass of this watcher is already reading its sources' };
       const holder = profileBusy(watcherProfileOf(wf.id));
       if (holder) return { status: 'busy', note: `another pass holds the ${watcherProfileOf(wf.id)} browser (${holder}) — wait with gb_watcher_wait, then run again` };
       runningWatchers.add(wf.id);
@@ -7114,6 +7214,9 @@ async function scheduleTick() {
     if (cfg.type !== 'schedule') continue;
     const last = workflows.runsFor(wf.id, 1)[0];
     if (!scheduleDue(cfg, last ? Date.parse(last.started_at) : 0, when)) continue;
+    /* A SOURCES watcher is read from this server only: before the profile gate, the device ring and the
+       browser gate, none of which it uses — so it can never be moved to the owner's device. */
+    if (String(require('./watcherFeed').getConfig(wf.id).mode) === 'sources') { startSourcePass(wf); continue; }
     const holder = profileBusy(watcherProfileOf(wf.id));
     if (holder) { log.info(`[workflow-sched] "${wf.name}" waits — another pass holds the ${watcherProfileOf(wf.id)} browser (${holder})`); continue; }
     // A Cloudflare-gated platform (LinkedIn) must run on a real device — the phone that holds the login,

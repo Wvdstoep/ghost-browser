@@ -25,11 +25,18 @@ const tools = [
   ['browser_save_image', 'Keep a picture from the current page — by its number from browser_images, or its src — read through this session, so signed-in and generated images (e.g. Google Flow) work. Returns a fileId for browser_upload_file or a shop\'s image import.', { sessionId: id, image: { type: 'integer', minimum: 1 }, src: string('Picture address from browser_images.'), name: string('File name to keep it under.') }, ['sessionId']],
   ['browser_upload_file', 'Put a kept file (fileId from browser_save_image) into a numbered upload button or file field from the most recent analysis, e.g. a product photo as a reference image.', { sessionId: id, index: { type: 'integer', minimum: 1 }, fileId: string('fileId from browser_save_image.') }, ['sessionId', 'index', 'fileId']],
   ['browser_file', 'Show a kept picture (fileId from browser_save_image).', { fileId: string('fileId from browser_save_image.') }, ['fileId']],
+  ['watcher_feed', "Read a watcher's feed: what it found, newest and most urgent first, deduped across passes. A sources watcher also returns how each source stood on its last read (ok, blocked, thin, timeout).", { watcherId: string('The watcher (automation) id.'), limit: { type: 'integer', minimum: 1 } }, ['watcherId']],
+  ['egress_check', 'Where this server leaves the internet: {ip, country, org, via}. A sources watcher reads its pages from exactly this address, never through a device or the tailnet; browserExit says where browser sessions leave, which is a different path.', {}, []],
+  ['watcher_run', 'Start one pass of a watcher now. A sources watcher refuses a pass within five minutes of the last one.', { watcherId: string('The watcher (automation) id.') }, ['watcherId']],
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file'].includes(name),
+  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check'].includes(name),
     destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file'].includes(name), openWorldHint: true },
 }));
+
+/* What a watch key (gbw_, see watchKeys.js) is shown and may call: its watcher, and nothing that drives a browser. */
+const WATCH_TOOL_NAMES = ['watcher_feed', 'egress_check', 'watcher_run'];
+const watchTools = tools.filter((t) => WATCH_TOOL_NAMES.includes(t.name));
 
 function validate(tool, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be an object');
@@ -43,12 +50,13 @@ function validate(tool, args) {
   }
   if (args.sessionId && !/^s-[a-z0-9]+-[a-z0-9]+$/.test(args.sessionId)) throw new Error('Invalid sessionId');
   if (args.fileId && !/^f[0-9a-f]{16}$/.test(args.fileId)) throw new Error('Invalid fileId');
+  if (args.watcherId && !/^[a-zA-Z0-9_.-]{1,120}$/.test(args.watcherId)) throw new Error('Invalid watcherId');
   if (tool.name === 'browser_save_image' && !args.image && !args.src) throw new Error('Give image (a number from browser_images) or src');
 }
 
 const CONNECTOR_ORIGINS = new Set(['https://claude.ai', 'https://claude.com']);
 
-function createHandler({ requestApi }) {
+function createHandler({ requestApi, toolset = tools }) {
   return async (req, res) => {
     // Browser-originated requests are not needed by CLI clients; refuse them to prevent cross-site use.
     // Claude's own connector origins are the exception: claude.ai may present one when it relays a call.
@@ -56,10 +64,10 @@ function createHandler({ requestApi }) {
     if (origin && !CONNECTOR_ORIGINS.has(origin)) return res.status(403).json({ error: 'Browser origins are not supported' });
     const server = new Server({ name: 'ghost-browser', version: '1.0.0' }, { capabilities: { tools: {} } });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: toolset }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       try {
-        const tool = tools.find(t => t.name === params.name);
+        const tool = toolset.find(t => t.name === params.name);
         if (!tool) throw new Error('Unknown tool');
         const args = params.arguments || {};
         validate(tool, args);
@@ -80,6 +88,9 @@ function createHandler({ requestApi }) {
           browser_save_image: ['POST', `${base}/save-image`, { image: args.image, src: args.src, name: args.name }],
           browser_upload_file: ['POST', `${base}/upload-file`, { index: args.index, fileId: args.fileId }],
           browser_file: ['GET', `/v1/files/${encodeURIComponent(String(args.fileId))}/b64`],
+          watcher_feed: ['GET', `/v1/watchers/${encodeURIComponent(String(args.watcherId))}/feed${args.limit ? `?limit=${Number(args.limit)}` : ''}`],
+          egress_check: ['GET', '/v1/egress'],
+          watcher_run: ['POST', `/v1/workflows/${encodeURIComponent(String(args.watcherId))}/run`, {}],
         };
         const [method, path, body] = routes[tool.name];
         const result = await requestApi({ method, path, body, authorization: req.get('authorization') });
@@ -117,8 +128,9 @@ function localApi(port) {
  * the resource metadata (RFC 9728), and it must do so for a revoked or unknown token as well as a
  * missing one — otherwise a revoked connector just fails instead of asking to reconnect.
  */
-function mount(app, { keys, requestApi, challenge = () => 'Bearer' }) {
+function mount(app, { keys, requestApi, challenge = () => 'Bearer', watchKeys = require('./watchKeys') }) {
   const bearer = require('./keys').auth(keys);
+  const watchHandler = createHandler({ requestApi, toolset: watchTools });
   app.all('/mcp', (req, res, next) => {
     /*
      * x-api-key COUNTS TOO, as on every other route (keys.js). The platform reaches a browser on the
@@ -133,6 +145,12 @@ function mount(app, { keys, requestApi, challenge = () => 'Bearer' }) {
       res.set('WWW-Authenticate', challenge(req));
       return res.status(401).json({ error: 'Bearer key required' });
     }
+    /* A watch key gets the watcher tools only; the routes behind them check its watcher and scopes again. */
+    const token = header.replace(/^Bearer\s+/i, '').trim();
+    if (watchKeys.isWatchKey(token)) {
+      if (!watchKeys.verify(token)) { res.set('WWW-Authenticate', 'Bearer error="invalid_token"'); return res.status(401).json({ error: 'invalid_token' }); }
+      return watchHandler(req, res);
+    }
     if (keys.size && !keys.get(header.replace(/^Bearer\s+/i, '').trim())) {
       res.set('WWW-Authenticate', `${challenge(req)}, error="invalid_token"`);
       return res.status(401).json({ error: 'invalid_token' });
@@ -141,4 +159,4 @@ function mount(app, { keys, requestApi, challenge = () => 'Bearer' }) {
   }, createHandler({ requestApi }));
 }
 
-module.exports = { createHandler, localApi, mount, tools };
+module.exports = { createHandler, localApi, mount, tools, watchTools };
