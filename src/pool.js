@@ -762,7 +762,7 @@ class BrowserPool {
       let url = '';
       try { url = s.page && !s.page.isClosed?.() ? s.page.url() : ''; } catch { /* page already gone */ }
       this.putResting(id, { owner: s.owner, profile: s.profile || null, url,
-        ring: s.ring ? { deviceId: s.ring.deviceId, name: s.ring.name, profile: s.ring.profile } : null, closedAt: Date.now(), why });
+        ring: s.ring ? { deviceId: s.ring.deviceId, name: s.ring.name, profile: s.ring.profile } : null, closedAt: Date.now(), unusedMs: Date.now() - (s.lastUsed || Date.now()), why });
     }
     this.sessions.delete(id);
     const mine = this.perOwner.get(s.owner);

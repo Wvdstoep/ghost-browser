@@ -31,8 +31,9 @@ function makeReviver({ pool, log = console, timeoutMs = 45000 }) {
       else if (/^https?:\/\//i.test(rest.url || '') && s.page) {
         await s.page.goto(rest.url, { waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => {});
       }
-      log.info?.(`[pool] ~ ${id} reopened after ${Math.round((Date.now() - rest.closedAt) / 60000)} min ${rest.why} (${rest.profile || 'no profile'}${rest.ring ? `, on ${rest.ring.name}` : ''})`);
-      res.set('X-GB-Revived', encodeURIComponent(JSON.stringify({ url: rest.url || '', profile: rest.profile || null, onDevice: rest.ring ? rest.ring.name : null, closedMinutesAgo: Math.round((Date.now() - rest.closedAt) / 60000) })));
+      const unusedMinutes = Math.round((rest.unusedMs || 0) / 60000), closedMinutesAgo = Math.round((Date.now() - rest.closedAt) / 60000);
+      log.info?.(`[pool] ~ ${id} reopened: closed ${closedMinutesAgo} min ago (${rest.why}, unused ${unusedMinutes} min) (${rest.profile || 'no profile'}${rest.ring ? `, on ${rest.ring.name}` : ''})`);
+      res.set('X-GB-Revived', encodeURIComponent(JSON.stringify({ url: rest.url || '', profile: rest.profile || null, onDevice: rest.ring ? rest.ring.name : null, unusedMinutes, closedMinutesAgo })));
       return next();
     } catch (e) {
       log.warn?.(`[pool] ${id} could not be reopened: ${e.message}`);
@@ -47,7 +48,10 @@ function makeReviver({ pool, log = console, timeoutMs = 45000 }) {
 function revivedNote(header) {
   if (!header) return null;
   let r = {}; try { r = JSON.parse(decodeURIComponent(header)); } catch { /* still say it */ }
-  return `Note: this session had closed after ${r.closedMinutesAgo ?? 'some'} minutes without use and was reopened with the same id`
+  const min = (n) => (n === 1 ? '1 minute' : `${n} minutes`);
+  const unused = Number.isFinite(r.unusedMinutes) && r.unusedMinutes > 0 ? ` after ${min(r.unusedMinutes)} without use` : ' for being unused';
+  const ago = Number.isFinite(r.closedMinutesAgo) ? (r.closedMinutesAgo < 1 ? ' just now' : ` ${min(r.closedMinutesAgo)} ago`) : '';
+  return `Note: this session was closed${ago}${unused} and was reopened with the same id`
     + `${r.profile ? ` in the "${r.profile}" profile (its logins are kept)` : ''}${r.onDevice ? ` on ${r.onDevice}` : ''}`
     + `${r.url ? `, back on ${r.url}` : ''}. The page was loaded again: anything typed or uploaded but not saved is gone — look at the page (browser_analyze or browser_screenshot) before continuing.`;
 }

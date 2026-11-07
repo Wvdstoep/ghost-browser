@@ -45,7 +45,7 @@ function app(pool, owner = 'carla') {
   a.delete('/v1/sessions/:id', (req, res) => { try { pool.get(req.params.id); res.json({ closed: true }); } catch { res.status(404).json({ error: 'no such session' }); } });
   return a;
 }
-const rest = (o = {}) => ({ owner: 'carla', profile: 'facebook', url: 'https://www.facebook.com/profile.php?id=1', ring: null, closedAt: Date.now() - 7 * 60000, why: 'idle', ...o });
+const rest = (o = {}) => ({ owner: 'carla', profile: 'facebook', url: 'https://www.facebook.com/profile.php?id=1', ring: null, closedAt: Date.now() - 7 * 60000, unusedMs: 20 * 60000, why: 'idle', ...o });
 
 describe('a timed-out session is reopened by its next call', () => {
   it('under the same id, in the same profile, back on the same page — and the reply says so', async () => {
@@ -55,7 +55,8 @@ describe('a timed-out session is reopened by its next call', () => {
     expect(pool.created[0]).toMatchObject({ id: 's-1', owner: 'carla', profile: 'facebook' });
     expect(pool.visited).toEqual(['https://www.facebook.com/profile.php?id=1']);
     const note = revivedNote(r.headers['x-gb-revived']);
-    expect(note).toMatch(/closed after 7 minutes without use and was reopened with the same id in the "facebook" profile/);
+    expect(note).toMatch(/was closed 7 minutes ago after 20 minutes without use and was reopened with the same id in the "facebook" profile/);
+    expect(revivedNote(encodeURIComponent(JSON.stringify({ unusedMinutes: 20, closedMinutesAgo: 1 })))).toMatch(/closed 1 minute ago after 20 minutes without use/);
     expect(note).toMatch(/anything typed or uploaded but not saved is gone/);
   });
   it('a session that ran on a device goes back to that device', async () => {
