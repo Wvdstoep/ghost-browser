@@ -399,8 +399,8 @@ describe('a draining pod gets itself replaced', () => {
     expect(src).toMatch(/const DRAIN_IDLE_MS = 2 \* 60 \* 1000;/);
   });
 
-  it('and the ordinary idle limit is unchanged for a pod that is NOT draining', () => {
-    expect(src).toMatch(/idleMs:\s+NUM\(process\.env\.IDLE_MS, 5 \* 60 \* 1000\)/);
+  it('and the ordinary idle limit is unchanged for a pod that is NOT draining (20 min since 2026-11-07; a closed one reopens on use)', () => {
+    expect(src).toMatch(/idleMs:\s+NUM\(process\.env\.IDLE_MS, 20 \* 60 \* 1000\)/);
   });
 
   it('the closing still happens before the exit check, so zero is reached on the same sweep', () => {
@@ -556,7 +556,7 @@ describe('the owner keeps one slot', () => {
   const server = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/server.js'), 'utf8');
 
   it('a reserved session may go one past the ceiling', () => {
-    expect(src).toMatch(/reserved = false \} = \{\}\) \{/);
+    expect(src).toMatch(/reserved = false(, id: reuseId = null)? \} = \{\}\) \{/);   // id: reopening a timed-out session (sessionRevive.js)
     expect(src).toMatch(/this\.sessions\.size >= this\.limits\.maxContexts \+ \(reserved \? 1 : 0\)/);
   });
 

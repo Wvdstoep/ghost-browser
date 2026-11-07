@@ -95,14 +95,17 @@ function createHandler({ requestApi, toolset = tools }) {
         const [method, path, body] = routes[tool.name];
         const result = await requestApi({ method, path, body, authorization: req.get('authorization') });
         if (!result.ok) return { isError: true, content: [{ type: 'text', text: JSON.stringify(result.data) }] };
-        if (tool.name === 'browser_screenshot') return { content: [{ type: 'image', mimeType: result.mimeType || 'image/jpeg', data: result.data }] };
+        // A session that had timed out was reopened for this call: say so, the page was loaded again.
+        const note = require('./sessionRevive').revivedNote(result.revived);
+        const withNote = (out) => (note ? { ...out, content: [...out.content, { type: 'text', text: note }] } : out);
+        if (tool.name === 'browser_screenshot') return withNote({ content: [{ type: 'image', mimeType: result.mimeType || 'image/jpeg', data: result.data }] });
         // A kept file comes back as itself: the picture, plus what it is (a shop import reads the bytes from here).
         if (tool.name === 'browser_file') {
           const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(result.data && result.data.data || ''));
           if (!m) return { isError: true, content: [{ type: 'text', text: 'That file is not a picture.' }] };
           return { content: [{ type: 'image', mimeType: m[1].toLowerCase(), data: m[2] }, { type: 'text', text: JSON.stringify({ fileId: result.data.id, name: result.data.name, mime: m[1].toLowerCase(), bytes: result.data.size }) }] };
         }
-        return { content: [{ type: 'text', text: JSON.stringify(result.data) }] };
+        return withNote({ content: [{ type: 'text', text: JSON.stringify(result.data) }] });
       } catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] }; }
     });
     res.on('close', () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
@@ -119,7 +122,7 @@ function localApi(port) {
     });
     const image = response.ok && response.headers.get('content-type')?.startsWith('image/');
     const data = image ? Buffer.from(await response.arrayBuffer()).toString('base64') : await response.json();
-    return { ok: response.ok, data, mimeType: image ? response.headers.get('content-type').split(';')[0] : undefined };
+    return { ok: response.ok, data, mimeType: image ? response.headers.get('content-type').split(';')[0] : undefined, ...(response.headers.get('x-gb-revived') ? { revived: response.headers.get('x-gb-revived') } : {}) };
   };
 }
 

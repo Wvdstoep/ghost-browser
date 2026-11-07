@@ -467,6 +467,8 @@ app.delete('/v1/tokens/:id', authed, ownerOnly, (req, res) => {
 });
 
 app.use('/v1/sessions', authed);
+// An idle-closed session reopens on its next call, same id, same profile and page (sessionRevive.js).
+app.use('/v1/sessions/:id', require('./sessionRevive').makeReviver({ pool, log }));
 
 // ── Sessions ────────────────────────────────────────────────────────────────────────────
 /*

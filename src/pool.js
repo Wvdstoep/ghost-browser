@@ -45,7 +45,9 @@ const LIMITS = {
    */
   maxContexts:        NUM(process.env.MAX_CONTEXTS, contextsMemoryAffords()),
   maxPagesPerContext: NUM(process.env.MAX_PAGES_PER_CONTEXT, 3),
-  idleMs:             NUM(process.env.IDLE_MS, 5 * 60 * 1000),
+  // 20 minutes (was 5): an AI working a page spends minutes elsewhere between two steps, and 74 sessions in
+  // 40 hours closed under it as 'idle' (2026-11-07). A closed one is reopened on use anyway (sessionRevive.js).
+  idleMs:             NUM(process.env.IDLE_MS, 20 * 60 * 1000),
   ttlMs:              NUM(process.env.SESSION_TTL_MS, 2 * 60 * 60 * 1000),
   memoryPct:          NUM(process.env.MEMORY_LIMIT_PCT, 80),
   sweepMs:            NUM(process.env.SWEEP_MS, 15 * 1000),
@@ -433,6 +435,7 @@ class BrowserPool {
     this.browser = null;
     this.launching = null;
     this.sessions = new Map();   // sessionId → { context, page, owner, createdAt, lastUsed, pages }
+    this.resting = new Map();    // sessionId → what an idle-closed session was, so its id can reopen it (sessionRevive.js)
     this.perOwner = new Map();   // owner → Set(sessionId)
     this.limits = LIMITS;
     this.stats = { created: 0, closedIdle: 0, closedTtl: 0, rejected: 0 };
@@ -488,7 +491,8 @@ class BrowserPool {
    * Create a session. Every rejection here is a deliberate answer, not a failure: the caller is
    * told which limit it hit so a client can queue, back off, or upgrade rather than retry blindly.
    */
-  async createSession({ owner = 'anonymous', maxConcurrent = 1, profile = null, takeover = false, reserved = false } = {}) {
+  async createSession({ owner = 'anonymous', maxConcurrent = 1, profile = null, takeover = false, reserved = false, id: reuseId = null } = {}) {
+    if (reuseId && this.sessions.has(reuseId)) throw Object.assign(new Error('that session is already open'), { status: 409 });
     const cap = this.capacity();
     if (this.draining) {
       this.stats.rejected++;
@@ -637,7 +641,7 @@ class BrowserPool {
         }
       } catch (e) { this.log.warn?.(`[vault] ${safe}: restore skipped (${e.message})`); }
       const page = persistent.pages()[0] || await persistent.newPage();
-      const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const id = reuseId || `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const at = Date.now();
       const session = { id, context: persistent, page, owner, profile: safe, persistent: true, createdAt: at, lastUsed: at, pages: 1, lastAnalysis: null };
       followPopups(persistent, session, this.log);
@@ -666,7 +670,7 @@ class BrowserPool {
     captureFileChoosers(context);
     const page = await context.newPage();
 
-    const id = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = reuseId || `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const now = Date.now();
     const session = { id, context, page, owner, createdAt: now, lastUsed: now, pages: 1, lastAnalysis: null };
     followPopups(context, session, this.log);
@@ -753,6 +757,13 @@ class BrowserPool {
   async close(id, why = 'closed') {
     const s = this.sessions.get(id);
     if (!s) return false;
+    // Closed by the clock, not by its user: remember enough to reopen it under the same id when it is used again.
+    if (why === 'idle' || why === 'expired') {
+      let url = '';
+      try { url = s.page && !s.page.isClosed?.() ? s.page.url() : ''; } catch { /* page already gone */ }
+      this.putResting(id, { owner: s.owner, profile: s.profile || null, url,
+        ring: s.ring ? { deviceId: s.ring.deviceId, name: s.ring.name, profile: s.ring.profile } : null, closedAt: Date.now(), why });
+    }
     this.sessions.delete(id);
     const mine = this.perOwner.get(s.owner);
     if (mine) { mine.delete(id); if (!mine.size) this.perOwner.delete(s.owner); }
@@ -762,6 +773,20 @@ class BrowserPool {
     try { await s.context.close(); } catch { /* already gone */ }
     this.log.info?.(`[pool] - ${id} (${why}) — ${this.sessions.size}/${this.limits.maxContexts}`);
     return true;
+  }
+
+  /* What an idle-closed session was, for two hours, at most 200. Only its own owner may reopen it. */
+  putResting(id, rest) {
+    const now = Date.now();
+    for (const [k, v] of this.resting) if (now - v.closedAt > 2 * 60 * 60 * 1000) this.resting.delete(k);
+    this.resting.set(id, rest);
+    while (this.resting.size > 200) this.resting.delete(this.resting.keys().next().value);
+  }
+  takeResting(id, owner) {
+    const r = this.resting.get(id);
+    if (!r || r.owner !== owner || Date.now() - r.closedAt > 2 * 60 * 60 * 1000) return null;
+    this.resting.delete(id);
+    return r;
   }
 
   /** Idle and expired sessions, plus the memory check that decides whether to stop taking work. */
