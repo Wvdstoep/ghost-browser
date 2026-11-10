@@ -1196,6 +1196,10 @@ app.post('/v1/sessions/:id/mouse', async (req, res) => {
 app.post('/v1/sessions/:id/keys', async (req, res) => {
   try {
     const s = mine(req);
+    if (s.ring) {
+      if (!req.body?.key) return res.status(400).json({ error: 'on a device, type into a numbered field with type; keys takes { key }' });
+      return res.json(await sessionRing.key(s, req.body.key));
+    }
     await s.page.bringToFront().catch(() => {});
 
     if (req.body?.key) {

@@ -346,14 +346,24 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domTypeJs(Number(index) - 1, text) });
       else await call(s, '/v1/type', { index: Number(index) - 1, text: String(text) });
       if (submit) {
-        // The phone's type has no Enter key. Do what Enter does: submit the field's form; a search bar
-        // that is no form (AliExpress) gets the key events, then its own search button is pressed.
-        await call(s, '/v1/eval', { code: SUBMIT_JS }).catch(() => null);
+        /* A real Enter on the phone (app 0.95+), into whatever has focus — a form in a frame included.
+           Measured 2026-11-10: the script below runs in the top page only, so on Google's profile editor
+           its Enter went into Google's own search box. An older app has no key: then do what Enter does —
+           submit the field's form; a search bar that is no form (AliExpress) gets the key events, then its
+           own search button is pressed. */
+        const pressed = await call(s, '/v1/key', { key: 'Enter' }, 30000).then(() => true).catch(() => false);
+        if (!pressed) await call(s, '/v1/eval', { code: SUBMIT_JS }).catch(() => null);
         await wait(SETTLE_MS);
         await acceptCookies(s);
       }
       const here = await info(s);
       return { typed: String(text).length, mode: 'type', url: here.url, onDevice: s.ring.name };
+    },
+    /** One real key on the phone (Enter, Tab, Escape, ArrowDown …), into whatever has focus. */
+    async key(s, key) {
+      await call(s, '/v1/key', { key: String(key) }, 30000);
+      const here = await info(s);
+      return { url: here.url, pressed: String(key), onDevice: s.ring.name };
     },
     async scroll(s, dy) {
       await call(s, '/v1/scroll', { dy: Number(dy) || 400 });

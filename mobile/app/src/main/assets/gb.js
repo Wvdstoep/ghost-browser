@@ -22,12 +22,30 @@
     var t = (el.innerText || el.value || '').replace(PUA, '').trim().replace(/\s+/g, ' ');
     return t.slice(0, 90);
   }
+  /* COVERED IS NOT THERE. Measured 2026-11-10: with Google's profile editor open (a frame over the whole
+   * screen) the search page under it still got numbers 1-36, drawn over the form, and a tap on one of them
+   * hit the form instead. An element on screen is kept only when a tap on it would reach it: one of five
+   * points on it must land on the element itself, inside it, or on something it sits in. */
+  function reachable(el, r) {
+    if (typeof document.elementFromPoint !== 'function') return true;
+    var pts = [[0.5, 0.5], [0.25, 0.3], [0.75, 0.3], [0.25, 0.7], [0.75, 0.7]], onScreen = false;
+    for (var k = 0; k < pts.length; k++) {
+      var x = r.left + r.width * pts[k][0], y = r.top + r.height * pts[k][1];
+      if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+      onScreen = true;
+      var t = document.elementFromPoint(x, y);
+      if (!t || t === el || el.contains(t) || t.contains(el)) return true;
+      if (t.tagName === 'LABEL' && (t.control === el || t.contains(el))) return true;
+    }
+    return !onScreen;   // below the fold: scrolling brings it up
+  }
   function collect() {
-    var sel = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=switch],[onclick],[contenteditable=true],[tabindex]:not([tabindex="-1"])';
+    var sel = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[role=tab],[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=option],[role=combobox],[role=radio],[role=checkbox],[role=switch],[role=treeitem],[onclick],[contenteditable=true],[tabindex]:not([tabindex="-1"])';
     var out = [], seen = new Set();
     document.querySelectorAll(sel).forEach(function (el) {
       if (seen.has(el) || !vis(el)) return;
       var r = el.getBoundingClientRect();
+      if (!reachable(el, r)) return;
       var lab = label(el);
       var txt = cleanText(el) || lab || el.getAttribute('placeholder') || el.name || '';
       var href = el.tagName === 'A' ? (el.getAttribute('href') || '').slice(0, 90) : '';
@@ -151,6 +169,24 @@
     },
     /* A dialog (or a frame holding one) scrolls an inner box, not the window: when the window does not
      * move, scroll the scrollable box under the middle of the screen. */
+    /* Before real keystrokes: focus the field and select what is in it, so the first key replaces it.
+     * Returns how many characters were selected. */
+    select: function (i) {
+      var o = this._els[i]; if (!o) return -1;
+      var el = o.el; try { el.focus(); } catch (e) {}
+      if (el.isContentEditable) {
+        var rg = document.createRange(); rg.selectNodeContents(el);
+        var sl = window.getSelection(); sl.removeAllRanges(); sl.addRange(rg);
+        return (el.textContent || '').length;
+      }
+      try { el.select(); } catch (e) {}
+      return String(el.value || '').length;
+    },
+    /* What the field holds now (to check that the keystrokes landed). */
+    value: function (i) {
+      var o = this._els[i]; if (!o) return null;
+      return o.el.isContentEditable ? (o.el.innerText || '') : String(o.el.value == null ? '' : o.el.value);
+    },
     scroll: function (dy) {
       clearOverlay();
       var before = window.scrollY; window.scrollBy(0, dy);

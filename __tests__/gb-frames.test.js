@@ -81,6 +81,27 @@ describe('a frame on the phone', () => {
     expect(ask({ op: 'text' }).result.text).toContain('Profiel bewerken');
   });
 
+  it('does not number what is hidden under the frame (the page behind a dialog)', () => {
+    const d = top.document;
+    const under = d.createElement('a'); under.href = '/zoeken'; under.textContent = 'Zoekresultaat'; d.body.appendChild(under);
+    rect(under, 50, 200, 120, 30);
+    top.innerWidth = 400; top.innerHeight = 800;
+    const ifr = d.getElementById('f'), btn = d.getElementById('b');
+    d.elementFromPoint = (x, y) => (x >= 10 && x < 310 && y >= 100 && y < 500 ? ifr : x < 80 && y < 30 ? btn : d.body);
+    const texts = top.__gb.mark().map((e) => e.text);
+    expect(texts).toContain('Top');
+    expect(texts).not.toContain('Zoekresultaat');
+  });
+
+  it('selects a field before real keys and reports what it holds', async () => {
+    top.__gb.geo(); await tick(); ask({ op: 'mark' });
+    frame.document.getElementById('name').value = 'Oude naam';
+    expect(ask({ op: 'select', i: 0 }).result).toBe(9);
+    expect(frame.document.activeElement.id).toBe('name');
+    expect(ask({ op: 'value', i: 0 }).result).toBe('Oude naam');
+    expect(ask({ op: 'select', i: 99 }).result).toBe(-1);
+  });
+
   it('answers only a command addressed to it', () => {
     const before = sent.length;
     onMsg({ data: JSON.stringify({ rid: 'r2', fid: 'someone-else', op: 'where' }) });

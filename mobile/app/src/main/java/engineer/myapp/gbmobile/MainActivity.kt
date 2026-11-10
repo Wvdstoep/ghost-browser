@@ -3921,6 +3921,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 "/v1/click_text" -> ringOps.clickText(body.optString("text"), body.optInt("nth", 0))
                 "/v1/click" -> ringOps.click(body.optInt("index", -1))
                 "/v1/type" -> ringOps.type(body.optInt("index", -1), body.optString("text"))
+                "/v1/key" -> ringOps.key(body.optString("key"))
                 "/v1/scroll" -> ringOps.scroll(body.optInt("dy", 600))
                 "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
                 "/v1/fetch" -> fetchInPage(body)

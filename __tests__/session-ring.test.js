@@ -78,6 +78,31 @@ describe('a session on the device', () => {
     expect((await ring.screenshot(s)).data.toString()).toBe('png');
     expect(p.calls.every((c) => c.deviceId === 'd1')).toBe(true);
   });
+  /* 2026-11-10: on Google's profile editor (a form in a frame) the top-page Enter script typed into
+     Google's own search box. A phone with keys gets a real Enter into what has focus. */
+  it('submits with a real Enter on the phone, and falls back to the script on an older app', async () => {
+    const p = phone();
+    const ring = createSessionRing({ run: p.run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's1' }; ring.attach(s, ['me']);
+    await ring.type(s, { index: 1, text: 'Softwarebedrijf', submit: true });
+    expect(p.calls.find((c) => c.path === '/v1/key').body).toEqual({ key: 'Enter' });
+    expect(p.calls.some((c) => c.path === '/v1/eval' && /requestSubmit/.test(c.body.code))).toBe(false);
+
+    const old = [];
+    const oldRun = async (id, spec) => { old.push(spec); return { result: { result: spec.path === '/v1/key' ? '{"error":"unknown path"}' : '"ok"' } }; };
+    const ring2 = createSessionRing({ run: oldRun, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s2 = { id: 's2' }; ring2.attach(s2, ['me']);
+    await ring2.type(s2, { index: 1, text: 'wekker', submit: true });
+    expect(old.some((c) => c.path === '/v1/eval' && /requestSubmit/.test(c.body.code))).toBe(true);
+  });
+  it('presses one key on the phone', async () => {
+    const p = phone();
+    const ring = createSessionRing({ run: p.run, pickDevice: () => device, log: {}, wait: async () => {} });
+    const s = { id: 's1' }; ring.attach(s, ['me']);
+    const r = await ring.key(s, 'ArrowDown');
+    expect(p.calls.find((c) => c.path === '/v1/key').body).toEqual({ key: 'ArrowDown' });
+    expect(r).toMatchObject({ pressed: 'ArrowDown', onDevice: 'SM-F926B' });
+  });
   it('remembers a host that walled the server, for a while', () => {
     let t = 1000;
     const ring = createSessionRing({ run: phone().run, pickDevice: () => device, log: {}, now: () => t });

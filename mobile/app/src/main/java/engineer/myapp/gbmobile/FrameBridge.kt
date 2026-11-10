@@ -50,6 +50,8 @@ class FrameBridge private constructor() {
       case 'coords': return g.coords(m.i);
       case 'coordsText': return g.coordsText(m.text, m.nth || 0);
       case 'type': return g.type(m.i, m.text);
+      case 'select': return g.select(m.i);
+      case 'value': return g.value(m.i);
       case 'scroll': return g.scroll(m.dy);
       case 'clear': return g.clear();
       case 'text': if (!f.off) return { hidden: true }; return { url: f.url, text: String(g.text()).slice(0, 60000) };
@@ -212,11 +214,53 @@ class FrameOps(private val target: () -> WebView?, private val evalGb: (String) 
         return tap(top)
     }
 
+    /** Run a gb.js call on element [index] where it lives (top page or its frame); the raw result. */
+    private fun onElement(index: Int, op: String, extra: JSONObject = JSONObject()): Any? {
+        val f = map[index]
+        if (f == null) {
+            val args = StringBuilder("$index"); if (op == "type") args.append(",").append(JSONObject.quote(extra.optString("text")))
+            val raw = evalGb("window.__gb.$op($args)")
+            return try { JSONObject("{\"v\":$raw}").opt("v") } catch (e: Exception) { null }
+        }
+        val r = bridge()?.ask(JSONObject(extra.toString()).put("op", op).put("i", f.second), listOf(f.first), 1500)?.firstOrNull() ?: return null
+        return r.opt("result")
+    }
+
+    /*
+     * TYPING WITH KEYS. Measured 2026-11-10 on Google's profile editor: setting a field's value filled the
+     * description fine, but the category box never showed its suggestions — Google only accepts a category
+     * picked from that list, and the list answers real key presses. So a field is tapped for real (focus),
+     * what is in it is selected and deleted with a real Delete, and the text arrives key by key. When the
+     * field does not end up holding the text (a character the virtual keyboard map has no key for, a page
+     * that swallows keys), the old way sets it, so typing never gets worse than before.
+     */
     fun type(index: Int, text: String): String {
-        val f = map[index] ?: return evalGb("window.__gb.type($index," + JSONObject.quote(text) + ")")
-        val r = bridge()?.ask(JSONObject().put("op", "type").put("i", f.second).put("text", text), listOf(f.first), 1500)?.firstOrNull()
-            ?: return JSONObject.quote("frame-gone")
-        return JSONObject.quote(r.optString("result", "ok"))
+        val w = target()
+        val coords = if (map[index] != null) frameCoords(map[index]!!.first, JSONObject().put("op", "coords").put("i", map[index]!!.second))
+                     else evalGb("window.__gb.coords($index)")
+        if (w == null || coords.contains("\"err\"") || coords == "null") return JSONObject.quote(setValue(index, text))
+        tap(coords)
+        Thread.sleep(250)
+        val had = (onElement(index, "select") as? Number)?.toInt() ?: -1
+        if (had < 0) return JSONObject.quote(setValue(index, text))
+        if (had > 0) NativeKeys.press(w, android.view.KeyEvent.KEYCODE_DEL)
+        NativeKeys.type(w, text)
+        Thread.sleep(300)
+        val now = onElement(index, "value") as? String
+        if (now != null && now.trim() == text.trim()) return JSONObject.quote("ok")
+        return JSONObject.quote(setValue(index, text) + " (set; keys did not land)")
+    }
+
+    private fun setValue(index: Int, text: String): String =
+        (onElement(index, "type", JSONObject().put("text", text)) as? String) ?: "frame-gone"
+
+    /** One real key on whatever has focus — in the top page or in a frame. */
+    fun key(name: String): String {
+        val w = target() ?: return "{\"error\":\"no browser\"}"
+        val code = NativeKeys.CODES[name.trim().lowercase()] ?: return "{\"error\":" + JSONObject.quote("unknown key: $name") + "}"
+        NativeKeys.press(w, code)
+        Thread.sleep(400)
+        return "{\"pressed\":" + JSONObject.quote(name) + "}"
     }
 
     /** Scroll the page, and a frame that fills most of the screen (a dialog's form) with it. */
@@ -245,5 +289,54 @@ class FrameOps(private val target: () -> WebView?, private val evalGb: (String) 
             sb.append("\n\n── frame ").append(r.optString("origin")).append(" ──\n").append(t)
         }
         return JSONObject.quote(sb.toString())
+    }
+}
+
+/**
+ * Real key presses into a WebView — the same path the on-screen keyboard's hardware twin takes, so the page
+ * gets trusted keydown/keypress/input/keyup wherever focus is, frames included. Call off the UI thread.
+ */
+object NativeKeys {
+    val CODES = mapOf(
+        "enter" to android.view.KeyEvent.KEYCODE_ENTER, "tab" to android.view.KeyEvent.KEYCODE_TAB,
+        "escape" to android.view.KeyEvent.KEYCODE_ESCAPE, "esc" to android.view.KeyEvent.KEYCODE_ESCAPE,
+        "backspace" to android.view.KeyEvent.KEYCODE_DEL, "delete" to android.view.KeyEvent.KEYCODE_FORWARD_DEL,
+        "arrowdown" to android.view.KeyEvent.KEYCODE_DPAD_DOWN, "arrowup" to android.view.KeyEvent.KEYCODE_DPAD_UP,
+        "arrowleft" to android.view.KeyEvent.KEYCODE_DPAD_LEFT, "arrowright" to android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+        "pagedown" to android.view.KeyEvent.KEYCODE_PAGE_DOWN, "pageup" to android.view.KeyEvent.KEYCODE_PAGE_UP,
+        "home" to android.view.KeyEvent.KEYCODE_MOVE_HOME, "end" to android.view.KeyEvent.KEYCODE_MOVE_END,
+        "space" to android.view.KeyEvent.KEYCODE_SPACE,
+    )
+    private val main = Handler(Looper.getMainLooper())
+
+    private fun onMain(block: () -> Unit) {
+        val l = CountDownLatch(1)
+        main.post { try { block() } catch (e: Throwable) {} finally { l.countDown() } }
+        l.await(3, TimeUnit.SECONDS)
+    }
+
+    fun press(w: WebView, code: Int) = onMain {
+        val t = android.os.SystemClock.uptimeMillis()
+        if (!w.hasFocus()) w.requestFocus()
+        w.dispatchKeyEvent(android.view.KeyEvent(t, t, android.view.KeyEvent.ACTION_DOWN, code, 0))
+        w.dispatchKeyEvent(android.view.KeyEvent(t, t + 40, android.view.KeyEvent.ACTION_UP, code, 0))
+    }
+
+    /** Key by key, with a short human pause; a long text goes faster so a description does not take minutes. */
+    fun type(w: WebView, text: String) {
+        val map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
+        val pause = if (text.length > 120) 8L else 35L
+        for (ch in text) {
+            val evs = map.getEvents(charArrayOf(ch))
+            onMain {
+                if (!w.hasFocus()) w.requestFocus()
+                if (evs != null) for (e in evs) w.dispatchKeyEvent(e)
+                else {   // ą, ę, ł … have no key on the virtual map: send the character itself
+                    @Suppress("DEPRECATION")
+                    w.dispatchKeyEvent(android.view.KeyEvent(android.os.SystemClock.uptimeMillis(), ch.toString(), android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0))
+                }
+            }
+            Thread.sleep(pause)
+        }
     }
 }

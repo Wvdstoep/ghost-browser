@@ -42,7 +42,7 @@ class ServiceBrowser(private val ctx: Context) {
 
     companion object {
         val PATHS = setOf("/v1/navigate", "/v1/info", "/v1/content", "/v1/analyze", "/v1/perceive", "/v1/click",
-            "/v1/click_text", "/v1/type", "/v1/scroll", "/v1/screenshot", "/v1/eval")
+            "/v1/click_text", "/v1/type", "/v1/key", "/v1/scroll", "/v1/screenshot", "/v1/eval")
     }
 
     private fun onMain(timeoutS: Long = 10, block: () -> Unit) {
@@ -199,6 +199,7 @@ class ServiceBrowser(private val ctx: Context) {
             "/v1/click" -> ops.click(body.optInt("index", -1))
             "/v1/click_text" -> ops.clickText(body.optString("text"), body.optInt("nth", 0))
             "/v1/type" -> ops.type(body.optInt("index", -1), body.optString("text"))
+            "/v1/key" -> ops.key(body.optString("key"))
             "/v1/scroll" -> ops.scroll(body.optInt("dy", 600))
             "/v1/screenshot" -> screenshot()
             "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
