@@ -717,6 +717,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
     }
 
     override fun evalGb(expr: String): String = evalJs(gbJs + "\n" + expr)
+    private val ringOps by lazy { FrameOps({ cmdTarget() }, { evalGb(it) }, { nativeTapFromCoords(it) }) }
     override fun currentUrl(): String = lastUrl
 
     /** A REAL tap via MotionEvent — trusted input that JS-onClick sites (Facebook rows/buttons) actually
@@ -3884,6 +3885,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(w, VISIBLE_JS, setOf("*"))
             }
         } catch (e: Exception) {}
+        FrameBridge.attach(w, this)   // forms in frames of another site (Google's profile editor) — see FrameBridge
     }
     private fun wakeForCommand() {
         val l = CountDownLatch(1)
@@ -3911,15 +3913,15 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 val l = CountDownLatch(1); runOnUiThread { try { cmdTarget().settings.userAgentString = ua ?: cmdTarget().settings.userAgentString.replace(Regex("\\(X11[^)]*\\)"), "(Linux; Android 13)") } catch (e: Exception) {}; l.countDown() }; l.await(3, TimeUnit.SECONDS) }
             when (path) {
                 "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
-                "/v1/analyze" -> evalGb("window.__gb.mark()")
+                "/v1/analyze" -> ringOps.analyze()
                 "/v1/info" -> evalGb("window.__gb.info()")
-                "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
+                "/v1/content" -> { waitSettle(4000); ringOps.text() }
                 "/v1/posts" -> { waitSettle(5000); evalGb("window.__gb.posts()") }
-                "/v1/perceive" -> { waitSettle(6000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
-                "/v1/click_text" -> nativeTapFromCoords(evalGb("window.__gb.coordsText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")"))
-                "/v1/click" -> nativeTapFromCoords(evalGb("window.__gb.coords(${body.optInt("index", -1)})"))
-                "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
-                "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
+                "/v1/perceive" -> { waitSettle(6000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${ringOps.analyze()},\"text\":${ringOps.text()}}" }
+                "/v1/click_text" -> ringOps.clickText(body.optString("text"), body.optInt("nth", 0))
+                "/v1/click" -> ringOps.click(body.optInt("index", -1))
+                "/v1/type" -> ringOps.type(body.optInt("index", -1), body.optString("text"))
+                "/v1/scroll" -> ringOps.scroll(body.optInt("dy", 600))
                 "/v1/screenshot" -> "{\"png_base64\":\"" + android.util.Base64.encodeToString(screenshotPng(), android.util.Base64.NO_WRAP) + "\"}"
                 "/v1/fetch" -> fetchInPage(body)
                 "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")

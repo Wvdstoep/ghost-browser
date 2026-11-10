@@ -50,7 +50,35 @@
       try { var E = (type.indexOf('pointer') === 0 && window.PointerEvent) ? PointerEvent : MouseEvent; el.dispatchEvent(new E(type, o)); } catch (e) {}
     });
   }
-  function drawOverlay(els) {
+  /* FRAMES. Forms a site keeps on another domain (Google's "Edit profile" lives in a frame of its own)
+   * have their own document, which this script cannot reach from the top page. The app injects this same
+   * script into every frame and talks to each one through its own channel (FrameBridge.kt); what the frame
+   * cannot know is where it sits on the screen. The page above it tells it: geo() sends each visible frame
+   * its box in top-page pixels, and a frame passes the sum on to the frames inside it. Only the frame's own
+   * parent is listened to, and all it can say is a position. */
+  var off = null;
+  function postGeo(ox, oy) {
+    var fs = document.querySelectorAll('iframe,frame'), n = 0;
+    for (var i = 0; i < fs.length; i++) {
+      var f = fs[i], r = f.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4 || r.bottom <= 0 || r.right <= 0) continue;
+      var s = getComputedStyle(f);
+      if (s.visibility === 'hidden' || s.display === 'none' || parseFloat(s.opacity || '1') <= 0.05) continue;
+      var x = ox + r.left + f.clientLeft + (parseFloat(s.paddingLeft) || 0);
+      var y = oy + r.top + f.clientTop + (parseFloat(s.paddingTop) || 0);
+      try { f.contentWindow.postMessage({ __gbgeo: 1, x: x, y: y }, '*'); n++; } catch (e) {}
+    }
+    return n;
+  }
+  if (window !== window.top) {
+    window.addEventListener('message', function (e) {
+      if (e.source !== window.parent || !e.data || e.data.__gbgeo !== 1) return;
+      off = { x: +e.data.x || 0, y: +e.data.y || 0 };
+      postGeo(off.x, off.y);
+    });
+  }
+  function drawOverlay(els, base) {
+    base = base || 0;
     clearOverlay();
     var c = document.createElement('div'); c.id = '__gbmarks';
     c.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483646;pointer-events:none';
@@ -59,7 +87,7 @@
       box.style.cssText = 'position:fixed;left:' + o.x + 'px;top:' + o.y + 'px;width:' + o.w + 'px;height:' + o.h +
         'px;outline:1.5px solid rgba(82,206,103,.85);background:rgba(82,206,103,.06);pointer-events:none;box-sizing:border-box';
       var b = document.createElement('div');
-      b.textContent = i;
+      b.textContent = i + base;
       b.style.cssText = 'position:fixed;left:' + o.x + 'px;top:' + Math.max(0, o.y - 1) + 'px;transform:translateY(-100%);' +
         'background:#52CE67;color:#04140A;font:700 11px/1.2 monospace;padding:1px 4px;border-radius:4px 4px 4px 0;' +
         'box-shadow:0 0 0 1px #04140A;pointer-events:none;white-space:nowrap';
@@ -69,9 +97,9 @@
   }
   window.__gb = {
     _els: [],
-    mark: function (draw) {
+    mark: function (draw, base) {
       this._els = collect();
-      if (draw !== false) { try { drawOverlay(this._els); } catch (e) {} }
+      if (draw !== false) { try { drawOverlay(this._els, base); } catch (e) {} }
       return this._els.map(function (o, i) {
         return { i: i, tag: o.tag, type: o.type, text: o.text, label: o.label, role: o.role, href: o.href, x: o.x, y: o.y, w: o.w, h: o.h };
       });
@@ -121,7 +149,25 @@
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return 'ok';
     },
-    scroll: function (dy) { clearOverlay(); window.scrollBy(0, dy); return 'ok'; },
+    /* A dialog (or a frame holding one) scrolls an inner box, not the window: when the window does not
+     * move, scroll the scrollable box under the middle of the screen. */
+    scroll: function (dy) {
+      clearOverlay();
+      var before = window.scrollY; window.scrollBy(0, dy);
+      if (window.scrollY !== before) return 'ok';
+      var el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+      for (; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+        var s = getComputedStyle(el);
+        if (/(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 4) {
+          var t = el.scrollTop; el.scrollTop = t + dy; if (el.scrollTop !== t) return 'ok';
+        }
+      }
+      return 'ok';
+    },
+    /* Top page: tell each visible frame where it is (see postGeo); returns the viewport the taps map to. */
+    geo: function () { return { iw: window.innerWidth, ih: window.innerHeight, frames: postGeo(0, 0) }; },
+    /* In a frame: where it sits in the top page (null until the page above said so) and its own size. */
+    frame: function () { return { off: off, iw: window.innerWidth, ih: window.innerHeight, url: location.href }; },
     /* Has the page rendered meaningful content yet (vs a lazy-load skeleton)? Used to wait for settle. */
     ready: function () {
       try {

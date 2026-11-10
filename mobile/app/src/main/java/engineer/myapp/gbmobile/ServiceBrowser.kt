@@ -83,6 +83,7 @@ class ServiceBrowser(private val ctx: Context) {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 try { WebViewCompat.addDocumentStartJavaScript(w, MainActivity.VISIBLE_JS, setOf("*")) } catch (e: Exception) {}
             }
+            FrameBridge.attach(w, ctx)   // forms in frames of another site (Google's profile editor) — see FrameBridge
             w.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) { loadLatch?.countDown() }
                 // Shops push their own app (aliexpress://…, intent://…) the moment a page loads; following that
@@ -127,6 +128,7 @@ class ServiceBrowser(private val ctx: Context) {
         return out[0] ?: "null"
     }
     private fun evalGb(expr: String) = evalJs(gbJs + "\n" + expr)
+    private val ops = FrameOps({ web }, { evalGb(it) }, { tap(it) })
 
     private fun waitSettle(maxMs: Long) {
         val deadline = System.currentTimeMillis() + maxMs
@@ -191,13 +193,13 @@ class ServiceBrowser(private val ctx: Context) {
         when (path) {
             "/v1/navigate" -> "{\"url\":" + JSONObject.quote(navigate(body.optString("url"))) + "}"
             "/v1/info" -> evalGb("window.__gb.info()")
-            "/v1/content" -> { waitSettle(4000); evalGb("window.__gb.text()") }
-            "/v1/analyze" -> evalGb("window.__gb.mark()")
-            "/v1/perceive" -> { waitSettle(6000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${evalGb("window.__gb.mark()")},\"text\":${evalGb("window.__gb.text()")}}" }
-            "/v1/click" -> tap(evalGb("window.__gb.coords(${body.optInt("index", -1)})"))
-            "/v1/click_text" -> tap(evalGb("window.__gb.coordsText(" + JSONObject.quote(body.optString("text")) + "," + body.optInt("nth", 0) + ")"))
-            "/v1/type" -> evalGb("window.__gb.type(${body.optInt("index", -1)}," + JSONObject.quote(body.optString("text")) + ")")
-            "/v1/scroll" -> evalGb("window.__gb.scroll(${body.optInt("dy", 600)})")
+            "/v1/content" -> { waitSettle(4000); ops.text() }
+            "/v1/analyze" -> ops.analyze()
+            "/v1/perceive" -> { waitSettle(6000); "{\"info\":${evalGb("window.__gb.info()")},\"elements\":${ops.analyze()},\"text\":${ops.text()}}" }
+            "/v1/click" -> ops.click(body.optInt("index", -1))
+            "/v1/click_text" -> ops.clickText(body.optString("text"), body.optInt("nth", 0))
+            "/v1/type" -> ops.type(body.optInt("index", -1), body.optString("text"))
+            "/v1/scroll" -> ops.scroll(body.optInt("dy", 600))
             "/v1/screenshot" -> screenshot()
             "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
             else -> "{\"error\":\"unsupported\"}"
