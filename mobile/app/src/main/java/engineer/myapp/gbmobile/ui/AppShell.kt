@@ -470,6 +470,8 @@ private fun TopBar(shell: ShellUi, act: ShellActions) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val host = hostOf(shell.url.value)
+            // Home, left of the address, as Chrome on Android has it: back to the start page.
+            IconButton(onClick = act.onHome, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.Home, "Home", tint = cs.onSurface) }
             Surface(
                 color = cs.surfaceVariant, shape = RoundedCornerShape(22.dp),
                 modifier = Modifier.weight(1f).height(44.dp).clickable { act.onFocusUrl() },
@@ -507,8 +509,15 @@ private fun TabCountButton(count: Int, onClick: () -> Unit) {
 @Composable
 private fun Omnibox(shell: ShellUi, act: ShellActions) {
     val cs = MaterialTheme.colorScheme
-    var q by remember { mutableStateOf(if (shell.searchFromWidget.value) "" else shell.url.value) }
+    /* Chrome: tapping the address shows the WHOLE address, selected, so typing replaces it; the page's
+       own row above the suggestions offers Share, Copy link and Edit (Edit keeps it and puts the cursor at the end). */
+    val pageUrl = if (shell.searchFromWidget.value) "" else shell.url.value
+    var field by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(pageUrl, androidx.compose.ui.text.TextRange(0, pageUrl.length))) }
+    val q = field.text
     val fr = remember { FocusRequester() }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pageTitle = shell.tabs.value.firstOrNull { it.active }?.title.orEmpty()
     LaunchedEffect(Unit) { shell.searchFromWidget.value = false; runCatching { fr.requestFocus() } }
     val looksUrl = q.contains(".") && !q.trimStart().contains(" ")
     Surface(color = cs.background, contentColor = cs.onBackground, modifier = Modifier.fillMaxSize()) {
@@ -521,7 +530,7 @@ private fun Omnibox(shell: ShellUi, act: ShellActions) {
                         Icon(Icons.Default.Search, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(10.dp))
                         androidx.compose.foundation.text.BasicTextField(
-                            value = q, onValueChange = { q = it }, singleLine = true,
+                            value = field, onValueChange = { field = it }, singleLine = true,
                             modifier = Modifier.weight(1f).focusRequester(fr),
                             textStyle = androidx.compose.ui.text.TextStyle(color = cs.onSurface, fontSize = 16.sp),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(Brand),
@@ -529,12 +538,33 @@ private fun Omnibox(shell: ShellUi, act: ShellActions) {
                             keyboardActions = KeyboardActions(onGo = { if (q.isNotBlank()) act.onUrlGo(q.trim()) }),
                             decorationBox = { inner -> if (q.isEmpty()) Text("Search or type a URL", color = cs.onSurfaceVariant, fontSize = 16.sp); inner() },
                         )
-                        if (q.isNotEmpty()) IconButton(onClick = { q = "" }) { Icon(Icons.Default.Close, "Clear", tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+                        if (q.isNotEmpty()) IconButton(onClick = { field = androidx.compose.ui.text.input.TextFieldValue("") }) { Icon(Icons.Default.Close, "Clear", tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
                     }
                 }
             }
             HorizontalDivider(color = cs.outline)
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                // The page you are on, while its address is unchanged: Share, Copy link, Edit.
+                if (pageUrl.isNotBlank() && q == pageUrl) {
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Language, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(pageTitle.ifBlank { hostOf(pageUrl) }, color = cs.onSurface, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(pageUrl, color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton(onClick = { act.onShare() }) { Icon(Icons.Default.Share, "Share", tint = cs.onSurfaceVariant) }
+                        IconButton(onClick = {
+                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(pageUrl))
+                            android.widget.Toast.makeText(ctx, "Link copied", android.widget.Toast.LENGTH_SHORT).show()
+                        }) { Icon(Icons.Default.ContentCopy, "Copy link", tint = cs.onSurfaceVariant) }
+                        IconButton(onClick = {
+                            field = androidx.compose.ui.text.input.TextFieldValue(pageUrl, androidx.compose.ui.text.TextRange(pageUrl.length))
+                            runCatching { fr.requestFocus() }
+                        }) { Icon(Icons.Default.Edit, "Edit", tint = cs.onSurfaceVariant) }
+                    }
+                    HorizontalDivider(color = cs.outline)
+                }
                 if (q.isNotBlank()) {
                     SuggestRow(Icons.Default.Search, if (looksUrl) "Go to $q" else "Search Google for “$q”", null) { act.onUrlGo(q.trim()) }
                     HorizontalDivider(color = cs.outline)
