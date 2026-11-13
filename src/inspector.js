@@ -52,7 +52,11 @@ const FRAME_EXTRACTOR = () => {
   // button…) with NO native <button>, role or onclick, so without this the reader saw "0 things to
   // click" on a fully interactive page. `[tabindex]:not([tabindex="-1"])` catches focusable custom
   // controls the same way. [role="option"] and the ARIA widgets stay for dropdowns/typeaheads.
-  const TAGS = 'button, input:not([type=hidden]), textarea, select, a[href], [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="switch"], [role="tab"], [contenteditable="true"], [onclick], [jsaction], [tabindex]:not([tabindex="-1"])';
+  // 2026-11-13, Business Suite's scheduler: the time field never appeared. A time/date picker is a row
+  // of [role="spinbutton"] segments (hour, minute) or a [role="combobox"]; a choice can be a
+  // [role="radio"]; a range a [role="slider"]. None was in the list, so the agent could see the date
+  // and not the time beside it.
+  const TAGS = 'button, input:not([type=hidden]), textarea, select, a[href], [role="button"], [role="link"], [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="radio"], [role="checkbox"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="switch"], [role="tab"], [contenteditable="true"], [onclick], [jsaction], [tabindex]:not([tabindex="-1"])';
   // Collect matches from the light DOM AND every open shadow root (web-component apps render their
   // controls inside shadow trees that a plain querySelectorAll never sees). ALSO collect anything the
   // page styles as clickable (cursor:pointer) at control size — the one signal a custom button always
@@ -195,25 +199,52 @@ const FRAME_EXTRACTOR = () => {
   };
   const scope = modalScope();
   const out = [];
-  for (const el of deepQuery(TAGS, scope)) {
+  /*
+   * A TOGGLE THAT HIDES ITS INPUT. A styled switch is a real <input type=checkbox role=switch> shrunk
+   * to nothing (or made transparent) under a drawn track — the scheduler's "plan" switch on Business
+   * Suite is one. Its own box is 0-1px, so it was dropped as too small, and the drawing above it has
+   * no role. Give such an input the box of what a person clicks: its <label>, else the nearest
+   * ancestor of control size. Clicking there toggles it, exactly as a finger would.
+   */
+  const boxOf = (el) => {
     const r = el.getBoundingClientRect();
+    const kind = (el.getAttribute('role') || el.type || '').toLowerCase();
+    if (!(el.tagName === 'INPUT' && /^(checkbox|radio|switch)$/.test(kind)) && kind !== 'switch') return r;
+    let faint = false;
+    try { faint = Number(getComputedStyle(el).opacity) === 0; } catch { /* keep */ }
+    if (r.width >= 8 && r.height >= 8 && !faint) return r;
+    const cands = [];
+    try { if (el.labels && el.labels[0]) cands.push(el.labels[0]); } catch { /* not labelable */ }
+    let p = el.parentElement;
+    for (let i = 0; p && i < 4; i++, p = p.parentElement) cands.push(p);
+    for (const c of cands) {
+      const b = c.getBoundingClientRect();
+      if (b.width >= 8 && b.height >= 8 && b.width <= 680 && b.height <= 160) return b;
+    }
+    return r;
+  };
+  for (const el of deepQuery(TAGS, scope)) {
+    const r = boxOf(el);
     if (r.width < 2 || r.height < 2) continue;
     const testId = el.getAttribute('data-testid');
     const ariaLabel = el.getAttribute('aria-label') || '';
     const id = el.id ? `#${el.id}` : null;
     const selector = id || (testId ? `[data-testid="${testId}"]` : null);
-    const text = (
+    let text = (
       el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') ||
       el.value || el.textContent || el.getAttribute('name') || ''
     ).trim().replace(/\s+/g, ' ').slice(0, 60);
+    // a spinbutton/slider is read by its value too ("Uur = 20"): the agent must see what is set now
+    const now = el.getAttribute('aria-valuetext') || el.getAttribute('aria-valuenow');
+    if (now && /^(spinbutton|slider)$/.test(el.getAttribute('role') || '') && text.indexOf(now) < 0) text = `${text} = ${now}`.trim().slice(0, 70);
     // Is this a place text can be TYPED? A rich-text "O mnie" editor is a contenteditable <div> that
     // otherwise looks like any other element — marking it is what lets the agent find where to type
     // instead of clicking around it forever.
     const editable = !!(
       el.isContentEditable ||
       el.tagName === 'TEXTAREA' ||
-      (el.tagName === 'INPUT' && /^(text|email|search|url|tel|number|password|)$/i.test(el.type || '')) ||
-      el.getAttribute('role') === 'textbox'
+      (el.tagName === 'INPUT' && /^(text|email|search|url|tel|number|password|date|time|datetime-local|month|week|)$/i.test(el.type || '')) ||
+      /^(textbox|searchbox|combobox|spinbutton)$/.test(el.getAttribute('role') || '')
     );
     // Is this control currently ON? Checkbox/radio checked, or an ARIA-selected/pressed/checked
     // widget, or a custom toggle whose class says selected/active. A category picker, a tabs row, a
@@ -550,7 +581,7 @@ async function analyzePage(page) {
 `
     : '';
   const summary = head + elements.map(e =>
-    `[${e.index}] ${e.on ? '✓ ' : ''}${e.editable ? '✎ FIELD' : e.tag}${e.type ? `[${e.type}]` : ''} — "${e.text || e.placeholder || e.ariaLabel || '(no label)'}"${e.on ? ' (SELECTED)' : ''}${e.editable ? ` ← a text field; type here with type([${e.index}], "...")` : ''}${e.selector ? ` (${e.selector})` : ''} @ (${e.x},${e.y})`
+    `[${e.index}] ${e.on ? '✓ ' : ''}${e.editable ? '✎ FIELD' : e.tag}${e.role && !/^(button|link)$/.test(e.role) ? `(${e.role})` : ''}${e.type ? `[${e.type}]` : ''} — "${e.text || e.placeholder || e.ariaLabel || '(no label)'}"${e.on ? ' (SELECTED)' : ''}${e.editable ? ` ← a text field; type here with type([${e.index}], "...")` : ''}${e.selector ? ` (${e.selector})` : ''} @ (${e.x},${e.y})`
   ).join('\n');
 
   return {

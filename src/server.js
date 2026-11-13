@@ -1154,6 +1154,8 @@ app.post('/v1/sessions/:id/type', async (req, res) => {
 app.post('/v1/sessions/:id/mouse', async (req, res) => {
   try {
     const s = mine(req);
+    // a session living on the owner's device has no page here to put a mouse on
+    if (s.ring) return res.status(400).json({ error: 'this session runs on a device: click a numbered element, or by its text' });
     const x = Number(req.body?.x); const y = Number(req.body?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return res.status(400).json({ error: 'x and y required' });
     const action = String(req.body?.action || 'click');

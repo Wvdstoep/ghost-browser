@@ -13,8 +13,10 @@ const tools = [
   ['browser_open', 'Open an isolated browser session. Pass profile to use a signed-in profile from browser_profiles (default: "default"). device chooses where it runs: "auto" (default) = this browser, moving to the owner\'s phone or desktop by itself at a refusal, a marketplace, or a sign-in page whose login that device holds; "device" = straight to the owner\'s device that holds this profile (use it when browser_profiles lists the profile on a device and the login lives there); a device name from browser_profiles = that device; "cluster" = never move. Close it when finished.', { profile: string('Profile name from browser_profiles, e.g. "default".'), device: string('"auto", "device", "cluster", or a device name from browser_profiles.') }, []],
   ['browser_list', 'List your open browser sessions.', {}, []],
   ['browser_navigate', 'Navigate to a public HTTP(S) URL in your session.', { sessionId: id, url: string('Public URL to visit.') }, ['sessionId', 'url']],
-  ['browser_analyze', 'Inspect the current page and return numbered interactive elements.', { sessionId: id }, ['sessionId']],
-  ['browser_click', 'Click a numbered element from the most recent analysis. This can submit forms or change websites.', { sessionId: id, index: { type: 'integer', minimum: 1 } }, ['sessionId', 'index']],
+  ['browser_analyze', 'Inspect the current page and return numbered interactive elements. When something you can see has no number: browser_click with its text, browser_press_key Tab from a field next to it, or browser_click_at its spot on browser_screenshot.', { sessionId: id }, ['sessionId']],
+  ['browser_click', 'Click a numbered element from the most recent analysis, or — when the thing is not in the list — the first element showing this exact visible text (e.g. "Bericht plannen"). Give index or text. This can submit forms or change websites.', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: string('Visible text of the thing to click, when it has no number.') }, ['sessionId']],
+  ['browser_press_key', 'Press a key in the page, as on a keyboard — e.g. Tab / Shift+Tab to move to the next field (a time picker\'s hour and minute boxes), ArrowUp / ArrowDown to change a spin box or pick in an open list, Enter, Escape, Backspace, Space, Control+A. Or give text instead of key to type it into whatever field has focus right now (after a click or a Tab). Follow with browser_analyze or browser_screenshot to see the result.', { sessionId: id, key: string('A key name: Tab, Shift+Tab, Enter, Escape, ArrowUp/Down/Left/Right, Backspace, Delete, Space, Home, End, PageUp, PageDown, F1-F12, a single character, or a combination like Control+A.'), text: string('Instead of key: text to type into the focused field.') }, ['sessionId']],
+  ['browser_click_at', 'Click at a pixel position of the current browser_screenshot (x from the left, y from the top) — the last resort for something that has no number in browser_analyze and no text, such as a drawn switch, a canvas or a picture tile. Not available while a session runs on the owner\'s device.', { sessionId: id, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 } }, ['sessionId', 'x', 'y']],
   ['browser_type', 'Type into a numbered element from the most recent analysis; optionally submit it.', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: { type: 'string' }, submit: { type: 'boolean' } }, ['sessionId', 'index', 'text']],
   ['browser_scroll', 'Scroll the page vertically.', { sessionId: id, dy: { type: 'number' } }, ['sessionId', 'dy']],
   ['browser_read', 'Read the text of the current page.', { sessionId: id }, ['sessionId']],
@@ -31,12 +33,15 @@ const tools = [
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
   annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check'].includes(name),
-    destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file'].includes(name), openWorldHint: true },
+    destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_click_at'].includes(name), openWorldHint: true },
 }));
 
 /* What a watch key (gbw_, see watchKeys.js) is shown and may call: its watcher, and nothing that drives a browser. */
 const WATCH_TOOL_NAMES = ['watcher_feed', 'egress_check', 'watcher_run'];
 const watchTools = tools.filter((t) => WATCH_TOOL_NAMES.includes(t.name));
+
+/* A key the page may be sent: modifiers + one named key or one character. Nothing else reaches Playwright. */
+const KEY_RE = /^(?:(?:Control|Shift|Alt|Meta)\+){0,3}(?:[!-~]|Tab|Enter|Escape|Backspace|Delete|Insert|Space|Home|End|PageUp|PageDown|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|F(?:[1-9]|1[0-2]))$/;
 
 function validate(tool, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be an object');
@@ -52,6 +57,12 @@ function validate(tool, args) {
   if (args.fileId && !/^f[0-9a-f]{16}$/.test(args.fileId)) throw new Error('Invalid fileId');
   if (args.watcherId && !/^[a-zA-Z0-9_.-]{1,120}$/.test(args.watcherId)) throw new Error('Invalid watcherId');
   if (tool.name === 'browser_save_image' && !args.image && !args.src) throw new Error('Give image (a number from browser_images) or src');
+  if (tool.name === 'browser_click' && (args.index == null) === (args.text == null)) throw new Error('Give index (a number from browser_analyze) or text, not both');
+  if (tool.name === 'browser_press_key') {
+    if ((args.key == null) === (args.text == null)) throw new Error('Give key or text, not both');
+    if (args.key != null && !KEY_RE.test(args.key)) throw new Error('Invalid key: use a name like Tab, Shift+Tab, Enter, Escape, ArrowDown, Backspace, Control+A or one character');
+    if (args.text != null && args.text.length > 2000) throw new Error('text is too long');
+  }
 }
 
 const CONNECTOR_ORIGINS = new Set(['https://claude.ai', 'https://claude.com']);
@@ -78,7 +89,10 @@ function createHandler({ requestApi, toolset = tools }) {
           browser_profiles: ['GET', '/v1/browser-profiles'],
           browser_navigate: ['POST', `${base}/navigate`, { url: args.url }],
           browser_analyze: ['GET', `${base}/analyze?screenshot=false`],
-          browser_click: ['POST', `${base}/click`, { index: args.index }],
+          browser_click: ['POST', `${base}/click`, args.text != null ? { text: args.text } : { index: args.index }],
+          // Playwright names the space bar " "; the tool says Space so a model can write it
+          browser_press_key: ['POST', `${base}/keys`, args.key != null ? { key: String(args.key).replace(/(^|\+)Space$/, '$1 ') } : { text: args.text }],
+          browser_click_at: ['POST', `${base}/mouse`, { x: args.x, y: args.y }],
           browser_type: ['POST', `${base}/type`, { index: args.index, text: args.text, submit: args.submit === true }],
           browser_scroll: ['POST', `${base}/scroll`, { dy: args.dy }],
           browser_read: ['GET', `${base}/content`], browser_screenshot: ['GET', `${base}/screenshot`],
