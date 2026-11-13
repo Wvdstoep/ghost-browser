@@ -1095,15 +1095,8 @@ app.post('/v1/sessions/:id/click', async (req, res) => {
 
 // Scroll a target to mid-viewport if it is off-screen, so a coordinate action actually lands on it
 // (the same fix the agent uses for long forms). Mutates and returns the target with a usable y.
-async function bringIntoView(page, target) {
-  const vh = await page.evaluate(() => window.innerHeight).catch(() => 800);
-  if (target.y < 40 || target.y > vh - 40) {
-    await page.mouse.wheel(0, target.y - Math.round(vh / 2));
-    await new Promise((r) => setTimeout(r, 500));
-    target.y = Math.round(vh / 2);
-  }
-  return target;
-}
+// in the target's own scrolling pane, its real position read back by id (inspector.js)
+const { bringIntoView } = require('./inspector');
 // Re-analyse when the page moved since the last look, so an index still names the thing the caller meant.
 async function freshIfMoved(s) {
   const scrollY = await s.page.evaluate(() => window.scrollY).catch(() => 0);

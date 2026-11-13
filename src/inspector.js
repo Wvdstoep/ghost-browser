@@ -602,7 +602,34 @@ async function analyzePage(page) {
 async function clickByIndex(page, index, elements) {
   const el = elements.find(e => e.index === index);
   if (!el) throw new Error(`Element [${index}] not found in last analysis. Call analyze_page first.`);
-  return { x: el.x, y: el.y, text: el.text, selector: el.selector };
+  // id rides along so a click on an off-screen element can find it again after scrolling (server.js bringIntoView)
+  return { x: el.x, y: el.y, text: el.text, selector: el.selector, id: el.id || null };
 }
 
-module.exports = { analyzePage, extractElements, dismissConsent, clickByIndex, stripAnnotations, settle };
+/*
+ * BRING AN OFF-SCREEN TARGET INTO VIEW before a coordinate click (the REST API and the agent both use
+ * this). 2026-11-13: a wheel scrolls whatever is under the pointer, and apps like Business Suite and
+ * most docs scroll an inner content PANE, not the window. The pointer sat wherever the last action
+ * left it, so the pane never moved and the click went to "mid-screen", onto whatever was there. Now the
+ * wheel turns over the target's own column, and the target's real position is read back by its id
+ * instead of assumed.
+ */
+async function bringIntoView(page, target) {
+  const num = async (fn, dflt) => { try { const v = await page.evaluate(fn); return Number.isFinite(v) && v > 0 ? v : dflt; } catch { return dflt; } };
+  const vh = await num(() => window.innerHeight, 800);
+  const vw = await num(() => window.innerWidth, 1280);
+  if (!(target.y < 40 || target.y > vh - 40)) return target;
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+  try { await page.mouse.move(clamp(target.x, 5, vw - 5), clamp(target.y, 60, vh - 60), { steps: 4 }); } catch { /* the wheel still turns */ }
+  await page.mouse.wheel(0, target.y - Math.round(vh / 2));
+  await new Promise((r) => setTimeout(r, 500));
+  let box = null;
+  if (target.id && typeof page.locator === 'function') {
+    try { box = await page.locator(`[id="${String(target.id).replace(/["\\]/g, '\\$&')}"]`).first().boundingBox({ timeout: 2000 }); } catch { box = null; }
+  }
+  if (box && box.width > 0) { target.x = Math.round(box.x + box.width / 2); target.y = Math.round(box.y + box.height / 2); }
+  else target.y = Math.round(vh / 2);
+  return target;
+}
+
+module.exports = { analyzePage, extractElements, dismissConsent, clickByIndex, bringIntoView, stripAnnotations, settle };

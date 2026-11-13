@@ -1359,15 +1359,8 @@ async function run({ job, session, settings, switchProfile = null, chat = llm.ch
      mid-viewport and click the adjusted position. THIS is what lets type([n]) work on a field the
      agent can see in the list but not on screen — the fix for the endless scroll-hunt on Useme's
      offer form. */
-  const bringIntoView = async (target) => {
-    const vh = await page().evaluate(() => window.innerHeight).catch(() => 800);
-    if (target.y < 40 || target.y > vh - 40) {
-      await page().mouse.wheel(0, target.y - Math.round(vh / 2));
-      await sleep(500, signal);
-      target.y = Math.round(vh / 2);
-    }
-    return target;
-  };
+  // the shared one: it scrolls the target's own pane, not the window, and reads back where it landed
+  const bringIntoView = (target) => require('./inspector').bringIntoView(page(), target);
 
   /* Click by number, re-analysing first if the page moved — the same rule the REST API uses, for the
      same reason: the model asked to click a THING, and the number is only a handle on it. */

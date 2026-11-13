@@ -54,3 +54,32 @@ describe('controls a page draws over or builds from roles', () => {
     expect(find(/^Nu publiceren/)).toMatchObject({ role: 'radio', on: true });
   });
 });
+
+// Found live on v720 the same day: an app that scrolls an inner PANE (Business Suite, most docs) — a
+// click on an off-screen element wheeled the window, nothing moved, and the click hit mid-screen.
+describe('a click on something below the fold of a scrolling pane', () => {
+  it('scrolls that pane (not the window) and clicks the thing itself', async () => {
+    const { bringIntoView, clickByIndex } = await import('../src/inspector.js');
+    const p = await browser.newPage({ viewport: { width: 1000, height: 700 } });
+    await p.setContent(`<!doctype html><html><body style="margin:0;overflow:hidden;height:100vh;display:flex">
+      <nav style="width:200px;height:100vh;overflow:auto">${'<a href="#">link</a><br>'.repeat(5)}</nav>
+      <main id="pane" style="flex:1;height:100vh;overflow:auto">
+        <div style="height:1800px"></div>
+        <input id="far" aria-label="Uur" onclick="window.hit=(window.hit||0)+1">
+        <div style="height:600px"></div>
+      </main></body></html>`);
+    let list = await extractElements(p); list = Array.isArray(list) ? list : list.elements;
+    const { analyzePage } = await import('../src/inspector.js');
+    const a = await analyzePage(p);
+    const far = a.elements.find((e) => e.id === 'far');
+    expect(far, 'an off-screen field is still listed').toBeTruthy();
+    expect(far.y).toBeGreaterThan(700);
+    await p.mouse.move(100, 100);                                  // the pointer over the OTHER pane, as it is after a nav click
+    const t = await bringIntoView(p, await clickByIndex(p, far.index, a.elements));
+    expect(t.y).toBeGreaterThan(0); expect(t.y).toBeLessThan(700);
+    await p.mouse.click(t.x, t.y);
+    expect(await p.evaluate(() => window.hit)).toBe(1);
+    expect(await p.evaluate(() => document.getElementById('pane').scrollTop)).toBeGreaterThan(1000);
+    await p.close();
+  }, 60000);
+});
