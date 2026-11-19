@@ -16,8 +16,9 @@ const tools = [
   ['browser_analyze', 'Inspect the current page and return numbered interactive elements. When something you can see has no number: browser_click with its text, browser_press_key Tab from a field next to it, or browser_click_at its spot on browser_screenshot.', { sessionId: id }, ['sessionId']],
   ['browser_click', 'Click a numbered element from the most recent analysis, or — when the thing is not in the list — the first element showing this exact visible text (e.g. "Bericht plannen"). Give index or text. This can submit forms or change websites.', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: string('Visible text of the thing to click, when it has no number.') }, ['sessionId']],
   ['browser_press_key', 'Press a key in the page, as on a keyboard — e.g. Tab / Shift+Tab to move to the next field (a time picker\'s hour and minute boxes), ArrowUp / ArrowDown to change a spin box or pick in an open list, Enter, Escape, Backspace, Space, Control+A. Or give text instead of key to type it into whatever field has focus right now (after a click or a Tab). Follow with browser_analyze or browser_screenshot to see the result.', { sessionId: id, key: string('A key name: Tab, Shift+Tab, Enter, Escape, ArrowUp/Down/Left/Right, Backspace, Delete, Space, Home, End, PageUp, PageDown, F1-F12, a single character, or a combination like Control+A.'), text: string('Instead of key: text to type into the focused field.') }, ['sessionId']],
-  ['browser_click_at', 'Click at a pixel position of the current browser_screenshot (x from the left, y from the top) — the last resort for something that has no number in browser_analyze and no text, such as a drawn switch, a canvas or a picture tile. Not available while a session runs on the owner\'s device.', { sessionId: id, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 } }, ['sessionId', 'x', 'y']],
-  ['browser_type', 'Type into a numbered element from the most recent analysis; optionally submit it.', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: { type: 'string' }, submit: { type: 'boolean' } }, ['sessionId', 'index', 'text']],
+  ['browser_click_at', 'Click at a pixel position of the current browser_screenshot (x from the left, y from the top) — the last resort for something that has no number in browser_analyze and no text, such as a drawn switch, a canvas or a picture tile.', { sessionId: id, x: { type: 'integer', minimum: 0 }, y: { type: 'integer', minimum: 0 } }, ['sessionId', 'x', 'y']],
+  ['browser_type', 'Type into a numbered element from the most recent analysis; optionally submit it. Afterwards the form is told the field was left (commit, default true), so a form that checks a field when you leave it enables its submit button; the cursor stays in the field. commit=false skips that (e.g. to pick from suggestions).', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: { type: 'string' }, submit: { type: 'boolean' }, commit: { type: 'boolean' } }, ['sessionId', 'index', 'text']],
+  ['browser_console', 'Read the page\'s console messages, uncaught errors and failed requests (status 400 and up, or blocked) — to find out why a page "does nothing". Only for your own apps on my-app.engineer: other sites log sign-in tokens and personal data there. Pass since (the until of the previous answer) to get only what is new.', { sessionId: id, since: { type: 'integer', minimum: 0 } }, ['sessionId']],
   ['browser_scroll', 'Scroll the page vertically.', { sessionId: id, dy: { type: 'number' } }, ['sessionId', 'dy']],
   ['browser_read', 'Read the text of the current page.', { sessionId: id }, ['sessionId']],
   ['browser_extract_product', 'Extract factual product fields from the current page for review before importing to a shop. Does not verify variants, stock, shipping or fulfillment.', { sessionId: id }, ['sessionId']],
@@ -32,7 +33,7 @@ const tools = [
   ['watcher_run', 'Start one pass of a watcher now. A sources watcher refuses a pass within five minutes of the last one.', { watcherId: string('The watcher (automation) id.') }, ['watcherId']],
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check'].includes(name),
+  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_console', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check'].includes(name),
     destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_click_at'].includes(name), openWorldHint: true },
 }));
 
@@ -93,7 +94,8 @@ function createHandler({ requestApi, toolset = tools }) {
           // Playwright names the space bar " "; the tool says Space so a model can write it
           browser_press_key: ['POST', `${base}/keys`, args.key != null ? { key: String(args.key).replace(/(^|\+)Space$/, '$1 ') } : { text: args.text }],
           browser_click_at: ['POST', `${base}/mouse`, { x: args.x, y: args.y }],
-          browser_type: ['POST', `${base}/type`, { index: args.index, text: args.text, submit: args.submit === true }],
+          browser_type: ['POST', `${base}/type`, { index: args.index, text: args.text, submit: args.submit === true, commit: args.commit !== false }],
+          browser_console: ['GET', `${base}/console${args.since ? `?since=${Number(args.since)}` : ''}`],
           browser_scroll: ['POST', `${base}/scroll`, { dy: args.dy }],
           browser_read: ['GET', `${base}/content`], browser_screenshot: ['GET', `${base}/screenshot`],
           browser_extract_product: ['GET', `${base}/product`],

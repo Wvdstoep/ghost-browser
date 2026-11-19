@@ -545,6 +545,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 } catch (e: Exception) { true }
             }
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                startedWeb = view; startedAt = System.currentTimeMillis()
                 h.url = url ?: h.url
                 if (isActive(h)) { lastUrl = h.url; shellUi.url.value = if (h.url == HOME) "" else h.url }
             }
@@ -675,17 +676,33 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     // ---- Agent.DeviceBrowser + GbServer.Browser (off the UI thread) ------------------------------
 
+    /** Which browser last STARTED loading a page, and when — so a navigate waits for ITS page, not the old one. */
+    @Volatile private var startedWeb: WebView? = null
+    @Volatile private var startedAt: Long = 0L
+    /** Wait until [target] has started loading after [since]; false when it never did within [ms]. */
+    private fun awaitStart(target: WebView, since: Long, ms: Long): Boolean {
+        val until = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < until) { if (startedWeb === target && startedAt >= since) return true; Thread.sleep(100) }
+        return false
+    }
+
     override fun navigate(url: String): String {
         var u = url.trim(); if (u.isEmpty()) return currentUrl()
         if (!u.startsWith("http") && !u.startsWith("file:")) u = "https://$u"
         u = mobileFbUrl(u)
         val fu = u; val target = cmdTarget()
+        /* A browser kept between sessions answered with its old page (2026-11-19): the old page counted as
+           loaded. The load must start first; one that never starts is asked for once more. */
         if (cmdWeb != null) {   // a background profile browser: no shared latch, gate on content instead
+            var t0 = System.currentTimeMillis()
             runOnUiThread { target.loadUrl(fu) }
+            if (!awaitStart(target, t0, 8000)) { t0 = System.currentTimeMillis(); runOnUiThread { target.loadUrl(fu) }; awaitStart(target, t0, 8000) }
             Thread.sleep(1200); waitSettle(9000); return targetUrl()
         }
         val latch = CountDownLatch(1); loadLatch = latch
+        val t0 = System.currentTimeMillis()
         runOnUiThread { shellUi.url.value = fu; web.loadUrl(fu) }
+        if (!awaitStart(web, t0, 8000)) runOnUiThread { web.loadUrl(fu) }
         latch.await(25, TimeUnit.SECONDS); Thread.sleep(400)
         waitSettle(6000)   // lazy-loaded pages (Facebook) fire onPageFinished on a skeleton — wait for real content
         return currentUrl()
@@ -776,10 +793,13 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         val latch = CountDownLatch(1); val holder = arrayOfNulls<ByteArray>(1)
         runOnUiThread {
             try {
-                val w = if (web.width > 0) web.width else 1080
-                val h = if (web.height > 0) web.height else 1920
+                // The browser the commands ran in (a profile's own), unless it was never given a size.
+                val v = cmdTarget().takeIf { it.width > 1 && it.height > 1 } ?: web
+                val w = if (v.width > 0) v.width else 1080
+                val h = if (v.height > 0) v.height else 1920
                 val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                val c = Canvas(bmp); c.drawColor(Color.WHITE); web.draw(c)
+                // draw() paints in page coordinates: move by the scroll offset, or a scrolled page is blank (2026-11-19).
+                val c = Canvas(bmp); c.drawColor(Color.WHITE); c.translate(-v.scrollX.toFloat(), -v.scrollY.toFloat()); v.draw(c)
                 val bos = ByteArrayOutputStream(); bmp.compress(Bitmap.CompressFormat.PNG, 85, bos)
                 holder[0] = bos.toByteArray(); bmp.recycle()
             } catch (e: Exception) { holder[0] = ByteArray(0) }

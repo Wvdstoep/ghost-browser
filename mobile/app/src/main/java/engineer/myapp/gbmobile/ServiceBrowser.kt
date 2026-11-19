@@ -38,11 +38,25 @@ class ServiceBrowser(private val ctx: Context) {
     @Volatile private var web: WebView? = null            // the browser of the profile the current command names
     private val webs = HashMap<String, WebView>()          // one invisible browser per profile, created on first use
     @Volatile private var loadLatch: CountDownLatch? = null
+    /** The address the browser last STARTED loading (onPageStarted), so a navigate can tell a new page from the old one. */
+    @Volatile private var startedUrl: String = ""
     private val gbJs: String by lazy { try { ctx.assets.open("gb.js").bufferedReader().use { it.readText() } } catch (e: Exception) { "" } }
+
+    /*
+     * WHAT THE PAGE SAID. Measured 2026-11-19 (Product Hunt on the SM-F926B): a submit that "did nothing" could
+     * only be debugged with a test page that logged its own events, because no tool showed the page's console
+     * or its failed requests. WebView hands both to the app natively (no script in the page that a site could
+     * notice), so each browser keeps the last ones and /v1/console returns them.
+     */
+    private val consoleLog = java.util.concurrent.ConcurrentHashMap<WebView, java.util.ArrayDeque<JSONObject>>()
+    private fun note(w: WebView, o: JSONObject) {
+        val q = consoleLog.getOrPut(w) { java.util.ArrayDeque() }
+        synchronized(q) { q.addLast(o.put("t", System.currentTimeMillis())); while (q.size > 300) q.removeFirst() }
+    }
 
     companion object {
         val PATHS = setOf("/v1/navigate", "/v1/info", "/v1/content", "/v1/analyze", "/v1/perceive", "/v1/click",
-            "/v1/click_text", "/v1/type", "/v1/key", "/v1/scroll", "/v1/screenshot", "/v1/eval")
+            "/v1/click_text", "/v1/type", "/v1/key", "/v1/scroll", "/v1/screenshot", "/v1/eval", "/v1/console")
     }
 
     private fun onMain(timeoutS: Long = 10, block: () -> Unit) {
@@ -84,8 +98,28 @@ class ServiceBrowser(private val ctx: Context) {
                 try { WebViewCompat.addDocumentStartJavaScript(w, MainActivity.VISIBLE_JS, setOf("*")) } catch (e: Exception) {}
             }
             FrameBridge.attach(w, ctx)   // forms in frames of another site (Google's profile editor) — see FrameBridge
+            w.webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onConsoleMessage(m: android.webkit.ConsoleMessage?): Boolean {
+                    if (m != null) note(w, JSONObject().put("kind", "console").put("level", m.messageLevel().name.lowercase())
+                        .put("text", (m.message() ?: "").take(800)).put("source", (m.sourceId() ?: "").takeLast(160)).put("line", m.lineNumber()))
+                    return true
+                }
+            }
             w.webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                    startedUrl = url ?: ""
+                    note(w, JSONObject().put("kind", "page").put("url", (url ?: "").take(400)))
+                }
                 override fun onPageFinished(view: WebView?, url: String?) { loadLatch?.countDown() }
+                override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
+                    note(w, JSONObject().put("kind", "http").put("status", response?.statusCode ?: 0)
+                        .put("url", (request?.url?.toString() ?: "").take(400)).put("main", request?.isForMainFrame == true))
+                }
+                override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                    val desc = if (Build.VERSION.SDK_INT >= 23) (error?.description?.toString() ?: "") else ""
+                    note(w, JSONObject().put("kind", "network").put("status", 0).put("error", desc.take(200))
+                        .put("url", (request?.url?.toString() ?: "").take(400)).put("main", request?.isForMainFrame == true))
+                }
                 // Shops push their own app (aliexpress://…, intent://…) the moment a page loads; following that
                 // replaced the page with "Web page not available" (measured 2026-10-31). Only the web is loaded.
                 override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
@@ -143,14 +177,37 @@ class ServiceBrowser(private val ctx: Context) {
         return h[0] ?: ""
     }
 
+    /*
+     * A NAVIGATE THAT ANSWERS WITH THE PAGE IT WAS ASKED FOR. Measured 2026-11-19: the first navigate of a new
+     * session answered with the previous session's page (Product Hunt) and the requested app never got a
+     * request. A profile's browser lives on between sessions, so its old page counted as loaded (a late
+     * onPageFinished, a settled page). Now the load must have STARTED (onPageStarted) before the wait counts,
+     * and a load that never starts is asked for once more.
+     */
     private fun navigate(url: String): String {
         var u = url.trim(); if (u.isEmpty()) return currentUrl()
         if (!u.startsWith("http")) u = "https://$u"
-        val l = CountDownLatch(1); loadLatch = l
-        main.post { web?.loadUrl(u) }
-        l.await(25, TimeUnit.SECONDS); Thread.sleep(400)
-        waitSettle(6000)
+        for (attempt in 0..1) {
+            startedUrl = ""
+            val l = CountDownLatch(1); loadLatch = l
+            main.post { web?.loadUrl(u) }
+            val until = System.currentTimeMillis() + 8000
+            while (startedUrl.isEmpty() && System.currentTimeMillis() < until) Thread.sleep(100)
+            if (startedUrl.isEmpty() && attempt == 0) continue   // the load never started: ask once more
+            l.await(25, TimeUnit.SECONDS); Thread.sleep(400)
+            waitSettle(6000)
+            break
+        }
         return currentUrl()
+    }
+
+    /** The page's console lines and failed requests after [since] (ms), oldest first. */
+    private fun console(since: Long): String {
+        val w = web ?: return "{\"entries\":[]}"
+        val q = consoleLog[w] ?: return JSONObject().put("entries", org.json.JSONArray()).put("native", true).toString()
+        val out = org.json.JSONArray()
+        synchronized(q) { for (o in q) if (o.optLong("t") > since) out.put(o) }
+        return JSONObject().put("entries", out).put("native", true).toString()
     }
 
     /** A real tap (trusted input) at an element's centre, mapped from CSS px to the view's px. */
@@ -180,7 +237,10 @@ class ServiceBrowser(private val ctx: Context) {
             // to at most 720 px wide and send a JPEG.
             val scale = minOf(1f, 720f / w.width)
             val b = Bitmap.createBitmap((w.width * scale).toInt().coerceAtLeast(1), (w.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(b); canvas.scale(scale, scale); w.draw(canvas)
+            /* draw() paints the page in page coordinates: without moving the canvas by the scroll offset a
+               scrolled page came back blank (measured 2026-11-19, Product Hunt scrolled down: pure white). */
+            val canvas = Canvas(b); canvas.scale(scale, scale)
+            canvas.translate(-w.scrollX.toFloat(), -w.scrollY.toFloat()); w.draw(canvas)
             val out = java.io.ByteArrayOutputStream()
             b.compress(Bitmap.CompressFormat.JPEG, 72, out); b.recycle()
             holder[0] = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
@@ -203,6 +263,7 @@ class ServiceBrowser(private val ctx: Context) {
             "/v1/scroll" -> ops.scroll(body.optInt("dy", 600))
             "/v1/screenshot" -> screenshot()
             "/v1/eval" -> evalJs(gbJs + "\n(function(){try{return JSON.stringify((" + body.optString("code") + "))}catch(e){return JSON.stringify({error:String(e)})}})()")
+            "/v1/console" -> console(body.optLong("since", 0L))
             else -> "{\"error\":\"unsupported\"}"
         }
     } catch (e: Exception) { "{\"error\":" + JSONObject.quote(e.message ?: "failed") + "}" }

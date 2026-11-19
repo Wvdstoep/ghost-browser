@@ -865,6 +865,26 @@ app.delete('/v1/sessions/:id', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+/** A device step that refused (disabled, covered, nothing tapped, not loaded) is an error, not a 200 with words. */
+const ringOut = (res, r) => res.status(r && r.error ? 409 : 200).json(r);
+
+/*
+ * THE PAGE'S CONSOLE AND FAILED REQUESTS (browser_console), for the account's own apps only — see
+ * sessionRing.consoleAllowed for why. On the cluster it is what diagnostics.js already collects.
+ */
+app.get('/v1/sessions/:id/console', async (req, res) => {
+  try {
+    const s = mine(req);
+    const since = Number(req.query.since) || 0;
+    if (s.ring) return ringOut(res, await sessionRing.console(s, { since }));
+    const url = s.page ? s.page.url() : '';
+    const { consoleAllowed, consoleRefusal } = require('./sessionRing');
+    if (!consoleAllowed(url)) return res.status(409).json({ error: consoleRefusal(url) });
+    const d = diagnostics.dump(s);
+    res.json({ url, console: d.console, errors: d.errors, failedRequests: d.network, navigations: d.navigations, loop: d.loop, summary: d.summary });
+  } catch (e) { fail(res, e); }
+});
+
 /** A session belongs to the key that opened it — checked on every call, not just on close. */
 function mine(req) {
   const s = pool.get(req.params.id);
@@ -912,7 +932,7 @@ function pageImages(page) {
 app.get('/v1/sessions/:id/images', async (req, res) => {
   try {
     const s = mine(req);
-    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; its pictures cannot be read from here' });
+    if (s.ring) return res.json(await sessionRing.images(s));
     const images = (await pageImages(s.page)).slice(0, 60)
       .map((i) => ({ ...i, src: /^data:/i.test(i.src) ? 'data: (inline picture — save it by its number)' : i.src.slice(0, 600) }));
     res.json({ url: s.page.url(), images, hint: 'browser_save_image with image=<number> keeps one and returns its fileId' });
@@ -921,16 +941,31 @@ app.get('/v1/sessions/:id/images', async (req, res) => {
 app.post('/v1/sessions/:id/save-image', async (req, res) => {
   try {
     const s = mine(req);
-    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; its pictures cannot be read from here' });
     const { image, src: asked } = req.body || {};
     let src = asked ? String(asked) : null;
+    let referer = s.ring ? '' : s.page.url();
     if (!src) {
-      const found = (await pageImages(s.page)).find((i) => i.image === Number(image));
+      // On a device the page lists its pictures itself; one that lives only in the page comes back whole.
+      const found = s.ring ? await sessionRing.imageSource(s, image) : (await pageImages(s.page)).find((i) => i.image === Number(image));
       if (!found) return res.status(404).json({ error: 'no such picture on this page — call browser_images for the numbers' });
       src = found.src;
+      if (found.referer) referer = found.referer;
     }
     let bytes = null; let mime = '';
-    if (/^https?:\/\//i.test(src)) {
+    if (s.ring && /^https?:\/\//i.test(src)) {
+      /* A device's picture is fetched from here, as the page's own request would ask for it. A site that
+         answers only the device's connection says so in the error. */
+      await assertPublicUrl(src);
+      const r = await fetch(src, { headers: { ...(referer ? { referer } : {}), 'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36', accept: 'image/avif,image/webp,image/*,*/*;q=0.8' }, signal: AbortSignal.timeout(30000), redirect: 'follow' });
+      if (!r.ok) return res.status(502).json({ error: `the picture answered ${r.status} to the server (the site may show it only to the device)` });
+      bytes = Buffer.from(await r.arrayBuffer()); mime = String(r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    } else if (s.ring && /^data:/i.test(src)) {
+      const m = /^data:([^;,]*)(;base64)?,(.*)$/is.exec(src);
+      if (!m) return res.status(400).json({ error: 'that inline picture could not be read' });
+      bytes = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8'); mime = String(m[1] || '').toLowerCase();
+    } else if (s.ring) {
+      return res.status(409).json({ error: 'that picture exists only inside the page on the device (a blob: address); take browser_screenshot instead' });
+    } else if (/^https?:\/\//i.test(src)) {
       await assertPublicUrl(src);
       const r = await s.page.context().request.get(src, { timeout: 30000, headers: { referer: s.page.url() } });
       if (!r.ok()) return res.status(502).json({ error: `the picture answered ${r.status()}` });
@@ -957,10 +992,10 @@ app.post('/v1/sessions/:id/save-image', async (req, res) => {
 app.post('/v1/sessions/:id/upload-file', async (req, res) => {
   try {
     const s = mine(req);
-    if (s.ring) return res.status(409).json({ error: 'this page is open on your device; files cannot be uploaded to it from here' });
     const { index, fileId } = req.body || {};
     const f = fileAssets.get(String(fileId || ''));
     if (!f || !f.bytes) return res.status(404).json({ error: 'no such file — save one first with browser_save_image' });
+    if (s.ring) return ringOut(res, await sessionRing.upload(s, { index, name: f.name || `${f.id}.${f.ext}`, mime: f.mime, bytes: f.bytes }));
     await freshIfMoved(s);
     const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
     /* The element is a file input or a button that opens one; either way the picker is caught, never shown. */
@@ -986,7 +1021,7 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
     const known = s.stayOnCluster ? '' : sessionRing.knownWall(target);
     const wasOnDevice = !!s.ring;
     if (wasOnDevice || (known && sessionRing.attach(s, ringOwners(req)))) {
-      return res.json({ ...(await sessionRing.navigate(s, target)), ...(!wasOnDevice ? { handedOver: true, reason: known } : {}) });
+      return ringOut(res, { ...(await sessionRing.navigate(s, target)), ...(!wasOnDevice ? { handedOver: true, reason: known } : {}) });
     }
 
     const r = await s.page.goto(target, { waitUntil: req.body?.waitUntil || 'domcontentloaded', timeout: NAV_TIMEOUT });
@@ -1065,7 +1100,7 @@ app.post('/v1/sessions/:id/click', async (req, res) => {
   try {
     const s = mine(req);
     const { index, text } = req.body || {};
-    if (s.ring) return res.json(await sessionRing.click(s, { index, text }));
+    if (s.ring) return ringOut(res, await sessionRing.click(s, { index, text }));
 
     if (text) {
       const el = s.page.getByText(String(text), { exact: false }).first();
@@ -1109,8 +1144,8 @@ async function freshIfMoved(s) {
 app.post('/v1/sessions/:id/type', async (req, res) => {
   try {
     const s = mine(req);
-    const { index, text = '', submit = false, paste = false, clear = true } = req.body || {};
-    if (s.ring) return res.json(await sessionRing.type(s, { index, text, submit }));
+    const { index, text = '', submit = false, paste = false, clear = true, commit = true } = req.body || {};
+    if (s.ring) return res.json(await sessionRing.type(s, { index, text, submit, commit }));
     if (!s.lastAnalysis) return res.status(409).json({ error: 'analyze the page first' });
     await freshIfMoved(s);
     const target = await bringIntoView(s.page, await clickByIndex(s.page, Number(index), s.lastAnalysis.elements));
@@ -1124,11 +1159,14 @@ app.post('/v1/sessions/:id/type', async (req, res) => {
     } else {
       await s.page.keyboard.type(String(text), { delay: 45 + Math.floor(Math.random() * 55) });
     }
+    // The form hears the field was left, so a check on blur runs (ringPage.COMMIT_JS; the cursor stays).
+    const committed = commit !== false || submit
+      ? await s.page.evaluate(require('./ringPage').COMMIT_JS).catch(() => null) : null;
     if (submit) {
       await s.page.keyboard.press('Enter');
       await s.page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
     }
-    res.json({ typed: String(text).length, into: target.text, mode: paste ? 'paste' : 'type', url: s.page.url() });
+    res.json({ typed: String(text).length, into: target.text, mode: paste ? 'paste' : 'type', url: s.page.url(), ...(typeof committed === 'string' ? { committed } : {}) });
   } catch (e) { fail(res, e); }
 });
 
@@ -1147,10 +1185,13 @@ app.post('/v1/sessions/:id/type', async (req, res) => {
 app.post('/v1/sessions/:id/mouse', async (req, res) => {
   try {
     const s = mine(req);
-    // a session living on the owner's device has no page here to put a mouse on
-    if (s.ring) return res.status(400).json({ error: 'this session runs on a device: click a numbered element, or by its text' });
     const x = Number(req.body?.x); const y = Number(req.body?.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return res.status(400).json({ error: 'x and y required' });
+    // On the owner's device: the app's own tap at that spot of the last screenshot (only a plain click).
+    if (s.ring) {
+      if ((req.body?.action || 'click') !== 'click') return res.status(400).json({ error: 'on a device only a click can be sent to a spot' });
+      return ringOut(res, await sessionRing.clickAt(s, x, y));
+    }
     const action = String(req.body?.action || 'click');
     if (action === 'move') await s.page.mouse.move(x, y);
     else if (action === 'dblclick') await s.page.mouse.dblclick(x, y);
@@ -1192,8 +1233,9 @@ app.post('/v1/sessions/:id/keys', async (req, res) => {
   try {
     const s = mine(req);
     if (s.ring) {
-      if (!req.body?.key) return res.status(400).json({ error: 'on a device, type into a numbered field with type; keys takes { key }' });
-      return res.json(await sessionRing.key(s, req.body.key));
+      if (req.body?.key) return ringOut(res, await sessionRing.key(s, req.body.key));
+      if (!req.body?.text) return res.status(400).json({ error: 'give key or text' });
+      return ringOut(res, await sessionRing.keyText(s, req.body.text));
     }
     await s.page.bringToFront().catch(() => {});
 
