@@ -132,6 +132,26 @@ describe('a menu item that opens below the screen', () => {
     expect(calls.some((c) => c.path === '/v1/click')).toBe(false);
     expect(calls.some((c) => onPage(c, SCRIPT_CLICK))).toBe(true);
   });
+  it('a reply label that takes no clicks is tapped where a finger would, naming what that reaches', async () => {
+    const { calls, ring, s } = ringWith(base({ inert: true, reach: 'div[role=button]', point: { x: 70, y: 310 } }));
+    const r = await ring.click(s, { index: 5 });
+    expect(r.error).toBeUndefined();
+    expect(r.how).toMatch(/pointer-events: none.*reaches <div\[role=button\]>/);
+    expect(calls.find((c) => onPage(c, POINT)).body.code).toContain('left:70,top:310');
+    expect(calls.find((c) => c.path === '/v1/click').body).toEqual({ index: 99998 });
+    expect(calls.filter((c) => onPage(c, STATE))).toHaveLength(1);   // no waiting for it to come free
+  });
+  it('one that takes no clicks with nothing under it is still refused', async () => {
+    const { calls, ring, s } = ringWith(base({ inert: true }));
+    expect((await ring.click(s, { index: 5 })).error).toMatch(/nothing under it on screen does/);
+    expect(calls.some((c) => c.path === '/v1/click')).toBe(false);
+  });
+  it('a row with its own button over the centre is tapped on a free spot', async () => {
+    const { calls, ring, s } = ringWith(base({ ok: true, cover: '', part: { x: 60, y: 140 }, nested: 'div[role=button] "..."' }));
+    const r = await ring.click(s, { index: 1 });
+    expect(r.how).toMatch(/sits over its centre, so a free spot of it was tapped/);
+    expect(calls.find((c) => c.path === '/v1/click').body).toEqual({ index: 99998 });
+  });
   it('click by text gets the same treatment', async () => {
     const { calls, ring, s } = ringWith((spec) => (onPage(spec, /var want="bericht bewerken"/)
       ? { found: 1, tag: 'div', text: 'bericht bewerken', hiddenCopies: 0 }
@@ -139,5 +159,33 @@ describe('a menu item that opens below the screen', () => {
     const r = await ring.click(s, { text: 'Bericht bewerken' });
     expect(r.how).toMatch(/on screen/);
     expect(calls.find((c) => c.path === '/v1/click').body).toEqual({ index: 99998 });
+  });
+});
+
+describe('Back, and a phone stuck on one page', () => {
+  it('Back goes back in the page (that closes a sheet on a mobile site), never an unknown key', async () => {
+    const { calls, ring, s } = ringWith((spec) => (spec.path === '/v1/info' ? info : onPage(spec, /history\.back\(\)/) ? 'went back' : 'ok'));
+    const r = await ring.key(s, 'Back');
+    expect(r).toMatchObject({ did: 'went back', pressed: 'Back' });
+    expect(calls.some((c) => c.path === '/v1/key')).toBe(false);
+  });
+  it('a navigate that stays twice lets the page itself go, and answers stuck when even that does not take', async () => {
+    let loadedAt = 111; let replaced = 0;
+    const answer = (spec) => {
+      if (spec.path === '/v1/info') return { url: 'https://www.facebook.com/search/', title: 'Facebook', ready: 'complete' };
+      if (onPage(spec, /timeOrigin/)) return loadedAt;
+      if (onPage(spec, /location\.replace/)) { replaced += 1; return 'going'; }
+      return 'ok';
+    };
+    const a = ringWith(answer);
+    const r = await a.ring.navigate(a.s, 'https://gb-debug.mavicpro-fan.my-app.engineer/');
+    expect(r).toMatchObject({ stuck: true, url: 'https://www.facebook.com/search/' });
+    expect(r.error).toMatch(/also when the page itself was told to go/);
+    expect(a.calls.filter((c) => c.path === '/v1/navigate')).toHaveLength(2);
+    expect(replaced).toBe(1);
+    // the page's own navigation takes: no error
+    const b = ringWith((spec) => (onPage(spec, /location\.replace/) ? ((loadedAt = 222), 'going') : answer(spec)));
+    loadedAt = 111;
+    expect((await b.ring.navigate(b.s, 'https://gb-debug.mavicpro-fan.my-app.engineer/')).error).toBeUndefined();
   });
 });

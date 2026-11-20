@@ -248,3 +248,26 @@ describe('an element sticking out of the screen', () => {
     expect(run(P.FIELD_TEXT_JS)).toEqual({ text: 'tak poproszę' });
   });
 });
+
+// 2026-11-20, a day on Facebook: reply buttons with pointer-events none, a notification row with "..." on top.
+describe('what a finger reaches', () => {
+  beforeEach(() => {
+    page('<div id="row" role="link"><span id="txt">Michael commented</span><div id="opts" role="button">...</div></div>'
+      + '<div id="wrap" role="button"><span id="reply" style="pointer-events:none">Beantwoorden</span></div>');
+    win.innerWidth = 400; win.innerHeight = 800;
+    number(doc.getElementById('row'), doc.getElementById('reply'));
+  });
+  it('a label with pointer-events none gives its spot and what listens there', () => {
+    rect(doc.getElementById('reply'), 20, 300, 100, 20);
+    onTop = doc.getElementById('wrap');
+    expect(run(P.stateJs(P.elementRef('screen', 1)))).toEqual({ inert: true, reach: expect.stringMatching(/div#wrap/), point: { x: 70, y: 310 } });
+    onTop = null;
+    expect(run(P.stateJs(P.elementRef('screen', 1)))).toEqual({ inert: true });
+  });
+  it('a row whose centre has its own options button is tapped on a free spot', () => {
+    const row = doc.getElementById('row'); const opts = doc.getElementById('opts'); const txt = doc.getElementById('txt');
+    rect(row, 0, 100, 400, 80);
+    doc.elementFromPoint = (x) => (x > 150 && x < 250 ? opts : txt);   // "..." over the middle
+    expect(run(P.stateJs(P.elementRef('screen', 0)))).toEqual({ ok: true, cover: '', part: { x: 60, y: 140 }, nested: expect.stringMatching(/div#opts/) });
+  });
+});

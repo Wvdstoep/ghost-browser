@@ -1239,6 +1239,10 @@ app.post('/v1/sessions/:id/keys', async (req, res) => {
     }
     await s.page.bringToFront().catch(() => {});
 
+    if (req.body?.key && /^(back|browserback|goback)$/i.test(String(req.body.key))) {   // the phone's Back, here a page back
+      await s.page.goBack({ timeout: 10000 }).catch(() => null);
+      return res.json({ url: s.page.url(), pressed: req.body.key });
+    }
     if (req.body?.key) {
       await s.page.keyboard.press(String(req.body.key));
       await s.page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});

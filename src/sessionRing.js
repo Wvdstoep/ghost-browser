@@ -323,14 +323,14 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   async function refusal(s, ref, what, seen = {}) {
     let st = await askObj(s, page.stateJs(ref, { release: true }));
     const released = !!(st && st.released);
-    for (let k = 0; k < 4 && st && (st.disabled || st.inert); k += 1) { await wait(500); st = await askObj(s, page.stateJs(ref)); }
+    for (let k = 0; k < 4 && st && (st.disabled || (st.inert && !st.point)); k += 1) { await wait(500); st = await askObj(s, page.stateJs(ref)); }
     seen.st = st;
     if (!st || st.unknown) return null;
     if (st.gone) return { error: `${what} is no longer on the page (it changed since browser_analyze). Call browser_analyze again.` };
     if (st.disabled) {
       return { error: `${what} is disabled${released ? ', also after leaving the field the cursor was in' : ''}: the form is not complete or not valid yet. Fill in what it asks for (browser_read or browser_screenshot shows the message), then click again.`, disabled: true };
     }
-    if (st.inert) return { error: `${what} does not take clicks right now (pointer-events: none). Wait for the page, or call browser_analyze again.` };
+    if (st.inert && !st.point) return { error: `${what} does not take clicks right now (pointer-events: none) and nothing under it on screen does. Wait for the page, or call browser_analyze again.` };
     if (st.cover) return { error: `${what} is covered by <${st.cover}>: a dialog, banner or overlay is on top of it. Close that first, or call browser_analyze again.`, coveredBy: st.cover };
     return null;
   }
@@ -346,11 +346,15 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
    * that is shown; one with nothing on screen is clicked by script, and the answer says so (stateJs).
    */
   async function press(s, ref, deviceIndex, st) {
-    if (st && st.part) {
-      const p = await askObj(s, page.pointJs(st.part.x, st.part.y));
+    const spot = st && (st.part || (st.inert && st.point));
+    if (spot) {
+      const p = await askObj(s, page.pointJs(spot.x, spot.y));
       if (!p || p.error) return { no: { error: 'the device could not be asked where to tap. Call browser_analyze again.' } };
       const missed = await tap(s, page.SPOT);
-      return missed ? { no: missed } : { how: 'tapped the part of it that is on screen' };
+      if (missed) return { no: missed };
+      if (st.inert) return { how: `it takes no clicks itself (pointer-events: none), so its spot was tapped, as a finger would: that reaches <${st.reach}>` };
+      if (st.nested) return { how: `<${st.nested}> sits over its centre, so a free spot of it was tapped` };
+      return { how: 'tapped the part of it that is on screen' };
     }
     if (st && st.offscreen) {
       const r = await askObj(s, page.scriptClickJs(ref));
@@ -455,10 +459,17 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (typeof was === 'number' && left() > 15000 && await ask(s, page.LOADED_AT_JS, 10000) === was) {
         log.info?.(`[ring] session ${s.id}: ${s.ring.name} did not load ${url}; asking again`);
         await call(s, '/v1/navigate', { url }, Math.max(5000, left() - 8000));
+        /* Still the same page (after a Facebook search, 2026-11-20, every navigate of every new session stayed
+           there): the page itself is told to go, which a page whose own routing holds the browser obeys. */
+        if (await ask(s, page.LOADED_AT_JS, 10000) === was && left() > 12000) {
+          log.info?.(`[ring] session ${s.id}: ${s.ring.name} still stayed; the page itself goes to ${url}`);
+          await ask(s, page.goJs(url), 10000);
+          await wait(2500);
+        }
         if (await ask(s, page.LOADED_AT_JS, 10000) === was) {
           const stuck = await info(s);
-          return { error: `${s.ring.name} stayed on ${stuck.url || 'its previous page'} and did not open ${url}. Call browser_navigate again; if it keeps happening, open the Ghost Browser app on ${s.ring.name} once.`,
-            url: stuck.url || '', title: stuck.title || '', onDevice: s.ring.name };
+          return { error: `${s.ring.name} stayed on ${stuck.url || 'its previous page'} and did not open ${url}, also when the page itself was told to go. Ask the owner to open the Ghost Browser app on ${s.ring.name} once (that wakes its browser), then call browser_navigate again.`,
+            stuck: true, url: stuck.url || '', title: stuck.title || '', onDevice: s.ring.name };
         }
       }
       if (s.ring.console) await ask(s, page.CONSOLE_JS, 10000);   // an older app: catch this page's errors from now on
@@ -608,7 +619,14 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (mods.length) {
         if (/^a$/i.test(name) && mods.every((m) => m === 'control' || m === 'meta')) return done({ did: await ask(s, page.SELECT_ALL_JS) });
         if (/^tab$/i.test(name) && mods.length === 1 && mods[0] === 'shift') return done({ did: await ask(s, page.FOCUS_PREVIOUS_JS) });
-        return { error: `${k} cannot be pressed on ${s.ring.name}: of the key combinations only Control+A and Shift+Tab work on a device. Use one key (Tab, Enter, Escape, Backspace, the arrows, Space …), or give text to type.`, onDevice: s.ring.name };
+        return { error: `${k} cannot be pressed on ${s.ring.name}: of the key combinations only Control+A and Shift+Tab work on a device. Use one key (Tab, Enter, Escape, Back, Backspace, the arrows, Space …), or give text to type.`, onDevice: s.ring.name };
+      }
+      /* The phone's Back button (2026-11-20): on a mobile site it closes the sheet, dialog or menu that is open
+         (they put themselves in the history so Back can), else goes back a page. Escape closes none of those. */
+      if (/^(back|browserback|goback)$/i.test(name)) {
+        const did = await ask(s, page.BACK_JS);
+        await wait(1200);
+        return done({ did: did || 'went back' });
       }
       if (name.length === 1) return { ...(await this.keyText(s, name)), pressed: k };
       await call(s, '/v1/key', { key: name }, 30000);

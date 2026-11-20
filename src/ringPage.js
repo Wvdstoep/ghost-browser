@@ -47,13 +47,26 @@ function stateJs(ref, { release = false } = {}) {
   if(dis){var a=document.activeElement,rel=false;
     if(${release ? 'true' : 'false'}&&a&&a!==e&&a!==document.body&&a!==document.documentElement&&a.blur){a.blur();rel=true}
     return {disabled:true,released:rel}}
-  if(getComputedStyle(e).pointerEvents==='none')return {inert:true};
+  var inert=getComputedStyle(e).pointerEvents==='none';
   try{e.scrollIntoView({block:'center',inline:'center'})}catch(x){}
   var r=e.getBoundingClientRect(),cover='',root=e.getRootNode?e.getRootNode():document;
-  var hit=function(x,y){var t=(root&&root.elementFromPoint?root:document).elementFromPoint(x,y);
+  var at=function(x,y){return (root&&root.elementFromPoint?root:document).elementFromPoint(x,y)};
+  var hit=function(x,y){var t=at(x,y);
     return !t||t===e||e.contains(t)||t.contains(e)||(t.tagName==='LABEL'&&t.control===e)||(root!==document&&t===root.host)?'':name(t)};
+  var CLICK='a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[role=checkbox],[role=switch],[onclick]';
+  /* Another control INSIDE it at that point (a row's "..." button over its centre): not this one. */
+  var nested=function(x,y){var t=at(x,y);if(!t||t===e||!e.contains(t))return null;var c=t.closest&&t.closest(CLICK);return c&&c!==e&&e.contains(c)?c:null};
   if(r.width>0&&r.height>0&&innerWidth>0){var cx=r.left+r.width/2,cy=r.top+r.height/2;
-    if(cx>=0&&cy>=0&&cx<innerWidth&&cy<innerHeight)cover=hit(cx,cy);
+    var shown=cx>=0&&cy>=0&&cx<innerWidth&&cy<innerHeight;
+    /* pointer-events: none on the label a person sees (Facebook's "Beantwoorden", 2026-11-20): it takes no
+       events itself, and a finger on it reaches what listens there, a parent or an overlay. Give that spot. */
+    if(inert){var u=shown?at(cx,cy):null;
+      return u&&u!==document.body&&u!==document.documentElement?{inert:true,reach:name(u),point:{x:Math.round(cx),y:Math.round(cy)}}:{inert:true}}
+    if(shown){cover=hit(cx,cy);var n=!cover&&nested(cx,cy);
+      if(n){var fx=[.15,.3,.7,.85,.5],fy=[.5,.3,.7];
+        for(var i=0;i<fy.length;i++)for(var j=0;j<fx.length;j++){var x=r.left+r.width*fx[j],y=r.top+r.height*fy[i];
+          if(x>=0&&y>=0&&x<innerWidth&&y<innerHeight&&!hit(x,y)&&!nested(x,y))return {ok:true,cover:'',part:{x:Math.round(x),y:Math.round(y)},nested:name(n)}}
+        return {ok:true,cover:'',nested:name(n)}}}
     else{
       /* A menu that opens below the screen is a pinned layer: scrolling does not bring it up, and a tap
          at its centre lands outside the browser (Facebook's post menu, 2026-11-20). Tap the part of it
@@ -61,6 +74,7 @@ function stateJs(ref, { release = false } = {}) {
       var L=Math.max(r.left,0),T=Math.max(r.top,0),R=Math.min(r.right,innerWidth),B=Math.min(r.bottom,innerHeight);
       if(R-L>=2&&B-T>=2){var px=(L+R)/2,py=(T+B)/2;if(!hit(px,py))return {ok:true,cover:'',part:{x:Math.round(px),y:Math.round(py)}}}
       return {ok:true,cover:'',offscreen:true}}}
+  if(inert)return {inert:true};
   return {ok:true,cover:cover}})()`;
 }
 
@@ -99,6 +113,15 @@ function focusInJs(ref) {
   if(!inside()){try{e.focus()}catch(x){}}
   if(!inside()){var c=e.querySelector&&e.querySelector('[contenteditable=true],textarea,input');if(c){try{c.focus()}catch(x){}}}
   return {focused:inside()}})()`;
+}
+
+/* The phone's Back button: the keyboard goes away (the field is left), then one step back in the history. */
+const BACK_JS = `(function(){var a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();
+  var n=history.length;history.back();return n>1?'went back':'nothing to go back to'})()`;
+
+/* A navigation the page itself makes (location.replace), for a browser whose own load does not take. */
+function goJs(url) {
+  return `(function(){try{location.replace(${JSON.stringify(String(url))});return 'going'}catch(e){return 'refused'}})()`;
 }
 
 /* What the focused field holds now, as text. */
@@ -291,6 +314,6 @@ const LOADED_AT_JS = '(typeof performance!=="undefined"&&performance.timeOrigin?
 
 module.exports = {
   PICK, SPOT, slotRef, elementRef, stateJs, findTextJs, spotJs, fieldsJs, COMMIT_JS, insertTextJs, SELECT_ALL_JS,
-  pointJs, scriptClickJs, LINE_BREAK_JS, focusInJs, FIELD_TEXT_JS,
+  pointJs, scriptClickJs, LINE_BREAK_JS, focusInJs, FIELD_TEXT_JS, BACK_JS, goJs,
   FOCUS_PREVIOUS_JS, IMAGES_JS, imageDataJs, uploadTargetJs, uploadChunkJs, uploadFinishJs, CONSOLE_JS, LOADED_AT_JS,
 };
