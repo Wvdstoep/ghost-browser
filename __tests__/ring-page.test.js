@@ -206,3 +206,45 @@ describe('the console on an older app', () => {
     expect(win.console.log).toBe(before);
   });
 });
+
+// 2026-11-20: Facebook's post menu opened below the screen; a tap at its centre landed outside the browser.
+describe('an element sticking out of the screen', () => {
+  beforeEach(() => {
+    page('<div id="menu" role="menu"><div id="edit" role="menuitem">Bericht bewerken</div></div><div id="veil"></div>');
+    win.innerWidth = 400; win.innerHeight = 800;
+    number(doc.getElementById('edit'));
+  });
+  it('gives the centre of its shown part when that part is really it', () => {
+    rect(doc.getElementById('edit'), 0, 780, 400, 60);   // 20 px on screen, the rest below
+    onTop = doc.getElementById('edit');
+    expect(run(P.stateJs(P.elementRef('screen', 0)))).toEqual({ ok: true, cover: '', part: { x: 200, y: 790 } });
+  });
+  it('says offscreen when nothing of it is shown, or its shown part is under something else', () => {
+    rect(doc.getElementById('edit'), 0, 900, 400, 60);
+    expect(run(P.stateJs(P.elementRef('screen', 0)))).toEqual({ ok: true, cover: '', offscreen: true });
+    rect(doc.getElementById('edit'), 0, 780, 400, 60);
+    onTop = doc.getElementById('veil');
+    expect(run(P.stateJs(P.elementRef('screen', 0))).offscreen).toBe(true);
+  });
+  it('the script click is heard as a tap, and a point goes into the spot slot', () => {
+    const got = [];
+    for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) doc.getElementById('edit').addEventListener(t, () => got.push(t));
+    if (!win.PointerEvent) win.PointerEvent = win.MouseEvent;
+    expect(run(P.scriptClickJs(P.elementRef('screen', 0))).clicked).toMatch(/div/);
+    expect(got).toEqual(['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']);
+    expect(run(P.pointJs(200, 790))).toEqual({ x: 200, y: 790 });
+    expect(win.__gb._els[P.SPOT].el.getBoundingClientRect()).toMatchObject({ left: 200, top: 790 });
+  });
+  it('a line break is a line break in a box and a newline in a text area, never Enter', () => {
+    page('<textarea id="t"></textarea><div id="ce" contenteditable="true"></div>');
+    const cmds = []; doc.execCommand = (c, u, v) => { cmds.push([c, v]); return true; };
+    doc.getElementById('t').focus();
+    expect(run(P.LINE_BREAK_JS)).toEqual({ ok: true });
+    doc.getElementById('ce').focus();
+    run(P.LINE_BREAK_JS);
+    expect(cmds).toEqual([['insertText', '\n'], ['insertLineBreak', undefined]]);
+    doc.getElementById('t').value = 'tak poproszę';
+    doc.getElementById('t').focus();
+    expect(run(P.FIELD_TEXT_JS)).toEqual({ text: 'tak poproszę' });
+  });
+});

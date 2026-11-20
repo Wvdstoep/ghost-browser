@@ -49,13 +49,61 @@ function stateJs(ref, { release = false } = {}) {
     return {disabled:true,released:rel}}
   if(getComputedStyle(e).pointerEvents==='none')return {inert:true};
   try{e.scrollIntoView({block:'center',inline:'center'})}catch(x){}
-  var r=e.getBoundingClientRect(),cover='';
+  var r=e.getBoundingClientRect(),cover='',root=e.getRootNode?e.getRootNode():document;
+  var hit=function(x,y){var t=(root&&root.elementFromPoint?root:document).elementFromPoint(x,y);
+    return !t||t===e||e.contains(t)||t.contains(e)||(t.tagName==='LABEL'&&t.control===e)||(root!==document&&t===root.host)?'':name(t)};
   if(r.width>0&&r.height>0&&innerWidth>0){var cx=r.left+r.width/2,cy=r.top+r.height/2;
-    if(cx>=0&&cy>=0&&cx<innerWidth&&cy<innerHeight){var root=e.getRootNode?e.getRootNode():document;
-      var t=(root&&root.elementFromPoint?root:document).elementFromPoint(cx,cy);
-      if(t&&t!==e&&!e.contains(t)&&!t.contains(e)&&!(t.tagName==='LABEL'&&t.control===e)&&!(root!==document&&t===root.host))cover=name(t)}}
+    if(cx>=0&&cy>=0&&cx<innerWidth&&cy<innerHeight)cover=hit(cx,cy);
+    else{
+      /* A menu that opens below the screen is a pinned layer: scrolling does not bring it up, and a tap
+         at its centre lands outside the browser (Facebook's post menu, 2026-11-20). Tap the part of it
+         that is on screen; with nothing on screen it can only be clicked by script. */
+      var L=Math.max(r.left,0),T=Math.max(r.top,0),R=Math.min(r.right,innerWidth),B=Math.min(r.bottom,innerHeight);
+      if(R-L>=2&&B-T>=2){var px=(L+R)/2,py=(T+B)/2;if(!hit(px,py))return {ok:true,cover:'',part:{x:Math.round(px),y:Math.round(py)}}}
+      return {ok:true,cover:'',offscreen:true}}}
   return {ok:true,cover:cover}})()`;
 }
+
+/* A point of the page (CSS pixels) into slot SPOT, for the app's own tap there. */
+function pointJs(x, y) {
+  const X = Number(x) || 0; const Y = Number(y) || 0;
+  return `(function(){if(!window.__gb||!window.__gb._els)return {error:'no page script'};
+  window.__gb._els[${SPOT}]={el:{scrollIntoView:function(){},getBoundingClientRect:function(){return {left:${X},top:${Y},width:0,height:0}}}};return {x:${X},y:${Y}}})()`;
+}
+
+/* A click by script, as the page's own handlers hear a tap: pointer and mouse down and up, then click. */
+function scriptClickJs(ref) {
+  return `(function(){var e=${ref};if(!e||e.nodeType!==1)return {error:'gone'};var name=${NAME_FN};
+  var o={bubbles:true,cancelable:true,composed:true,view:window,button:0,buttons:1};
+  try{e.dispatchEvent(new PointerEvent('pointerdown',o))}catch(x){}e.dispatchEvent(new MouseEvent('mousedown',o));
+  o.buttons=0;try{e.dispatchEvent(new PointerEvent('pointerup',o))}catch(x){}e.dispatchEvent(new MouseEvent('mouseup',o));
+  e.click();return {clicked:name(e)}})()`;
+}
+
+/*
+ * LONG TEXT AND LETTERS WITHOUT A KEY (2026-11-20). Typing key by key into Facebook's post box stopped after
+ * about 2,000 characters (each key costs ~60 ms there, so the 120 s call ran out) and at "ę" (the virtual
+ * keymap has no key for it, and the fallback key event is dropped). Such text goes in through the browser's
+ * own insert command, which the editor hears as typing; a line break is inserted as a line break (what
+ * Shift+Enter does), never Enter, so a comment box does not send half a text.
+ */
+const LINE_BREAK_JS = `(function(){var a=document.activeElement;if(!a||a===document.body)return {error:'nothing is focused'};
+  var ok=false;if('value' in a){try{ok=document.execCommand('insertText',false,'\\n')}catch(e){}}
+  else{try{ok=document.execCommand('insertLineBreak')}catch(e){}if(!ok){try{ok=document.execCommand('insertParagraph')}catch(e){}}}
+  return {ok:ok}})()`;
+
+/* Focus is in this element (a tap on a box can focus a child); else focus it. */
+function focusInJs(ref) {
+  return `(function(){var e=${ref};if(!e||e.nodeType!==1)return {error:'gone'};var a=document.activeElement;
+  var inside=function(){a=document.activeElement;return !!a&&a!==document.body&&(a===e||e.contains(a)||a.contains(e))};
+  if(!inside()){try{e.focus()}catch(x){}}
+  if(!inside()){var c=e.querySelector&&e.querySelector('[contenteditable=true],textarea,input');if(c){try{c.focus()}catch(x){}}}
+  return {focused:inside()}})()`;
+}
+
+/* What the focused field holds now, as text. */
+const FIELD_TEXT_JS = `(function(){var a=document.activeElement;if(!a||a===document.body)return {text:null};
+  return {text:'value' in a?String(a.value||''):String(a.innerText||a.textContent||'')}})()`;
 
 /*
  * CLICK BY TEXT, THE COPY A PERSON SEES. Product Hunt renders hidden copies of its buttons (other layouts,
@@ -243,5 +291,6 @@ const LOADED_AT_JS = '(typeof performance!=="undefined"&&performance.timeOrigin?
 
 module.exports = {
   PICK, SPOT, slotRef, elementRef, stateJs, findTextJs, spotJs, fieldsJs, COMMIT_JS, insertTextJs, SELECT_ALL_JS,
+  pointJs, scriptClickJs, LINE_BREAK_JS, focusInJs, FIELD_TEXT_JS,
   FOCUS_PREVIOUS_JS, IMAGES_JS, imageDataJs, uploadTargetJs, uploadChunkJs, uploadFinishJs, CONSOLE_JS, LOADED_AT_JS,
 };

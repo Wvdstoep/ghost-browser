@@ -241,6 +241,27 @@ const consoleRefusal = (url) => `The console is shown only for your own apps on 
 const page = require('./ringPage');
 const UPLOAD_CHUNK = 512 * 1024;
 
+/*
+ * KEYS OR INSERT (2026-11-20). Real key presses stay for short plain text (a search box whose suggestions
+ * answer keys); long text, and text with a letter the phone's keymap has no key for (ą, ę, ł, emoji), is
+ * inserted. Key by key cost ~60 ms a character on Facebook's post box, so a post stopped at ~2,000.
+ */
+const KEYED_MAX = 300;
+const INSERT_PIECE = 800;
+const keyable = (t) => String(t).length <= KEYED_MAX && /^[\x20-\x7e\n\t]*$/.test(String(t));
+/** Pieces of at most n characters, never splitting an emoji or another two-unit character. */
+function pieces(t, n) {
+  const chars = Array.from(String(t)); const out = [];
+  for (let k = 0; k < chars.length; k += n) out.push(chars.slice(k, k + n).join(''));
+  return out;
+}
+/** Did the field get the whole text? Spacing and line breaks may be rendered differently by an editor. */
+function arrived(got, want) {
+  const norm = (x) => String(x || '').replace(/\s+/g, ' ').trim();
+  const g = norm(got); const w = norm(want);
+  return !w || g === w || g.endsWith(w) || (g.includes(w.slice(-60)) && g.length >= w.length * 0.97);
+}
+
 const { deviceProfileFor, baseName } = require('./deviceProfile');
 
 function createSessionRing({ run, pickDevice, log = console, now = Date.now, wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
@@ -299,10 +320,11 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
    * is in is left, and the button is watched for two seconds. null = go ahead (also when the page cannot
    * tell: an element in a frame, an app without page scripts).
    */
-  async function refusal(s, ref, what) {
+  async function refusal(s, ref, what, seen = {}) {
     let st = await askObj(s, page.stateJs(ref, { release: true }));
     const released = !!(st && st.released);
     for (let k = 0; k < 4 && st && (st.disabled || st.inert); k += 1) { await wait(500); st = await askObj(s, page.stateJs(ref)); }
+    seen.st = st;
     if (!st || st.unknown) return null;
     if (st.gone) return { error: `${what} is no longer on the page (it changed since browser_analyze). Call browser_analyze again.` };
     if (st.disabled) {
@@ -317,6 +339,57 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     const r = await call(s, '/v1/click', { index: deviceIndex });
     if (r && typeof r === 'object' && (r.err || r.error)) return { error: `the device found nothing to tap there (${r.err || r.error}). Call browser_analyze again.` };
     return null;
+  }
+
+  /*
+   * The tap itself. An element sticking out of the screen (a menu that opens below it) is tapped on its part
+   * that is shown; one with nothing on screen is clicked by script, and the answer says so (stateJs).
+   */
+  async function press(s, ref, deviceIndex, st) {
+    if (st && st.part) {
+      const p = await askObj(s, page.pointJs(st.part.x, st.part.y));
+      if (!p || p.error) return { no: { error: 'the device could not be asked where to tap. Call browser_analyze again.' } };
+      const missed = await tap(s, page.SPOT);
+      return missed ? { no: missed } : { how: 'tapped the part of it that is on screen' };
+    }
+    if (st && st.offscreen) {
+      const r = await askObj(s, page.scriptClickJs(ref));
+      if (!r || r.error) return { no: { error: 'it is outside the screen and could not be clicked. Scroll (browser_scroll) or call browser_analyze again.' } };
+      return { how: 'it is outside the screen (a menu or layer that does not scroll), so it was clicked by script instead of a tap; check the result with browser_screenshot' };
+    }
+    const missed = await tap(s, deviceIndex);
+    return missed ? { no: missed } : {};
+  }
+
+  /*
+   * Text that is long or holds a letter without a key goes in by the browser's insert command (ringPage,
+   * LINE_BREAK_JS): the app's real tap focuses and empties the field, then the text arrives line by line in
+   * pieces, and what the field holds afterwards is compared with what was asked. A part that did not arrive
+   * is an error that says how much did, never "typed".
+   */
+  async function insertText(s, i, txt) {
+    await call(s, '/v1/type', { index: i, text: '' });
+    const f = await askObj(s, page.focusInJs(page.elementRef(s.ring.mode, i)));
+    if (!f || !f.focused) return { error: `the field could not be focused on ${s.ring.name}. Call browser_analyze and type into the field by its number again.` };
+    const lines = txt.split('\n');
+    for (let n = 0; n < lines.length; n += 1) {
+      if (n > 0) {
+        const br = await askObj(s, page.LINE_BREAK_JS);
+        if (!br || br.error || !br.ok) return { error: `typing stopped at line ${n + 1} of ${lines.length}: the field took no line break${br && br.error ? ` (${br.error})` : ''}.`, landed: await landed(s) };
+      }
+      for (const piece of pieces(lines[n], INSERT_PIECE)) {
+        const r = await askObj(s, page.insertTextJs(piece));
+        if (!r || r.error || !r.changed) return { error: `typing stopped at line ${n + 1} of ${lines.length}: the field took no more text${r && r.error ? ` (${r.error})` : ''}.`, landed: await landed(s) };
+      }
+    }
+    const got = await landed(s);
+    if (!arrived(got.text, txt)) return { error: `only ${got.length} of ${txt.length} characters arrived in the field on ${s.ring.name}. Read the field (browser_analyze) before typing again, so nothing goes in twice.`, landed: got };
+    return { landed: { length: got.length } };
+  }
+  async function landed(s) {
+    const r = await askObj(s, page.FIELD_TEXT_JS);
+    const text = r && typeof r.text === 'string' ? r.text : '';
+    return { text, length: text.length };
   }
 
   /** Press the cookie banner's accept, if there is one. Returns the button text it pressed. */
@@ -438,13 +511,18 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     },
     async click(s, { index, text }) {
       const before = (await info(s)).url;
+      let how = '';
       const at = (r) => ({ ...r, onDevice: s.ring.name });
       if (text) {
         // The copy that is shown and on top (ringPage.findTextJs), tapped by the app; frames go the old way.
         const found = s.ring.mode === 'dom' ? null : await askObj(s, page.findTextJs(String(text)));
         if (found && found.found) {
-          const no = (await refusal(s, page.slotRef(page.PICK), `"${text}"`)) || (await tap(s, page.PICK));
+          const seen = {};
+          const no = await refusal(s, page.slotRef(page.PICK), `"${text}"`, seen);
           if (no) return at(no);
+          const done = await press(s, page.slotRef(page.PICK), page.PICK, seen.st);
+          if (done.no) return at(done.no);
+          how = done.how || '';
         } else if (found && found.covered) {
           return at({ error: `every shown copy of "${text}" is covered by <${found.covered}>: a dialog, banner or overlay is on top. Close it first, or call browser_analyze.` });
         } else if (found && found.notfound && found.hidden > 0) {
@@ -457,12 +535,14 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         }
       } else {
         const i = Number(index) - 1;
-        const no = await refusal(s, page.elementRef(s.ring.mode, i), `element [${index}]`);
+        const seen = {};
+        const no = await refusal(s, page.elementRef(s.ring.mode, i), `element [${index}]`, seen);
         if (no) return at({ ...no, index: Number(index) });
         if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domClickJs(i) });
         else {
-          const missed = await tap(s, i);
-          if (missed) return at({ ...missed, index: Number(index) });
+          const done = await press(s, page.elementRef(s.ring.mode, i), i, seen.st);
+          if (done.no) return at({ ...done.no, index: Number(index) });
+          how = done.how || '';
         }
       }
       await wait(1500);
@@ -482,12 +562,19 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         await loaded(s, 12000);
         here = await info(s);
       }
-      if (await humanCheck(s, here)) return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name, notice: checkNotice(s) };
-      return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name };
+      const said = how ? { how } : {};
+      if (await humanCheck(s, here)) return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name, ...said, notice: checkNotice(s) };
+      return { clicked: text ? { text } : { index: Number(index) }, url: here.url, onDevice: s.ring.name, ...said };
     },
     async type(s, { index, text = '', submit = false, commit = true }) {
-      if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domTypeJs(Number(index) - 1, text) });
-      else await call(s, '/v1/type', { index: Number(index) - 1, text: String(text) });
+      const txt = String(text);
+      let inserted = null;
+      if (s.ring.mode === 'dom') await call(s, '/v1/eval', { code: domTypeJs(Number(index) - 1, txt) });
+      else if (keyable(txt)) await call(s, '/v1/type', { index: Number(index) - 1, text: txt });
+      else {
+        inserted = await insertText(s, Number(index) - 1, txt);
+        if (inserted.error) return { ...inserted, index: Number(index), onDevice: s.ring.name };
+      }
       /* The form hears that the field was left (ringPage.COMMIT_JS), so a check on blur runs and a button it
          holds disabled comes free; the cursor stays, so an Enter after this still goes into the field. */
       const committed = commit !== false || submit ? await ask(s, page.COMMIT_JS) : null;
@@ -504,7 +591,8 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         await acceptCookies(s);
       }
       const here = await info(s);
-      return { typed: String(text).length, mode: 'type', url: here.url, onDevice: s.ring.name, ...(typeof committed === 'string' ? { committed } : {}) };
+      return { typed: txt.length, mode: inserted ? 'insert' : 'type', url: here.url, onDevice: s.ring.name,
+        ...(inserted ? { landed: inserted.landed } : {}), ...(typeof committed === 'string' ? { committed } : {}) };
     },
     /*
      * One real key on the phone (Enter, Tab, Escape, ArrowDown …), into whatever has focus. The phone has no
@@ -630,4 +718,4 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
   };
 }
 
-module.exports = { createSessionRing, signInPage, looksWalled, unwrap, toElements, withField, imageWidth, consoleAllowed, consoleRefusal, hostOf, regionScriptFor, marketUrl, WALL_STATUS, CONSENT_JS, PRODUCT_JS };
+module.exports = { createSessionRing, signInPage, looksWalled, unwrap, toElements, withField, imageWidth, consoleAllowed, consoleRefusal, keyable, pieces, arrived, hostOf, regionScriptFor, marketUrl, WALL_STATUS, CONSENT_JS, PRODUCT_JS };
