@@ -249,10 +249,6 @@ describe('profiles and their locks', () => {
     pool.sessions.set('a', { id: 'a', owner: 'x', profile: 'facebook', createdAt: Date.now(), lastUsed: Date.now(), context: { close: async () => {} } });
     pool.perOwner.set('x', new Set(['a']));
 
-    const mine = await pool.createSession({ owner: 'x', maxConcurrent: 3, profile: 'facebook' }).catch((e) => e);
-    expect(mine.message).toMatch(/facebook/);
-    expect(mine.message).toMatch(/take it over/i);
-
     const theirs = await pool.createSession({ owner: 'y', maxConcurrent: 2, profile: 'facebook' }).catch((e) => e);
     expect(theirs.message).toMatch(/in use by someone else/);
     expect(theirs.canTakeover).toBe(false);
@@ -284,14 +280,6 @@ describe('taking over a profile', () => {
     pool.perOwner.set(owner, new Set(['held']));
   };
 
-  it('tells the owner it is theirs to take', async () => {
-    const pool = makePool({ maxContexts: 4 });
-    holding(pool, 'carla', 'facebook');
-    const err = await pool.createSession({ owner: 'carla', maxConcurrent: 3, profile: 'facebook' }).catch((e) => e);
-    expect(err.status).toBe(409);
-    expect(err.canTakeover).toBe(true);
-    expect(err.blockedBy).toBe('held');
-  });
 
   it('closes the old session when asked to take over', async () => {
     const pool = makePool({ maxContexts: 4 });
@@ -535,5 +523,66 @@ describe('pool shutdown: one wedged context must not cost the others their cooki
     pool.browser = b; pool.launch = async () => b;
     const r = await pool.shutdown({ perCloseMs: 500 });
     expect(r).toMatchObject({ closed: 0, abandoned: [] });
+  });
+});
+
+/*
+ * SEVERAL SESSIONS ON ONE PROFILE (2026-11-20). Research agents of one owner refused each other with
+ * "profile in use". The newcomer is now a tab in the holder's own browser: same logins, its own page, one
+ * Chromium on the directory, and closing either one leaves the other working.
+ */
+describe('a second session on a profile that is open', () => {
+  async function shared(job) {
+    const b = fakeBrowser();
+    const context = await b.newContext();
+    const page = await context.newPage();
+    const pool = makePool({ maxContexts: 6 });
+    const held = { id: 'held', owner: 'carla', profile: 'research', persistent: true, createdAt: Date.now(), lastUsed: Date.now(), context, page, ...(job ? { job } : {}) };
+    pool.sessions.set('held', held); pool.perOwner.set('carla', new Set(['held']));
+    followPopups(context, held, quiet);
+    return { pool, context, held, b };
+  }
+  it('opens a tab in the same browser for the same owner, also while a job drives the profile', async () => {
+    const { pool, context, held } = await shared({ jobId: 'walk-1', status: 'running' });
+    const r = await pool.createSession({ owner: 'carla', maxConcurrent: 3, profile: 'research' });
+    expect(r).toMatchObject({ profile: 'research', sharedWith: 'held' });
+    expect(r.notice).toMatch(/new tab in that same browser/);
+    const tab = pool.sessions.get(r.sessionId);
+    expect(tab.context).toBe(context);
+    expect(tab.page).not.toBe(held.page);
+    expect(held.page.__gbSession).toBe('held');                     // the walk keeps its own page
+    expect(context.__gbTabs).toBe(1);
+  });
+  it('another owner is still refused, and takeover of an idle session still replaces it', async () => {
+    const a = await shared();
+    expect((await a.pool.createSession({ owner: 'someone', maxConcurrent: 3, profile: 'research' }).catch((e) => e)).status).toBe(409);
+    const b = await shared();
+    await b.pool.createSession({ owner: 'carla', maxConcurrent: 3, profile: 'research', takeover: true }).catch(() => {});
+    expect(b.pool.sessions.has('held')).toBe(false);
+  }, 30000);
+  it('a window follows the session whose page opened it, never the other', async () => {
+    const { pool, context, held } = await shared();
+    const r = await pool.createSession({ owner: 'carla', maxConcurrent: 3, profile: 'research' });
+    const tab = pool.sessions.get(r.sessionId);
+    const popup = { url: () => 'https://accounts.example/', isClosed: () => false, on() {}, opener: async () => tab.page };
+    context.emitPage(popup);
+    await new Promise((res) => setTimeout(res, 0));
+    expect(tab.page).toBe(popup);
+    expect(held.page).not.toBe(popup);
+  });
+  it('closing a tab closes only its page; closing the last one closes the browser', async () => {
+    const { pool, context, held, b } = await shared();
+    let pageClosed = 0;
+    const r = await pool.createSession({ owner: 'carla', maxConcurrent: 3, profile: 'research' });
+    pool.sessions.get(r.sessionId).page.close = async () => { pageClosed += 1; };
+    pool.vaultSave = async () => {};
+    await pool.close(r.sessionId);
+    expect(pageClosed).toBe(1);
+    expect(b.closed).toHaveLength(0);
+    expect(context.__gbTabs).toBe(0);
+    await pool.close('held');
+    expect(b.closed).toHaveLength(1);
+    expect(pool.sessions.has('held')).toBe(false);
+    void held;
   });
 });

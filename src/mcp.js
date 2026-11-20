@@ -20,7 +20,7 @@ const tools = [
   ['browser_type', 'Type into a numbered element from the most recent analysis; optionally submit it. Afterwards the form is told the field was left (commit, default true), so a form that checks a field when you leave it enables its submit button; the cursor stays in the field. commit=false skips that (e.g. to pick from suggestions).', { sessionId: id, index: { type: 'integer', minimum: 1 }, text: { type: 'string' }, submit: { type: 'boolean' }, commit: { type: 'boolean' } }, ['sessionId', 'index', 'text']],
   ['browser_console', 'Read the page\'s console messages, uncaught errors and failed requests (status 400 and up, or blocked) — to find out why a page "does nothing". Only for your own apps on my-app.engineer: other sites log sign-in tokens and personal data there. Pass since (the until of the previous answer) to get only what is new.', { sessionId: id, since: { type: 'integer', minimum: 0 } }, ['sessionId']],
   ['browser_scroll', 'Scroll the page vertically.', { sessionId: id, dy: { type: 'number' } }, ['sessionId', 'dy']],
-  ['browser_read', 'Read the text of the current page.', { sessionId: id }, ['sessionId']],
+  ['browser_read', 'Read the text of the current page. A long page comes in parts: when the answer says truncated, call again with offset = its nextOffset. Text a site folds away ("See more") is not on the page until that link is clicked; the answer says so.', { sessionId: id, offset: { type: 'integer', minimum: 0, description: 'Where to start, in characters (the nextOffset of the previous answer).' }, maxChars: { type: 'integer', minimum: 500, maximum: 200000, description: 'At most this many characters (default 60000).' } }, ['sessionId']],
   ['browser_extract_product', 'Extract factual product fields from the current page for review before importing to a shop. Does not verify variants, stock, shipping or fulfillment.', { sessionId: id }, ['sessionId']],
   ['browser_screenshot', 'Capture an image of the current page.', { sessionId: id }, ['sessionId']],
   ['browser_close', 'Close your browser session.', { sessionId: id }, ['sessionId']],
@@ -30,10 +30,13 @@ const tools = [
   ['browser_file', 'Show a kept picture (fileId from browser_save_image).', { fileId: string('fileId from browser_save_image.') }, ['fileId']],
   ['watcher_feed', "Read a watcher's feed: what it found, newest and most urgent first, deduped across passes. A sources watcher also returns how each source stood on its last read (ok, blocked, thin, timeout).", { watcherId: string('The watcher (automation) id.'), limit: { type: 'integer', minimum: 1 } }, ['watcherId']],
   ['egress_check', 'Where this server leaves the internet: {ip, country, org, via}. A sources watcher reads its pages from exactly this address, never through a device or the tailnet; browserExit says where browser sessions leave, which is a different path.', {}, []],
+  ['browser_status', 'Where a session is now and whether the human check of a site ("verify you are human") is still up. After a check the owner is sent a notification on their phone; call this to see when it is solved instead of waiting blind.', { sessionId: id }, ['sessionId']],
+  ['browser_wait_for', 'Wait until a text appears on the page (at most 60 s), then say where: the address, and the link nearest to that text, e.g. the own link of the new post after Post, or of a comment after Reply.', { sessionId: id, text: string('The text to wait for.'), timeoutMs: { type: 'integer', minimum: 1000, maximum: 60000 } }, ['sessionId', 'text']],
+  ['watcher_watch_post', 'Watch a post (Facebook group or page post link) for new comments: a watcher reads its whole comment thread every few hours, keeps every branch, drafts replies for the ones waiting on you, and sends a notification to the phone of the owner when new comments wait. Returns the watcher id for watcher_feed and watcher_run.', { url: string('The post link.'), everyHours: { type: 'integer', minimum: 1, maximum: 24 }, name: string('A name for the watcher.') }, ['url']],
   ['watcher_run', 'Start one pass of a watcher now. A sources watcher refuses a pass within five minutes of the last one.', { watcherId: string('The watcher (automation) id.') }, ['watcherId']],
 ].map(([name, description, properties, required]) => ({
   name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
-  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_console', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check'].includes(name),
+  annotations: { readOnlyHint: ['browser_list', 'browser_profiles', 'browser_analyze', 'browser_console', 'browser_read', 'browser_extract_product', 'browser_screenshot', 'browser_images', 'browser_file', 'watcher_feed', 'egress_check', 'browser_status', 'browser_wait_for'].includes(name),
     destructiveHint: ['browser_click', 'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_click_at'].includes(name), openWorldHint: true },
 }));
 
@@ -97,7 +100,7 @@ function createHandler({ requestApi, toolset = tools }) {
           browser_type: ['POST', `${base}/type`, { index: args.index, text: args.text, submit: args.submit === true, commit: args.commit !== false }],
           browser_console: ['GET', `${base}/console${args.since ? `?since=${Number(args.since)}` : ''}`],
           browser_scroll: ['POST', `${base}/scroll`, { dy: args.dy }],
-          browser_read: ['GET', `${base}/content`], browser_screenshot: ['GET', `${base}/screenshot`],
+          browser_read: ['GET', `${base}/content${args.offset || args.maxChars ? `?offset=${Number(args.offset) || 0}${args.maxChars ? `&maxChars=${Number(args.maxChars)}` : ''}` : ''}`], browser_screenshot: ['GET', `${base}/screenshot`],
           browser_extract_product: ['GET', `${base}/product`],
           browser_close: ['DELETE', base],
           browser_images: ['GET', `${base}/images`],
@@ -107,6 +110,9 @@ function createHandler({ requestApi, toolset = tools }) {
           watcher_feed: ['GET', `/v1/watchers/${encodeURIComponent(String(args.watcherId))}/feed${args.limit ? `?limit=${Number(args.limit)}` : ''}`],
           egress_check: ['GET', '/v1/egress'],
           watcher_run: ['POST', `/v1/workflows/${encodeURIComponent(String(args.watcherId))}/run`, {}],
+          browser_status: ['GET', `${base}/status`],
+          browser_wait_for: ['POST', `${base}/wait`, { text: args.text, ...(args.timeoutMs ? { timeoutMs: args.timeoutMs } : {}) }],
+          watcher_watch_post: ['POST', '/v1/watchers/posts', { url: args.url, ...(args.everyHours ? { everyHours: args.everyHours } : {}), ...(args.name ? { name: args.name } : {}) }],
         };
         const [method, path, body] = routes[tool.name];
         const result = await requestApi({ method, path, body, authorization: req.get('authorization') });

@@ -275,6 +275,7 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       const i = await call(s, '/v1/info', {}, 30000);
       // null = no page to ask: the app on the device is closed (Android destroys its browser with it).
       if (!i || typeof i !== 'object') return { url: '', title: '', ready: 'closed' };
+      if (i.url && s.ring) s.ring.lastUrl = i.url;
       return { url: i.url || '', title: i.title || '', ready: i.ready || '' };
     } catch (_) { return { url: '', title: '', ready: '' }; }
   }
@@ -306,7 +307,22 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
     const t = await call(s, '/v1/eval', { code: '(document.title+"\\n"+(document.body?document.body.innerText.slice(0,1500):""))' }, 15000).catch(() => '');
     return typeof t === 'string' && t.length < 1500 && WALL_WORDS.test(t);
   }
-  const checkNotice = (s) => `${s.ring.name} was shown a "verify you are human" check by this site. Do not try to solve it: ask the owner to open the Ghost Browser app on ${s.ring.name}, solve it there once, then continue.`;
+  /*
+   * THE OWNER HEARS IT ON THE PHONE (2026-11-20): a check or a stuck browser needs the owner to open the app,
+   * and the person the session talks to is often not holding the phone. The phone shows a notification
+   * (app 0.99+; an older app answers "unsupported", which is fine). Once per kind per session in 10 minutes.
+   */
+  async function notify(s, tag, title, text) {
+    const seen = s.ring.notified || (s.ring.notified = {});
+    if (seen[tag] && now() - seen[tag] < 10 * 60 * 1000) return false;
+    seen[tag] = now();
+    try { const r = await call(s, '/v1/notify', { tag, title, text }, 15000); return !!(r && r.notified); } catch (_) { return false; }
+  }
+  const checkNotice = (s) => {
+    let site = ''; try { site = hostOf(s.ring.lastUrl || ''); } catch (_) { /* unknown */ }
+    notify(s, 'check', 'A site wants a check', `${site || 'A site'} asks to verify you are human. Tap to open Ghost Browser and solve it once.`).catch(() => {});
+    return `${s.ring.name} was shown a "verify you are human" check by this site. Do not try to solve it: the owner was sent a notification on ${s.ring.name} (app 0.99 or newer); they open the Ghost Browser app there and solve it once. browser_status says when it is gone.`;
+  };
 
   /** Run a script in the page; its value, or null when the page (or an older app) could not answer. */
   async function ask(s, code, ms = 30000) {
@@ -468,6 +484,7 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
         }
         if (await ask(s, page.LOADED_AT_JS, 10000) === was) {
           const stuck = await info(s);
+          notify(s, 'stuck', 'Ghost Browser is stuck', `It stayed on ${hostOf(stuck.url || '') || 'a page'} and cannot open the next one. Tap to open the app once, that wakes it.`).catch(() => {});
           return { error: `${s.ring.name} stayed on ${stuck.url || 'its previous page'} and did not open ${url}, also when the page itself was told to go. Ask the owner to open the Ghost Browser app on ${s.ring.name} once (that wakes its browser), then call browser_navigate again.`,
             stuck: true, url: stuck.url || '', title: stuck.title || '', onDevice: s.ring.name };
         }
@@ -488,6 +505,25 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       s.ring.elements = [];
       return { url: here.url || url, status: null, title: here.title, onDevice: s.ring.name,
         ...(cookies ? { acceptedCookies: cookies } : {}), ...(here.notice ? { notice: here.notice } : {}) };
+    },
+    /* Where the session is and whether a human check is still up (after the owner was asked to solve it). */
+    async status(s) {
+      const here = await info(s);
+      const check = here.ready !== 'closed' && here.url ? await humanCheck(s, here) : false;
+      return { url: here.url, title: here.title, ready: here.ready || '', humanCheck: !!check, onDevice: s.ring.name,
+        ...(here.ready === 'closed' ? { notice: `the Ghost Browser app on ${s.ring.name} is closed; it opens again on the next command` } : {}) };
+    },
+    /* Wait until a text is on the page (at most 60 s), then where it is and the link nearest to it. */
+    async waitFor(s, text, timeoutMs = 20000) {
+      const until = now() + Math.max(1000, Math.min(60000, Number(timeoutMs) || 20000));
+      let r = null;
+      do {
+        r = await askObj(s, page.waitTextJs(text), 10000);
+        if (r && r.found) return { found: true, url: r.url || '', ...(r.link ? { link: r.link } : {}), ...(r.near ? { near: r.near } : {}), onDevice: s.ring.name };
+        if (now() >= until) break;
+        await wait(1000);
+      } while (now() < until);
+      return { found: false, url: (r && r.url) || (await info(s)).url, onDevice: s.ring.name, error: `"${String(text).slice(0, 80)}" did not appear on the page within ${Math.round((Number(timeoutMs) || 20000) / 1000)} s` };
     },
     async content(s) {
       const first = await loaded(s, 15000);
@@ -511,13 +547,15 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       // Disabled, value, placeholder, ticked, on screen: per element of the top page (frames keep the scan's).
       const st = await askObj(s, page.fieldsJs(s.ring.mode), 20000);
       if (st && Array.isArray(st.fields)) elements = elements.map((e, n) => withField(e, st.fields[n], Number(st.ih)));
-      s.ring.elements = elements;
+      s.ring.elements = elements;   // the full list: a click by number resolves against it
+      const { kept, merged } = require('./repeats').collapseRepeats(elements);
       const here = await info(s);
-      const summary = elements.slice(0, 150).map((e) => `[${e.index}] ${e.tag}${e.role ? `(${e.role})` : ''} ${e.text || e.label || e.placeholder || ''}`.trim()
+      const summary = kept.slice(0, 150).map((e) => `[${e.index}] ${e.tag}${e.role ? `(${e.role})` : ''} ${e.text || e.label || e.placeholder || ''}`.trim()
         + (e.value ? ` = "${String(e.value).slice(0, 60)}"` : '') + (e.password ? (e.filled ? ' (filled)' : ' (empty)') : '')
         + (e.checked ? ' (checked)' : '') + (e.disabled ? ' (disabled)' : '')).join('\n');
       const files = st && Number(st.fileInputs) > 0 ? Number(st.fileInputs) : 0;
-      return { url: here.url, title: here.title, elementCount: elements.length, elements, summary, screenshot: null, onDevice: s.ring.name,
+      return { url: here.url, title: here.title, elementCount: kept.length, elements: kept, summary, screenshot: null, onDevice: s.ring.name,
+        ...(merged.length ? { repeatsMerged: merged.length } : {}),
         ...(files ? { fileInputs: files, hint: `${files} file field(s) on this page, maybe hidden behind an upload button: browser_upload_file with the number of that button puts a kept file in.` } : {}) };
     },
     async click(s, { index, text }) {

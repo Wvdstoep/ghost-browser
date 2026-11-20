@@ -124,6 +124,27 @@ function goJs(url) {
   return `(function(){try{location.replace(${JSON.stringify(String(url))});return 'going'}catch(e){return 'refused'}})()`;
 }
 
+/*
+ * WAIT FOR A TEXT, AND SAY WHERE IT IS (2026-11-20). After "Plaatsen" there was no link to the new post,
+ * so checking it went up meant searching the feed while the post slid away. This finds the text on the
+ * page and the link nearest to it: the element's own link, else a permalink in the block around it
+ * (a post, comment or story address before any other link).
+ */
+function waitTextJs(text) {
+  const want = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return `(function(){var want=${JSON.stringify(want)};if(!want||!document.body)return {found:false};
+  var hay=(document.body.innerText||'').replace(/\\s+/g,' ').toLowerCase();if(hay.indexOf(want)<0)return {found:false,url:location.href};
+  var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),n,el=null,probe=want.slice(0,40);
+  while((n=w.nextNode())){var t=(n.nodeValue||'').replace(/\\s+/g,' ').toLowerCase();if(t&&(t.indexOf(probe)>-1||probe.indexOf(t.trim())===0&&t.trim().length>8)){el=n.parentElement;break}}
+  var PERMA=/\\/posts\\/|\\/permalink|story_fbid|comment_id|\\/status\\/|\\/p\\/|\\/reel\\/|\\/videos\\//;
+  var link='',up=el,hops=0;
+  if(el&&el.closest){var own=el.closest('a[href]');if(own)link=own.href}
+  while(!link&&up&&hops<8){var as=up.querySelectorAll?up.querySelectorAll('a[href]'):[];
+    for(var i=0;i<as.length;i++){if(PERMA.test(as[i].href)){link=as[i].href;break}}up=up.parentElement;hops++}
+  var near=el?String(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim().slice(0,200):'';
+  return {found:true,url:location.href,link:link,near:near}})()`;
+}
+
 /* What the focused field holds now, as text. */
 const FIELD_TEXT_JS = `(function(){var a=document.activeElement;if(!a||a===document.body)return {text:null};
   return {text:'value' in a?String(a.value||''):String(a.innerText||a.textContent||'')}})()`;
@@ -314,6 +335,6 @@ const LOADED_AT_JS = '(typeof performance!=="undefined"&&performance.timeOrigin?
 
 module.exports = {
   PICK, SPOT, slotRef, elementRef, stateJs, findTextJs, spotJs, fieldsJs, COMMIT_JS, insertTextJs, SELECT_ALL_JS,
-  pointJs, scriptClickJs, LINE_BREAK_JS, focusInJs, FIELD_TEXT_JS, BACK_JS, goJs,
+  pointJs, scriptClickJs, LINE_BREAK_JS, focusInJs, FIELD_TEXT_JS, BACK_JS, goJs, waitTextJs,
   FOCUS_PREVIOUS_JS, IMAGES_JS, imageDataJs, uploadTargetJs, uploadChunkJs, uploadFinishJs, CONSOLE_JS, LOADED_AT_JS,
 };

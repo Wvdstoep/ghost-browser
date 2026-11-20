@@ -243,6 +243,7 @@ async function refusePasskeys(context, log = console) {
  * context that cannot emit request events simply learns no cards, which is where things stand without
  * this at all.
  */
+/* `context` may be one page: a tab session hears only its own tab's requests. */
 function attachRecorder(context, session, makeRecorder, log = console) {
   if (!session.recorder) session.recorder = makeRecorder({ log });
   if (typeof context.on !== 'function') return;
@@ -271,25 +272,35 @@ function followPopups(context, session, log = console) {
    * dead object, and every subsequent call threw "Target page, context or browser has been closed".
    * Three real runs died exactly there.
    */
+  /* In a browser shared by tab sessions (pool.openTab) a page belongs to one of them: never another's. */
+  const ours = (x) => !x.__gbSession || x.__gbSession === session.id;
   const watchClose = (p) => {
     if (typeof p.on !== 'function') return;
     p.on('close', () => {
       if (session.page !== p) return;
       let left = [];
-      try { left = context.pages().filter((x) => !x.isClosed()); } catch { /* context gone */ }
+      try { left = context.pages().filter((x) => !x.isClosed() && ours(x)); } catch { /* context gone */ }
       session.page = left[left.length - 1] || null;
       session.lastAnalysis = null;
       log.info?.(`[pool] ${session.id} back to ${session.page ? session.page.url() : 'nothing'}`);
     });
   };
 
-  for (const p of (context.pages?.() || [])) watchClose(p);
+  for (const p of (context.pages?.() || [])) if (ours(p)) watchClose(p);
 
-  context.on('page', (p) => {
+  const follow = (p) => {
+    p.__gbSession = session.id;
     session.page = p;
     session.lastAnalysis = null;      // the numbers belonged to a different document entirely
     log.info?.(`[pool] ${session.id} follows a new window — ${p.url() || 'about:blank'}`);
     watchClose(p);
+  };
+  context.on('page', (p) => {
+    if (context.__gbOpeningTab) return;              // a tab session's own new tab, not a popup
+    if (!context.__gbTabs) return follow(p);         // one session in this browser: every window is its
+    // Shared: a window follows the session whose page opened it, and nobody else.
+    Promise.resolve(typeof p.opener === 'function' ? p.opener() : null).catch(() => null)
+      .then((op) => { if (op && op === session.page && !p.__gbSession) follow(p); });
   });
 }
 
@@ -559,9 +570,19 @@ class BrowserPool {
          * page the victim was navigating, the victim loses its browser. Live proof: a Workshop build
          * probing olx.pl and a research walk reading Clio traded the google profile until the build
          * reported a malware hijack. 409 is the honest answer — callers already wait and retry.
+         * (Since 2026-11-20 the same owner is not refused at all: it gets its own tab, below, which takes
+         * nothing from the walk. The busy refusal remains for anyone else.)
          */
         const driving = holder.job && holder.job.status !== 'idle' && holder.job.status !== 'done'
           && holder.job.status !== 'failed' && holder.job.status !== 'stopped';
+        /*
+         * SEVERAL SESSIONS ON ONE PROFILE (2026-11-20): research agents of one owner refused each other
+         * ("profile in use"). Two Chromiums on one directory corrupt it, but one browser holds as many
+         * tabs as anyone likes: the newcomer gets its own tab in the holder's browser, with the same
+         * logins, and takes nothing from the walk already running there. A takeover asked for on an
+         * idle session still replaces it; another owner is still refused.
+         */
+        if (holder.owner === owner && (driving || !takeover)) return this.openTab(holder, { owner, reuseId, mine });
         if (driving) {
           this.stats.rejected++;
           throw Object.assign(
@@ -754,6 +775,30 @@ class BrowserPool {
     return s;
   }
 
+  /* A session that is one more tab in the browser `holder` runs (same profile, same logins). */
+  async openTab(holder, { owner, reuseId, mine }) {
+    const context = holder.context;
+    context.__gbOpeningTab = true;
+    let page;
+    try { page = await context.newPage(); } finally { context.__gbOpeningTab = false; }
+    const id = reuseId || `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    page.__gbSession = id;
+    if (holder.page && !holder.page.__gbSession) holder.page.__gbSession = holder.id;
+    context.__gbTabs = (context.__gbTabs || 0) + 1;
+    const at = Date.now();
+    const session = { id, context, page, owner, profile: holder.profile, persistent: true, tabOf: holder.id, createdAt: at, lastUsed: at, pages: 1, lastAnalysis: null };
+    followPopups(context, session, this.log);
+    diag.attach(page, session, this.log);
+    attachRecorder(page, session, makeRecorder, this.log);
+    this.sessions.set(id, session);
+    mine.add(id);
+    this.perOwner.set(owner, mine);
+    this.stats.created++;
+    this.log.info?.(`[pool] + ${id} (${owner}, profile "${holder.profile}", a tab beside ${holder.id}) — ${this.sessions.size}/${this.limits.maxContexts}`);
+    return { sessionId: id, profile: holder.profile, sharedWith: holder.id, expiresAt: at + this.limits.ttlMs,
+      notice: `profile "${holder.profile}" is already open in session ${holder.id}, so this session is a new tab in that same browser: the same logins, its own page.` };
+  }
+
   async close(id, why = 'closed') {
     const s = this.sessions.get(id);
     if (!s) return false;
@@ -770,7 +815,16 @@ class BrowserPool {
     /* The freshest, cheapest moment to write the session down, and the one that catches a login made
        seconds before a deploy. Bounded so a wedged context cannot make closing slower. */
     if (s.persistent && s.profile) await this.vaultSave(s, 'close');
-    try { await s.context.close(); } catch { /* already gone */ }
+    // A browser other sessions still have tabs in stays open: only this session's own pages go.
+    const shared = [...this.sessions.values()].some((o) => o.context === s.context);
+    if (shared) {
+      let own = [];
+      try { own = s.context.pages().filter((p) => p.__gbSession === s.id || p === s.page); } catch { /* context gone */ }
+      for (const p of own) { try { await p.close(); } catch { /* already gone */ } }
+      if (s.tabOf || s.context.__gbTabs) s.context.__gbTabs = Math.max(0, (s.context.__gbTabs || 1) - 1);
+    } else {
+      try { await s.context.close(); } catch { /* already gone */ }
+    }
     this.log.info?.(`[pool] - ${id} (${why}) — ${this.sessions.size}/${this.limits.maxContexts}`);
     return true;
   }

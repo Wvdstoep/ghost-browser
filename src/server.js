@@ -872,6 +872,39 @@ const ringOut = (res, r) => res.status(r && r.error ? 409 : 200).json(r);
  * THE PAGE'S CONSOLE AND FAILED REQUESTS (browser_console), for the account's own apps only — see
  * sessionRing.consoleAllowed for why. On the cluster it is what diagnostics.js already collects.
  */
+/*
+ * STATUS AND WAITING (2026-11-20, a day on Facebook through the phone). The session waited blind for the
+ * owner to solve a check, and after "Plaatsen" had no address of what it posted. /status says where the
+ * session is and whether a human check is still up; /wait waits for a text and returns where it is and
+ * the link nearest to it (the new post's own address).
+ */
+app.get('/v1/sessions/:id/status', async (req, res) => {
+  try {
+    const s = mine(req);
+    if (s.ring) return res.json(await sessionRing.status(s));
+    const url = s.page.url(); const title = await s.page.title().catch(() => '');
+    const sample = await s.page.evaluate(() => (document.body ? document.body.innerText.slice(0, 3000) : '')).catch(() => '');
+    res.json({ url, title, ready: 'complete', humanCheck: /captcha|challenge|\/punish/i.test(url) || !!require('./sessionRing').looksWalled({ title, sample }) });
+  } catch (e) { fail(res, e); }
+});
+app.post('/v1/sessions/:id/wait', async (req, res) => {
+  try {
+    const s = mine(req);
+    const text = String((req.body || {}).text || '').trim();
+    if (!text) return res.status(400).json({ error: 'give the text to wait for' });
+    const ms = Math.max(1000, Math.min(60000, Number((req.body || {}).timeoutMs) || 20000));
+    if (s.ring) return ringOut(res, await sessionRing.waitFor(s, text, ms));
+    const code = require('./ringPage').waitTextJs(text);
+    const until = Date.now() + ms; let r = null;
+    do {
+      r = await s.page.evaluate(code).catch(() => null);
+      if (r && r.found) return res.json({ found: true, url: r.url, ...(r.link ? { link: r.link } : {}), ...(r.near ? { near: r.near } : {}) });
+      await new Promise((ok) => setTimeout(ok, 1000));
+    } while (Date.now() < until);
+    res.status(409).json({ found: false, url: s.page.url(), error: `"${text.slice(0, 80)}" did not appear on the page within ${Math.round(ms / 1000)} s` });
+  } catch (e) { fail(res, e); }
+});
+
 app.get('/v1/sessions/:id/console', async (req, res) => {
   try {
     const s = mine(req);
@@ -1088,9 +1121,13 @@ app.get('/v1/sessions/:id/analyze', async (req, res) => {
       scrollY: await s.page.evaluate(() => window.scrollY).catch(() => 0),
     };
     const withShot = req.query.screenshot !== 'false';
+    // One thing listed once (repeats.js): same text, boxes inside one another. Numbers stay as they were.
+    const { collapseRepeats, dropSummaryLines } = require('./repeats');
+    const { kept, merged } = collapseRepeats(analysis.elements);
     res.json({
-      url: analysis.url, title: analysis.title, elementCount: analysis.elementCount,
-      elements: analysis.elements, summary: analysis.summary,
+      url: analysis.url, title: analysis.title, elementCount: kept.length,
+      elements: kept, summary: dropSummaryLines(analysis.summary, merged),
+      ...(merged.length ? { repeatsMerged: merged.length } : {}),
       screenshot: withShot ? analysis.screenshot : null,
     });
   } catch (e) { fail(res, e); }
@@ -5488,6 +5525,28 @@ app.get('/v1/egress', watchOrAuthed('egress'), async (req, res) => {
  * A SOURCES WATCHER, MADE IN ONE CALL: the flow (just a schedule) and its config. Hours, not minutes —
  * sourceWatch refuses to read the same pages more than once an hour anyway.
  */
+/*
+ * WATCH ONE POST FOR NEW COMMENTS (2026-11-20): a session polled the notifications page every ten minutes.
+ * A posts watcher (postWatch.js) reads the post's whole comment tree on a schedule, keeps every branch and
+ * drafts replies; this makes one for a post, from the connector, and its new comments reach the owner's
+ * phone as a notification (notifyPhones). watcher_feed reads what it found.
+ */
+app.post('/v1/watchers/posts', authed, (req, res) => {
+  try {
+    const pw = require('./postWatch'); const b = req.body || {};
+    const url = String(b.url || '').trim();
+    if (!pw.postIdOf(url)) return res.status(400).json({ error: 'that is not a post link (needs post_id or /posts/<id>/)' });
+    const hours = Math.max(1, Math.min(24, Math.round(Number(b.everyHours) || 1)));
+    const trigger = { type: 'schedule', every: 'hour', n: hours };
+    const rec = workflows.save({ name: String(b.name || 'Comments on a post').slice(0, 120), active: true, trigger, nodes: [{ id: 'trigger', type: 'trigger', label: 'Every ' + hours + ' h', trigger }], edges: [] }, wfRoleNames());
+    const wid = (rec && rec.id) || (rec && rec.workflow && rec.workflow.id);
+    require('./watcherFeed').setConfig(wid, { mode: 'posts', postUrls: [url], selfDiscover: false, notifyPhone: b.notify !== false,
+      ...(b.profile ? { profile: profiles.safeName(String(b.profile)) } : {}) });
+    res.json({ id: wid, watching: url, everyHours: hours, notify: b.notify !== false,
+      next: 'watcher_run starts a pass now; watcher_feed shows the comments it found and the ones waiting on you. The pass reads Facebook in the "facebook" browser profile of this account, which must be signed in.' });
+  } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
+});
+
 app.post('/v1/watchers/sources', authed, (req, res) => {
   try {
     const sw = require('./sourceWatch'); const b = req.body || {};
@@ -6325,7 +6384,18 @@ async function postWatchTick(wf, owner, opts) {
     } catch (e) { health.errors.push(`${url}: ${e.message}`); log.error(`[post-watch] ${url}: ${e.message}`); }
   }
   health.endedAt = Date.now();
+  const before = (cfg.lastPass && Number(cfg.lastPass.waiting)) || 0;
   feed.setConfig(wf.id, { lastPass: health });
+  if (cfg.notifyPhone && health.waiting > before) {
+    notifyPhones(owner, { tag: `post-${wf.id}`, title: 'New comments on your post', text: `${health.waiting - before} new comment(s) waiting on you (${wf.name}).` });
+  }
+}
+/* A notification on the owner's online phones (app 0.99+; others answer unsupported). Never throws. */
+function notifyPhones(owner, { tag, title, text }) {
+  let list = [];
+  try { list = deviceHub.deviceList().filter((d) => d.online && d.owner === owner && (!d.caps || d.caps.platform !== 'desktop')); } catch (e) { list = []; }
+  for (const d of list) deviceHub.runCommand(d.deviceId, { method: 'POST', path: '/v1/notify', body: { tag, title, text } }, 15000).catch(() => {});
+  return list.length;
 }
 /*
  * ── THE GB OPERATOR ──────────────────────────────────────────────────────────────────────────────
@@ -7976,17 +8046,19 @@ app.get('/v1/sessions/:id/probe', async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+const { readPart } = require('./readPart');   // a page in parts, and what it folds away
+
 app.get('/v1/sessions/:id/content', async (req, res) => {
   try {
     const s = mine(req);
-    if (s.ring) return res.json(await sessionRing.content(s));
+    if (s.ring) return res.json(readPart(await sessionRing.content(s), req.query));
     const content = await s.page.evaluate(() => {
       const junk = document.querySelectorAll('script, style, noscript, svg, iframe');
       junk.forEach((n) => n.remove());
       const main = document.querySelector('main, article, [role="main"]') || document.body;
       return (main.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
     });
-    res.json({ url: s.page.url(), title: await s.page.title().catch(() => ''), chars: content.length, content: content.slice(0, 200000) });
+    res.json(readPart({ url: s.page.url(), title: await s.page.title().catch(() => ''), content }, req.query));
   } catch (e) { fail(res, e); }
 });
 

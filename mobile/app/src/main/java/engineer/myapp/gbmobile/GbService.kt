@@ -101,6 +101,7 @@ class GbService : Service() {
     /** Commands for the default browser run in the service's own window; logged-in profiles and anything
      *  else run in the app (reopened in the background when it is not open). */
     private fun dispatch(path: String, body: org.json.JSONObject): String {
+        if (path == "/v1/notify") return notifyOwner(body)
         /* Only a profile this phone has and shares with the cluster ("default" or synced), in the store
            behind that name. A name it does not have used to get a fresh, empty store: the AliExpress pages
            of 2026-11-01 all showed the login screen though the owner had signed in. Now the cluster is told
@@ -125,6 +126,34 @@ class GbService : Service() {
             }
         return screen?.runDeviceCommand(path, body.toString())
             ?: "{\"error\":\"This needs the Ghost Browser app (a signed-in profile); it could not be opened on the phone.\"}"
+    }
+
+    /*
+     * THE PHONE ASKS ITS OWNER (2026-11-20). A site's "verify you are human" check, or a browser stuck on one
+     * page, needs the owner to open the app once, and the session could only tell the person it was talking
+     * to, who was often not holding the phone. Now the cluster sends this, and the phone shows it: a tap opens
+     * the app, where the check is solved (same cookies) and the browser wakes. Also new comments a watcher found.
+     */
+    private fun notifyOwner(body: org.json.JSONObject): String {
+        val channelId = "gb_attention"
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm.getNotificationChannel(channelId) == null) {
+            nm.createNotificationChannel(NotificationChannel(channelId, "Needs you", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val title = body.optString("title", "Ghost Browser needs you").take(80)
+        val text = body.optString("text", "Open the app").take(400)
+        val tag = body.optString("tag", "attention").take(40)
+        val open = PendingIntent.getActivity(this, tag.hashCode(),
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(this, channelId)
+            .setContentTitle(title).setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true).setContentIntent(open).build()
+        return try { nm.notify(tag, 2, n); "{\"notified\":true}" }
+        catch (e: SecurityException) { "{\"error\":\"notifications are not allowed for Ghost Browser on this phone\"}" }
     }
 
     private fun startRing() {
