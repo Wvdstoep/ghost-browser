@@ -102,6 +102,17 @@ describe('build-vm.sh', () => {
     expect(vm).toMatch(/if str\(s\["id"\]\)==cur: continue/);                 // the sweep leaves the warm VM to reap
     expect(vm).toMatch(/live\(\) \{ reap \|\| true;/);                         // checked every minute by the host watchdog
   });
+  /* 2026-11-21: "HTTP 412 resource_unavailable: error during placement" for cx43 in hel1; pipelines 2911 and 2912
+     built on the server. Tested live: BUILD_VM_LOCATION=sin answered 422 and the script rented cx43 in hel1. */
+  it('sold out (412) or not offered (422): the next location, then a comparable type, before the server builds', () => {
+    const fn = vm.slice(vm.indexOf('candidates() {'), vm.indexOf('\n}\n', vm.indexOf('candidates() {')) + 3);
+    const list = execFileSync('bash', ['-c', `${fn}\nTYPE=cx43 LOCATION=hel1; candidates`], { encoding: 'utf8' }).trim().split(/\s+/);
+    expect(list.slice(0, 4)).toEqual(['cx43@hel1', 'cx43@fsn1', 'cx43@nbg1', 'cx53@hel1']);
+    expect(new Set(list).size).toBe(list.length);
+    expect(list).toHaveLength(12);
+    expect(vm).toMatch(/case "\$\(cat "\$STATE\/hc\.code" 2>\/dev\/null\)" in 412\|422\) continue ;; \*\) return 1 ;; esac/);
+    expect(vm).toMatch(/tr -s '\\n\\t ' ' '/);    // the whole error on one line, not "}"
+  });
   it('the server watchdog sweeps every 15 minutes and reports a VM left running', () => {
     expect(watch).toMatch(/build-vm\.sh sweep/);
     expect(watch).toMatch(/report build-vm warn "A rented build VM is still running"/);
