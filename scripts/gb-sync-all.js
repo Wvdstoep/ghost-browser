@@ -29,7 +29,7 @@ function syncRegistryCredentials(source, target, prefix, run) {
 const BACKOFF_H = [1, 3, 6, 12, 24];
 const backoffMs = (fails) => BACKOFF_H[Math.min(Math.max(fails, 1), BACKOFF_H.length) - 1] * 3600 * 1000;
 
-function syncAll(image, run, log = console.log, importImage = null, { state = null, now = Date.now() } = {}) {
+function syncAll(image, run, log = console.log, importImage = null, { state = null, now = Date.now(), nestedHours = null, hour = new Date(now).getHours() } = {}) {
   if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image)) throw new Error('Invalid release image');
   const root = JSON.parse(run(['get', 'deployments', '-A', '-o', 'json'])).items;
   let failed = false;
@@ -54,13 +54,19 @@ function syncAll(image, run, log = console.log, importImage = null, { state = nu
             'fetch("http://127.0.0.1:3000/v1/deploy/readiness",{headers:{authorization:"Bearer "+require("/app/src/keys").parseKeys().keys().next().value}}).then(async r=>{if(!r.ok)throw Error("readiness failed");console.log(JSON.stringify(await r.json()))}).catch(()=>process.exit(1))']));
           if (ready.busy !== 0) { log(`${dep.metadata.namespace}: busy; retry next cycle`); continue; }
         }
+        // NIGHT ONLY for an owned cluster (2026-11-21): its copy of a 2.7 GB image lands on the disk etcd shares, and
+        // a browser a few hours behind costs its owner nothing. nestedHours = [from, to) in the server's local time.
+        if (prefix.length && nestedHours && !(hour >= nestedHours[0] && hour < nestedHours[1])) {
+          log(`${dep.metadata.namespace}: ${image} waits for the night window (${nestedHours[0]}:00-${nestedHours[1]}:00)`);
+          continue;
+        }
         if (source) syncRegistryCredentials(source, dep, prefix, run);
-        // A RELEASE IS DELIVERED TO AN OWNED CLUSTER, NOT PULLED THERE. The platform cluster never pulls
-        // its browser either (gb-auto-deploy ctr-imports it). An owned cluster used to "set image" and
-        // pull from the private repo with the owner's copied credential; that pull was refused on every
-        // release (v702-v704). Its browser runs Recreate, so it was DOWN until the next 15-minute
-        // pass found it pull-blocked and imported the image. The signed image now goes in first, and
-        // the pod starts from that copy.
+        // AN OWNED CLUSTER PULLS THE SIGNED RELEASE ITSELF (2026-11-21). It used to "set image" and pull, which left
+        // its Recreate browser down while a pull was refused (v702-v704); then the image was STREAMED in (docker
+        // save | kubectl exec … ctr import), 2.7 GB through the platform's API server, which timed out and failed
+        // 154 times, every 15 minutes, on the disk etcd shares. Now a short-lived pull pod in that cluster fetches
+        // it with the copied pull secret (no password on any command line), the browser keeps running meanwhile,
+        // and only a pulled image is switched to.
         if (prefix.length && importImage) {
           const key = `${prefix[1] || 'platform'}/${dep.metadata.namespace}`;
           const was = state && state[key];
@@ -68,7 +74,7 @@ function syncAll(image, run, log = console.log, importImage = null, { state = nu
             log(`${dep.metadata.namespace}: waiting until ${new Date(was.retryAt).toISOString()} before sending ${image} again (failed ${was.fails}x: ${was.why})`);
             continue;
           }
-          try { importImage(image, prefix); if (state) delete state[key]; }
+          try { importImage(image, prefix, { dep, container, run, log }); if (state) delete state[key]; }
           catch (e) {
             if (state) { const fails = was && was.image === image ? was.fails + 1 : 1; state[key] = { image, fails, retryAt: now + backoffMs(fails), why: String(e.message || e).slice(0, 200) }; }
             throw e;
@@ -116,15 +122,66 @@ function importHostedImage(image, prefix, exec = execFileSync) {
   } catch (e) { throw new Error(`signed browser image transfer failed: ${transferWhy(e)}`); }
 }
 
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/*
+ * THE OWNED CLUSTER PULLS IT (2026-11-21). The signature is checked here first; then a pull pod in the target
+ * namespace, with the browser's own pull secrets and security context, asks that cluster's kubelet for the image
+ * and exits at once. Kubernetes keeps the credential inside the cluster (nothing on a command line), the running
+ * browser is untouched, and a refusal comes back as the kubelet's own words ("unauthorized", "not found").
+ */
+function prePullImage(image, prefix, { dep, container, run, log = () => {}, exec = execFileSync, sleep = sleepSync, now = Date.now, timeoutMs = 25 * 60 * 1000 } = {}) {
+  if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image) || !Array.isArray(prefix) || prefix[prefix.length - 1] !== 'kubectl') throw new Error('Invalid browser image transfer');
+  try {
+    exec('sudo', ['cosign', 'verify', '--key', process.env.COSIGN_PUB || '/etc/cosign/cosign.pub', '--insecure-ignore-tlog', image], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
+  } catch (e) { throw new Error(`signed browser image transfer failed: signature check (${transferWhy(e)})`); }
+  const ns = dep.metadata.namespace;
+  const pod = `gb-prepull-v${image.split(':v')[1]}`;
+  const tpl = dep.spec.template.spec;
+  const manifest = {
+    apiVersion: 'v1', kind: 'Pod',
+    metadata: { name: pod, namespace: ns, labels: { 'app-cluster/gb-prepull': 'true' } },
+    spec: {
+      restartPolicy: 'Never', terminationGracePeriodSeconds: 0,
+      ...(tpl.imagePullSecrets ? { imagePullSecrets: tpl.imagePullSecrets } : {}),
+      ...(tpl.securityContext ? { securityContext: tpl.securityContext } : {}),
+      containers: [{ name: 'pull', image, imagePullPolicy: 'IfNotPresent', command: ['node', '-e', '0'],
+        ...(container && container.securityContext ? { securityContext: container.securityContext } : {}),
+        resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { memory: '64Mi' } } }],
+    },
+  };
+  const args = [...prefix, '-n', ns];
+  const drop = () => { try { run([...args, 'delete', 'pod', pod, '--ignore-not-found', '--wait=false']); } catch { /* gone */ } };
+  drop();
+  run([...prefix, 'apply', '-f', '-'], JSON.stringify(manifest));
+  const until = now() + timeoutMs;
+  try {
+    for (;;) {
+      let st = null;
+      try { st = ((JSON.parse(run([...args, 'get', 'pod', pod, '-o', 'json'])).status || {}).containerStatuses || [])[0] || null; } catch { st = null; }
+      const waiting = st && st.state && st.state.waiting;
+      if (st && (st.imageID || (st.state && (st.state.running || st.state.terminated)))) { log(`${ns}: ${image} pulled by the cluster itself`); return; }
+      if (waiting && /ErrImagePull|ImagePullBackOff|InvalidImageName|ErrImageNeverPull/.test(waiting.reason || '')) {
+        throw new Error(`signed browser image transfer failed: the cluster could not pull it (${waiting.reason}: ${String(waiting.message || '').slice(0, 160)})`);
+      }
+      if (now() > until) throw new Error('signed browser image transfer failed: the pull did not finish in 25 minutes');
+      sleep(15000);
+    }
+  } finally { drop(); }
+}
+
 if (require.main === module) {
   try {
     const run = (args, input) => execFileSync('sudo', ['kubectl', ...args], { input, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
     const fs = require('node:fs');
     const stateFile = process.env.GB_SYNC_STATE || require('node:path').join(require('node:os').homedir(), '.gb-sync-state.json');
     let state = {}; try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) || {}; } catch { state = {}; }
-    const ok = syncAll(process.argv[2], run, console.log, importHostedImage, { state });
+    // Owned clusters pull the release themselves, at night (GB_NESTED_HOURS="1-6", "0-24" = any time).
+    const hours = String(process.env.GB_NESTED_HOURS || '1-6').split('-').map(Number);
+    const nestedHours = hours.length === 2 && hours.every(Number.isFinite) ? hours : [1, 6];
+    const ok = syncAll(process.argv[2], run, console.log, prePullImage, { state, nestedHours });
     try { fs.writeFileSync(stateFile, JSON.stringify(state, null, 1)); } catch (e) { console.error(`backoff state not saved: ${e.message}`); }
     if (!ok) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { syncAll, syncRegistryCredentials, importHostedImage, transferWhy, backoffMs };
+module.exports = { syncAll, syncRegistryCredentials, importHostedImage, prePullImage, transferWhy, backoffMs };

@@ -54,7 +54,8 @@ describe('all installed Ghost Browser releases', () => {
     });
     const importImage = vi.fn(() => order.push('import'));
     expect(syncAll(image, run, () => {}, importImage)).toBe(true);
-    expect(importImage).toHaveBeenCalledWith(image, expect.arrayContaining(['byon-cp-ann', 'k3s', 'kubectl']));
+    // 2026-11-21: the importer (prePullImage) also gets the deployment and the runner, for the cluster's own pull pod
+    expect(importImage).toHaveBeenCalledWith(image, expect.arrayContaining(['byon-cp-ann', 'k3s', 'kubectl']), expect.objectContaining({ dep: expect.any(Object), run: expect.any(Function) }));
     const hosted = run.mock.calls.map(([a]) => a).filter(a => a.includes('--'));
     expect(hosted.some(a => a.includes('set'))).toBe(false);
     const patch = hosted.find(a => a.includes('patch'));

@@ -17,7 +17,30 @@ RUN bash gradlew :shared:wasmJsBrowserDistribution --no-daemon
 # build, so the package went looking for a Chromium the base image does not contain and every
 # session failed with "Executable doesn't exist at /ms-playwright/chromium_headless_shell-1234".
 # The image and the package are one thing; a range pretends they are two.
-FROM mcr.microsoft.com/playwright:v1.59.1-noble
+#
+# CHROMIUM ONLY (2026-11-21). Microsoft's image ships Chromium, Firefox AND WebKit: 2.0 of the image's 2.7 GB. This
+# browser only ever launches Chromium (pool.js, playwright-extra), and every release of 2.7 GB was unpacked on the
+# node's one disk, which etcd shares (k3s restarted at 12:02 during exactly such a rollout). The same base as that
+# image, rebuilt with what this service uses: Ubuntu 24.04, Node 24.14.1, pwuser uid/gid 1001 (the profile volumes
+# are owned by it), PLAYWRIGHT_BROWSERS_PATH=/ms-playwright, Chromium + its headless shell + Playwright's ffmpeg at
+# the version package.json pins (playwright install --with-deps also brings their system libraries and fonts), Xvfb.
+FROM node:24.14.1-bookworm-slim AS node-bin
+FROM ubuntu:24.04
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY --from=node-bin /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-bin /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN set -eux; \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl xz-utils xvfb xauth fonts-liberation fonts-noto-color-emoji fonts-dejavu-core tzdata; \
+    npx -y playwright@1.59.1 install --with-deps chromium chromium-headless-shell ffmpeg; \
+    groupadd -g 1001 pwuser; useradd -u 1001 -g 1001 -G users -m -s /bin/bash pwuser; \
+    chmod -R a+rX /ms-playwright; \
+    rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*; \
+    test -x "$(ls -d /ms-playwright/chromium-*/chrome-linux*/chrome | head -1)"; \
+    node -v | grep -q '^v24\.'
 
 # Tailscale, so the browser can exit through a device its OWNER controls.
 #
