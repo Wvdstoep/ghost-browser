@@ -31,6 +31,9 @@ describe('deploy.sh builds through dk', () => {
   it('an image copied into the node is paced (an unpaced import restarted k3s on 2026-11-04)', () => {
     expect(deploy).toMatch(/sudo docker save "\$image" \| node "\$BASE_DIR\/ghost-browser\/scripts\/throttle-stream\.js" 40 \| sudo ctr/);
   });
+  it('an image built on the VM is pushed before the server pulls it for the import (2902-2903 imported the previous release)', () => {
+    expect(deploy).toMatch(/dk push -q "\$image" >\/dev\/null \|\| \{[^}]*return 1; \}\n\s+sudo docker pull -q "\$image" >\/dev\/null \|\| \{[^}]*return 1; \}/);
+  });
   it('the VM address is kept for the whole run, also for builds in a subshell', () => {
     expect(deploy).toMatch(/\[ -s "\/tmp\/build-vm-host-\$\$" \] && BUILD_DOCKER_HOST=\$\(cat "\/tmp\/build-vm-host-\$\$"\)/);
     expect(deploy).toMatch(/echo "\$BUILD_DOCKER_HOST" > "\/tmp\/build-vm-host-\$\$"/);
@@ -65,6 +68,12 @@ describe('build-vm.sh', () => {
     expect(vm).toMatch(/hc DELETE "\/servers\/\$id"/);
     expect(vm).toMatch(/label_selector=purpose%3Dbuild/);
     expect(vm).toMatch(/MAX_AGE_MIN=\$\{BUILD_VM_MAX_AGE_MIN:-120\}/);
+  });
+  it('scripts that run on Linux keep LF line endings, also from a Windows checkout ("env: bash\\r", 2026-11-21)', () => {
+    const ga = readFileSync(new URL('../../.gitattributes', import.meta.url), 'utf8');
+    expect(ga).toMatch(/^\*\.sh text eol=lf$/m);
+    expect(ga).toMatch(/^ops\/host\/\*\* text eol=lf$/m);
+    expect(ga).toMatch(/^ghost-browser\/scripts\/\*\.js text eol=lf$/m);
   });
   it('the server watchdog sweeps every 15 minutes and reports a VM left running', () => {
     expect(watch).toMatch(/build-vm\.sh sweep/);
