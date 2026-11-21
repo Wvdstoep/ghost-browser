@@ -68,7 +68,21 @@ function mountDeviceHub(app, authed) {
       trainerHome: String(c.trainerHome || '').slice(0, 200),
       trainerCanSetUp: !!c.trainerCanSetUp,                  // not ready, but could be made ready
       trainerMissing: arr(c.trainerMissing).map((s) => String(s).slice(0, 160)).slice(0, 8),
+      /* WHICH SITES EACH PROFILE IS SIGNED IN TO (app 1.01, SiteLogins.kt): { "default": ["facebook.com"] }.
+         loginHome.siteHome routes a site's work to the device holding its login on this alone. Left off this
+         list on 2026-11-21, it was dropped in silence and the posts watcher read Facebook from the cluster. */
+      logins: logins(c.logins),
     };
+  };
+  const logins = (v) => {
+    const out = {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return out;
+    for (const [p, sites] of Object.entries(v).slice(0, 50)) {
+      const name = String(p).slice(0, 64);
+      const list = Array.isArray(sites) ? [...new Set(sites.map((s) => String(s).toLowerCase().slice(0, 80)).filter((s) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(s)))].slice(0, 30) : [];
+      if (name && list.length) out[name] = list;
+    }
+    return out;
   };
 
   // Per-device activity log (ring buffer) so the operator/master can watch what the phone is doing —

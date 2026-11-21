@@ -113,3 +113,28 @@ describe('where the login for a site lives', () => {
     expect(ringSrc).toMatch(/const held = \(profile && String\(profile\)\) \|\| deviceProfileFor/);
   });
 });
+
+/* 2026-11-21, app 1.01 on SM-F926B: the phone said { default: ["facebook.com"] }, but the device hub keeps only
+   the capabilities it names, and logins was not one of them; the posts watcher ran on the cluster. */
+describe('the phone\'s logins reach the router', () => {
+  const { mountDeviceHub } = require('../src/device-hub.js');
+  const hub = () => {
+    const routes = {}; const app = { get() {}, post: (p, _a, h) => { routes[p] = h; }, delete() {}, put() {} };
+    const api = mountDeviceHub(app, (_q, _s, n) => n && n());
+    const register = (body) => { let out; routes['/v1/device/register']({ body, client: { owner: 'carla' } }, { json: (x) => { out = x; }, status: () => ({ json: (x) => { out = x; } }) }); return out; };
+    return { api, register };
+  };
+  it('a registration with caps.logins keeps them, and the site\'s work goes to that device and profile', () => {
+    const { api, register } = hub();
+    const r = register({ deviceId: 'p1', name: 'SM-F926B', caps: { platform: 'android', realIp: true, profiles: ['default'], logins: { default: ['facebook.com', 'google.com'] } } });
+    expect(r.caps.logins).toEqual({ default: ['facebook.com', 'google.com'] });
+    const home = siteHome({ devices: api.deviceList(), sessions: [], owner: 'carla', url: 'https://www.facebook.com/' });
+    expect(home).toMatchObject({ name: 'SM-F926B', profile: 'default' });
+  });
+  it('junk is dropped, not passed on: no arrays for a profile, no non-site strings', () => {
+    const { register } = hub();
+    const r = register({ deviceId: 'p2', caps: { logins: { default: ['facebook.com', 'javascript:alert(1)', 5], x: 'facebook.com', '': ['a.com'] } } });
+    expect(r.caps.logins).toEqual({ default: ['facebook.com'] });
+    expect(register({ deviceId: 'p3', caps: { logins: ['facebook.com'] } }).caps.logins).toEqual({});
+  });
+});
