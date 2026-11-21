@@ -110,7 +110,10 @@ describe('build-vm.sh', () => {
     expect(list.slice(0, 4)).toEqual(['cx43@hel1', 'cx43@fsn1', 'cx43@nbg1', 'cx53@hel1']);
     expect(new Set(list).size).toBe(list.length);
     expect(list).toHaveLength(12);
-    expect(vm).toMatch(/case "\$\(cat "\$STATE\/hc\.code" 2>\/dev\/null\)" in 412\|422\) continue ;; \*\) return 1 ;; esac/);
+    expect(vm).toMatch(/case "\$code" in 412\) tried="[^"]*sold out" ;; 422\) tried="[^"]*not offered" ;; \*\) return 1 ;; esac/);
+    // the Build VMs page: the note stays on the run's row; a failed rent shows the type chosen in Admin, not the last tried
+    expect(vm).toMatch(/"note=\$\{tried:\+Not available first:\$tried\}"/);
+    expect(vm).toMatch(/report event=failed-up "type=\$\{w%@\*\}" "location=\$\{w#\*@\}"/);
     expect(vm).toMatch(/tr -s '\\n\\t ' ' '/);    // the whole error on one line, not "}"
   });
   it('the server watchdog sweeps every 15 minutes and reports a VM left running', () => {
