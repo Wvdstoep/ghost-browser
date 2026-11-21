@@ -138,3 +138,12 @@ describe('the phone\'s logins reach the router', () => {
     expect(register({ deviceId: 'p3', caps: { logins: ['facebook.com'] } }).caps.logins).toEqual({});
   });
 });
+
+describe('the probe reads where the pass reads', () => {
+  it('the phone holding the login, through the same ring page; the cluster only when no device holds it', () => {
+    const probe = server.slice(server.indexOf("app.post('/v1/watchers/:id/probe'"), server.indexOf("app.post('/v1/watchers/:id/probe'") + 2500);
+    expect(probe).toMatch(/const home = watchHome\(owner, want, 'https:\/\/www\.facebook\.com\/'\);/);
+    expect(probe).toMatch(/if \(home\.device\) \{[\s\S]{0,400}pw\.probePage\(require\('\.\/ringPlaywright'\)\.ringPage\(sessionRing, rs\), url, popts\)/);
+    expect(probe.indexOf('if (home.device)')).toBeLessThan(probe.indexOf('pool.createSession'));
+  });
+});

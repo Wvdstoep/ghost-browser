@@ -7183,9 +7183,20 @@ app.post('/v1/watchers/:id/probe', authed, async (req, res) => {
   const want = profiles.safeName(cfg.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   runningWatchers.add(req.params.id);
   try {
+    const popts = { expand: !!(req.body || {}).expand, html: !!(req.body || {}).html };
+    /* WHERE THE WATCHER READS (2026-11-21): the phone holding the login, else the cluster. The probe is the
+       ground truth for a pass, so it reads the same page the pass reads, in the same layout. */
+    const home = watchHome(owner, want, 'https://www.facebook.com/');
+    if (home.waiting || home.busy) return res.status(409).json({ error: home.reason });
+    if (home.device) {
+      const rs = { id: `probe-${req.params.id}`, profile: want };
+      if (!sessionRing.attach(rs, [owner], { device: home.device, profile: home.profile || null })) return res.status(503).json({ error: `${home.name} did not take the session` });
+      const out = await pw.probePage(require('./ringPlaywright').ringPage(sessionRing, rs), url, popts);
+      return res.json(Object.assign(out, { onDevice: home.name }));
+    }
     let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
     if (!s) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
-    res.json(await pw.probePage(s.page, url, { expand: !!(req.body || {}).expand, html: !!(req.body || {}).html }));
+    res.json(await pw.probePage(s.page, url, popts));
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { runningWatchers.delete(req.params.id); }
 });

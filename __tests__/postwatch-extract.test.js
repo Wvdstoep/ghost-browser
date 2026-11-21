@@ -26,12 +26,17 @@ if (chromium && have('post-page.html')) {
 
 describe.skipIf(!browser)('post watcher extractor on real pages', () => {
   let page;
-  beforeAll(async () => { page = await browser.newPage({ viewport: { width: 1280, height: 2400 } }); await page.route('**/*', (r) => r.abort()).catch(() => {}); }, 60000);
+  beforeAll(async () => { page = await browser.newPage({ viewport: { width: 1280, height: 2400 } }); }, 60000);
   afterAll(async () => { try { await browser.close(); } catch { /* gone */ } });
 
+  /* The saved page is SERVED at its real address (location.href carries the ids); everything else it asks for
+     is refused. Navigating with every request aborted and then injecting the HTML raced: "Execution context
+     was destroyed" whenever the error page landed after setContent. */
   const load = async (file, url) => {
-    await page.goto(url, { waitUntil: 'commit' }).catch(() => {});   // location.href carries the ids
-    await page.setContent(read(file), { waitUntil: 'domcontentloaded' });
+    const html = read(file);
+    await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+    await page.route('**/*', (r) => (r.request().url() === url ? r.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }) : r.abort()));
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     return page.evaluate(extractInPage);
   };
 

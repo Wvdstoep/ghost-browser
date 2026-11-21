@@ -499,7 +499,8 @@ async function probePage(page, url, opts) {
   });
   dump.expand = expand;
   // fixtures: the rendered page itself, so the extractor can be tested against real HTML offline
-  if (opts && opts.html) { try { dump.html = await page.evaluate(() => document.documentElement.outerHTML); } catch { dump.html = ''; } }
+  // scripts left out: they are most of the bytes, run nothing in a fixture, and carry the session's tokens
+  if (opts && opts.html) { try { dump.html = await page.evaluate(() => { const c = document.documentElement.cloneNode(true); c.querySelectorAll('script, noscript, link[rel="preload"], link[rel="modulepreload"]').forEach((x) => x.remove()); return '<!doctype html>' + c.outerHTML; }); } catch { dump.html = ''; } }
   return dump;
 }
 
