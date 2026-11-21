@@ -440,15 +440,16 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
      * Move this session to a device with a home connection. Returns the device, or null when none is online.
      * `device` is one the caller already chose (browser_open { device }, or the device that holds a login).
      */
-    attach(s, owners, { device = null } = {}) {
+    attach(s, owners, { device = null, profile = null } = {}) {
       if (s.ring) return s.ring;
       const dev = device || pickDevice(owners, { profile: s.profile });
       if (!dev) return null;
       // The device runs the session in the profile the session was opened with, under the name the device
       // holds it by (deviceProfile.js). One it does not hold goes as the plain name: the app refuses it and
-      // says how to add it, instead of opening an empty store.
+      // says how to add it, instead of opening an empty store. `profile`: the device's own profile that holds
+      // the site's login (loginHome.siteHome: the owner's Facebook is in the phone's "default").
       const prof = String(s.profile || 'default');
-      const held = deviceProfileFor(dev.caps, prof) || baseName(prof);
+      const held = (profile && String(profile)) || deviceProfileFor(dev.caps, prof) || baseName(prof);
       s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [], profile: held === 'default' ? '' : held };
       /* The cloud copy of the page goes blank (2026-11-21): a site left open there keeps calling home with the
          session's cookies from the datacenter (Facebook polls for chat and notifications) while the device works. */

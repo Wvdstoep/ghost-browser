@@ -19,7 +19,17 @@ function syncRegistryCredentials(source, target, prefix, run) {
   if (names.size !== existing.length) run([...prefix, '-n', target.metadata.namespace, 'patch', 'deployment/' + target.metadata.name, '--type=merge', '-p', JSON.stringify({spec:{template:{spec:{imagePullSecrets:[...names].map(name=>({name}))}}}})]);
 }
 
-function syncAll(image, run, log = console.log, importImage = null) {
+/*
+ * BACK OFF AFTER A FAILED DELIVERY (2026-11-21). An owned cluster that would not take the 2.7 GB image was sent it
+ * again every 15 minutes, 154 times, each attempt a full stream through the node's one disk; etcd shares that disk,
+ * and at 10:31 k3s lost its leader election and restarted. A target that failed waits 1, 3, 6, 12, then 24 hours
+ * before the same release is sent again; a new release is tried at once. state = { "<cluster>/<namespace>":
+ * { image, fails, retryAt, why } }, kept by the caller.
+ */
+const BACKOFF_H = [1, 3, 6, 12, 24];
+const backoffMs = (fails) => BACKOFF_H[Math.min(Math.max(fails, 1), BACKOFF_H.length) - 1] * 3600 * 1000;
+
+function syncAll(image, run, log = console.log, importImage = null, { state = null, now = Date.now() } = {}) {
   if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image)) throw new Error('Invalid release image');
   const root = JSON.parse(run(['get', 'deployments', '-A', '-o', 'json'])).items;
   let failed = false;
@@ -52,7 +62,17 @@ function syncAll(image, run, log = console.log, importImage = null) {
         // pass found it pull-blocked and imported the image. The signed image now goes in first, and
         // the pod starts from that copy.
         if (prefix.length && importImage) {
-          importImage(image, prefix);
+          const key = `${prefix[1] || 'platform'}/${dep.metadata.namespace}`;
+          const was = state && state[key];
+          if (was && was.image === image && now < was.retryAt) {
+            log(`${dep.metadata.namespace}: waiting until ${new Date(was.retryAt).toISOString()} before sending ${image} again (failed ${was.fails}x: ${was.why})`);
+            continue;
+          }
+          try { importImage(image, prefix); if (state) delete state[key]; }
+          catch (e) {
+            if (state) { const fails = was && was.image === image ? was.fails + 1 : 1; state[key] = { image, fails, retryAt: now + backoffMs(fails), why: String(e.message || e).slice(0, 200) }; }
+            throw e;
+          }
           run([...args, 'patch', name, '--type=strategic', '-p', JSON.stringify({spec:{template:{spec:{containers:[{name:container.name,image,imagePullPolicy:'IfNotPresent'}]}}}})]);
         } else run([...args, 'set', 'image', name, `${container.name}=${image}`]);
         run([...args, 'rollout', 'status', name, '--timeout=240s']);
@@ -71,20 +91,40 @@ function syncAll(image, run, log = console.log, importImage = null) {
   return !failed;
 }
 
+/* Why a transfer failed, without anything private: a timeout, an exit code, the last line of stderr (kubectl, ctr
+   and docker print no credentials; anything token-shaped is masked anyway). */
+function transferWhy(e) {
+  if (!e) return 'unknown';
+  if (e.killed || e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM') return 'timed out';
+  const last = String(e.stderr || '').trim().split('\n').filter(Boolean).pop() || '';
+  const clean = last.replace(/[A-Za-z0-9_\-]{32,}/g, '…').slice(0, 160);
+  return `exit ${e.status == null ? '?' : e.status}${clean ? `: ${clean}` : ''}`;
+}
+const TRANSFER_MBPS = Number(process.env.GB_TRANSFER_MBPS) || 40;
+
 function importHostedImage(image, prefix, exec = execFileSync) {
   if (!/^wvdstoep\/ghost-browser:v\d+$/.test(image) || !Array.isArray(prefix) || prefix[prefix.length - 1] !== 'kubectl') throw new Error('Invalid browser image transfer');
   // Stream the existing signed release, not publisher credentials, into the owned cluster cache.
   const args = [...prefix.slice(0, -1), 'ctr', '--address', '/run/k3s/containerd/containerd.sock', '-n', 'k8s.io', 'images', 'import', '-'];
   try {
     exec('sudo', ['cosign', 'verify', '--key', process.env.COSIGN_PUB || '/etc/cosign/cosign.pub', '--insecure-ignore-tlog', image], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
-    exec('bash', ['-o', 'pipefail', '-c', "sudo docker save \"$1\" | sudo kubectl \"${@:2}\"", 'ghost-browser-image-transfer', image, ...args], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:300000,maxBuffer:2*1024*1024});
-  } catch { throw new Error('signed browser image transfer failed'); }
+  } catch (e) { throw new Error(`signed browser image transfer failed: signature check (${transferWhy(e)})`); }
+  // Paced (throttle-stream.js): at full speed this stream starves etcd of the disk they share.
+  const throttle = require('node:path').join(__dirname, 'throttle-stream.js');
+  try {
+    exec('bash', ['-o', 'pipefail', '-c', `sudo docker save "$1" | node ${JSON.stringify(throttle)} ${TRANSFER_MBPS} | sudo kubectl "\${@:2}"`, 'ghost-browser-image-transfer', image, ...args], {stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:900000,maxBuffer:2*1024*1024});
+  } catch (e) { throw new Error(`signed browser image transfer failed: ${transferWhy(e)}`); }
 }
 
 if (require.main === module) {
   try {
     const run = (args, input) => execFileSync('sudo', ['kubectl', ...args], { input, stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf8', timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
-    if (!syncAll(process.argv[2], run, console.log, importHostedImage)) process.exitCode = 1;
+    const fs = require('node:fs');
+    const stateFile = process.env.GB_SYNC_STATE || require('node:path').join(require('node:os').homedir(), '.gb-sync-state.json');
+    let state = {}; try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')) || {}; } catch { state = {}; }
+    const ok = syncAll(process.argv[2], run, console.log, importHostedImage, { state });
+    try { fs.writeFileSync(stateFile, JSON.stringify(state, null, 1)); } catch (e) { console.error(`backoff state not saved: ${e.message}`); }
+    if (!ok) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
-module.exports = { syncAll, syncRegistryCredentials, importHostedImage };
+module.exports = { syncAll, syncRegistryCredentials, importHostedImage, transferWhy, backoffMs };

@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { loginHome, STARTUP_MS, BUSY_MS } = require('../src/loginHome');
+const { loginHome, siteHome, siteOf, STARTUP_MS, BUSY_MS } = require('../src/loginHome');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const ringSrc = readFileSync(new URL('../src/sessionRing.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
@@ -72,14 +72,44 @@ describe('everything goes through it', () => {
     expect(server).toMatch(/lives on \$\{home\.name\}, which is offline/);
   });
   it('the posts watcher runs on the phone that holds the login, and waits when it is offline or busy', () => {
-    expect(server).toMatch(/const home = loginOnDevice\(owner, base\);\n  if \(home\.waiting \|\| home\.busy\) \{/);
-    expect(server).toMatch(/if \(home\.device\) return postWatchOnDevice\(/);
+    expect(server).toMatch(/const home = watchHome\(owner, base, 'https:\/\/www\.facebook\.com\/'\);\n  if \(home\.waiting \|\| home\.busy\) \{/);
+    expect(server).toMatch(/if \(home\.device\) return postWatchOnDevice\([^)]*home\.profile\)/);
     expect(server).toMatch(/require\('\.\/ringPlaywright'\)\.ringPage\(sessionRing, rs\)/);
   });
   it('the approved reply is posted on that phone too', () => {
-    expect(server).toMatch(/const home = loginOnDevice\(owner, want\);[\s\S]{0,900}if \(devicePage\) return \{ page: devicePage \};/);
+    expect(server).toMatch(/const home = watchHome\(owner, want, 'https:\/\/www\.facebook\.com\/'\);[\s\S]{0,900}profile: home\.profile \|\| null[\s\S]{0,300}if \(devicePage\) return \{ page: devicePage \};/);
   });
   it('a session handed to a device leaves the cloud copy of the page blank', () => {
     expect(ringSrc).toMatch(/s\.page\.goto\('about:blank'\)/);
+  });
+});
+
+/* 2026-11-21, later: "facebook is logged in the default profile". The phone says per profile which sites it holds a
+   real login for (app 1.01, caps.logins); the cluster routes by the site, whatever the profile is called. */
+describe('where the login for a site lives', () => {
+  const withLogins = (logins, over = {}) => phone({ caps: { realIp: true, platform: 'android', profiles: ['default'], logins }, ...over });
+  it('a site whose login the phone holds goes to the phone, in the profile that holds it', () => {
+    const r = siteHome({ devices: [withLogins({ default: ['facebook.com', 'google.com'] })], owner: 'carla', url: 'https://www.facebook.com/groups/vibe/posts/1/', now });
+    expect(r).toMatchObject({ device: { deviceId: 'p1' }, profile: 'default', site: 'facebook.com' });
+  });
+  it('another site, another owner, or a phone that reports no logins (app before 1.01): not routed', () => {
+    const d = withLogins({ default: ['facebook.com'] });
+    expect(siteHome({ devices: [d], owner: 'carla', url: 'https://www.reddit.com/', now })).toEqual({});
+    expect(siteHome({ devices: [d], owner: 'ben', url: 'https://www.facebook.com/', now })).toEqual({});
+    expect(siteHome({ devices: [phone()], owner: 'carla', url: 'https://www.facebook.com/', now })).toEqual({});
+  });
+  it('offline: wait; busy in that profile: the next pass', () => {
+    expect(siteHome({ devices: [withLogins({ default: ['facebook.com'] }, { online: false })], owner: 'carla', url: 'facebook.com', now }).waiting).toBe(true);
+    const sessions = [{ ring: { deviceId: 'p1', profile: '' }, lastUsed: now - 1000 }];   // "default" is '' in a ring
+    expect(siteHome({ devices: [withLogins({ default: ['facebook.com'] })], sessions, owner: 'carla', url: 'facebook.com', now }).busy).toBe(true);
+    expect(siteHome({ devices: [withLogins({ default: ['facebook.com'] })], sessions, owner: 'carla', url: 'facebook.com', now, busyCheck: false }).device).toBeTruthy();
+  });
+  it('m. and www. are the same site', () => {
+    expect(siteOf('https://m.facebook.com/x')).toBe('facebook.com');
+    expect(siteOf('www.linkedin.com')).toBe('linkedin.com');
+  });
+  it('a navigate goes straight to that device and profile before the cluster loads anything', () => {
+    expect(server).toMatch(/const sh = siteOnDevice\(owner, target, \{ busyCheck: false \}\);\n\s+if \(sh\.device && sessionRing\.attach\(s, ringOwners\(req\), \{ device: sh\.device, profile: sh\.profile \}\)\)[\s\S]{0,1500}const r = await s\.page\.goto\(target/);
+    expect(ringSrc).toMatch(/const held = \(profile && String\(profile\)\) \|\| deviceProfileFor/);
   });
 });

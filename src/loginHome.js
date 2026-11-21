@@ -46,4 +46,46 @@ function loginHome({ devices = [], sessions = [], owner, profile, now = Date.now
   return { device: { deviceId: dev.deviceId, name: dev.name, caps: dev.caps }, name: dev.name };
 }
 
-module.exports = { loginHome, STARTUP_MS, BUSY_MS };
+/** "www.m.facebook.com" and "https://facebook.com/x" are both "facebook.com". */
+function siteOf(urlOrHost) {
+  let h = String(urlOrHost || '').trim().toLowerCase();
+  try { if (/^[a-z]+:\/\//.test(h)) h = new URL(h).hostname; } catch (e) { return ''; }
+  h = h.replace(/^\.+/, '').split('/')[0];
+  const parts = h.split('.').filter(Boolean);
+  return parts.length >= 2 ? parts.slice(-2).join('.') : '';
+}
+
+/*
+ * WHERE THE LOGIN FOR A SITE LIVES (2026-11-21). The owner's Facebook is signed in in the phone's "default"
+ * profile, not in one called "facebook": a rule by profile name never found it. The phone (app 1.01) says per
+ * profile which sites it holds a real login for (caps.logins, from the login cookie itself, refreshed after every
+ * page), so the cluster routes by the site: { device, profile } that holds it, waiting/busy as loginHome, or {}.
+ */
+function siteHome({ devices = [], sessions = [], owner, url, now = Date.now(), busyCheck = true } = {}) {
+  const site = siteOf(url);
+  if (!site) return {};
+  const holds = (d) => {
+    const logins = d && d.caps && d.caps.logins;
+    if (!logins || typeof logins !== 'object') return null;
+    for (const [profile, sites] of Object.entries(logins)) if (Array.isArray(sites) && sites.map(String).includes(site)) return profile;
+    return null;
+  };
+  const holders = devices.filter((d) => d && d.owner === owner && d.caps && d.caps.realIp && holds(d));
+  const online = holders.filter((d) => d.online);
+  const dev = online.find((d) => d.caps.platform !== 'desktop') || online[0];
+  if (!dev) {
+    return holders.length ? { waiting: true, name: holders[0].name, site,
+      reason: `the ${site} login lives on ${holders.map((d) => d.name).join(', ')}, which is offline: waiting for it (never the cluster)` } : {};
+  }
+  const profile = holds(dev);
+  if (busyCheck) {
+    for (const live of sessions) {
+      if (live && live.ring && live.ring.deviceId === dev.deviceId && (live.ring.profile || 'default') === profile && now - (live.lastUsed || 0) < BUSY_MS) {
+        return { busy: true, name: dev.name, site, reason: `${dev.name} is in use in "${profile}" by a session right now: the next pass reads it` };
+      }
+    }
+  }
+  return { device: { deviceId: dev.deviceId, name: dev.name, caps: dev.caps }, name: dev.name, profile, site };
+}
+
+module.exports = { loginHome, siteHome, siteOf, STARTUP_MS, BUSY_MS };

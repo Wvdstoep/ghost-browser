@@ -9,7 +9,7 @@ describe('signed browser artifact delivery',()=>{
   const [bin,args,options]=exec.mock.calls[1];
   expect(bin).toBe('bash');expect(args).toContain('pipefail');
   expect(args.slice(5)).toEqual([image,...prefix.slice(0,-1),'ctr','--address','/run/k3s/containerd/containerd.sock','-n','k8s.io','images','import','-']);
-  expect(args[3]).not.toContain(image);expect(options.timeout).toBe(300000);
+  expect(args[3]).not.toContain(image);expect(args[3]).toMatch(/docker save "\$1" \| node "[^"]*throttle-stream\.js" 40 \| sudo kubectl/);expect(options.timeout).toBe(900000);
   expect(options.stdio).toEqual(['ignore','pipe','pipe']);
  });
  it.each(['wvdstoep/ghost-browser:latest','other/image:v678','wvdstoep/ghost-browser:v678;echo unsafe'])('rejects an unapproved image before executing: %s',bad=>{

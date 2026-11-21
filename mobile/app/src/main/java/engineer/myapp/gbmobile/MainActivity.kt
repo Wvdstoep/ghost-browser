@@ -557,6 +557,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                 loadLatch?.countDown()
                 syncTabs()
                 try { syncLoginForTab(h, h.url) } catch (e: Exception) { vm.log("! login sync: ${e.message}") }
+                refreshRingCaps()
             }
         }
         w.webChromeClient = object : WebChromeClient() {
@@ -1522,6 +1523,34 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
             .put("realIp", true)      // a real mobile-device IP
             .put("profiles", profs)
             .put("features", feats)
+            .put("logins", profileLogins())
+    }
+
+    /**
+     * Per profile work may use, the sites it is signed in to (SiteLogins, 1.01): the cluster sends work for such a
+     * site straight to this phone, into that profile (the owner's Facebook lives in "default"). Site names only.
+     */
+    private fun profileLogins(): JSONObject {
+        val out = JSONObject()
+        for (name in ProfileRegistry.deviceProfiles(vm.registry)) {
+            val jar = ProfileRegistry.jarOf(vm.registry, name) ?: continue
+            val cm = try {
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) ProfileStore.getInstance().getOrCreateProfile(jar).cookieManager
+                else CookieManager.getInstance()
+            } catch (e: Exception) { null } ?: continue
+            val sites = SiteLogins.of { u -> try { cm.getCookie(u) } catch (e: Exception) { null } }
+            if (sites.isNotEmpty()) out.put(name, JSONArray(sites))
+        }
+        return out
+    }
+
+    /** After a page: a login made (or signed out of) just now reaches the cluster with the next poll (GbService re-registers on a change). */
+    private var lastRingCaps = ""
+    private fun refreshRingCaps() {
+        try {
+            val t = phoneCaps().toString()
+            if (t != lastRingCaps) { lastRingCaps = t; getSharedPreferences("gb", MODE_PRIVATE).edit().putString("ringCaps", t).apply() }
+        } catch (e: Exception) { /* next page */ }
     }
 
     /** The flow's browser profile (from the shared cache), used as a routing preference. */

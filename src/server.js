@@ -1050,6 +1050,21 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
     const target = String(req.body?.url || '');
     await assertPublicUrl(target);
 
+    /* THE SITE'S LOGIN LIVES ON A DEVICE (2026-11-21): straight there, in the device's profile that holds it, before
+       the cluster loads anything. The owner's Facebook is in the phone's "default"; loading it on the cluster first
+       showed the same account a datacenter address. Offline: said so, never the cluster instead. */
+    if (!s.ring && !s.stayOnCluster && !(req.client && req.client.console)) {
+      for (const owner of ringOwners(req).filter(Boolean)) {
+        const sh = siteOnDevice(owner, target, { busyCheck: false });
+        if (sh.device && sessionRing.attach(s, ringOwners(req), { device: sh.device, profile: sh.profile })) {
+          return ringOut(res, { ...(await sessionRing.navigate(s, target)), handedOver: true, reason: `the ${sh.site} login lives on ${sh.name} (its "${sh.profile}" profile)` });
+        }
+        if (sh.waiting) {
+          return res.status(409).json({ error: `The ${sh.site} login lives on ${sh.name}, which is offline.`,
+            hint: `Open the Ghost Browser app on ${sh.name} (it may stay locked), then navigate again. The cloud is not used for this site: it would show the account a datacenter address.` });
+        }
+      }
+    }
     // Already on a device, or a host that walled the server's address recently: go (straight) there.
     const known = s.stayOnCluster ? '' : sessionRing.knownWall(target);
     const wasOnDevice = !!s.ring;
@@ -5747,7 +5762,7 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const cfgP = feed.getConfig(wid) || {};
   const want = profiles.safeName(cfgP.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   /* The reply is posted where the login lives (loginOnDevice): on the phone that holds it, never by the cluster. */
-  const home = loginOnDevice(owner, want);
+  const home = watchHome(owner, want, 'https://www.facebook.com/');
   if (home.waiting || home.busy) {
     const why = home.busy ? `${home.reason}; approve again in a few minutes` : `${home.reason}; approve again when it is online`;
     feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + why } : { posting: false, postFailed: true, posted: 'failed: ' + why });
@@ -5756,7 +5771,7 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   let devicePage = null;
   if (home.device) {
     const rs = { id: `post-${wid}`, profile: want };
-    if (sessionRing.attach(rs, [owner], { device: home.device })) devicePage = require('./ringPlaywright').ringPage(sessionRing, rs);
+    if (sessionRing.attach(rs, [owner], { device: home.device, profile: home.profile || null })) devicePage = require('./ringPlaywright').ringPage(sessionRing, rs);
   }
   const session = async () => {
     if (devicePage) return { page: devicePage };
@@ -6370,6 +6385,19 @@ function loginOnDevice(owner, profile, opts = {}) {
   let sessions = []; try { sessions = pool.listFor(owner).map((x) => pool.get(x.sessionId)).filter(Boolean); } catch (e) { sessions = []; }
   return require('./loginHome').loginHome({ devices, sessions, owner, profile, startedAt: SERVER_STARTED_AT, ...opts });
 }
+/* The device and ITS profile holding the login for a site (the phone says which, app 1.01: caps.logins). */
+function siteOnDevice(owner, url, opts = {}) {
+  let devices = []; try { devices = deviceHub.deviceList(); } catch (e) { devices = []; }
+  let sessions = []; try { sessions = pool.listFor(owner).map((x) => pool.get(x.sessionId)).filter(Boolean); } catch (e) { sessions = []; }
+  return require('./loginHome').siteHome({ devices, sessions, owner, url, ...opts });
+}
+/* Where a watcher for `site` in `profile` runs: the device holding the site's login first (whatever that profile
+   is called there), else a device holding the profile itself, else {} (the cluster, as before). */
+function watchHome(owner, profile, site) {
+  const sh = siteOnDevice(owner, site);
+  if (sh.device || sh.waiting || sh.busy) return sh;
+  return loginOnDevice(owner, profile);
+}
 async function postWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   let cfg = feed.getConfig(wf.id);
@@ -6379,13 +6407,13 @@ async function postWatchTick(wf, owner, opts) {
   const base = profiles.safeName(cfg.profile || 'facebook');
   /* THE LOGIN'S OWN PHONE FIRST (2026-11-21): a phone that holds this profile runs the pass itself, with its own
      login and home connection; the cluster never reads it with a copy. No such phone online: wait for it. */
-  const home = loginOnDevice(owner, base);
+  const home = watchHome(owner, base, 'https://www.facebook.com/');
   if (home.waiting || home.busy) {
     try { feed.setConfig(wf.id, { lastPass: { at: Date.now(), status: home.busy ? 'device-busy' : 'waiting-device', note: home.reason, device: home.name || null } }); } catch (e) { /* the record may not fail the pass */ }
     log.info(`[post-watch] "${wf.name}": ${home.reason}`);
     return;
   }
-  if (home.device) return postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, home.device, base);
+  if (home.device) return postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, home.device, base, home.profile);
   const want = watchProfile.ensureWatchProfile(process.env.PROFILE_DIR || '/profiles', base);
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   let synced = false;
@@ -6403,10 +6431,10 @@ async function postWatchTick(wf, owner, opts) {
 }
 /* The post watcher's pass on the phone that holds the login: the same pass, its page the device ring's
    (ringPlaywright.js). Only the phone's own browser reads Facebook; nothing is copied to or read by the cluster. */
-async function postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, device, base) {
+async function postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, device, base, deviceProfile) {
   const rs = { id: `watch-${wf.id}`, profile: base };
-  if (!sessionRing.attach(rs, [owner], { device })) return;
-  log.info(`[post-watch] "${wf.name}" runs on ${device.name}, in its own "${base}" login`);
+  if (!sessionRing.attach(rs, [owner], { device, profile: deviceProfile || null })) return;
+  log.info(`[post-watch] "${wf.name}" runs on ${device.name}, in its own "${deviceProfile || base}" login`);
   const page = require('./ringPlaywright').ringPage(sessionRing, rs);
   return postWatchPass(wf, owner, cfg, feed, pw, llmCfg, opts, async () => page, () => {}, device.name);
 }
