@@ -116,6 +116,12 @@ describe('build-vm.sh', () => {
     expect(vm).toMatch(/report event=failed-up "type=\$\{w%@\*\}" "location=\$\{w#\*@\}"/);
     expect(vm).toMatch(/tr -s '\\n\\t ' ' '/);    // the whole error on one line, not "}"
   });
+  it('set to "this server" in Admin, up rents nothing (not even a warm VM) and the pipeline builds on the server', () => {
+    expect(vm).toMatch(/up\(\) \{\n\s+exec 9>"\$STATE\/lock"; flock -w 600 9\n\s+if \[ "\$\(build_mode\)" = server \]; then say "turned off in Admin -> Build VMs: building on this server"; return 1; fi\n\s+if alive; then/);
+    // only an explicit "server" turns it off; an unreachable platform keeps renting
+    const fn = vm.slice(vm.indexOf('build_mode() {'), vm.indexOf('\n}\n', vm.indexOf('build_mode() {')) + 3);
+    expect(execFileSync('bash', ['-c', `${fn}\nbuild_mode`], { encoding: 'utf8' }).trim()).toBe('vm');
+  });
   it('the server watchdog sweeps every 15 minutes and reports a VM left running', () => {
     expect(watch).toMatch(/build-vm\.sh sweep/);
     expect(watch).toMatch(/report build-vm warn "A rented build VM is still running"/);
