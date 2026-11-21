@@ -450,6 +450,9 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       const prof = String(s.profile || 'default');
       const held = deviceProfileFor(dev.caps, prof) || baseName(prof);
       s.ring = { deviceId: dev.deviceId, name: dev.name, elements: [], profile: held === 'default' ? '' : held };
+      /* The cloud copy of the page goes blank (2026-11-21): a site left open there keeps calling home with the
+         session's cookies from the datacenter (Facebook polls for chat and notifications) while the device works. */
+      try { if (s.page && typeof s.page.goto === 'function' && !(s.page.isClosed && s.page.isClosed())) s.page.goto('about:blank').catch(() => {}); } catch (_) { /* nothing open */ }
       log.info?.(`[ring] session ${s.id}: handed to ${dev.name} (home connection)`);
       return s.ring;
     },
@@ -677,6 +680,19 @@ function createSessionRing({ run, pickDevice, log = console, now = Date.now, wai
       if (r.error) return { error: r.error, onDevice: s.ring.name };
       const here = await info(s);
       return { url: here.url, into: r.into, changed: !!r.changed, length: Number(r.length) || 0, onDevice: s.ring.name };
+    },
+    /*
+     * FOR CODE THAT DRIVES A PAGE ITSELF (ringPlaywright.js, 2026-11-21): the post watcher runs on the phone that
+     * holds the login instead of on the cluster with a copy of it. A script's value (null when the page could not
+     * answer), and the app's own tap on an element a script put in slot `n`, with the same checks as a click.
+     */
+    async evaluate(s, code, ms = 30000) { return ask(s, code, ms); },
+    async pressSlot(s, n, what = 'element') {
+      const seen = {};
+      const no = await refusal(s, page.slotRef(n), what, seen);
+      if (no) return no;
+      const done = await press(s, page.slotRef(n), n, seen.st);
+      return done.no || { pressed: true, ...(done.how ? { how: done.how } : {}) };
     },
     /** A tap at a spot of the last screenshot (its pixels), by the app's own tap. */
     async clickAt(s, x, y) {

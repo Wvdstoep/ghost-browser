@@ -39,17 +39,39 @@ class ProfileRegistryTest {
         assertEquals("default", R.forCluster(list, "")!!.jar)
         assertNull(R.forCluster(list, "privebank"))
         assertNull(R.forCluster(list, "aliexpress"))      // case matters, as on the cluster
-        assertTrue(R.refusalFor(list, "privebank").contains("Sync with cluster"))
+        assertTrue(R.refusalFor(list, "privebank").contains("Tasks run on this phone"))   // 1.00: a private profile is opened to tasks on the phone, not copied
         assertTrue(R.refusalFor(list, "Temu").contains("Use on this phone"))
         assertEquals(listOf("default", "AliExpress"), R.deviceProfiles(list))
     }
 
     @Test fun aClusterProfileIsAddedUnderItsOwnNameAndOnlyOnce() {
         val list = ok(R.useOnPhone(R.parse(null), "AliExpress", "aliexpress.com")).list
-        assertEquals(Storage.SYNCED, R.find(list, "AliExpress")!!.storage)
+        assertEquals(Storage.DEVICE, R.find(list, "AliExpress")!!.storage)   // 1.00: the login stays on the phone
         assertTrue(refused(R.useOnPhone(list, "AliExpress")).contains("already on this phone"))
+        assertEquals(Storage.SYNCED, R.find(ok(R.useOnPhone(R.parse(null), "AliExpress", "", Storage.SYNCED)).list, "AliExpress")!!.storage)
         val phoneOnly = ok(R.add(R.parse(null), "mail", Storage.PHONE)).list
-        assertTrue(refused(R.useOnPhone(phoneOnly, "mail")).contains("Turn on \"Sync with cluster\""))
+        assertTrue(refused(R.useOnPhone(phoneOnly, "mail")).contains("Tasks run on this phone"))
+    }
+
+    /* 1.00 (2026-11-21): a login that lives on the phone. Tasks from the cluster and Claude run in it HERE; the
+       phone advertises it so the cluster sends the work to the phone; nothing about it is copied anywhere. */
+    @Test fun aDeviceProfileIsUsedByTasksOnThePhoneAndSurvivesARestart() {
+        var list = ok(R.add(R.parse(null), "facebook", Storage.DEVICE, "facebook.com", clusterNames = listOf("facebook"))).list
+        assertEquals("facebook", R.forCluster(list, "facebook")!!.jar)
+        assertEquals(listOf("default", "facebook"), R.deviceProfiles(list))
+        list = R.parse(R.serialize(list))
+        assertEquals(Storage.DEVICE, R.find(list, "facebook")!!.storage)
+        assertEquals("device", R.placement(list, listOf("facebook"))["facebook"])
+        // moved from "phone + cluster": still used by tasks, now as a device profile
+        val synced = ok(R.add(R.parse(null), "li", Storage.SYNCED)).list
+        val moved = ok(R.setStorage(synced, "li", Storage.DEVICE)).list
+        assertEquals("li", R.forCluster(moved, "li")!!.name)
+        // private stays private
+        val priv = ok(R.add(R.parse(null), "bank", Storage.PHONE)).list
+        assertNull(R.forCluster(priv, "bank"))
+        assertTrue(R.refusalFor(priv, "bank").contains("Tasks run on this phone"))
+        assertEquals(Storage.DEVICE, storageOf("device")); assertEquals("device", wordOf(Storage.DEVICE))
+        assertEquals(Storage.PHONE, storageOf("anything else"))
     }
 
     @Test fun aPhoneOnlyProfileCannotShareANameWithTheCluster() {

@@ -661,6 +661,9 @@ class BrowserPool {
           }
         }
       } catch (e) { this.log.warn?.(`[vault] ${safe}: restore skipped (${e.message})`); }
+      // A login that went back to living on the owner's phone (cloudLoginCopy.js): its cloud copy is cleared
+      // before any page loads, also when the vault or an old jar still held it.
+      try { await require('./cloudLoginCopy').applyPurge(dir, persistent, this.log); } catch (e) { this.log.warn?.(`[login-copy] ${safe}: ${e.message}`); }
       const page = persistent.pages()[0] || await persistent.newPage();
       const id = reuseId || `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       const at = Date.now();

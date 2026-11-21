@@ -73,16 +73,18 @@ data class StorageWords(val badge: String, val explain: String)
 
 fun storageWords(storage: String): StorageWords? = when (storage) {
     "main" -> StorageWords("📱 This phone's main browser", "Plain tasks on this phone run here.")
-    "synced" -> StorageWords("📱☁ This phone + cluster", "Sign in on this phone; the login is copied to your cluster. Tasks can use it on the phone and on the cluster.")
-    "phone" -> StorageWords("📱 This phone only", "The login never leaves this phone. Tasks from the cluster or Claude cannot use it.")
+    "device" -> StorageWords("📱 This phone, tasks run here", "Sign in on this phone. Tasks from Claude and the cluster run here on the phone, with your own connection. The login never leaves the phone.")
+    "synced" -> StorageWords("📱☁ This phone + a copy in the cloud", "The login is also copied to your cluster, so tasks can use it from the cloud too. Sites such as Facebook may ask a login used from two places to verify itself.")
+    "phone" -> StorageWords("📱 This phone only, private", "The login never leaves this phone, and tasks from Claude or the cluster cannot use it.")
     "cluster" -> StorageWords("☁ Cluster only", "Not on this phone. Tasks the cluster hands to this phone cannot use it until you add it here.")
     else -> null
 }
 
-/** The two places a new profile can be kept, on a surface with a store of its own. */
+/** Where a new profile can be kept, on a surface with a store of its own. */
 val STORAGE_CHOICES = listOf(
-    "synced" to "This phone + my cluster (recommended for sites tasks work on)",
+    "device" to "This phone, tasks run here (recommended)",
     "phone" to "This phone only (private: tasks cannot use it)",
+    "synced" to "This phone + a copy of the login in the cloud",
 )
 
 /**
@@ -338,7 +340,7 @@ fun ProfilesScreen(
                         sortProfiles(profiles).forEach { p ->
                             ProfileRow(p, openLabel = openLabel, onOpen = { onOpen(p) },
                                 onRole = { picking = p; reading = "" }, onManage = { managing = p },
-                                onUseHere = if (p.storage == "cluster" && onSetStorage != null) ({ onSetStorage(p, "synced") }) else null)
+                                onUseHere = if (p.storage == "cluster" && onSetStorage != null) ({ onSetStorage(p, "device") }) else null)
                         }
                     }
                     Spacer(Modifier.height(24.dp))
@@ -431,7 +433,7 @@ private fun AddProfileRow(onCreate: (String, String, String) -> Unit, askWhere: 
     val cs = MaterialTheme.colorScheme
     var name by remember(prefill) { mutableStateOf(prefill?.first ?: "") }
     var site by remember(prefill) { mutableStateOf(prefill?.second ?: "") }
-    var where by remember { mutableStateOf("synced") }
+    var where by remember { mutableStateOf("device") }
     // The cluster's own rule: what is typed is what both sides call it, never a silently changed copy.
     val badName = name.isNotBlank() && !Regex("^[A-Za-z0-9_-]{1,40}$").matches(name.trim())
     Surface(color = cs.surface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, cs.outline),
@@ -476,7 +478,7 @@ private fun WhereProfilesLive() {
     Surface(color = cs.surfaceVariant, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Where your profiles live", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            listOf("synced", "phone", "cluster").forEach { s ->
+            listOf("device", "phone", "synced", "cluster").forEach { s ->
                 storageWords(s)?.let { w ->
                     Column {
                         Text(w.badge, fontSize = 12.sp, fontWeight = FontWeight.Medium)
@@ -542,15 +544,23 @@ private fun ManagePanel(
                         Spacer(Modifier.height(8.dp))
                         when (profile.storage) {
                             "synced" -> {
-                                OutlinedButton(onClick = { onSetStorage("phone") }, shape = RoundedCornerShape(10.dp)) { Text("Keep on this phone only", fontSize = 13.sp) }
-                                Text("Stops copying its login to the cluster. The cluster's copy stays until you delete it there.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                                Button(onClick = { onSetStorage("device") }, shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Keep the login on this phone", fontSize = 13.sp) }
+                                Text("Tasks keep working: they run here on the phone. The copy in the cloud is deleted.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                            }
+                            "device" -> {
+                                OutlinedButton(onClick = { onSetStorage("phone") }, shape = RoundedCornerShape(10.dp)) { Text("Make it private", fontSize = 13.sp) }
+                                Text("Tasks can no longer use it.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                                Spacer(Modifier.height(6.dp))
+                                OutlinedButton(onClick = { onSetStorage("synced") }, shape = RoundedCornerShape(10.dp)) { Text("Also copy the login to the cloud", fontSize = 13.sp) }
+                                Text("Only for sites that do not mind one login used from two places.", color = cs.onSurfaceVariant, fontSize = 11.sp)
                             }
                             "phone" -> {
-                                Button(onClick = { onSetStorage("synced") }, shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Sync with cluster", fontSize = 13.sp) }
-                                Text("Creates \"${profile.name}\" on your cluster and copies its login there, so tasks can use it.", color = cs.onSurfaceVariant, fontSize = 11.sp)
+                                Button(onClick = { onSetStorage("device") }, shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Tasks run on this phone", fontSize = 13.sp) }
+                                Text("Claude's tasks may use \"${profile.name}\" here on the phone. The login stays on the phone.", color = cs.onSurfaceVariant, fontSize = 11.sp)
                             }
-                            "cluster" -> Button(onClick = { onSetStorage("synced") }, shape = RoundedCornerShape(10.dp),
+                            "cluster" -> Button(onClick = { onSetStorage("device") }, shape = RoundedCornerShape(10.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Brand, contentColor = BrandOn)) { Text("Use on this phone", fontSize = 13.sp) }
                         }
                     }

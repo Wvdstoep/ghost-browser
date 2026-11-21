@@ -965,7 +965,7 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     /** Add on the phone, kept where the owner chose. "synced" also creates it on the cluster under the same name. */
     private fun profileCreateIn(rawName: String, site: String, storage: String) {
-        val where = if (storage == "phone") Storage.PHONE else Storage.SYNCED
+        val where = storageOf(storage)
         val name = rawName.trim()
         if (where == Storage.SYNCED && vm.clusterUrl.trim().isEmpty()) {
             shellUi.profileStatus.value = "Sign in to your cluster first (Settings → Account & sync), or keep \"$name\" on this phone only."; return
@@ -974,9 +974,10 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         if (where == Storage.SYNCED && name in clusterProfileNames()) { profileUseOnPhone(name, site); return }
         when (val c = ProfileRegistry.add(vm.registry, name, where, site, clusterProfileNames())) {
             is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
-            is ProfileRegistry.Change.Ok -> if (where == Storage.PHONE) {
+            is ProfileRegistry.Change.Ok -> if (where != Storage.SYNCED) {
                 savePhoneProfiles(c.list)
-                shellUi.profileStatus.value = "\"$name\" is on this phone only. Open it and sign in once."
+                shellUi.profileStatus.value = if (where == Storage.DEVICE) "\"$name\" is on this phone. Open it and sign in once: Claude's tasks run in it here, and the login stays on the phone."
+                    else "\"$name\" is on this phone only, private. Open it and sign in once."
                 profilesLoad()
             } else clusterThenPhone("POST", "/v1/profiles", JSONObject().put("name", name).put("site", site).toString(), okIfExists = false) {
                 savePhoneProfiles(ProfileRegistry.add(vm.registry, name, where, site).let { (it as? ProfileRegistry.Change.Ok)?.list ?: vm.registry })
@@ -985,8 +986,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         }
     }
 
-    private fun profileUseOnPhone(name: String, site: String) {
-        when (val c = ProfileRegistry.useOnPhone(vm.registry, name, site)) {
+    private fun profileUseOnPhone(name: String, site: String, storage: Storage = Storage.DEVICE) {
+        when (val c = ProfileRegistry.useOnPhone(vm.registry, name, site, storage)) {
             is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
             is ProfileRegistry.Change.Ok -> {
                 savePhoneProfiles(c.list)
@@ -998,8 +999,20 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
 
     private fun profileSetStorage(card: engineer.myapp.gb.shared.ProfileCard, to: String) {
         when {
-            card.storage == "cluster" && to == "synced" -> profileUseOnPhone(card.name, card.site)
-            card.storage == "phone" && to == "synced" -> {
+            card.storage == "cluster" && (to == "synced" || to == "device") -> profileUseOnPhone(card.name, card.site, storageOf(to))
+            /* THE LOGIN STAYS ON THE PHONE (1.00, 2026-11-21): tasks run here, the copy in the cloud is deleted. */
+            to == "device" || (card.storage == "synced" && to == "phone") -> when (val c = ProfileRegistry.setStorage(vm.registry, card.name, storageOf(to))) {
+                is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
+                is ProfileRegistry.Change.Ok -> {
+                    savePhoneProfiles(c.list)
+                    val was = card.storage == "synced"
+                    shellUi.profileStatus.value = (if (to == "device") "\"${card.name}\" stays on this phone: Claude's tasks run in it here." else "\"${card.name}\" is private to this phone now.") +
+                        (if (was) " Deleting the copy in the cloud…" else "")
+                    if (was) forgetCloudCopy(card.name, c.profile.site)
+                    profilesLoad()
+                }
+            }
+            (card.storage == "phone" || card.storage == "device") && to == "synced" -> {
                 if (vm.clusterUrl.trim().isEmpty()) { shellUi.profileStatus.value = "Sign in to your cluster first (Settings → Account & sync)."; return }
                 clusterThenPhone("POST", "/v1/profiles", JSONObject().put("name", card.name).put("site", card.site).toString(), okIfExists = true) {
                     (ProfileRegistry.setStorage(vm.registry, card.name, Storage.SYNCED) as? ProfileRegistry.Change.Ok)?.let { savePhoneProfiles(it.list) }
@@ -1007,9 +1020,24 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
                     "\"${card.name}\" now syncs with your cluster: its logins are copied there."
                 }
             }
-            card.storage == "synced" && to == "phone" -> when (val c = ProfileRegistry.setStorage(vm.registry, card.name, Storage.PHONE)) {
+            card.storage == "device" && to == "phone" -> when (val c = ProfileRegistry.setStorage(vm.registry, card.name, Storage.PHONE)) {
                 is ProfileRegistry.Change.Refused -> shellUi.profileStatus.value = c.why
-                is ProfileRegistry.Change.Ok -> { savePhoneProfiles(c.list); shellUi.profileStatus.value = "\"${card.name}\" stays on this phone only. The cluster's copy remains until you delete it there."; profilesLoad() }
+                is ProfileRegistry.Change.Ok -> { savePhoneProfiles(c.list); shellUi.profileStatus.value = "\"${card.name}\" is private to this phone now."; profilesLoad() }
+            }
+        }
+    }
+
+    /** The cluster forgets the login this phone copied there (DELETE /v1/profiles/{name}/cookies): pending cookies, vault, open browser. */
+    private fun forgetCloudCopy(name: String, site: String) {
+        if (vm.clusterUrl.trim().isEmpty()) return
+        agentExec.execute {
+            val host = site.trim().removePrefix("https://").removePrefix("http://").substringBefore('/')
+            val body = JSONObject().put("sites", org.json.JSONArray().apply { if (host.isNotBlank()) put(host) }).toString()
+            val raw = apiAwait("DELETE", "/v1/profiles/" + java.net.URLEncoder.encode(name, "UTF-8") + "/cookies", body)
+            val ok = try { JSONObject(raw).optBoolean("ok") } catch (e: Exception) { false }
+            runOnUiThread {
+                shellUi.profileStatus.value = if (ok) "\"$name\" stays on this phone; the copy of its login in the cloud is deleted."
+                    else "\"$name\" stays on this phone, but the cloud did not confirm deleting its copy (${raw.take(100)}). Try again later from this page."
             }
         }
     }
@@ -3826,8 +3854,8 @@ class MainActivity : AppCompatActivity(), Agent.DeviceBrowser, GbServer.Browser 
         // "Share login with cluster" is where the profile lives now: synced, or this phone only.
         onSetCookieSync = { profile, approved ->
             val card = shellUi.profileCards.value.firstOrNull { it.name == profile }
-                ?: engineer.myapp.gb.shared.ProfileCard(name = profile, storage = if (ProfileRegistry.find(vm.registry, profile)?.storage == Storage.SYNCED) "synced" else "phone")
-            profileSetStorage(card, if (approved) "synced" else "phone")
+                ?: engineer.myapp.gb.shared.ProfileCard(name = profile, storage = wordOf(ProfileRegistry.find(vm.registry, profile)?.storage ?: Storage.PHONE))
+            profileSetStorage(card, if (approved) "synced" else "device")
         },
         onSetUseLocal = { vm.useLocal = it; settingsUi.useLocal.value = it },
         onSelectModelIndex = { i -> settingsUi.modelIndex.value = i; vm.selectedModel = ModelCatalog.models.getOrElse(i) { ModelCatalog.models[0] }.id; refreshSettingsModel() },

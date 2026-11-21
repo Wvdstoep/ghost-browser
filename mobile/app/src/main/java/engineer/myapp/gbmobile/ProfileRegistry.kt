@@ -18,13 +18,20 @@ import org.json.JSONObject
  *    hands to this phone cannot use it.
  *  - [Storage.SYNCED]: on this phone and on the cluster under the same name. You sign in on the
  *    phone; the login is copied to the cluster profile, and work handed to this phone runs in it.
+ *  - [Storage.DEVICE] (1.00, the default): on this phone, and work from the cluster or Claude runs in
+ *    it HERE. The login never leaves the phone: the cluster sends the work to the phone instead of
+ *    using a copy (2026-11-21: the same Facebook login used from the datacenter and from the phone
+ *    drew "verify you are human" on the cloud only).
  * A cluster profile that is not on this phone is shown as such and can be added here.
  *
  * [PhoneProfile.jar] is the WebView cookie store behind the name. It equals the name for every new
  * profile; older ones keep their store ("p_linkedin" behind "linkedin") so no login is lost, because
  * Android cannot rename a WebView profile.
  */
-internal enum class Storage { PHONE, SYNCED }
+internal enum class Storage { PHONE, SYNCED, DEVICE }
+
+internal fun storageOf(word: String): Storage = when (word) { "synced" -> Storage.SYNCED; "device" -> Storage.DEVICE; else -> Storage.PHONE }
+internal fun wordOf(s: Storage): String = when (s) { Storage.SYNCED -> "synced"; Storage.DEVICE -> "device"; Storage.PHONE -> "phone" }
 
 internal data class PhoneProfile(val name: String, val jar: String, val storage: Storage, val site: String = "")
 
@@ -42,7 +49,7 @@ internal object ProfileRegistry {
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val name = o.optString("name"); if (name.isBlank()) continue
-            val storage = if (o.optString("storage") == "synced") Storage.SYNCED else Storage.PHONE
+            val storage = storageOf(o.optString("storage"))
             out.add(PhoneProfile(name, o.optString("jar").ifBlank { name }, storage, o.optString("site")))
         }
         return withDefault(out)
@@ -51,7 +58,7 @@ internal object ProfileRegistry {
     fun serialize(list: List<PhoneProfile>): String {
         val arr = JSONArray()
         for (p in list) arr.put(JSONObject().put("name", p.name).put("jar", p.jar).put("site", p.site)
-            .put("storage", if (p.storage == Storage.SYNCED) "synced" else "phone"))
+            .put("storage", wordOf(p.storage)))
         return arr.toString()
     }
 
@@ -98,18 +105,18 @@ internal object ProfileRegistry {
      */
     fun forCluster(list: List<PhoneProfile>, requested: String): PhoneProfile? {
         val p = find(list, requested.ifBlank { DEFAULT }) ?: return null
-        return if (p.name == DEFAULT || p.storage == Storage.SYNCED) p else null
+        return if (p.name == DEFAULT || p.storage == Storage.SYNCED || p.storage == Storage.DEVICE) p else null
     }
 
     fun refusalFor(list: List<PhoneProfile>, requested: String): String {
         val name = requested.ifBlank { DEFAULT }
         val p = find(list, name)
         return if (p == null) "The profile \"$name\" is not on this phone. In the Ghost Browser app open Profiles, tap \"Use on this phone\" on \"$name\", and sign in there once."
-        else "The profile \"$name\" is kept on this phone only. In the Ghost Browser app open Profiles and turn on \"Sync with cluster\" for \"$name\" to let work from the cluster use it."
+        else "The profile \"$name\" is private to this phone. In the Ghost Browser app open Profiles and choose \"Tasks run on this phone\" for \"$name\" to let work use it here (the login stays on the phone)."
     }
 
     /** What the phone tells the cluster it can run: exactly the stores [forCluster] accepts. */
-    fun deviceProfiles(list: List<PhoneProfile>): List<String> = list.filter { it.name == DEFAULT || it.storage == Storage.SYNCED }.map { it.name }
+    fun deviceProfiles(list: List<PhoneProfile>): List<String> = list.filter { it.name == DEFAULT || it.storage == Storage.SYNCED || it.storage == Storage.DEVICE }.map { it.name }
 
     sealed class Change { data class Ok(val list: List<PhoneProfile>, val profile: PhoneProfile) : Change(); data class Refused(val why: String) : Change() }
 
@@ -125,14 +132,14 @@ internal object ProfileRegistry {
         return Change.Ok(list + p, p)
     }
 
-    /** Add a cluster profile to this phone: synced, under the cluster's own name. */
-    fun useOnPhone(list: List<PhoneProfile>, clusterName: String, site: String = ""): Change {
+    /** Add a cluster profile to this phone under the cluster's own name: its tasks run here (or synced, when asked). */
+    fun useOnPhone(list: List<PhoneProfile>, clusterName: String, site: String = "", storage: Storage = Storage.DEVICE): Change {
         find(list, clusterName)?.let { existing ->
-            return if (existing.storage == Storage.SYNCED) Change.Refused("\"$clusterName\" is already on this phone.")
-            else Change.Refused("\"$clusterName\" is on this phone as a phone-only profile. Turn on \"Sync with cluster\" for it instead.")
+            return if (existing.storage != Storage.PHONE) Change.Refused("\"$clusterName\" is already on this phone.")
+            else Change.Refused("\"$clusterName\" is on this phone as a private profile. Choose \"Tasks run on this phone\" for it instead.")
         }
         if (list.any { it.jar == clusterName }) return Change.Refused("This phone already has a store named \"$clusterName\" under another profile.")
-        val p = PhoneProfile(clusterName, clusterName, Storage.SYNCED, site.trim())
+        val p = PhoneProfile(clusterName, clusterName, storage, site.trim())
         return Change.Ok(list + p, p)
     }
 
@@ -165,7 +172,7 @@ internal object ProfileRegistry {
      */
     fun placement(list: List<PhoneProfile>, clusterNames: Collection<String>): Map<String, String> {
         val out = LinkedHashMap<String, String>()
-        for (p in list) out[p.name] = if (p.name == DEFAULT) "main" else if (p.storage == Storage.SYNCED) "synced" else "phone"
+        for (p in list) out[p.name] = if (p.name == DEFAULT) "main" else wordOf(p.storage)
         for (n in clusterNames) if (n !in out) out[n] = "cluster"
         return out
     }

@@ -1644,7 +1644,22 @@ const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
  */
 function placeSession(req, profileName) {
   const where = String((req.body && req.body.device) || 'auto').trim();
-  if (where === 'auto' || where === 'cluster') return { where };
+  /* "auto" and a login that lives on a device (loginOnDevice, 2026-11-21): straight there, never the cluster first.
+     Trying the cluster first meant the same login hit the site from the datacenter and, seconds later, from the
+     phone. A device that holds it but is offline is said so; "cluster" still opens it on the cluster on purpose. */
+  /* The console (the owner at the screen, a live view of the cloud browser) keeps opening where it always did. */
+  if (where === 'auto' && !(req.client && req.client.console)) {
+    for (const owner of ringOwners(req).filter(Boolean)) {
+      const home = loginOnDevice(owner, profileName, { starting: false, busyCheck: false });
+      if (home.device) return { where, device: home.device, home: true };
+      if (home.waiting && home.name) {
+        return { where, refusal: { error: `The "${profileName}" login lives on ${home.name}, which is offline.`,
+          hint: `Open the Ghost Browser app on ${home.name} (it may stay locked), then try again. Opening it in the cloud instead (device "cluster") uses a copy of the login from the server's address, which sites like Facebook check.` } };
+      }
+    }
+    return { where };
+  }
+  if (where === 'cluster') return { where };
   const r = pickDeviceFor(req, { name: where === 'device' ? '' : where, profile: profileName || 'default' });
   if (r.device) return { where, device: r.device };
   return { where, refusal: { error: r.reason, devices: r.devices,
@@ -5731,7 +5746,20 @@ app.post('/v1/watchers/:id/feed/approve', authed, (req, res) => {
   const lockKey = `poster:${wid}:${runId}`;   // one lock PER POST: four approvals of the same watcher take turns instead of typing over each other
   const cfgP = feed.getConfig(wid) || {};
   const want = profiles.safeName(cfgP.profile || 'facebook'); const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
+  /* The reply is posted where the login lives (loginOnDevice): on the phone that holds it, never by the cluster. */
+  const home = loginOnDevice(owner, want);
+  if (home.waiting || home.busy) {
+    const why = home.busy ? `${home.reason}; approve again in a few minutes` : `${home.reason}; approve again when it is online`;
+    feed.mark(wid, it.key, dryRun ? { dryRunResult: 'failed: ' + why } : { posting: false, postFailed: true, posted: 'failed: ' + why });
+    return res.json({ mode: dryRun ? 'dry-run' : 'post', runId, waiting: why });
+  }
+  let devicePage = null;
+  if (home.device) {
+    const rs = { id: `post-${wid}`, profile: want };
+    if (sessionRing.attach(rs, [owner], { device: home.device })) devicePage = require('./ringPlaywright').ringPage(sessionRing, rs);
+  }
   const session = async () => {
+    if (devicePage) return { page: devicePage };
     let s = pool.listFor(owner).find((x) => x.profile === want); if (s) s = pool.get(s.sessionId);
     let dead = false; try { dead = !s || !s.page || (s.page.isClosed && s.page.isClosed()); } catch (e) { dead = true; }
     if (dead) { const o = await pool.createSession({ owner, maxConcurrent, profile: want, takeover: true }); s = pool.get(o.sessionId); }
@@ -6326,6 +6354,22 @@ async function replyWatchTick(wf, owner, opts) {
   return gigReplies.tick(getPage, wf.id, { log: (m) => log.info(m), config: (opts && opts.config) || null, settings: settingsStore.read() });
 }
 
+/*
+ * WHERE A LOGIN LIVES (2026-11-21). A profile that one of the owner's phones (or desktops) holds is that device's:
+ * work in it runs there, with the device's own login and home connection, never on the cluster with a copy (the
+ * cluster IP drew Facebook's "verify you are human"; the phone, with the same account, never did). Returns
+ *   { device }            an online device that holds it: run there (a phone before a desktop)
+ *   { waiting, reason }   a device holds it but none is online (or the server just started and devices are still
+ *                         registering): wait, do not fall back to the cluster
+ *   { busy, reason }      that device is in use in this profile by a session right now: next pass
+ *   {}                    no device holds it: the cluster, as before
+ */
+const SERVER_STARTED_AT = Date.now();
+function loginOnDevice(owner, profile, opts = {}) {
+  let devices = []; try { devices = deviceHub.deviceList(); } catch (e) { devices = []; }
+  let sessions = []; try { sessions = pool.listFor(owner).map((x) => pool.get(x.sessionId)).filter(Boolean); } catch (e) { sessions = []; }
+  return require('./loginHome').loginHome({ devices, sessions, owner, profile, startedAt: SERVER_STARTED_AT, ...opts });
+}
 async function postWatchTick(wf, owner, opts) {
   const feed = require('./watcherFeed'); const pw = require('./postWatch');
   let cfg = feed.getConfig(wf.id);
@@ -6333,6 +6377,15 @@ async function postWatchTick(wf, owner, opts) {
   /* THE PASS RUNS IN THE WATCHERS' OWN BROWSER (src/watchProfile.js): a copy of the login profile, so
      the owner's browser stays free for walks, looks and the poster while a pass crawls. */
   const base = profiles.safeName(cfg.profile || 'facebook');
+  /* THE LOGIN'S OWN PHONE FIRST (2026-11-21): a phone that holds this profile runs the pass itself, with its own
+     login and home connection; the cluster never reads it with a copy. No such phone online: wait for it. */
+  const home = loginOnDevice(owner, base);
+  if (home.waiting || home.busy) {
+    try { feed.setConfig(wf.id, { lastPass: { at: Date.now(), status: home.busy ? 'device-busy' : 'waiting-device', note: home.reason, device: home.name || null } }); } catch (e) { /* the record may not fail the pass */ }
+    log.info(`[post-watch] "${wf.name}": ${home.reason}`);
+    return;
+  }
+  if (home.device) return postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, home.device, base);
   const want = watchProfile.ensureWatchProfile(process.env.PROFILE_DIR || '/profiles', base);
   const maxConcurrent = Math.max(2, Number(process.env.MAX_CONTEXTS) || 8);
   let synced = false;
@@ -6346,10 +6399,22 @@ async function postWatchTick(wf, owner, opts) {
   // A crawl drives the page directly; without this the pool reads it as idle and reaps the browser mid-pass.
   const touch = () => { try { const s = pool.listFor(owner).find((x) => x.profile === want); const live = s && pool.get(s.sessionId); if (live) live.lastUsed = Date.now(); } catch (e) { /* best effort */ } };
   const getPage = async () => (await session()).page;
+  return postWatchPass(wf, owner, cfg, feed, pw, llmCfg, opts, getPage, touch);
+}
+/* The post watcher's pass on the phone that holds the login: the same pass, its page the device ring's
+   (ringPlaywright.js). Only the phone's own browser reads Facebook; nothing is copied to or read by the cluster. */
+async function postWatchOnDevice(wf, owner, cfg, feed, pw, llmCfg, opts, device, base) {
+  const rs = { id: `watch-${wf.id}`, profile: base };
+  if (!sessionRing.attach(rs, [owner], { device })) return;
+  log.info(`[post-watch] "${wf.name}" runs on ${device.name}, in its own "${base}" login`);
+  const page = require('./ringPlaywright').ringPage(sessionRing, rs);
+  return postWatchPass(wf, owner, cfg, feed, pw, llmCfg, opts, async () => page, () => {}, device.name);
+}
+async function postWatchPass(wf, owner, cfg, feed, pw, llmCfg, opts, getPage, touch, onDevice) {
   // Stand alone: read the owner's notifications page for posts with activity, no other watcher needed.
   if (cfg.selfDiscover !== false) {
     try {
-      const found = await pw.discoverOnPage((await session()).page, log);
+      const found = await pw.discoverOnPage(await getPage(), log);
       const have = new Set((cfg.postUrls || []).map((u) => pw.postIdOf(u)));
       const add = found.filter((u) => !have.has(pw.postIdOf(u)));
       const mineIds = Array.from(new Set((cfg.mineIds || []).concat(found.mine || []).map(String)));
@@ -6384,6 +6449,7 @@ async function postWatchTick(wf, owner, opts) {
     } catch (e) { health.errors.push(`${url}: ${e.message}`); log.error(`[post-watch] ${url}: ${e.message}`); }
   }
   health.endedAt = Date.now();
+  if (onDevice) health.device = onDevice;
   const before = (cfg.lastPass && Number(cfg.lastPass.waiting)) || 0;
   feed.setConfig(wf.id, { lastPass: health });
   if (cfg.notifyPhone && health.waiting > before) {
@@ -6844,6 +6910,27 @@ app.post('/v1/profiles/:name/cookies', authed, async (req, res) => {
   try { const owner = consoleOwner(); const s0 = pool.listFor(owner).find((x) => x.profile === name); const s = s0 && pool.get(s0.sessionId); if (s && s.context) { await s.context.addCookies(list); applied = true; } } catch (e) { log.warn(`[login-sync] ${name}: ${e.message}`); }
   log.info(`[login-sync] ${name}: ${list.length} cookie(s) from the app for ${host || 'the site'}${applied ? ' — applied to the open browser' : ' — applied at the next launch'}`);
   res.json({ ok: true, profile: name, stored: byKey.size, applied });
+});
+/*
+ * THE LOGIN LIVES ON THE PHONE AGAIN (2026-11-21): the app calls this when a profile stops copying its login to
+ * the cluster. Every copy the cluster keeps goes (cloudLoginCopy.js): the pending cookies, the vault's snapshot
+ * and the open browser's jar for those sites (or at its next launch).
+ */
+app.delete('/v1/profiles/:name/cookies', authed, async (req, res) => {
+  const name = profiles.safeName(req.params.name);
+  if (!name || name === 'default') return res.status(400).json({ error: 'name a profile other than "default"' });
+  const contexts = [];
+  try {
+    for (const owner of new Set([consoleOwner(), req.client && req.client.owner].filter(Boolean))) {
+      for (const x of pool.listFor(owner)) { if (x.profile === name || x.profile === `${name}-watch`) { const live = pool.get(x.sessionId); if (live && live.context) contexts.push(live.context); } }
+    }
+  } catch (e) { /* none open */ }
+  try {
+    const sites = Array.isArray(req.body && req.body.sites) ? req.body.sites.map(String).slice(0, 20) : [];
+    const r = await require('./cloudLoginCopy').forget({ profileDir: process.env.PROFILE_DIR || '/profiles', profile: name, contexts, sites });
+    log.info(`[login-copy] ${name}: the cloud copy of the phone's login is gone (${r.sites.join(', ') || 'no sites'}; ${r.vaultRemoved} from the vault, ${r.clearedOpen} cleared in open browsers)`);
+    res.json({ ok: true, ...r });
+  } catch (e) { fail(res, e); }
 });
 app.get('/v1/assistant/chats', authed, (_req, res) => res.json({ chats: assistant.list() }));
 app.post('/v1/assistant/chats', authed, (req, res) => res.json(assistant.create((req.body || {}).title, (req.body || {}).agentType)));
