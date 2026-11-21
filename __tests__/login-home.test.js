@@ -147,3 +147,16 @@ describe('the probe reads where the pass reads', () => {
     expect(probe.indexOf('if (home.device)')).toBeLessThan(probe.indexOf('pool.createSession'));
   });
 });
+
+describe('a read that cannot be right', () => {
+  it('is never folded into the feed, stays due, and the owner\'s phone hears it once per post', () => {
+    const pass = server.slice(server.indexOf('async function postWatchPass('), server.indexOf('function notifyPhones('));
+    const at = pass.indexOf('if (tree.broken) {');
+    expect(at).toBeGreaterThan(0);
+    expect(at).toBeLessThan(pass.indexOf('pw.ingest(wf.id, tree, cfg, feed)'));
+    const block = pass.slice(at, pass.indexOf('}', pass.indexOf('continue;', at)) + 1);
+    expect(block).toMatch(/notifyPhones\(owner, \{ tag: `post-broken-\$\{pw\.postIdOf\(url\) \|\| wf\.id\}`/);
+    expect(block).toMatch(/continue;/);                         // no lastCrawl stamp: the post stays due
+    expect(block).not.toMatch(/lastCrawl/);
+  });
+});

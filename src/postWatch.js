@@ -26,7 +26,7 @@ const VOICE = 'Plain words, short, like a real person typing on their phone. Con
   + 'experience rather than a general observation. Never mention being an AI. Answer criticism thoughtfully, never defensively. No pitch.';
 
 /* Controls that reveal more of the thread — in Dutch and English, and never the "Reply" control itself. */
-const EXPAND = /^(?:(?:bekijk|view|show|see|toon)\s+)?(?:(?:all|alle|nog|more|meer)\s+)?\d*\s*(?:antwoorden?|repl(?:y|ies)|reacties?|opmerkingen|comments)(?:\s+(?:bekijken|weergeven|tonen))?$|^(?:meer|more)\s+(?:opmerkingen|comments|reacties)(?:\s+(?:weergeven|bekijken|laden|tonen))?$|^(?:vorige|previous|earlier)\s+(?:opmerkingen|comments|reacties)(?:\s+(?:weergeven|bekijken))?$|^(?:zie|see|show)\s+more$|^meer\s+weergeven$/i;
+const EXPAND = /^(?!(?:antwoord(?:en)?|repl(?:y|ies)|odpowiedz|odpowiedź|comments?|opmerkingen|reacties?|komentarze?)$)(?:(?:bekijk|view|show|see|toon)\s+)?(?:(?:all|alle|nog|more|meer)\s+)?\d*\s*(?:antwoord(?:en)?|repl(?:y|ies)|reacties?|opmerkingen|comments)(?:\s+(?:bekijken|weergeven|tonen))?$|^(?:meer|more)\s+(?:opmerkingen|comments|reacties)(?:\s+(?:weergeven|bekijken|laden|tonen))?$|^(?:vorige|previous|earlier)\s+(?:opmerkingen|comments|reacties)(?:\s+(?:weergeven|bekijken))?$|^(?:zie|see|show)\s+more$|^meer\s+weergeven$/i;
 const SORT_BTN = /^(?:meest relevant|most relevant|nieuwste|newest|oudste|oldest)$/i;
 const SORT_ALL = /^(?:alle opmerkingen|all comments|alle reacties)$/i;
 
@@ -43,7 +43,9 @@ async function crawl(getPage, url, log, touch) {
      afresh for every branch (getPage re-acquires the profile if it was closed). */
   const tree = await openAndRead(await getPage(), url, log, true, touch);
   const byId = new Map(); tree.nodes.forEach((n) => byId.set(n.id, n));
-  const roots = tree.nodes.filter((n) => !n.isReply).slice(0, 40);
+  /* A comment's own page exists only under Facebook's own id (desktop links carry it). On the phone a comment
+     has no link: the post page, with every "View N replies" opened, is the whole thread. */
+  const roots = tree.nodes.filter((n) => !n.isReply && /^\d+$/.test(String(n.id))).slice(0, 40);
   for (const root of roots) {
     const link = `https://www.facebook.com/groups/${tree.group || 'x'}/posts/${tree.postId}/?comment_id=${root.id}`;
     try {
@@ -62,8 +64,24 @@ async function crawl(getPage, url, log, touch) {
   }
   tree.nodes = [...byId.values()].sort((a, b) => a.i - b.i);
   tree.url = String(url); tree.crawledAt = Date.now();
+  tree.broken = readerBroken(tree);
+  if (tree.broken && log) log.warn(`[post-watch] reader broken on ${url}: ${tree.broken}`);
   if (log) log.info(`[post-watch] ${roots.length} root comment(s) read from their own pages → ${tree.nodes.length} messages`);
   return tree;
+}
+
+/**
+ * THE READER CHECKS ITSELF. A post with comments read as "0 messages" looked exactly like a quiet post, so the
+ * phone's first pass failed in silence. Broken: Reply controls on the page but no comment came out of them, or
+ * far fewer comments than the count Facebook prints. Returns why, or '' when the read is believable.
+ */
+function readerBroken(tree) {
+  const read = (tree.nodes || []).length;
+  const controls = Number(tree.replyControls) || 0;
+  const shownCount = Number(tree.shownCount) || 0;
+  if (controls > 0 && read === 0) return `${controls} Reply control(s) on the page, 0 comments read`;
+  if (shownCount >= 4 && read < Math.ceil(shownCount / 2)) return `Facebook shows ${shownCount} comments, ${read} read`;
+  return '';
 }
 
 /** One page: land on it (proving the post is there), optionally sort to all comments, reveal what is
@@ -81,9 +99,13 @@ async function openAndRead(page, url, log, sortAll, touch) {
     try { await dismissConsent(page); } catch { /* no banner is the normal case */ }
     try { await settle(page); } catch { /* may still be rendering */ }
     await page.waitForTimeout(2500);
+    /* ON THE POST, in any layout: its id in the address (or a link to it), and something a person can answer
+       with on screen: a comment box, or a Reply under a comment. */
     const onPost = await page.evaluate((id) => {
-      const here = location.href.includes(id) || !!document.querySelector(`a[href*="${id}"]`);
-      return here && document.querySelectorAll('[role="article"]').length > 0;
+      const here = !id || location.href.includes(id) || !!document.querySelector(`a[href*="${id}"]`);
+      const box = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]')).some((b) => b.getClientRects().length > 0);
+      const reply = Array.from(document.querySelectorAll('body *')).some((el) => el.children.length === 0 && /^(?:reply|beantwoorden|antwoorden|odpowiedz|odpowiedź)$/i.test((el.textContent || '').trim()) && el.getClientRects().length > 0);
+      return here && (box || reply);
     }, pid || '').catch(() => false);
     if (onPost) break;
     if (log) log.info(`[post-watch] not on the post yet (${page.url().slice(0, 80)}) — retrying`);
@@ -106,13 +128,14 @@ async function openAndRead(page, url, log, sortAll, touch) {
 
 /** Button finding + a real click with a fallback, shared by the crawl and the probe. */
 function helpers(page) {
+  /* Controls by their WORDS, in any layout ("1 antwoord bekijken" is a role=button on desktop and a plain block
+     on the phone): the page marks the deepest visible element whose text matches, and those are the handles. */
+  let seq = 0;
   const candidates = async (re) => {
-    const out = [];
-    for (const h of await page.$$('div[role="button"], span[role="button"], a[role="button"], [role="menuitem"]')) {
-      let t = ''; try { t = (await h.innerText()).trim().replace(/\s+/g, ' '); } catch { continue; }
-      if (re.test(t)) out.push(h);
-    }
-    return out;
+    const tag = 'c' + (++seq);
+    // ONE argument: Playwright passes only one to a page function (the phone's page takes more, the cluster's not)
+    const n = await page.evaluate(markControls, { src: re.source, flags: re.flags.replace('g', ''), tag }).catch(() => 0);
+    return n ? page.$(`[data-gb-ctl="${tag}"]`) : [];
   };
   const press = async (h) => {
     try { await h.evaluate((el) => el.scrollIntoView({ block: 'center' })); await page.waitForTimeout(250); await h.click({ timeout: 3000 }); return true; }
@@ -142,81 +165,242 @@ async function expandAll(page, candidates, press, touch) {
   return { clicks, clicked, remaining };
 }
 
-/* Runs INSIDE the page. Read-only. Facebook labels comment articles "Comment by X" / "Opmerking van X"
-   and replies "Reply by X" / "Antwoord van X"; the timestamp link inside carries the stable ids. */
+/*
+ * ONE READER FOR EVERY LAYOUT (2026-11-21). Runs INSIDE the page. Read-only.
+ *
+ * The owner's phone gets Facebook's mobile layout, the cluster the desktop one, and the old reader knew only
+ * the desktop's markup (comment articles and their aria-labels): on the phone it read "0 messages" from a post
+ * with 26 comments. Owner: "we need to think about not that one change breaks 2 versions". So this reads what
+ * a PERSON sees, which is the same in both layouts and in every language Facebook speaks to the owner:
+ *
+ *   - a comment is the block around ONE "Reply" control, bounded above by the Like row before it (the
+ *     previous comment's, or the post's own);
+ *   - its first line is the name (badges like "Author" dropped), the rest is the text (actions and times dropped);
+ *   - a reply's writing starts further right than what it answers: nesting comes from indentation;
+ *   - its id is Facebook's own comment id when the block links to it (desktop), else a fingerprint of name and
+ *     text, the same on every pass;
+ *   - the count Facebook prints ("26 comments") comes back too, with how many Reply controls were on the page,
+ *     so a reader that misses most of them says so instead of reading "0 messages".
+ *
+ * Visible means laid out on screen. Not aria-hidden: mobile Facebook marks the VISIBLE name aria-hidden (it
+ * repeats the text in a label), desktop marks a hidden duplicate copy, which drops out here by its layout or,
+ * at the latest, by its id. Lines come from the element structure, not the stylesheet, so a saved page without
+ * its styles reads the same. An aria-label that names the author and who they answered ("Reply by X on the
+ * reply by Y") is used when the page has one: it is what a screen reader says, not layout.
+ */
 function extractInPage() {
-  const q = (s, r) => Array.from((r || document).querySelectorAll(s));
-  const label = (a) => a.getAttribute('aria-label') || '';
-  const isC = (a) => /^(comment|opmerking|reply|antwoord)\b/i.test(label(a));
-  const shown = (el) => !!el && el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"]');
-  // visible only: Facebook keeps a hidden second copy of the thread, which doubled every root comment
-  const arts = q('[role="article"]').filter((a) => isC(a) && shown(a));
-  /* The label is "Opmerking van <Name> een dag geleden" or "Antwoord van <Name> op het antwoord van
-     <Other> ongeveer een uur geleden" (EN: "Comment by <Name> 2 hours ago", "Reply by <Name> on the
-     reply by <Other>"). It names the author AND who they answered - the reply target is more exact
-     than DOM nesting, since Facebook flattens replies under the root comment. */
-  const AGO = /\s+(?:ongeveer\s+|about\s+|over\s+)?(?:een|one|an?|\d+)\s+(?:seconde|second|minuut|minute|min|uur|hour|hr|dag|day|week|wk|maand|month|jaar|year)\w*\s+(?:geleden|ago)\b.*$/i;
-  const parts = (a) => {
-    const s = label(a).replace(/^(comment|opmerking|reply|antwoord)\s+(by|van|from|door)\s+/i, '').replace(AGO, '').trim();
-    const m = s.match(/^(.*?)\s+(?:op (?:het antwoord|de opmerking|een opmerking) van|on (?:the |a )?(?:reply|comment) (?:by|from|of))\s+(.+)$/i);
-    return m ? { author: m[1].trim(), replyTo: m[2].trim() } : { author: s, replyTo: '' };
+  const REPLY = /^(?:reply|beantwoorden|antwoorden|odpowiedz|odpowiedź)$/i;
+  const LIKE = /^(?:like|leuk|vind ik leuk|lubię to!?|polub|liked|geliked)$/i;
+  const BADGE = /^(?:auteur|author|autor|topbijdrager|top contributor|najaktywniejszy|beheerder|admin|administrator|moderator|nieuw lid|new member|nowy członek|groepsexpert|group expert|volgen|follow|obserwuj|bewerkt|edited|edytowano|·|•)$/i;
+  const ACTION = /^(?:vind ik leuk|like|leuk|lubię to!?|beantwoorden|reply|antwoorden|odpowiedz|odpowiedź|delen|share|udostępnij|bewerken|edit|verbergen|hide|meer weergeven|see more|zie meer|więcej|geliked|liked|verzenden|send|vertaling bekijken|see translation|zobacz tłumaczenie|\d+)$/i;
+  const WHEN = /^(?:\d+\s*(?:s|sec|seconden?|min|minuten?|m|u|uur|h|hr|hrs|godz\.?|d|dag|dagen|dni|w|wk|weken?|tyg\.?|j|jaar|y|yr|mnd|mo|mies\.?)\.?|\d{1,2}\s+[a-zA-Zéû]{3,10}\.?(?:\s+\d{4})?(?:\s+om\s+\d{1,2}:\d{2})?|gisteren|yesterday|wczoraj|zojuist|just now|przed chwilą)$/i;
+  const COUNT = /^(\d[\d.,]*)\s*(?:opmerkingen|opmerking|comments?|reacties|reactie|komentarz(?:e|y)?)$/i;
+  // "1 antwoord bekijken", "View all 3 replies": a control that opens more, never part of what someone wrote
+  const MORE = /^(?!(?:antwoord(?:en)?|repl(?:y|ies)|odpowiedz|odpowiedź|comments?|opmerkingen|reacties?|komentarze?)$)(?:(?:bekijk|view|show|see|toon|zobacz)\s+)?(?:(?:all|alle|nog|more|meer|wszystkie|kolejne)\s+)?\d*\s*(?:antwoord(?:en)?|repl(?:y|ies)|odpowied\w*|reacties?|opmerkingen|comments?|komentarz\w*)(?:\s+(?:bekijken|weergeven|tonen))?$/i;
+  // Facebook's icon font (private-use characters) draws badges and separators: read as a separator, never as words
+  const norm = (t) => String(t || '')
+    .replace(/[​-‏⁠﻿]/g, '')
+    .replace(/[-]|[\uDB80-\uDBFF][\uDC00-\uDFFF]/g, ' · ')
+    .replace(/\s+/g, ' ')
+    .replace(/(?:\s*·\s*){2,}/g, ' · ')
+    .trim();
+  const shown = (el) => {
+    if (!el || !el.getClientRects().length) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none' && String(cs.opacity).trim() !== '0';
   };
-  const ACTION = /^(vind ik leuk|like|leuk|beantwoorden|reply|delen|share|bewerken|edit|verbergen|hide|meer weergeven|see more|zie meer|geliked|verzenden|send|auteur|author|volgen|follow|topbijdrager|top contributor|beheerder|admin|moderator|nieuw lid|new member|groepsexpert|group expert|·|\d+\s*(u|m|d|w|j|h|min|uur|dag|dagen|wk|week|weken|jaar|y|mo|mnd)\.?|\d+)$/i;
-  const nodes = arts.map((a, i) => {
-    const inner = q('[role="article"]', a);
-    const links = q('a[href*="comment_id="]', a).filter((l) => !inner.some((x) => x.contains(l)));
-    const link = links[0] || null;
-    let cid = null, rid = null; try { const u = new URL(link.href); cid = u.searchParams.get('comment_id'); rid = u.searchParams.get('reply_comment_id'); } catch (e) { /* no link */ }
-    const isReply = /^(reply|antwoord)/i.test(label(a));
-    const parentArt = a.parentElement && a.parentElement.closest('[role="article"]');
-    const { author, replyTo } = parts(a);
-    const lines = q('div[dir="auto"], span[dir="auto"]', a).filter((d) => !inner.some((x) => x.contains(d)))
-      .map((d) => (d.innerText || '').trim()).filter((t) => t && t !== author && t !== replyTo && !ACTION.test(t) && t.length > 1);
-    const body = []; const seen = new Set();
-    for (const t of lines) { if (seen.has(t)) continue; seen.add(t); if (lines.some((o) => o !== t && o.includes(t))) continue; body.push(t); }
-    let text = body.join('\n');
-    if (text.startsWith(author + '\n')) text = text.slice(author.length + 1);          // the name line
-    if (replyTo && text.startsWith(replyTo + ' ')) text = text.slice(replyTo.length + 1); // the @mention prefix
-    const when = link ? (link.innerText || '').trim() : '';
-    // Did the owner already react to this one? The Like control reads "Verwijder Leuk" / "Remove Like"
-    // (or is aria-pressed) once it is yours - the owner's usual way of acknowledging without words.
-    const reactedByMe = q('[role="button"]', a).filter((b) => !inner.some((x) => x.contains(b))).some((b) => {
-      const l = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
-      return (/verwijder|remove|unlike|ongedaan/.test(l) && /leuk|like|reactie|reaction/.test(l)) || (b.getAttribute('aria-pressed') === 'true' && /leuk|like/.test(l));
+  /* The lines of a piece of the page, as a person reads them: text in the same block element is one line, a new
+     block element starts the next, and a "·" splits a line ("Mike · 1 d"). */
+  const BLOCK = 'div,p,li,h1,h2,h3,h4,h5,h6,blockquote,section,article,ul,ol,table,tr,td,header,footer,form';
+  const linesOf = (root, keep) => {
+    const out = []; let cur = ''; let owner = null;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    while (w.nextNode()) {
+      const n = w.currentNode;
+      if (n.nodeType === 1) { if (n.tagName === 'BR') { out.push(cur); cur = ''; } continue; }
+      const el = n.parentElement;
+      if (!el || !shown(el) || (keep && !keep(el))) continue;
+      const blk = el.closest(BLOCK);
+      if (blk !== owner) { out.push(cur); cur = ''; owner = blk; }
+      cur += n.textContent;
+    }
+    out.push(cur);
+    return out.map(norm).flatMap((l) => l.split(/\s+·\s+|^·\s+|\s+·$/)).map(norm).filter((l) => l && l !== '·');
+  };
+  const rect = (el) => el.getBoundingClientRect();
+  // where a block's writing starts: a reply's text sits further right than its parent's, whatever the row's width
+  const textLeft = (root) => {
+    let min = Infinity;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (w.nextNode()) {
+      const n = w.currentNode;
+      if (!/[\p{L}\p{N}]/u.test(n.textContent) || !shown(n.parentElement)) continue;
+      let r = null;
+      try { const rg = document.createRange(); rg.selectNodeContents(n); r = rg.getBoundingClientRect(); } catch (e) { r = null; }
+      if (!r) r = rect(n.parentElement);
+      if (r.width > 0 && r.left < min) min = r.left;
+    }
+    return Number.isFinite(min) ? Math.round(min) : Math.round(rect(root).left);
+  };
+  // the deepest elements whose own visible text is exactly one of these words: the controls themselves
+  const controls = (re) => {
+    const out = [];
+    for (const el of document.querySelectorAll('body *')) {
+      const t = norm(el.textContent);
+      if (!t || t.length > 40 || !re.test(t) || !shown(el)) continue;
+      if (Array.from(el.children).some((c) => re.test(norm(c.textContent)))) continue;
+      out.push(el);
+    }
+    return out;
+  };
+  const replies = controls(REPLY);
+  const likes = controls(LIKE);
+  const yOf = (el) => rect(el).top + window.scrollY;
+  const countIn = (el, list) => list.filter((x) => el.contains(x)).length;
+  const blocks = [];
+  for (const r of replies) {
+    const top = yOf(r);
+    // the Like row above this one: the previous comment's, or the post's own action row
+    let floor = -Infinity;
+    for (const l of likes) { const b = rect(l).bottom + window.scrollY; if (b <= top - 4 && b > floor) floor = b; }
+    let block = r; let up = r.parentElement;
+    while (up && up !== document.body && countIn(up, replies) === 1 && yOf(up) >= floor - 2) { block = up; up = up.parentElement; }
+    if (block === r || blocks.some((b) => b.el === block)) continue;
+    blocks.push({ el: block, reply: r });
+  }
+  // the label a screen reader reads, when the page has one: "Reply by X on the reply by Y 2 hours ago"
+  const AGO = /\s+(?:ongeveer\s+|about\s+|over\s+)?(?:een|one|an?|\d+)\s+(?:seconde|second|minuut|minute|min|uur|hour|hr|dag|day|week|wk|maand|month|jaar|year)\w*\s+(?:geleden|ago)\b.*$/i;
+  const labelOf = (el) => {
+    const a = el.closest('[aria-label]');
+    const l = a ? a.getAttribute('aria-label') || '' : '';
+    return /^(comment|opmerking|reply|antwoord|komentarz|odpowiedź)\b/i.test(l) ? l : '';
+  };
+  const fromLabel = (l) => {
+    const s2 = l.replace(/^(comment|opmerking|reply|antwoord|komentarz|odpowiedź)\s+(by|van|from|door|użytkownika|od)\s+/i, '').replace(AGO, '').trim();
+    const m = s2.match(/^(.*?)\s+(?:op (?:het antwoord|de opmerking|een opmerking) van|on (?:the |a )?(?:reply|comment) (?:by|from|of))\s+(.+)$/i);
+    return m ? { author: m[1].trim(), replyTo: m[2].trim() } : { author: s2, replyTo: '' };
+  };
+  const hash = (t) => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(36); };
+  const nodes = blocks.map((b, i) => {
+    const lines = linesOf(b.el);
+    const label = labelOf(b.el);
+    const lab = label ? fromLabel(label) : null;
+    let k = 0; while (k < lines.length && (BADGE.test(lines[k]) || WHEN.test(lines[k]))) k++;
+    const author = lab && lab.author ? lab.author : (lines[k] || '');
+    const rest = []; let when = '';
+    for (const t of lines) {
+      if (t === author) continue;
+      if (WHEN.test(t)) { if (!when) when = t; continue; }
+      if (BADGE.test(t) || ACTION.test(t) || MORE.test(t) || t.length < 2) continue;
+      rest.push(t);
+    }
+    const text = rest.filter((t, j) => rest.indexOf(t) === j).join('\n');
+    // Facebook's own ids, when the block links to its comment (desktop); a block holds one comment only
+    let cid = null; let rid = null;
+    for (const a of b.el.querySelectorAll('a[href*="comment_id="]')) {
+      try { const u = new URL(a.href); cid = u.searchParams.get('comment_id'); rid = u.searchParams.get('reply_comment_id'); if (cid) break; } catch (e) { /* not a url */ }
+    }
+    const reactedByMe = Array.from(b.el.querySelectorAll('[role="button"], [aria-pressed]')).some((x) => {
+      const l = ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).toLowerCase();
+      return (/verwijder|remove|unlike|ongedaan|usuń|cofnij/.test(l) && /leuk|like|reactie|reaction|lubię|reakcj/.test(l)) || (x.getAttribute('aria-pressed') === 'true' && /leuk|like|lubię/.test(l));
     });
-    return { i, id: rid || cid, cid, rid, isReply, author, replyTo, reactedByMe, text: text.trim().slice(0, 2000), when, parentIdx: parentArt ? arts.indexOf(parentArt) : -1 };
+    return { i, el: b.el, reply: b.reply, left: textLeft(b.el), author, labelReplyTo: lab ? lab.replyTo : '', labelReply: /^(reply|antwoord|odpowiedź)/i.test(label), text: text.slice(0, 2000), when, cid, rid, reactedByMe };
+  }).filter((n) => n.author);
+  // nesting from indentation: the nearest earlier block whose writing starts further left
+  nodes.forEach((n, j) => {
+    let p = null;
+    for (let q = j - 1; q >= 0; q--) if (nodes[q].left < n.left - 6) { p = nodes[q]; break; }
+    n.parent = p;
   });
-  for (const n of nodes) { n.parentId = n.rid ? n.cid : (n.parentIdx >= 0 ? nodes[n.parentIdx].id : null); delete n.parentIdx; }
-  // one node per id, whichever copy carries the words
-  const byIdOnce = new Map(); for (const n of nodes) { if (!n.id) continue; const ex = byIdOnce.get(n.id); if (!ex || (n.text || '').length > (ex.text || '').length) byIdOnce.set(n.id, n); }
-  const uniq = [...byIdOnce.values()].sort((a, b) => a.i - b.i);
+  const rootOf = (n) => { let c = n; let g = 0; while (c.parent && g++ < 20) c = c.parent; return c; };
+  for (const n of nodes) n.fp = 'v' + hash(n.author.toLowerCase() + '|' + n.text.replace(/\s+/g, ' ').slice(0, 160).toLowerCase());
+  nodes.forEach((n, j) => {
+    const root = rootOf(n);
+    n.isReply = !!n.parent || n.labelReply || !!n.rid;
+    if (n.cid) n.id = n.rid || n.cid;                                  // Facebook's own
+    else { n.id = n.fp; n.cid = n.isReply ? root.fp : n.fp; n.rid = n.isReply ? n.fp : null; }
+    n.parentId = n.isReply ? (n.parent ? (n.parent.rid || n.parent.cid || n.parent.fp) : n.cid) : null;
+    // who they answered: the label when there is one, else an @mention of an earlier name, else the parent
+    let replyTo = n.labelReplyTo || '';
+    if (!replyTo && n.isReply) {
+      const earlier = nodes.slice(0, j).map((m) => m.author).sort((a, b) => b.length - a.length);
+      const m = earlier.find((a) => a && n.text.startsWith(a));
+      replyTo = m || (n.parent ? n.parent.author : '');
+    }
+    if (replyTo && (n.text.startsWith(replyTo + ' ') || n.text.startsWith(replyTo + '\n'))) n.text = n.text.slice(replyTo.length + 1).trim();   // the @mention prefix
+    n.replyTo = replyTo;
+  });
+  const byIdOnce = new Map();
+  for (const n of nodes) { const ex = byIdOnce.get(n.id); if (!ex || (n.text || '').length > (ex.text || '').length) byIdOnce.set(n.id, n); }
+  // each comment's own Reply control carries its id, so the poster presses exactly that one (the only write here)
+  for (const n of byIdOnce.values()) { try { n.reply.setAttribute('data-gb-cid', String(n.id)); } catch (e) { /* detached */ } }
+  const uniq = [...byIdOnce.values()].sort((a, b) => a.i - b.i).map((n) => ({ i: n.i, id: n.id, cid: n.cid, rid: n.rid, isReply: n.isReply, author: n.author, replyTo: n.replyTo, reactedByMe: n.reactedByMe, text: n.text, when: n.when, parentId: n.parentId }));
+  // THE COUNT FACEBOOK SHOWS ("26 comments"), the largest one on the page
+  let shownCount = 0;
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.children.length > 3) continue;
+    const t = norm(el.textContent);
+    if (!t || t.length > 30) continue;
+    const m = t.match(COUNT);
+    if (m && shown(el)) { const v = Number(m[1].replace(/[.,]/g, '')); if (v > shownCount && v < 100000) shownCount = v; }
+  }
   const u = new URL(location.href);
   const postId = u.searchParams.get('post_id') || (location.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null;
   const group = (location.pathname.match(/\/groups\/([^/]+)/) || [])[1] || null;
-  /* THE POST, not a neighbour. The first non-comment article on a permalink page can be a suggested
-     post in the sidebar (one pass drafted as a Dutch fish-keeper). The real post is the article that
-     CONTAINS the comment thread; failing that, the largest one before the first comment, never in the
-     complementary (sidebar) region. Its own text = its content minus the nested comments/controls. */
-  const visible = (el) => !!el && el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"]');
-  const cands = q('[role="article"]').filter((a) => !isC(a) && !a.closest('[role="complementary"]') && visible(a));
-  // Deterministic: the post's own article links to ITS id (timestamp / permalink); suggestions link elsewhere.
-  const pidNow = u.searchParams.get('post_id') || (location.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || '';
-  const linksTo = (a) => !!pidNow && q('a[href]', a).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('/posts/' + pidNow) || h.includes('/permalink/' + pidNow) || h.includes('post_id=' + pidNow) || h.includes('story_fbid=' + pidNow) || h.includes('fbid=' + pidNow) || h.includes('multi_permalinks=' + pidNow); });
-  const isBefore = (el) => arts[0] ? !!(el.compareDocumentPosition(arts[0]) & Node.DOCUMENT_POSITION_FOLLOWING) : true;
-  // Every visible post body on the page, ranked: links to THIS post id > sits before the first comment > longest.
-  const msgs = q('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]').filter(visible);
-  const scored = msgs.map((m) => { const sc = m.closest('[role="article"]') || m.parentElement; const txt = (m.innerText || m.textContent || '').trim(); return { m, byId: sc ? linksTo(sc) : false, before: isBefore(m), len: txt.length, txt }; })
-    .sort((a, b) => (Number(b.byId) - Number(a.byId)) || (Number(b.before) - Number(a.before)) || (b.len - a.len));
-  const msg = scored[0] ? scored[0].m : null;
-  let postArt = cands.find(linksTo) || cands.find((a) => arts.some((c) => a.contains(c))) || null;
-  if (!postArt && arts[0]) { const before = cands.filter(isBefore); postArt = before.sort((x, y) => (y.textContent || '').length - (x.textContent || '').length)[0] || null; }
-  const ownText = (el) => { const c = el.cloneNode(true); c.querySelectorAll('[role="article"], form, [role="button"], [role="menu"], [aria-hidden="true"]').forEach((x) => x.remove()); return (c.textContent || '').replace(/\s+\n/g, '\n').replace(/[ \t]+/g, ' ').trim(); };
-  const probe = scored.slice(0, 6).map((s) => ({ byId: s.byId, before: s.before, len: s.len, text: s.txt.slice(0, 70) }));
-  const postText = ((msg && (msg.innerText || msg.textContent)) || (postArt ? ownText(postArt) : '') || '').replace(/…?\s*(meer weergeven|see more|zie meer)\b/gi, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 2500);
-  const authorEl = postArt && postArt.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a, h2, h3, h4');
-  const postAuthor = authorEl ? (authorEl.innerText || '').trim().split('\n')[0].trim() : '';
-  let me = ''; try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
-  return { postId, group, postText, postAuthor, me, probe, nodes: uniq.filter((n) => n.id && n.author) };
+  /* THE POST. Desktop marks its body (data-ad-preview / story_message) and that is used when present; otherwise
+     the post is what is written above the first comment, after its header: a name right before the time
+     ("Wesley Stoep", "19 sep.") or the heading a screen reader reads ("Bericht van Wesley Stoep"). */
+  const first = nodes[0] ? nodes[0].el : null;
+  const before = (el) => !first || !!(el.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const marked = Array.from(document.querySelectorAll('[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-ad-rendering-role="story_message"]'))
+    .filter((m) => shown(m) && before(m) && !m.closest('[role="complementary"]'))
+    .sort((a, b) => (b.textContent || '').length - (a.textContent || '').length);
+  let postText = marked[0] ? linesOf(marked[0]).join('\n') : '';
+  let postAuthor = '';
+  const head = linesOf(document.body, (el) => before(el) && !el.closest('[role="complementary"], [role="navigation"], [role="banner"], header, nav'));
+  let meta = -1;
+  for (let j = 0; j < head.length - 1 && meta < 0; j++) {
+    if (WHEN.test(head[j]) || head[j].length > 80 || BADGE.test(head[j])) continue;
+    if (WHEN.test(head[j + 1])) meta = j;
+  }
+  const said = head.map((t) => t.match(/^(?:bericht van|post by|posted by|post od|wpis od)\s+(.+)$/i)).find(Boolean);
+  if (meta >= 0) postAuthor = head[meta];
+  else if (said) postAuthor = said[1].trim();
+  let start = meta >= 0 ? meta + 1 : 0;
+  while (start < head.length && WHEN.test(head[start])) start++;
+  if (!postText) {
+    const body = head.slice(start).filter((t) => !WHEN.test(t) && !BADGE.test(t) && !ACTION.test(t) && !COUNT.test(t) && !MORE.test(t) && !/^\d+$/.test(t));
+    postText = body.join('\n');
+  }
+  if (!postAuthor && postText) {
+    // desktop: the line right above the marked post body is its author
+    const at = head.findIndex((t) => t.length > 20 && postText.startsWith(t.slice(0, 40)));
+    for (let j = at - 1; j >= 0 && !postAuthor; j--) if (!WHEN.test(head[j]) && !BADGE.test(head[j]) && head[j].length <= 60) postAuthor = head[j];
+  }
+  postText = postText.replace(/…?\s*(meer weergeven|see more|zie meer|więcej)\b/gi, ' ').replace(/[ \t]{2,}/g, ' ').trim().slice(0, 2500);
+  let me = '';
+  try { const p = document.querySelector('[aria-label="Je profiel"] img, [aria-label="Your profile"] img, [aria-label="Profiel"] img, [aria-label="Profile"] img, [aria-label="Twój profil"] img'); me = p ? (p.getAttribute('alt') || '') : ''; } catch (e) { /* none */ }
+  return { postId, group, postText, postAuthor, me, shownCount, replyControls: replies.length, read: uniq.length, nodes: uniq.filter((n) => n.id && n.author) };
+}
+
+/* Runs INSIDE the page: mark the controls whose visible text matches (the deepest such element, on screen), so
+   the caller can take them as handles. The same in every layout: a person finds "View 3 replies" by its words,
+   not by its tag. Returns how many. */
+function markControls({ src, flags, tag }) {
+  const re = new RegExp(src, flags);
+  const norm = (t) => String(t || '').replace(/[​-‏⁠﻿]/g, '').replace(/[-]|[\uDB80-\uDBFF][\uDC00-\uDFFF]/g, ' ').replace(/\s+/g, ' ').trim();
+  const shown = (el) => { const r = el.getBoundingClientRect(); if (!el.getClientRects().length || r.width < 1 || r.height < 1) return false; const cs = getComputedStyle(el); return cs.visibility !== 'hidden' && cs.display !== 'none'; };
+  document.querySelectorAll('[data-gb-ctl="' + tag + '"]').forEach((x) => x.removeAttribute('data-gb-ctl'));
+  let n = 0;
+  for (const el of document.querySelectorAll('body *')) {
+    const t = norm(el.textContent);
+    if (!t || t.length > 60 || !re.test(t) || !shown(el)) continue;
+    if (Array.from(el.children).some((c) => re.test(norm(c.textContent)))) continue;
+    el.setAttribute('data-gb-ctl', tag); n++;
+  }
+  return n;
 }
 
 function store(tree) {
@@ -481,8 +665,9 @@ async function discoverOnPage(page, log) {
   return urls;
 }
 
-/** Ground truth for one comment link: every comment article Facebook renders there, as the watcher's
- *  own session sees it (label, visible, first words), plus the reveal controls still closed. */
+/** Ground truth for one comment link, as the watcher's own session sees it: what the reader reads there (every
+ *  comment with its author, who it answers and its first words), the count Facebook shows, the Reply controls,
+ *  and the reveal controls still closed. The same in every layout, because it IS the reader. */
 async function probePage(page, url, opts) {
   const { settle } = require('./inspector');
   await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -490,26 +675,26 @@ async function probePage(page, url, opts) {
   await page.waitForTimeout(4000);
   let expand = null;
   if (opts && opts.expand) { const { candidates, press } = helpers(page); expand = await expandAll(page, candidates, press); }
-  const dump = await page.evaluate(() => {
-    const q = (s, r) => Array.from((r || document).querySelectorAll(s));
-    const arts = q('[role="article"]').filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || ''));
-    return { url: location.href, count: arts.length,
-      items: arts.slice(0, 80).map((a) => ({ label: (a.getAttribute('aria-label') || '').slice(0, 110), vis: a.getClientRects().length > 0, text: (a.innerText || '').replace(/\s+/g, ' ').slice(0, 90) })),
-      expanders: q('[role="button"]').map((b) => (b.innerText || '').trim()).filter((t) => /antwoord|repl|opmerking|comment/i.test(t)).slice(0, 25) };
-  });
+  const t = await page.evaluate(extractInPage);
+  const dump = {
+    url: page.url(), count: t.nodes.length, shownCount: t.shownCount, replyControls: t.replyControls, broken: readerBroken(t),
+    postAuthor: t.postAuthor, postText: String(t.postText || '').slice(0, 160),
+    items: t.nodes.slice(0, 80).map((n) => ({ id: n.id, author: n.author, replyTo: n.replyTo, isReply: n.isReply, when: n.when, text: String(n.text || '').replace(/\s+/g, ' ').slice(0, 90) })),
+  };
   dump.expand = expand;
-  // fixtures: the rendered page itself, so the extractor can be tested against real HTML offline
+  // fixtures: the rendered page itself, so the reader can be tested against real HTML offline
   // scripts left out: they are most of the bytes, run nothing in a fixture, and carry the session's tokens
   if (opts && opts.html) { try { dump.html = await page.evaluate(() => { const c = document.documentElement.cloneNode(true); c.querySelectorAll('script, noscript, link[rel="preload"], link[rel="modulepreload"]').forEach((x) => x.remove()); return '<!doctype html>' + c.outerHTML; }); } catch { dump.html = ''; } }
   return dump;
 }
 
 /**
- * THE POSTER, AS CODE. Posting an approved reply is not a judgement call, it is four deterministic
- * steps — so it is no longer an agent walk (the agent burned a 50-step budget wandering Facebook's
- * comment redirects and typed a reply it could not confirm). Here: open the comment's own deep link,
- * find THAT comment by its id, press its Reply, type the exact words, submit, and prove the reply is on
- * the page with the owner's name on it. Never types twice. `dryRun` does everything except typing.
+ * THE POSTER, AS CODE, in any layout. Posting an approved reply is four deterministic steps, never an agent walk
+ * (the agent burned a 50-step budget wandering Facebook's comment redirects). Open the comment's link, find THAT
+ * comment with the reader (by Facebook's id, or by the fingerprint of its name and words, which is what the phone
+ * gives), check nobody answered it meanwhile, press its own Reply, type the exact words into the box that opened
+ * (a textarea on the phone, a rich editor on desktop), send, and prove the reply is on the page under the owner's
+ * name. Never types twice. `dryRun` does everything except typing.
  */
 async function postReply(page, url, text, opts) {
   const o = opts || {}; const meName = String(o.meName || '').trim().toLowerCase();
@@ -518,60 +703,63 @@ async function postReply(page, url, text, opts) {
   const rid = u.searchParams.get('reply_comment_id'); const cid = u.searchParams.get('comment_id');
   const targetId = rid || cid; if (!targetId) return { posted: false, detail: 'no comment id in the link' };
   const { dismissConsent, settle } = require('./inspector');
-  await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
-  try { await dismissConsent(page); } catch { /* none */ }
-  try { await settle(page); } catch { /* rendering */ }
-  await page.waitForTimeout(3000); alive();
   const { candidates, press } = helpers(page);
-  // the target may sit behind a collapsed "N antwoorden bekijken" — reveal what is on this page
-  await expandAll(page, candidates, press, alive);
-  // the article that carries this exact id in its timestamp link, visible copy only
-  const findTarget = () => page.evaluateHandle((id) => {
-    const arts = Array.from(document.querySelectorAll('[role="article"]')).filter((a) => /^(comment|opmerking|reply|antwoord)/i.test(a.getAttribute('aria-label') || '') && a.getClientRects().length > 0 && !a.closest('[aria-hidden="true"]'));
-    return arts.find((a) => Array.from(a.querySelectorAll('a[href*="comment_id="]')).some((l) => { const h = l.getAttribute('href') || ''; return h.includes('reply_comment_id=' + id) || (!h.includes('reply_comment_id=') && h.includes('comment_id=' + id)); })) || null;
-  }, targetId);
-  let el = (await findTarget()).asElement();
-  if (!el) {
-    // once more from the top — the page may have been mid-render, or been moved under us
-    await page.waitForTimeout(3000);
+  const land = async () => {
     await page.goto(String(url), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try { await dismissConsent(page); } catch { /* none */ }
     try { await settle(page); } catch { /* rendering */ }
     await page.waitForTimeout(3000); alive();
+    // the target may sit behind a collapsed "N antwoorden bekijken": reveal what is on this page
     await expandAll(page, candidates, press, alive);
-    el = (await findTarget()).asElement();
-  }
-  if (!el) return { posted: false, detail: `comment ${targetId} not found on its own page (tried twice)` };
-  const already = await el.evaluate((a, me) => {
-    // a later reply by the owner TO this author already present? (re-check before posting)
-    const label = a.getAttribute('aria-label') || '';
-    const author = label.replace(/^(comment|opmerking|reply|antwoord)\s+(by|van|from|door)\s+/i, '').split(/\s+op\s+|\s+on\s+/i)[0].replace(/\s+(?:ongeveer\s+|about\s+)?(?:een|one|an?|\d+)\s+\S+\s+(?:geleden|ago).*$/i, '').trim().toLowerCase();
-    const all = Array.from(document.querySelectorAll('[role="article"]')).filter((x) => x.getClientRects().length > 0);
-    const idx = all.indexOf(a);
-    return all.slice(idx + 1).some((x) => { const l = (x.getAttribute('aria-label') || '').toLowerCase(); return me && l.includes(me) && l.includes(author); });
-  }, meName).catch(() => false);
+    return page.evaluate(extractInPage);
+  };
+  let tree = await land();
+  let target = tree.nodes.find((n) => String(n.id) === String(targetId));
+  if (!target) { await page.waitForTimeout(3000); tree = await land(); target = tree.nodes.find((n) => String(n.id) === String(targetId)); }
+  if (!target) return { posted: false, detail: `comment ${targetId} not found on its page (tried twice; ${tree.nodes.length} comment(s) read there)` };
+  // answered meanwhile? a later reply of the owner's TO this person, in this branch
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const idx = tree.nodes.indexOf(target);
+  const branchRoot = target.isReply ? target.cid : target.id;
+  const already = !!meName && tree.nodes.slice(idx + 1).some((n) => same(n.author, meName) && (n.cid === branchRoot || n.id === branchRoot) && (same(n.replyTo, target.author) || n.parentId === target.id));
   if (already) return { posted: false, alreadyAnswered: true, detail: 'already answered on the page' };
-  // its Reply control
-  const replyBtn = await el.evaluateHandle((a) => Array.from(a.querySelectorAll('[role="button"]')).find((b) => /^(beantwoorden|reply|antwoorden)$/i.test((b.innerText || '').trim())) || null);
-  const rb = replyBtn.asElement();
+  // the read above marked each comment's own Reply control with the comment's id
+  const rb = (await page.$$(`[data-gb-cid="${String(targetId).replace(/[^\w-]/g, '')}"]`))[0] || null;
   if (!rb) return { posted: false, detail: 'no Reply control under that comment' };
-  if (o.dryRun) return { posted: false, dryRun: true, detail: `found comment ${targetId} and its Reply control; would type ${text.length} chars` };
-  await rb.evaluate((b) => b.scrollIntoView({ block: 'center' })); await page.waitForTimeout(300);
-  try { await rb.click({ timeout: 4000 }); } catch { await rb.dispatchEvent('click'); }
-  // the composer that opened: the focused textbox
-  let box = null;
-  for (let i = 0; i < 10 && !box; i++) { await page.waitForTimeout(400); box = await page.evaluateHandle(() => { const a = document.activeElement; return a && a.getAttribute('contenteditable') === 'true' ? a : null; }).then((h) => h.asElement()); }
-  if (!box) return { posted: false, detail: 'reply box did not open' };
+  if (o.dryRun) return { posted: false, dryRun: true, detail: `found ${target.author}'s comment ${targetId} and its Reply control; would type ${text.length} chars` };
+  if (!(await press(rb))) return { posted: false, detail: 'its Reply control did not respond' };
+  // the box that opened: whatever has the focus and takes text
+  let kind = '';
+  for (let i = 0; i < 12 && !kind; i++) {
+    await page.waitForTimeout(400);
+    kind = await page.evaluate(() => { const a = document.activeElement; if (!a) return ''; if (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') return 'field'; return a.getAttribute('contenteditable') === 'true' || a.getAttribute('role') === 'textbox' ? 'editor' : ''; }).catch(() => '');
+  }
+  if (!kind) return { posted: false, detail: 'reply box did not open' };
   await page.keyboard.type(text, { delay: 12 }); alive();
-  await page.waitForTimeout(600);
-  const seen = async () => page.evaluate((args) => {
-    const [me, probe] = args;
-    return Array.from(document.querySelectorAll('[role="article"]')).some((x) => { const l = (x.getAttribute('aria-label') || '').toLowerCase(); return x.getClientRects().length > 0 && l.includes(me) && (x.innerText || '').replace(/\s+/g, ' ').includes(probe); });
-  }, [meName, text.replace(/\s+/g, ' ').slice(0, 40)]);
-  await page.keyboard.press('Enter');
-  for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page with your name' }; }
-  // Enter did not submit: the composer's own submit control
-  const submit = await page.evaluateHandle(() => Array.from(document.querySelectorAll('[role="button"],button')).find((b) => { const l = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase(); return b.getClientRects().length > 0 && /(opmerking plaatsen|plaatsen|^post$|post comment|reageren|verzenden|send)/.test(l.trim()); }) || null).then((h) => h.asElement());
-  if (submit) { try { await submit.click({ timeout: 4000 }); } catch { await submit.dispatchEvent('click'); } for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page after pressing Post' }; } }
+  await page.waitForTimeout(800);
+  const probe = text.replace(/\s+/g, ' ').trim().slice(0, 40).toLowerCase();
+  const seen = async () => { try { const t = await page.evaluate(extractInPage); return t.nodes.some((n) => same(n.author, meName) && String(n.text || '').replace(/\s+/g, ' ').toLowerCase().includes(probe)); } catch { return false; } };
+  // the send control by its words or label, the one nearest the box (a textarea on the phone: Enter is a new line there)
+  const findSend = () => page.evaluateHandle(() => {
+    const a = document.activeElement; const ar = a ? a.getBoundingClientRect() : null;
+    const SEND = /^(?:opmerking plaatsen|plaatsen|post|post comment|comment|reageren|verzenden|send|wyślij|opublikuj|skomentuj)$/i;
+    const cands = Array.from(document.querySelectorAll('[role="button"], button, [aria-label]')).filter((b) => {
+      if (b === a || !b.getClientRects().length) return false;
+      const words = [(b.getAttribute('aria-label') || '').trim(), (b.textContent || '').replace(/\s+/g, ' ').trim()];
+      return words.some((w) => SEND.test(w));
+    });
+    if (!ar) return cands[0] || null;
+    const d = (b) => { const r = b.getBoundingClientRect(); return Math.hypot((r.left + r.right) / 2 - (ar.left + ar.right) / 2, (r.top + r.bottom) / 2 - (ar.top + ar.bottom) / 2); };
+    return cands.sort((x, y) => d(x) - d(y))[0] || null;
+  }).then((h) => h.asElement()).catch(() => null);
+  if (kind === 'editor') {
+    await page.keyboard.press('Enter');
+    for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page with your name' }; }
+  }
+  const submit = await findSend();
+  if (submit) {
+    if (await press(submit)) for (let i = 0; i < 12; i++) { await page.waitForTimeout(1000); if (await seen()) return { posted: true, detail: 'reply visible on the page after pressing send' }; }
+  }
   return { posted: false, typed: true, detail: 'typed but could not confirm it on the page — not retried (never twice)' };
 }
 
@@ -579,4 +767,4 @@ function postIdOf(url) {
   try { const u = new URL(String(url)); return u.searchParams.get('post_id') || (u.pathname.match(/\/posts\/(\d+)/) || [])[1] || u.searchParams.get('story_fbid') || null; } catch { return null; }
 }
 
-module.exports = { crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, cadenceOf, rememberVoice, probePage, postReply, postIdOf, extractInPage, cleanName, VOICE };
+module.exports = { readerBroken, markControls, crawl, store, ingest, verifyWaiting, draftAll, discover, discoverOnPage, dueUrls, cadenceOf, rememberVoice, probePage, postReply, postIdOf, extractInPage, cleanName, VOICE };

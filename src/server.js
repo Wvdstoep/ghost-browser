@@ -6465,6 +6465,13 @@ async function postWatchPass(wf, owner, cfg, feed, pw, llmCfg, opts, getPage, to
   for (const url of order) {
     try {
       const tree = await pw.crawl(getPage, url, log, touch);
+      /* A READ THAT CANNOT BE RIGHT is not folded in (a partial read would mark real comments handled), the post
+         stays due for the next pass, and the owner's phone hears it once per post: "0 messages" was silent. */
+      if (tree.broken) {
+        health.errors.push(`${url}: reader broken (${tree.broken})`); health.broken = (health.broken || 0) + 1;
+        notifyPhones(owner, { tag: `post-broken-${pw.postIdOf(url) || wf.id}`, title: 'Post watcher could not read a post', text: `${tree.broken}. Nothing was marked handled; it tries again next pass.` });
+        continue;
+      }
       const entries = pw.ingest(wf.id, tree, cfg, feed);
       const v = await pw.verifyWaiting(getPage, tree, entries, cfg, feed, wf.id, log, touch);
       pw.store(tree);

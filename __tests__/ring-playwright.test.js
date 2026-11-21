@@ -21,6 +21,8 @@ function load(html, url) {
   win = dom.window; doc = win.document;
   Object.defineProperty(win.HTMLElement.prototype, 'innerText', { configurable: true, get() { return this.textContent; } });
   win.Element.prototype.getClientRects = function () { return [{ width: 1, height: 1 }]; };
+  // a phone lays everything out: the reader counts only what has a size on screen
+  win.Element.prototype.getBoundingClientRect = function () { return { left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0 }; };
   win.HTMLElement.prototype.scrollIntoView = function () {};
   win.eval(GB);
 }
@@ -140,9 +142,11 @@ describe('the post watcher\'s own code on the phone', () => {
           document.body.appendChild(box); box.focus();
           box.addEventListener('keydown', function (e) {
             if (e.key !== 'Enter') return;
+            // a posted reply is a comment like any other: a name, the words, and its own Reply
             var a = document.createElement('div'); a.setAttribute('role', 'article');
             a.setAttribute('aria-label', 'Antwoord van Carla op de opmerking van Jan Jansen');
-            a.textContent = box.textContent; document.getElementById('list').appendChild(a);
+            a.innerHTML = '<div>Carla</div><div class="t"></div><div role="button">Beantwoorden</div>';
+            a.querySelector('.t').textContent = box.textContent; document.getElementById('list').appendChild(a);
           });
         });
       </script>`;
