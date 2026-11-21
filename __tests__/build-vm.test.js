@@ -6,6 +6,7 @@
 // Measured live on 2026-11-21: a cpx42 in hel1 was ready in 71 s, built an image (8 cpus, 16 GB) and was deleted.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const read = (p) => readFileSync(new URL(`../../${p}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const deploy = read('scripts/deploy.sh');
@@ -72,7 +73,7 @@ describe('build-vm.sh', () => {
     expect(vm).not.toMatch(/-H "Authorization: Bearer \$/);
   });
   it('reuses a live VM, deletes it on down, and sweeps any build VM older than its limit', () => {
-    expect(vm).toMatch(/if alive; then echo "ssh:\/\/build-vm"; return 0; fi/);
+    expect(vm).toMatch(/if alive; then\n[\s\S]{0,500}echo "ssh:\/\/build-vm"; return 0\n\s+fi/);
     expect(vm).toMatch(/hc DELETE "\/servers\/\$id"/);
     expect(vm).toMatch(/label_selector=purpose%3Dbuild/);
     expect(vm).toMatch(/MAX_AGE_MIN=\$\{BUILD_VM_MAX_AGE_MIN:-120\}/);
@@ -82,6 +83,24 @@ describe('build-vm.sh', () => {
     expect(ga).toMatch(/^\*\.sh text eol=lf$/m);
     expect(ga).toMatch(/^ops\/host\/\*\* text eol=lf$/m);
     expect(ga).toMatch(/^ghost-browser\/scripts\/\*\.js text eol=lf$/m);
+  });
+  /* 2026-11-21: Hetzner bills every started hour, so a VM deleted after a 7-minute build threw 53 paid minutes away. */
+  it('keeps the VM warm after a pipeline while more than 6 minutes of its paid hour are left; the next pipeline reuses it', () => {
+    expect(vm).toMatch(/KEEP_MARGIN_MIN=\$\{BUILD_VM_KEEP_MARGIN_MIN:-6\}/);
+    expect(vm).toMatch(/if \[ "\$left" -gt \$\(\( KEEP_MARGIN_MIN \* 60 \)\) \]; then\n\s+rm -f "\$STATE\/busy"/);
+    expect(vm).toMatch(/text=reused by pipeline #\$\{CI_PIPELINE_ID:-manual\}: no rent, build cache warm/);
+  });
+  it('the paid hour is counted from the VM\'s own creation: 7 min in, it is paid until minute 60; 61 min in, until 120', () => {
+    const fn = vm.slice(vm.indexOf('paid_until() {'), vm.indexOf('\n}\n', vm.indexOf('paid_until() {')) + 3);
+    const run = (age) => Number(execFileSync('bash', ['-c', `${fn}\nc=$(( $(date +%s) - ${age} )); echo $(( $(paid_until $c) - c ))`], { encoding: 'utf8' }).trim());
+    expect(run(7 * 60)).toBe(3600);
+    expect(run(61 * 60)).toBe(7200);
+  });
+  it('a busy VM is never reaped or swept; an idle one goes just before its next hour; a stuck one (busy over the limit) goes anyway', () => {
+    expect(vm).toMatch(/if \[ -s "\$STATE\/busy" \] && ! busy_stuck; then return 0; fi/);
+    expect(vm).toMatch(/-le \$\(\( KEEP_MARGIN_MIN \* 60 \)\) \] \|\| busy_stuck; then down_locked; fi/);
+    expect(vm).toMatch(/if str\(s\["id"\]\)==cur: continue/);                 // the sweep leaves the warm VM to reap
+    expect(vm).toMatch(/live\(\) \{ reap \|\| true;/);                         // checked every minute by the host watchdog
   });
   it('the server watchdog sweeps every 15 minutes and reports a VM left running', () => {
     expect(watch).toMatch(/build-vm\.sh sweep/);
