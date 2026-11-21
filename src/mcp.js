@@ -139,7 +139,8 @@ function createHandler({ requestApi, toolset = tools }) {
 function localApi(port) {
   return async ({ method, path, body, authorization }) => {
     const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-      method, headers: { authorization, ...(body ? { 'content-type': 'application/json' } : {}) },
+      // x-gb-via: Claude, not the owner at the console screen; it routes like "auto" (server.js placeSession)
+      method, headers: { authorization, 'x-gb-via': 'mcp', ...(body ? { 'content-type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(150000),   // a walled page tries the server, then loads on a device
     });
     const image = response.ok && response.headers.get('content-type')?.startsWith('image/');

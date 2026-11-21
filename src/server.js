@@ -1053,7 +1053,7 @@ app.post('/v1/sessions/:id/navigate', async (req, res) => {
     /* THE SITE'S LOGIN LIVES ON A DEVICE (2026-11-21): straight there, in the device's profile that holds it, before
        the cluster loads anything. The owner's Facebook is in the phone's "default"; loading it on the cluster first
        showed the same account a datacenter address. Offline: said so, never the cluster instead. */
-    if (!s.ring && !s.stayOnCluster && !(req.client && req.client.console)) {
+    if (!s.ring && !s.stayOnCluster && !atScreen(req)) {
       for (const owner of ringOwners(req).filter(Boolean)) {
         const sh = siteOnDevice(owner, target, { busyCheck: false });
         if (sh.device && sessionRing.attach(s, ringOwners(req), { device: sh.device, profile: sh.profile })) {
@@ -1657,13 +1657,19 @@ const ringOwners = (req) => [req.client && req.client.owner, consoleOwner()];
  * holds. "cluster": never move. "device": straight to the owner's phone or desktop that holds the profile.
  * Or a device's name from browser_profiles. Decided before the session opens, so a refusal costs nothing.
  */
+/* The owner at the console's screen (a live view of the cloud browser), not Claude signed in as the owner over MCP. */
+function atScreen(req) { return !!(req.client && req.client.console) && req.get('x-gb-via') !== 'mcp'; }
 function placeSession(req, profileName) {
   const where = String((req.body && req.body.device) || 'auto').trim();
   /* "auto" and a login that lives on a device (loginOnDevice, 2026-11-21): straight there, never the cluster first.
      Trying the cluster first meant the same login hit the site from the datacenter and, seconds later, from the
      phone. A device that holds it but is offline is said so; "cluster" still opens it on the cluster on purpose. */
-  /* The console (the owner at the screen, a live view of the cloud browser) keeps opening where it always did. */
-  if (where === 'auto' && !(req.client && req.client.console)) {
+  /* The console (the owner at the screen, a live view of the cloud browser) keeps opening where it always did.
+     Claude over MCP signs in AS the owner (console:true) but is not at that screen: it routes like "auto" — the
+     owner's goal is no difference between Claude and the owner on the phone. Before 2026-11-21 an MCP open without
+     a device fell through below and "auto" was looked up as a device's NAME: "No online device called auto". */
+  if (where === 'auto') {
+    if (atScreen(req)) return { where };
     for (const owner of ringOwners(req).filter(Boolean)) {
       const home = loginOnDevice(owner, profileName, { starting: false, busyCheck: false });
       if (home.device) return { where, device: home.device, home: true };

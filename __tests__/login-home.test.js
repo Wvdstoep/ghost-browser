@@ -67,7 +67,7 @@ describe('where a login lives', () => {
 
 describe('everything goes through it', () => {
   it('a new session with device "auto" goes straight to the device that holds the login, or is refused while it is offline', () => {
-    expect(server).toMatch(/if \(where === 'auto' && !\(req\.client && req\.client\.console\)\) \{[\s\S]{0,300}loginOnDevice\(owner, profileName, \{ starting: false, busyCheck: false \}\)/);
+    expect(server).toMatch(/if \(where === 'auto'\) \{\n\s+if \(atScreen\(req\)\) return \{ where \};[\s\S]{0,300}loginOnDevice\(owner, profileName, \{ starting: false, busyCheck: false \}\)/);
     expect(server).toMatch(/if \(home\.device\) return \{ where, device: home\.device, home: true \};/);
     expect(server).toMatch(/lives on \$\{home\.name\}, which is offline/);
   });
@@ -158,5 +158,22 @@ describe('a read that cannot be right', () => {
     expect(block).toMatch(/notifyPhones\(owner, \{ tag: `post-broken-\$\{pw\.postIdOf\(url\) \|\| wf\.id\}`/);
     expect(block).toMatch(/continue;/);                         // no lastCrawl stamp: the post stays due
     expect(block).not.toMatch(/lastCrawl/);
+  });
+});
+
+/* 2026-11-21, live over MCP: browser_open without a device answered "No online device called "auto"". Claude signs in
+   AS the owner (console:true), so "auto" skipped its branch and was looked up as a device's name. */
+describe('Claude over MCP routes like auto, not like the owner at the console screen', () => {
+  it('MCP requests say so; "at the screen" is the console without that mark', () => {
+    expect(readFileSync(new URL('../src/mcp.js', import.meta.url), 'utf8')).toMatch(/'x-gb-via': 'mcp'/);
+    expect(server).toMatch(/function atScreen\(req\) \{ return !!\(req\.client && req\.client\.console\) && req\.get\('x-gb-via'\) !== 'mcp'; \}/);
+  });
+  it('"auto" is never a device name: at the screen it opens in the cloud, otherwise where the login lives', () => {
+    const place = server.slice(server.indexOf('function placeSession('), server.indexOf('function pickDeviceFor('));
+    expect(place).toMatch(/if \(where === 'auto'\) \{\n\s+if \(atScreen\(req\)\) return \{ where \};/);
+    expect(place.indexOf("if (where === 'auto') {")).toBeLessThan(place.indexOf('pickDeviceFor('));
+  });
+  it('a navigate by Claude goes to the device holding the site\'s login too', () => {
+    expect(server).toMatch(/if \(!s\.ring && !s\.stayOnCluster && !atScreen\(req\)\) \{\n[\s\S]{0,200}siteOnDevice\(owner, target/);
   });
 });
