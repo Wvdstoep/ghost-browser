@@ -25,7 +25,11 @@ describe('deploy.sh builds through dk', () => {
     expect((deploy.match(/\bdk (build|buildx|push|tag|run|save|inspect|image|builder|rm|exec|logs|container) /g) || []).length).toBeGreaterThan(30);
   });
   it('rents the VM only in the pipeline, and builds here when it cannot be had', () => {
-    expect(deploy).toMatch(/if \[ -n "\$\{CI:-\}" \] && \[ -z "\$\{BUILD_VM_OFF:-\}" \][\s\S]{0,200}build-vm\.sh" up [^\n]*\|\| BUILD_DOCKER_HOST=local/);
+    expect(deploy).toMatch(/if \[ -n "\$\{CI:-\}" \] && \[ -z "\$\{BUILD_VM_OFF:-\}" \] && \[ -f "\$BUILD_VM_SH" \]; then\n\s+BUILD_DOCKER_HOST=\$\(bash "\$BUILD_VM_SH" up [^\n]*\|\| BUILD_DOCKER_HOST=local/);
+    // the path is absolute: inside ( cd <service> && dk build ) a relative one found nothing, and the build ran on
+    // the server without a word (pipeline 2905); a fallback in the pipeline always says why
+    expect(deploy).toMatch(/BUILD_VM_SH="\$\(cd "\$\(dirname "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)\/build-vm\.sh"/);
+    expect(deploy).toMatch(/\[ -n "\$\{CI:-\}" \] && echo "  ⚠️  building on this server: /);
     expect(deploy).toMatch(/no build VM [^\n]*building on this server/);
   });
   it('an image copied into the node is paced (an unpaced import restarted k3s on 2026-11-04)', () => {
