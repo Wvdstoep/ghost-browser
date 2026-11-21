@@ -14,10 +14,14 @@ const ci = read('.gitlab-ci.yml');
 const watch = read('ops/host/bin/node-pressure-watch.sh');
 
 describe('deploy.sh builds through dk', () => {
-  it('every Docker command of a build goes through dk; only dk itself calls docker', () => {
+  it('every Docker command of a build goes through dk; only dk and the containerd import call this server\'s docker', () => {
     const lines = deploy.split('\n').filter((l) => /sudo (env DOCKER_HOST=\S+ )?docker /.test(l));
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(3);
     expect(lines[0]).toMatch(/^\s+if \[ "\$BUILD_DOCKER_HOST" != local \]; then sudo env DOCKER_HOST="\$BUILD_DOCKER_HOST" docker "\$@"; else sudo docker "\$@"; fi$/);
+    // the import pulls what the build pushed onto THIS server and saves it here: a VM's newer Docker saved a format
+    // this containerd refused ("ctr: unrecognized image format", pipeline 2901)
+    expect(lines[1]).toMatch(/sudo docker pull -q "\$image"/);
+    expect(lines[2]).toMatch(/if sudo docker save "\$image" \| node/);
     expect((deploy.match(/\bdk (build|buildx|push|tag|run|save|inspect|image|builder|rm|exec|logs|container) /g) || []).length).toBeGreaterThan(30);
   });
   it('rents the VM only in the pipeline, and builds here when it cannot be had', () => {
@@ -25,7 +29,11 @@ describe('deploy.sh builds through dk', () => {
     expect(deploy).toMatch(/no build VM [^\n]*building on this server/);
   });
   it('an image copied into the node is paced (an unpaced import restarted k3s on 2026-11-04)', () => {
-    expect(deploy).toMatch(/dk save "\$image" \| node "\$BASE_DIR\/ghost-browser\/scripts\/throttle-stream\.js" 40 \| sudo ctr/);
+    expect(deploy).toMatch(/sudo docker save "\$image" \| node "\$BASE_DIR\/ghost-browser\/scripts\/throttle-stream\.js" 40 \| sudo ctr/);
+  });
+  it('the VM address is kept for the whole run, also for builds in a subshell', () => {
+    expect(deploy).toMatch(/\[ -s "\/tmp\/build-vm-host-\$\$" \] && BUILD_DOCKER_HOST=\$\(cat "\/tmp\/build-vm-host-\$\$"\)/);
+    expect(deploy).toMatch(/echo "\$BUILD_DOCKER_HOST" > "\/tmp\/build-vm-host-\$\$"/);
   });
   it('both deploy jobs delete the VM afterwards, also when they failed', () => {
     for (const job of ['\ndeploy:\n', '\nmanual-deploy:\n']) {
