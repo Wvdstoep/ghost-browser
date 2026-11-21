@@ -51,8 +51,12 @@ describe('deploy.sh builds through dk', () => {
 });
 
 describe('build-vm.sh', () => {
-  it('rents a cpx42 in Helsinki, next to the server, from the Docker image, labelled as a build VM', () => {
-    expect(vm).toMatch(/TYPE=\$\{BUILD_VM_TYPE:-cpx42\}/);
+  it('rents the type chosen in Admin (cx43 when the platform cannot be asked) in Helsinki, from the Docker image, labelled as a build VM', () => {
+    expect(vm).toMatch(/TYPE=\$\{BUILD_VM_TYPE:-\}/);
+    expect(vm).toMatch(/\[ -n "\$TYPE" \] \|\| TYPE=\$\(chosen_type\)/);
+    expect(vm).toMatch(/\[\[ "\$t" =~ \^\[a-z\]\{2,4\}\[0-9\]\{1,3\}\$ \]\] && echo "\$t" \|\| echo cx43/);
+    expect(vm).toMatch(/curl -s -m 10 -H @"\$hdr" "\$\{REPORT_URL\}\/config"/);
+    expect(vm).toMatch(/report event=catalog "location=\$LOCATION" "types=\$types"/);
     expect(vm).toMatch(/LOCATION=\$\{BUILD_VM_LOCATION:-hel1\}/);
     expect(vm).toMatch(/IMAGE=\$\{BUILD_VM_IMAGE:-docker-ce\}/);
     expect(vm).toMatch(/"labels":\{"purpose":"build","created"/);
